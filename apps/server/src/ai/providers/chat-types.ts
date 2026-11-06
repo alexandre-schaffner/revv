@@ -10,32 +10,21 @@
 //
 // The structured tool-use shape (`Activity`, `ActivityKind`) and the
 // classifier / tool-name normalizer live in `@revv/shared/activity` so
-// walkthrough and chat both consume one source of truth (doctrine
-// invariant #13: agent-path parity). This file re-exports them for callers
-// that already import from `./chat-types` so the import sites don't churn.
+// walkthrough and chat both consume one source of truth.
 
-import type { Activity, ChatTask, NormalizedQuestion } from "@revv/shared";
+import type { Activity, ChatTask } from "@revv/shared";
 
 // Re-export the canonical wire frame from shared.
 export type { ChatStreamFrame } from "@revv/shared";
-export type { Activity, NormalizedQuestion };
 
 /**
- * Internal driver-side frame. Drivers emit these with provider-keyed ids
- * (Claude `tool_use.id`, opencode `part.id`). The route's persistence wrapper
- * translates them into the wire `ChatStreamFrame` shape with server-assigned
- * ids (`planId`, `invocationId`).
- *
- * `subagentProviderCallId` on activities is the same provider-keyed id the
- * wrapper uses to look up the invocation it should stamp the activity with.
+ * Internal driver-side frame. The route's persistence wrapper translates it
+ * into the wire `ChatStreamFrame`, assigning server ids (`planId`, `turnId`).
  */
 export type RawChatStreamFrame =
   | { readonly kind: "text"; readonly data: string }
   | { readonly kind: "reasoning"; readonly data: string }
-  | ({
-      readonly kind: "activity";
-      readonly subagentProviderCallId?: string;
-    } & Activity)
+  | ({ readonly kind: "activity" } & Activity)
   | {
       readonly kind: "activity-result";
       readonly callId: string;
@@ -51,34 +40,4 @@ export type RawChatStreamFrame =
       readonly kind: "task-list";
       readonly tasks: ReadonlyArray<ChatTask>;
     }
-  | {
-      readonly kind: "plan-presented";
-      readonly providerPlanId: string;
-      readonly markdown: string;
-    }
-  | {
-      readonly kind: "subagent-start";
-      readonly providerCallId: string;
-      readonly subagentType: string;
-      readonly description: string;
-      readonly prompt: string;
-    }
-  | {
-      readonly kind: "subagent-end";
-      readonly providerCallId: string;
-      readonly result: string;
-      readonly ok: boolean;
-    }
-  | {
-      readonly kind: "user-question";
-      readonly providerRequestId: string;
-      readonly questions: ReadonlyArray<NormalizedQuestion>;
-      readonly previewFormat: "markdown" | "html";
-      readonly providerToolCallId?: string;
-    }
-  | {
-      readonly kind: "user-question-resolved";
-      readonly providerRequestId: string;
-      readonly status: "answered" | "rejected";
-      readonly answers?: Readonly<Record<string, ReadonlyArray<string>>>;
-    };
+  | { readonly kind: "plan-presented"; readonly markdown: string };

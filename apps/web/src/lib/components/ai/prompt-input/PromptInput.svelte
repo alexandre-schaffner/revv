@@ -75,7 +75,7 @@ export type PromptInputProps = Omit<HTMLFormAttributes, "onsubmit"> & {
 
 	function handleFormSubmit(e: SubmitEvent) {
 		e.preventDefault();
-		if (status === "streaming" || status === "submitted") {
+		if (status === "streaming") {
 			stop();
 		} else {
 			submit();

@@ -14,7 +14,6 @@ import type { ServerEventMessage } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { getToken } from "$lib/session/token.svelte";
 import * as auth from "./auth.svelte";
-import { onChatQuestionResolved } from "./chat.svelte";
 import { onPrConversationUpdated } from "./conversation.svelte";
 import { setError } from "./errors.svelte";
 import * as hunkScan from "./hunk-scan.svelte";
@@ -154,16 +153,6 @@ function dispatch(msg: ServerEventMessage): void {
       break;
     case "threads:new-reply":
       review.onThreadsNewReply(msg.data);
-      break;
-    case "chat:question-resolved":
-      onChatQuestionResolved(
-        msg.data.prId,
-        msg.data.questionId,
-        msg.data.status,
-        msg.data.answers,
-        msg.data.customAnswers,
-        msg.data.supersededPlanId,
-      );
       break;
     case "recap:status-changed":
       onRecapStatusChanged(msg.data);

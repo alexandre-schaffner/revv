@@ -1,4 +1,4 @@
-import type { WalkthroughLifecyclePhase, WalkthroughStreamEvent } from "@revv/shared";
+import type { WalkthroughStreamEvent } from "@revv/shared";
 import {
   WALKTHROUGH_FIRST_EVENT_TIMEOUT_MS,
   WALKTHROUGH_INACTIVITY_TIMEOUT_MS,
@@ -6,13 +6,10 @@ import {
 import { debug } from "../../logger";
 import { ZERO_TOKEN_USAGE } from "../agent-stream/token-usage";
 
-// ── Phase synthesis messages ────────────────────────────────────────────────
-//
-// Cross-agent normalization layer wrapping each provider's generator:
+// Wraps the walkthrough driver's generator:
 //   - inactivity + first-event timeouts,
 //   - synthesizes a terminal `done` / `error` if the inner generator ends
-//     without one,
-//   - optional phase synthesis for providers that don't emit their own.
+//     without one.
 //
 // Liveness is enforced by two timers only: a first-event timeout and an
 // inactivity timeout that ANY event resets — content, phase heartbeat, or
@@ -23,39 +20,23 @@ import { ZERO_TOKEN_USAGE } from "../agent-stream/token-usage";
 // (AGENT_IDLE_TIMEOUT_MS), rearmed only by real agent activity, with
 // CLI_WALKTHROUGH_TIMEOUT_MS as the absolute ceiling behind it.
 
-const PHASE_MESSAGES = {
-  exploration: {
-    phase: "exploring" as const,
-    message: "Reading files and understanding changes...",
-  },
-  summary: { phase: "analyzing" as const, message: "Forming assessment and risk analysis..." },
-  block: { phase: "writing" as const, message: "Building walkthrough..." },
-  rating: { phase: "rating" as const, message: "Scoring the PR across 9 axes..." },
-} satisfies Record<string, { phase: WalkthroughLifecyclePhase; message: string }>;
-
 // ── Guard wrapper ───────────────────────────────────────────────────────────
 
 /**
- * Wraps a walkthrough async generator to enforce consistent behavior
- * regardless of which AI provider produced it.
- *
  * Guarantees:
  * - Always yields either a `done` or `error` event before returning.
  * - Aborts with an error if no events arrive for `inactivityTimeoutMs`.
- * - Synthesizes `phase` events from observed event types (when enabled).
  * - Calls `inner.return()` on cleanup to trigger provider-side teardown.
  */
 export function guardWalkthroughStream(
   inner: AsyncGenerator<WalkthroughStreamEvent>,
   options?: {
     inactivityTimeoutMs?: number;
-    synthesizePhases?: boolean;
     label?: string;
     firstEventTimeoutMs?: number;
   },
 ): AsyncGenerator<WalkthroughStreamEvent> {
   const inactivityMs = options?.inactivityTimeoutMs ?? WALKTHROUGH_INACTIVITY_TIMEOUT_MS;
-  const synthesize = options?.synthesizePhases ?? true;
   const label = options?.label ?? "guard";
   const firstEventMs = options?.firstEventTimeoutMs ?? WALKTHROUGH_FIRST_EVENT_TIMEOUT_MS;
 
@@ -69,12 +50,6 @@ export function guardWalkthroughStream(
     let sawRating = false;
     let sawDone = false;
     let sawError = false;
-
-    // Track which phases we've synthesized so we don't repeat
-    let emittedExploringPhase = false;
-    let emittedAnalyzingPhase = false;
-    let emittedWritingPhase = false;
-    let emittedRatingPhase = false;
 
     let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -130,26 +105,6 @@ export function guardWalkthroughStream(
         if (event.type === "rating") sawRating = true;
         if (event.type === "done") sawDone = true;
         if (event.type === "error") sawError = true;
-
-        // Synthesize phase events for providers that don't emit them
-        if (synthesize) {
-          if (event.type === "exploration" && !emittedExploringPhase) {
-            emittedExploringPhase = true;
-            yield { type: "phase" as const, data: PHASE_MESSAGES.exploration };
-          }
-          if (event.type === "summary" && !emittedAnalyzingPhase) {
-            emittedAnalyzingPhase = true;
-            yield { type: "phase" as const, data: PHASE_MESSAGES.summary };
-          }
-          if ((event.type === "semantic-step" || event.type === "block") && !emittedWritingPhase) {
-            emittedWritingPhase = true;
-            yield { type: "phase" as const, data: PHASE_MESSAGES.block };
-          }
-          if (event.type === "rating" && !emittedRatingPhase) {
-            emittedRatingPhase = true;
-            yield { type: "phase" as const, data: PHASE_MESSAGES.rating };
-          }
-        }
 
         yield event;
 

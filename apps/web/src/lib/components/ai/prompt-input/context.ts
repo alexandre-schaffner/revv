@@ -1,4 +1,4 @@
-export type PromptInputStatus = "ready" | "submitted" | "streaming" | "error";
+export type PromptInputStatus = "ready" | "streaming";
 
 export interface PromptInputMessage {
   text: string;

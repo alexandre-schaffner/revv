@@ -79,13 +79,8 @@ export async function runRecapAgentViaAcp(
       );
     }
   };
-  const onAgentEvent = (ev: NormalizedAgentEvent): void => {
-    if (ev.kind === "error") {
-      logError("recap-acp", `session.error: ${ev.message}`);
-      return;
-    }
+  const onAgentEvent = (ev: NormalizedAgentEvent): void =>
     dispatchRecapStreamEvent(ev, dispatchState, fanOut);
-  };
   const decodeState = makeAcpDecodeState();
 
   const outcome = await runMcpAgentViaAcp({

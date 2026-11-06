@@ -58,13 +58,6 @@ export interface Activity {
    * Optional — phase/MCP-emitted activities have no call id.
    */
   readonly callId?: string;
-  /**
-   * When set, this activity row was emitted by a sub-agent (Claude `Task`
-   * tool, opencode `agent` part) rather than the parent agent. The UI uses
-   * this to nest the activity inside the matching `ChatSubagentInvocation`
-   * card. Unset for top-level tool calls.
-   */
-  readonly subagentInvocationId?: string;
 }
 
 /**

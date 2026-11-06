@@ -47,11 +47,7 @@
       "entry": ["src/index.ts"]
     }
   },
-  "ignore": [
-    ".context/**",
-    "apps/web/src/lib/components/ui/**/index.ts",
-    "apps/web/src/lib/components/ai/**/index.ts"
-  ],
+  "ignore": [".context/**", "apps/web/src/lib/components/ui/**/index.ts"],
   "ignoreExportsUsedInFile": true,
   "ignoreDependencies": ["biome", "turbo", "knip"]
 }

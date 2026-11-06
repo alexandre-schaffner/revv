@@ -79,7 +79,7 @@ async function resolveContext(
       db,
       prId: resolved.prId,
       userId: resolved.userId,
-      actor: resolved.actor,
+      actor: "chat:acp",
       emit,
       broadcastThreadEvent,
     },

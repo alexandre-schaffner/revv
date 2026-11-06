@@ -14,7 +14,6 @@ export interface GroupableActivity {
   readonly output?: string;
   /** Whether the tool call ended in error. */
   readonly isError?: boolean;
-  readonly subagentInvocationId?: string;
 }
 
 export interface ActivityGroupCounts {

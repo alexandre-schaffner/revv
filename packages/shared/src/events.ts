@@ -252,18 +252,6 @@ export interface ThreadsSyncErrorEnvelope {
   data: { prId: string; message: string };
 }
 
-export interface ChatQuestionResolvedEnvelope {
-  type: "chat:question-resolved";
-  data: {
-    prId: string;
-    questionId: string;
-    status: "answered" | "rejected";
-    answers?: Record<string, ReadonlyArray<string>>;
-    customAnswers?: Record<string, string>;
-    supersededPlanId?: string;
-  };
-}
-
 export interface RecapStatusChangedEnvelope {
   type: "recap:status-changed";
   data: {
@@ -311,6 +299,5 @@ export type ServerEventMessage =
   | AuthReauthClearedEnvelope
   | ThreadEventMessage
   | PrsSyncSummaryEnvelope
-  | ChatQuestionResolvedEnvelope
   | RecapStatusChangedEnvelope
   | RecapAddedEnvelope;

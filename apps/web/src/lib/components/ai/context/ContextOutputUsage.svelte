@@ -13,9 +13,8 @@ export type ContextOutputUsageProps = {
 
 	const state = getContextState();
 	const tokens = $derived(state().usage?.outputTokens ?? 0);
-	const cost = $derived(state().cost?.output);
 </script>
 
 {#if tokens > 0}
-	<UsageRow {label} {tokens} {cost} class={className} />
+	<UsageRow {label} {tokens} class={className} />
 {/if}

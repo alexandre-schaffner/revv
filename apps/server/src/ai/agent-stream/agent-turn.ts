@@ -5,8 +5,7 @@ import { debug } from "../../logger";
 export interface AgentTurnContext {
   /**
    * Composed signal: aborts on external cancel OR either timeout. Pass this
-   * to anything that should die when the turn dies (HTTP fetches, the
-   * Claude SDK's `query()`, etc.).
+   * to anything that should die when the turn dies.
    */
   readonly signal: AbortSignal;
   /** True after either timeout (idle deadline or absolute ceiling) fired. */
@@ -65,25 +64,19 @@ export interface WithAgentTurnOptions<T> {
   readonly jobStarted: () => Promise<void>;
   readonly jobEnded: () => Promise<void>;
   /**
-   * Called once when the external abort OR either timeout fires. Both
-   * opencode providers use this to call `client.session.abort({ path: { id: sessionId } })`
-   * so the daemon stops the model. May be a no-op for callers without a
-   * remote session to cancel.
+   * Called once when the external abort OR either timeout fires. ACP drivers
+   * cancel their session here so the agent stops producing output.
    */
   readonly abortSession?: () => Promise<void>;
   /**
-   * Synchronously fired when the external abort signal trips. Used by the
-   * walkthrough opencode driver to flip a `cancelled` flag the activity
-   * notifier (registered before `withAgentTurn`) reads to suppress late
-   * events. Distinct from `abortSession` (async; cancels the remote
-   * session) and from `ctx.wasCancelled()` (read-only; only callable
-   * inside `run`).
+   * Synchronously fired when the external abort signal trips, for state the
+   * driver reads outside `run` (where `ctx.wasCancelled()` isn't reachable).
    */
   readonly onCancel?: () => void;
   /** Synchronously fired when either timeout trips. */
   readonly onTimeout?: () => void;
   readonly run: (ctx: AgentTurnContext) => Promise<T>;
-  /** For debug logs ("chat-opencode", "walkthrough-opencode-mcp", …). */
+  /** For debug logs ("chat-acp", "walkthrough-acp", …). */
   readonly debugLabel: string;
 }
 

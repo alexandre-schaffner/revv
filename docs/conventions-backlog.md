@@ -47,9 +47,9 @@ implicitly endorses the shape.
 
 ## Closed
 
-- E-001 — Replaced all 4 `Effect.runPromise` escape hatches in OpencodeSupervisor: exit observation via `Effect.forkDaemon(observeExit(running))`, idle timer via `Effect.fork(Effect.sleep(...).pipe(Effect.andThen(stopIfIdle)))`, pre-warm via `Effect.forkDaemon`; changed `idleTimer` state from `setTimeout` handle to `Fiber.RuntimeFiber`
+- E-001 — Replaced all 4 `Effect.runPromise` escape hatches in OpencodeSupervisor (since deleted with the opencode daemon transport; agents run over ACP)
 - E-002 — Refactored `WalkthroughJobs.ts` main loop from async/await with `Effect.runPromise` to pure `Effect.gen` with recursive `consumeGenerator` and `runWithAutoContinuation`; refactored `ChatChangesPush.ts` `resolveConflictsAndPush` from callback-shaped `runWithDeps` to `Queue.unbounded<ResolvePushFrame>` with `Effect.forkDaemon` producer and `ReadableStream` boundary. Both files pass `make typecheck` and `biome check`.
-- E-003 — Added `OpencodeNotSelectedError` / `OpencodeUnhealthyError` to `domain/errors.ts`; migrated two `AiGenerationError` misuses in `OpencodeSupervisor.ts`
+- E-003 — Added `OpencodeNotSelectedError` / `OpencodeUnhealthyError` for two `AiGenerationError` misuses in `OpencodeSupervisor.ts` (all three since deleted with the opencode daemon transport)
 - E-004 — Wrapped all 7 raw Drizzle calls in Cache.ts with `Effect.try({ try, catch })`; added `DbError` to `domain/errors.ts`; updated service interface error channels from `never` to `DbError`
 - E-005 — Wrapped all raw Drizzle calls in Cache.ts (7 sites, E-004), Review.ts (12 sites), and PullRequest.ts (2 sites) using `tryDb` helper (which maps to `ReviewError` for backward compat); added `DbError` to `domain/errors.ts` for future use
 - S-001 — Migrated `review.svelte.ts` per-PR view state from plain `Map` + `$state` mirrors to single reactive `$state` store (`store = $state({ entries: Map, activePrId })`); derived `getActiveTab`/`getActiveFilePath` from the active entry; all mutations follow reactive-Map idiom

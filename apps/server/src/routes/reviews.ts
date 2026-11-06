@@ -16,7 +16,6 @@ import { submitGithubReviewHandler } from "./reviews/handlers/github-submit";
 import { ensureHunkScanHandler } from "./reviews/handlers/hunk-scan";
 import {
   coerceWalkthroughMode,
-  getCachedWalkthroughHandler,
   regenerateWalkthroughHandler,
   resumeWalkthroughHandler,
 } from "./reviews/handlers/walkthrough-cache";
@@ -114,9 +113,7 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
   // ── Walkthrough ────────────────────────────────────────────────────────
   //
   // Generation events stream over the global SSE bus at `/api/events`;
-  // these REST endpoints handle the trigger/hydrate/lifecycle side. The
-  // legacy per-PR SSE (`GET /:id/walkthrough`) was deleted when walkthrough
-  // events moved to the unified bus.
+  // these REST endpoints handle the trigger/hydrate/lifecycle side.
   .post("/:id/walkthrough/start", async (ctx) => {
     try {
       const body = ctx.body as { generationMode?: "full" | "incremental" } | undefined;
@@ -226,7 +223,6 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
           return {
             status: report.status as "complete" | "generating" | "error" | "superseded",
             walkthrough: report.walkthrough,
-            snapshotAt: new Date().toISOString(),
             seqAt,
             stale:
               report.status === "superseded" ||
@@ -234,18 +230,6 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
             historical: true as const,
           };
         }),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  .get("/:id/walkthrough/cached", async (ctx) => {
-    try {
-      return await getCachedWalkthroughHandler(
-        ctx.params.id,
-        ctx.session.user.id,
-        coerceWalkthroughMode(ctx.query.mode),
       );
     } catch (e) {
       return handleAppError(e, ctx);

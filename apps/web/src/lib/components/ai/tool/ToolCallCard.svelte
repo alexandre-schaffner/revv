@@ -13,8 +13,6 @@ export interface ToolCallCardProps {
   isError?: boolean | undefined;
   /** PR id, required to fetch a file-content peek. */
   prId?: string | undefined;
-  /** Streaming/active styling (subtle shimmer on the name). */
-  active?: boolean;
   class?: string;
 }
 </script>
@@ -61,7 +59,6 @@ let {
   output,
   isError = false,
   prId,
-  active = false,
   class: className,
 }: ToolCallCardProps = $props();
 
@@ -147,7 +144,7 @@ let open = $state(false);
 		<Collapsible bind:open>
 			<CollapsibleTrigger class="tcc-trigger" aria-label={`${label} ${detail}`.trim()}>
 				<Icon class="tcc-icon" style={`color: ${iconColor}`} aria-hidden="true" />
-				<span class="tcc-name" class:tcc-name--active={active}>{label}</span>
+				<span class="tcc-name">{label}</span>
 				{@render detailPill()}
 				{#if isError}
 					<WarningCircle class="tcc-error" weight="fill" aria-hidden="true" />
@@ -180,7 +177,7 @@ let open = $state(false);
 {:else}
 	<div class={cn("tcc tcc--static", className)} data-component="tool-call-card">
 		<Icon class="tcc-icon" style={`color: ${iconColor}`} aria-hidden="true" />
-		<span class="tcc-name" class:tcc-name--active={active}>{label}</span>
+		<span class="tcc-name">{label}</span>
 		{@render detailPill()}
 	</div>
 {/if}
@@ -227,10 +224,6 @@ let open = $state(false);
 		font-weight: 500;
 		line-height: 1.4;
 		color: var(--color-text-primary);
-	}
-
-	.tcc-name--active {
-		color: var(--color-accent);
 	}
 
 	.tcc-detail {

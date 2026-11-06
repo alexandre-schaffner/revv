@@ -27,13 +27,6 @@ import { toast } from "svelte-sonner";
 import { fetchProposedDiffFiles, type ProposedDiffFile } from "$lib/api/chat";
 import { encodeAttachments } from "$lib/chat/attachments";
 import AttachmentChip from "$lib/components/ai/AttachmentChip.svelte";
-import { Checkpoint } from "$lib/components/ai/checkpoint";
-import {
-  Confirmation,
-  ConfirmationActions,
-  ConfirmationContent,
-  ConfirmationHeader,
-} from "$lib/components/ai/confirmation";
 import {
   Conversation,
   ConversationContent,
@@ -62,7 +55,6 @@ import {
   PromptInputTextarea,
   PromptInputTools,
 } from "$lib/components/ai/prompt-input";
-import { Question } from "$lib/components/ai/question";
 import {
   Queue,
   QueueItem,
@@ -77,8 +69,7 @@ import {
   QueueSectionTrigger,
 } from "$lib/components/ai/queue";
 import { Suggestion, SuggestionItem } from "$lib/components/ai/suggestion";
-import type { ToolState } from "$lib/components/ai/tool";
-import { Tool, ToolCallCard, ToolContent, ToolHeader, ToolOutput } from "$lib/components/ai/tool";
+import { ToolCallCard } from "$lib/components/ai/tool";
 import ProposedDiffModal from "$lib/components/review/ProposedDiffModal.svelte";
 import { Button } from "$lib/components/ui/button";
 import { Checkbox } from "$lib/components/ui/checkbox";
@@ -105,13 +96,11 @@ import {
   getChatItems,
   getChatMentionPaths,
   getChatSessionContext,
-  getCheckpoints,
   getInteractionMode,
   getProposedChanges,
   getQueuedMessages,
   getSelectedCommitCount,
   getSelectedCommitShas,
-  getToolApprovals,
   getWorktreeBlocked,
   isBatchOpInFlight,
   isChatStreaming,
@@ -131,8 +120,6 @@ import {
   rejectPlanAction,
   removeQueuedMessage,
   resolveAndPushProposed,
-  respondToToolApproval,
-  restoreToCheckpoint,
   selectAllCommits,
   sendChatMessage,
   setInteractionMode,
@@ -184,8 +171,6 @@ const selectedPr = $derived(getSelectedPr());
 const interactionMode = $derived(prId ? getInteractionMode(prId) : "default");
 const planModeAvailable = $derived(isPlanModeAvailable());
 const queuedMessages = $derived(prId ? getQueuedMessages(prId) : []);
-const chatCheckpoints = $derived(prId ? getCheckpoints(prId) : []);
-const toolApprovals = $derived(prId ? getToolApprovals(prId) : []);
 const sessionContext = $derived(prId ? getChatSessionContext(prId) : null);
 const mentionPaths = $derived(
   getChatMentionPaths(
@@ -193,10 +178,6 @@ const mentionPaths = $derived(
     getReviewFiles().map((file) => file.path),
   ),
 );
-/** Index → checkpoint lookup for interleaving in the message loop. */
-const checkpointByAfterIndex = $derived(new Map(chatCheckpoints.map((cp) => [cp.afterIndex, cp])));
-/** Pending (un-responded) tool approvals, rendered after the last message. */
-const pendingApprovals = $derived(toolApprovals.filter((a) => !a.responded));
 /** Most recent task list from the agent — surfaces in the Queue dock. */
 const activeTasks = $derived.by(() => {
   const taskList = items.findLast(
@@ -302,13 +283,6 @@ function handleApprovePlan(planId: string): void {
 function handleRejectPlan(planId: string): void {
   if (!prId) return;
   void rejectPlanAction(prId, planId);
-}
-
-function nestedActivitiesFor(invocationId: string) {
-  return items.filter(
-    (i): i is Extract<typeof i, { kind: "activity" }> =>
-      i.kind === "activity" && i.subagentInvocationId === invocationId,
-  );
 }
 
 async function handlePromptSubmit(message: PromptInputMessage): Promise<void> {
@@ -665,13 +639,11 @@ function activitiesForTurn(
 				class={stacked ? 'mx-auto w-full max-w-3xl gap-3 px-3.5 pt-3' : 'gap-3 px-3.5 pt-3'}
 				style="padding-bottom: calc({composerH}px + 1rem)"
 			>
-				{#each items as item, itemIdx (item.id)}
+				{#each items as item (item.id)}
 				{#if item.kind === 'activity'}
-						<!-- Skip nested sub-agent tool calls — they render
-							 inside their SubagentInvocation card. Also fold
-							 active-turn tool calls into the dot-matrix
+						<!-- Active-turn tool calls fold into the dot-matrix
 							 indicator below. -->
-						{#if !item.subagentInvocationId && !(item.turnId && item.turnId === activeTurnId)}
+						{#if !(item.turnId && item.turnId === activeTurnId)}
 							<ToolCallCard
 								activityKind={item.activityKind}
 								toolName={item.toolName}
@@ -729,54 +701,6 @@ function activitiesForTurn(
 								</PlanFooter>
 							{/if}
 						</Plan>
-					{:else if item.kind === 'subagent'}
-						{@const toolState = (item.status === 'running' ? 'input-available' : item.status === 'errored' ? 'output-error' : 'output-available') as ToolState}
-						<Tool open={item.status === 'running'}>
-							<ToolHeader
-								toolType={item.subagentType}
-								title={item.description}
-								state={toolState}
-							/>
-							<ToolContent>
-								{#if nestedActivitiesFor(item.id).length > 0}
-									<div class="space-y-0.5">
-										{#each nestedActivitiesFor(item.id) as activity (activity.id)}
-											<ToolCallCard
-												activityKind={activity.activityKind}
-												toolName={activity.toolName}
-												summary={activity.summary}
-												payload={activity.payload}
-												output={activity.output}
-												isError={activity.isError}
-												prId={prId ?? undefined}
-											/>
-										{/each}
-									</div>
-								{/if}
-								{#if item.status === 'errored'}
-									<ToolOutput class="mt-2" errorText={item.result ?? 'Sub-agent errored'} />
-								{:else if item.status === 'completed' && item.result}
-									<ToolOutput class="mt-2">
-										{#snippet output()}
-											<pre class="overflow-x-auto rounded-md bg-muted p-2.5 text-xs font-mono whitespace-pre-wrap break-words">{item.result}</pre>
-										{/snippet}
-									</ToolOutput>
-								{/if}
-								{#if item.status === 'running' && nestedActivitiesFor(item.id).length === 0}
-									<p class="text-xs italic text-muted-foreground">Waiting for the sub-agent to start&hellip;</p>
-								{/if}
-							</ToolContent>
-						</Tool>
-					{:else if item.kind === 'question'}
-						<Question
-							prId={prId ?? ""}
-							itemId={item.id}
-							questions={item.questions}
-							status={item.status}
-							answers={item.answers}
-							customAnswers={item.customAnswers}
-							previewFormat={item.previewFormat}
-						/>
 				{:else if item.role === 'user'}
 					<Message from="user">
 						<MessageContent>
@@ -808,44 +732,6 @@ function activitiesForTurn(
 						</MessageContent>
 					</Message>
 					{/if}
-
-					<!-- Checkpoint marker (if one was placed after this item) -->
-					{#if checkpointByAfterIndex.has(itemIdx)}
-						{@const cp = checkpointByAfterIndex.get(itemIdx)}
-						{#if cp}
-							<Checkpoint
-								id={cp.id}
-								label={cp.label}
-								onRestore={(id) => prId && restoreToCheckpoint(prId, id)}
-							/>
-						{/if}
-					{/if}
-				{/each}
-
-				<!-- Pending tool approvals — shown at the bottom of the timeline -->
-				{#each pendingApprovals as approval (approval.id)}
-					<Confirmation
-						tool={approval.tool}
-						message={approval.message}
-						responded={approval.responded}
-						onApprove={() => prId && respondToToolApproval(prId, approval.id, 'approved')}
-						onDeny={() => prId && respondToToolApproval(prId, approval.id, 'denied')}
-					>
-						<ConfirmationHeader
-							title={approval.tool}
-							description={approval.message}
-						/>
-						{#if approval.input}
-							<ConfirmationContent>
-								<pre class="overflow-x-auto rounded bg-muted p-2 text-xs font-mono whitespace-pre-wrap break-words">{typeof approval.input === 'string' ? approval.input : JSON.stringify(approval.input, null, 2)}</pre>
-							</ConfirmationContent>
-						{/if}
-						<ConfirmationActions
-							responded={approval.responded}
-							onApprove={() => prId && respondToToolApproval(prId, approval.id, 'approved')}
-							onDeny={() => prId && respondToToolApproval(prId, approval.id, 'denied')}
-						/>
-					</Confirmation>
 				{/each}
 
 				{#if isStreaming}

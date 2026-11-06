@@ -37,20 +37,17 @@ import {
   relativizeToolInput,
   withAgentTurn,
 } from "../agent-stream";
-import { AgentUnavailableError } from "./chat-agent-errors";
 import type { RawChatStreamFrame } from "./chat-types";
 
 export interface AcpChatDeps {
   /**
-   * Mint a bearer token bound to the current PR/user/actor/interaction mode for
-   * the chat-context HTTP MCP route — the same registry the opencode/codex
-   * drivers use. The route stamps `walkthroughs.lastEditedBy` and filters edit
-   * tools out of `tools/list` in plan mode.
+   * Mint a bearer token bound to the current PR/user/interaction mode for the
+   * chat-context HTTP MCP route, which filters edit tools out of `tools/list`
+   * in plan mode.
    */
   readonly issueChatMcpToken: (args: {
     prId: string;
     userId: string;
-    actor: "chat:acp";
     interactionMode: InteractionMode;
   }) => Promise<string>;
   /** Revoke the token once the turn ends. */
@@ -183,7 +180,6 @@ export function streamChatViaAcp(
             chatMcpToken = await opts.deps.issueChatMcpToken({
               prId: opts.prId,
               userId: opts.userId,
-              actor: "chat:acp",
               interactionMode: opts.interactionMode ?? "default",
             });
             mcpServers.push({
@@ -219,12 +215,12 @@ export function streamChatViaAcp(
           });
         }
 
-        // Plan mode: switch the agent into its read-only mode. Mirrors the
-        // opencode driver's behaviour — if the agent has no such mode, surface a
-        // structured AgentUnavailableError the route renders as a 422.
+        // Plan mode: switch the agent into its read-only mode.
         if (planMode) {
           const planModeId = findPlanModeId(modes);
-          if (!planModeId) throw new AgentUnavailableError("plan");
+          if (!planModeId) {
+            throw new Error("This agent has no plan mode. Turn plan mode off to send the message.");
+          }
           await h.setMode(turnSessionId, planModeId);
           h.setPlanMode(turnSessionId, true);
         } else {
@@ -271,14 +267,6 @@ export function streamChatViaAcp(
           } else if (ev.kind === "task-list-update") {
             controller.enqueue({ kind: "task-list", tasks: ev.tasks });
             lastWasNonText = true;
-          } else if (ev.kind === "error") {
-            logError("chat-acp", "session.error:", ev.message);
-            controller.enqueue({
-              kind: "text",
-              data: `\n\n_Error: ${withAgentKeychainHint(opts.acpAgentId, ev.message)}_`,
-            });
-            hasEmittedText = true;
-            lastWasNonText = false;
           }
         };
         const wrappedEmit = fluidEmit(emit);
@@ -334,11 +322,7 @@ export function streamChatViaAcp(
         if (planMode) {
           const planMarkdown = planTextBuffer.join("").trim();
           if (planMarkdown.length > 0) {
-            controller.enqueue({
-              kind: "plan-presented",
-              providerPlanId: `acp-plan-${turnSessionId}`,
-              markdown: planMarkdown,
-            });
+            controller.enqueue({ kind: "plan-presented", markdown: planMarkdown });
           }
         }
 

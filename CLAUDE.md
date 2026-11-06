@@ -153,18 +153,21 @@ agent tomorrow). Any change that violates them is wrong by construction — push
   `resumeAttempts`, watermarks). Holds ephemeral coordination caches that are reconstructible.
 - **MCP server (agent write gateway).** The only path by which an agent's content reaches
   SQLite. Each tool is an atomic, idempotent upsert on a deterministic key, and each tool is
-  bound to a specific phase. Transport may be in-process (Claude Agent SDK) or HTTP
-  (opencode); **tool handler implementations are always shared in-process code.**
-- **Agent (stateless-across-runs worker).** In-memory reasoning state is never authoritative.
-  Between runs, the agent reconstructs its context from DB via an MCP read tool.
+  bound to a specific phase. Agents reach it over HTTP (the `/mcp/*` routes, authenticated
+  by a per-run bearer token); **tool handler implementations are in-process code shared by
+  every agent and every route that serves them.**
+- **Agent (stateless-across-runs worker).** An ACP (Agent Client Protocol) agent subprocess —
+  Claude Code, Codex, opencode or Cursor, picked in settings — driven over stdio by Elysia.
+  In-memory reasoning state is never authoritative. Between runs, the agent reconstructs its
+  context from DB via an MCP read tool.
 
 ### Invariants
 
 1. **SQLite is authoritative.** In-memory state is a reconstructible cache. Correctness must
    survive `kill -9` at any instruction.
 2. **Agent content writes go through MCP, only.** Orchestrator lifecycle writes stay in
-   Elysia and must not be routed through MCP. The MCP *transport* may vary; the *handlers*
-   are shared.
+   Elysia and must not be routed through MCP. Several routes may serve the same handlers
+   (chat-edit, external agents); the *handlers* are shared, never copied per route.
 
    **Carve-out: orchestrator-computed judgments.** A closed, enumerated set of fields is
    computed by the orchestrator (today: from TypeSafe System One / Jev) and written by Elysia
@@ -305,19 +308,25 @@ agent tomorrow). Any change that violates them is wrong by construction — push
     the orchestrator transition `status` to `complete`. It also refuses while a first-pass
     lead has no verdict, but that check is the tool's alone: the orchestrator completes a run
     with unresolved leads, so a skipped hint never costs the review.
-13. **Agent-path parity.** Both agent paths (Claude Agent SDK, opencode) must exhibit
-    byte-for-byte identical externally-observable behavior during a review. Divergence in
-    the model's reasoning style is allowed; divergence in events, lifecycle, phase
-    transitions, retry, or resume semantics is a bug.
-14. **Agent-daemon lifecycle.** Agent daemons (e.g., `opencode serve`) are eagerly
-    started whenever the selected agent or a per-feature override (e.g. `recap.agent`)
-    requires them — including at server boot and on settings-change-toward-opencode —
-    so the first job never pays the cold-start tax. They stay warm for as long as
-    they are needed; they are stopped on settings-change-away-from-opencode, on
-    crash-loop cap exhaustion, or on process exit. Idle-stop is a defensive fallback
-    only — invoked when `jobEnded()` observes the daemon is no longer needed and the
-    settings-change handler hasn't already torn it down. Their credentials and bound
-    port are ephemeral and never persisted.
+13. **Agent parity.** ACP is the only agent transport, and every ACP agent must exhibit
+    identical externally-observable behavior during a review. Divergence in the model's
+    reasoning style is allowed; divergence in events, lifecycle, phase transitions, retry, or
+    resume semantics is a bug. Per-agent differences live only in the launch preset
+    (`ai/acp/presets.ts`: command, env, model/effort routing) and capability flags (e.g. plan
+    mode, HTTP MCP support); the drivers never branch on which agent is running.
+14. **ACP connection lifecycle.** Agent subprocesses live in an in-memory pool
+    (`ai/acp/acp-connection.ts`) keyed on (working directory, agent, model, effort): one
+    subprocess per key, shared by every caller with that key. A subprocess is spawned lazily
+    on first use (the chat panel's session-context warm-up counts as a use), held warm by a
+    refcount of in-flight turns (`jobStarted` / `jobEnded`), and killed `IDLE_STOP_MS`
+    (5 min) after the last turn ends. A turn that is cancelled or times out may force-stop
+    its subprocess. When a subprocess exits for any reason it leaves the pool and the next
+    use spawns a fresh one, with none of the old one's per-session state (listeners, mode and
+    model selections). Nothing correctness-bearing may depend on an ACP session surviving:
+    walkthrough, recap and stack-brief runs always open a fresh session and rebuild context
+    from the DB (invariant 6); chat resumes via `session/load` only where the agent supports
+    it. Every pooled subprocess is stopped on process exit. The pool and the per-run MCP
+    bearer tokens are ephemeral and never persisted (invariant 1).
 
 ### Stack briefs
 

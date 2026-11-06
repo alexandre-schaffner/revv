@@ -227,7 +227,7 @@ so the frontend can reuse the walkthrough reducer code path — this is consiste
 **Rule.** Message type strings use colon-separated namespace and action segments. Segments are
 lowercase ASCII letters with hyphens between words. The namespace is the entity (`prs`, `thread`,
 `threads`, `walkthrough`, `repos`, `user`, `chat`, `recap`, `auth`, `error`);
-the action is the verb (`updated`, `created`, `sync-started`, `clone-status`, `question-resolved`).
+the action is the verb (`updated`, `created`, `sync-started`, `clone-status`, `status-changed`).
 
 **Why.** Easy to grep, easy to scan, no Ambiguity-About-Casing arguments. Bonus: `:` is illegal
 in most identifiers, so message types can never accidentally collide with frontend variable
@@ -411,7 +411,7 @@ possible combinations; only ~4 are legal.
 **Rule.** Functions exported from a store for the SSE router
 (`apps/web/src/lib/stores/events.svelte.ts`) to call follow the form `on<EventName>` where
 `<EventName>` is the event message `type` with the colon dropped and segments PascalCased
-(`thread:created` → `onThreadCreated`; `chat:question-resolved` → `onChatQuestionResolved`).
+(`thread:created` → `onThreadCreated`; `recap:status-changed` → `onRecapStatusChanged`).
 Each takes the envelope's `data` whole, and the store filters on its fields itself (the review
 store drops `thread:created` for a session it isn't showing). Several stores may handle one
 message, each with its own `on<EventName>`; the router lists them all in the message's arm.

@@ -510,14 +510,13 @@ export interface ProposedCommit {
  *     each prose run, so its sequence lands after whatever preceded it.
  *     Subsequent chunks of the same run append content via SQL `||`.
  *   - any frame that occupies its own slot in the rendered timeline
- *     (activity, plan, sub-agent start, question) first SEALS the open
+ *     (activity, plan) first SEALS the open
  *     assistant row, so the next prose run opens a fresh one. That's what
  *     makes the persisted sequence interleave narration and tool calls in
  *     true chronological order — a single row per turn would force every
  *     activity to sort either wholly before or wholly after the agent's
  *     entire narration. Frames that only patch an existing row
- *     (activity-result / activity-input / subagent-end / question-resolved)
- *     don't seal: they can land mid-sentence and must not split a paragraph.
+ *     (activity-result / activity-input) don't seal: they can land mid-sentence and must not split a paragraph.
  *     Neither does task-list — it renders in the Queue dock, not in the
  *     timeline, and its snapshots are frequent enough to shred the prose.
  *   - activity frames: insert a chat_activities row immediately, sequence
@@ -535,24 +534,13 @@ export interface ProposedCommit {
  */
 export function wrapStreamWithPersistence(
   source: ReadableStream<RawChatStreamFrame>,
-  ctx: { chatSessionId: string; turnId: string; agent: "acp" },
+  ctx: { chatSessionId: string; turnId: string },
 ): ReadableStream<ChatStreamFrame> {
   return new ReadableStream<ChatStreamFrame>({
     async start(controller) {
       const reader = source.getReader();
       let assistantMessageId: string | null = null;
       let textStreamed = false;
-      // Provider call id → server-assigned invocation id. Activity
-      // frames stamped with subagentProviderCallId are translated to
-      // subagentInvocationId here so the wire shape uses server ids
-      // throughout.
-      const providerToInvocationId = new Map<string, string>();
-      // Provider request id → server-assigned question id. Used to map
-      // opencode's `question.replied` event back to the row created on
-      // the prior `question.asked` so the resolution frame carries the
-      // server id rather than the provider's request id.
-      const providerRequestIdToQuestionId = new Map<string, string>();
-
       /** Best-effort log for persistence failures — never breaks the stream. */
       const logPersistError = (op: string, err: unknown): void => {
         logError("chat", `${op} failed:`, err instanceof Error ? err.message : String(err));
@@ -646,12 +634,7 @@ export function wrapStreamWithPersistence(
 
           // Frames that occupy their own timeline slot close the open prose
           // run first, so text and tool calls interleave by sequence.
-          if (
-            value.kind === "activity" ||
-            value.kind === "plan-presented" ||
-            value.kind === "subagent-start" ||
-            value.kind === "user-question"
-          ) {
+          if (value.kind === "activity" || value.kind === "plan-presented") {
             await sealAssistantMessage();
           }
 
@@ -677,9 +660,6 @@ export function wrapStreamWithPersistence(
               }
             }
           } else if (value.kind === "activity") {
-            const subagentInvocationId = value.subagentProviderCallId
-              ? (providerToInvocationId.get(value.subagentProviderCallId) ?? null)
-              : null;
             try {
               await AppRuntime.runPromise(
                 Effect.flatMap(ChatSessionService, (svc) =>
@@ -691,21 +671,13 @@ export function wrapStreamWithPersistence(
                     summary: value.summary,
                     payload: value.payload,
                     callId: value.callId ?? null,
-                    subagentInvocationId,
                   }),
                 ),
               );
             } catch (err) {
               logPersistError("appendActivity", err);
             }
-            // Translate Raw → Wire: drop the providerCallId field,
-            // add server-side subagentInvocationId when present.
-            const { subagentProviderCallId: _unused, ...activityRest } = value;
-            void _unused;
-            const wireActivity: ChatStreamFrame = subagentInvocationId
-              ? { ...activityRest, subagentInvocationId }
-              : activityRest;
-            controller.enqueue(wireActivity);
+            controller.enqueue(value);
             continue;
           } else if (value.kind === "activity-result") {
             // Stamp the captured output onto the originating activity row
@@ -755,7 +727,6 @@ export function wrapStreamWithPersistence(
                   svc.applyTaskListSnapshot({
                     chatSessionId: ctx.chatSessionId,
                     turnId: ctx.turnId,
-                    source: ctx.agent,
                     tasks: value.tasks,
                   }),
                 ),
@@ -777,7 +748,6 @@ export function wrapStreamWithPersistence(
                   svc.createPlan({
                     chatSessionId: ctx.chatSessionId,
                     turnId: ctx.turnId,
-                    source: ctx.agent,
                     markdown: value.markdown,
                   }),
                 ),
@@ -796,125 +766,9 @@ export function wrapStreamWithPersistence(
               });
             }
             continue;
-          } else if (value.kind === "subagent-start") {
-            let invocationId: string | null = null;
-            try {
-              const { invocationId: id } = await AppRuntime.runPromise(
-                Effect.flatMap(ChatSessionService, (svc) =>
-                  svc.startSubagentInvocation({
-                    chatSessionId: ctx.chatSessionId,
-                    parentTurnId: ctx.turnId,
-                    source: ctx.agent,
-                    providerCallId: value.providerCallId,
-                    subagentType: value.subagentType,
-                    description: value.description,
-                    prompt: value.prompt,
-                  }),
-                ),
-              );
-              invocationId = id;
-              providerToInvocationId.set(value.providerCallId, id);
-            } catch (err) {
-              logPersistError("startSubagentInvocation", err);
-            }
-            if (invocationId) {
-              controller.enqueue({
-                kind: "subagent-start",
-                invocationId,
-                parentTurnId: ctx.turnId,
-                subagentType: value.subagentType,
-                description: value.description,
-              });
-            }
-            continue;
-          } else if (value.kind === "subagent-end") {
-            const invocationId = providerToInvocationId.get(value.providerCallId);
-            if (invocationId) {
-              try {
-                await AppRuntime.runPromise(
-                  Effect.flatMap(ChatSessionService, (svc) =>
-                    svc.completeSubagentInvocation({
-                      invocationId,
-                      result: value.result,
-                      ok: value.ok,
-                    }),
-                  ),
-                );
-              } catch (err) {
-                logPersistError("completeSubagentInvocation", err);
-              }
-              controller.enqueue({
-                kind: "subagent-end",
-                invocationId,
-                result: value.result,
-                ok: value.ok,
-              });
-            }
-            continue;
-          } else if (value.kind === "user-question") {
-            let questionId: string | null = null;
-            try {
-              const row = await AppRuntime.runPromise(
-                Effect.flatMap(ChatSessionService, (svc) =>
-                  svc.createQuestion({
-                    chatSessionId: ctx.chatSessionId,
-                    turnId: ctx.turnId,
-                    source: ctx.agent,
-                    providerRequestId: value.providerRequestId,
-                    providerToolCallId: value.providerToolCallId ?? null,
-                    previewFormat: value.previewFormat,
-                    questions: value.questions,
-                  }),
-                ),
-              );
-              questionId = row.id;
-              providerRequestIdToQuestionId.set(value.providerRequestId, row.id);
-            } catch (err) {
-              logPersistError("createQuestion", err);
-            }
-            if (questionId) {
-              controller.enqueue({
-                kind: "user-question",
-                questionId,
-                turnId: ctx.turnId,
-                questions: value.questions,
-                previewFormat: value.previewFormat,
-                status: "pending",
-              });
-            }
-            continue;
-          } else if (value.kind === "user-question-resolved") {
-            // Opencode-only: the daemon broadcasts replied/rejected
-            // AFTER our /answer endpoint has already POSTed back to
-            // it. The endpoint already wrote the DB row, so this
-            // path is idempotent — `decideQuestion` no-ops when the
-            // row is already non-pending.
-            const questionId = providerRequestIdToQuestionId.get(value.providerRequestId);
-            if (questionId) {
-              try {
-                await AppRuntime.runPromise(
-                  Effect.flatMap(ChatSessionService, (svc) =>
-                    svc.decideQuestion({
-                      questionId,
-                      status: value.status,
-                      ...(value.answers !== undefined ? { answers: value.answers } : {}),
-                    }),
-                  ),
-                );
-              } catch (err) {
-                logPersistError("decideQuestion", err);
-              }
-              controller.enqueue({
-                kind: "user-question-resolved",
-                questionId,
-                status: value.status,
-                ...(value.answers !== undefined ? { answers: value.answers } : {}),
-              });
-            }
-            continue;
           }
 
-          controller.enqueue(value as ChatStreamFrame);
+          controller.enqueue(value);
         }
 
         // Stream ended cleanly. If no text was streamed but the agent

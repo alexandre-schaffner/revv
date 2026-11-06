@@ -15,8 +15,6 @@ export type PromptInputSubmitProps = ButtonProps;
 	import { Button } from "$lib/components/ui/button/index.js";
 	import ArrowUp from "phosphor-svelte/lib/ArrowUp";
 	import Stop from "phosphor-svelte/lib/Stop";
-	import Spinner from "phosphor-svelte/lib/Spinner";
-	import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 	import { PROMPT_INPUT_CTX_KEY, type PromptInputContext } from "./context.js";
 
 	let {
@@ -30,7 +28,7 @@ export type PromptInputSubmitProps = ButtonProps;
 	const isReady = $derived(status === "ready");
 	const isEmpty = $derived(ctx.value.trim().length === 0 && ctx.files.length === 0);
 	// In "ready" state the form is the send action — disable when the buffer is
-	// empty or the parent has explicitly disabled. In streaming/submitted, the
+	// empty or the parent has explicitly disabled. While streaming, the
 	// button is a stop action and stays enabled (the parent's `disabled` is
 	// ignored to keep the abort path always accessible).
 	const finalDisabled = $derived(isReady && (isEmpty || !!disabled));
@@ -40,17 +38,13 @@ export type PromptInputSubmitProps = ButtonProps;
 	data-slot="prompt-input-submit"
 	type="submit"
 	size="icon-sm"
-	variant={status === "streaming" || status === "submitted" ? "outline" : "default"}
+	variant={status === "streaming" ? "outline" : "default"}
 	class={cn("shrink-0", className)}
 	disabled={finalDisabled}
-	aria-label={status === "streaming" || status === "submitted" ? "Stop" : "Send"}
+	aria-label={status === "streaming" ? "Stop" : "Send"}
 	{...restProps}
 >
-	{#if status === "error"}
-		<WarningCircle class="size-3.5" />
-	{:else if status === "submitted"}
-		<Spinner class="size-3.5 motion-essential-spin" />
-	{:else if status === "streaming"}
+	{#if status === "streaming"}
 		<Stop class="size-3" />
 	{:else}
 		<ArrowUp class="size-3.5" />

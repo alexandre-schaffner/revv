@@ -13,9 +13,8 @@ export type ContextCacheReadUsageProps = {
 
 	const state = getContextState();
 	const tokens = $derived(state().usage?.cacheReadInputTokens ?? 0);
-	const cost = $derived(state().cost?.cacheRead);
 </script>
 
 {#if tokens > 0}
-	<UsageRow {label} {tokens} {cost} class={className} />
+	<UsageRow {label} {tokens} class={className} />
 {/if}

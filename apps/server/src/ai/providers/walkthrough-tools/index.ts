@@ -524,10 +524,7 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthro
 
 // ── Canonical TOOL_SPECS list ────────────────────────────────────────────────
 
-/**
- * The full phase-bound tool surface. Both the Claude Agent SDK path and the
- * HTTP MCP route (opencode) consume this array — one source of truth.
- */
+/** The full phase-bound tool surface, served by the `/mcp/walkthrough` route. */
 export const TOOL_SPECS: ReadonlyArray<WalkthroughToolSpec> = [
   {
     name: "get_walkthrough_state",
@@ -630,20 +627,6 @@ export const WALKTHROUGH_TOOL_BUNDLE: ToolSpecBundle<
   version: "2.0.0",
   specs: TOOL_SPECS,
 };
-
-// The walkthrough tool surface is reached exclusively over the HTTP MCP route
-// (`/mcp/walkthrough`), which binds the per-request context via `bindHttp`.
-// The former `createWalkthroughMcpServer` in-process adapter (for the deleted
-// Claude Agent SDK driver) is gone — every agent now runs on the ACP transport.
-
-// ── Back-compat shims ────────────────────────────────────────────────────────
-//
-// The old `WalkthroughEmitter`, `createInitialState`, and
-// `WalkthroughToolState` exports are no longer needed — state is in the DB,
-// per doctrine. Any caller that still imports those symbols needs to migrate
-// to the new context-threading model. We intentionally do NOT re-export the
-// old names so stale imports surface as typecheck errors rather than silent
-// misbehavior.
 
 export type {
   WalkthroughToolContext,

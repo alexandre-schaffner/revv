@@ -1,39 +1,17 @@
-// ─── walkthrough-acp ────────────────────────────────────────────────────────
+// ACP (Agent Client Protocol) driver for walkthrough generation, over the
+// stdio JSON-RPC connection pooled per worktree (`ai/acp/acp-connection.ts`).
 //
-// ACP (Agent Client Protocol) driver for walkthrough generation. This is the
-// single transport that replaces the bespoke claude-SDK / opencode / codex
-// walkthrough drivers — exactly as `chat-acp.ts` replaced the bespoke chat
-// drivers. It talks to whichever ACP agent is configured (see
-// `ai/acp/presets.ts`) over the stdio JSON-RPC connection pooled per worktree
-// (`ai/acp/acp-connection.ts`).
-//
-// Like the opencode driver it returns an `AsyncGenerator<WalkthroughStreamEvent>`
-// fed by a push-queue, so nothing downstream (the stream guard, WalkthroughJobs,
-// the SSE encoder, the web walkthrough panel) changes. All walkthrough CONTENT
-// (overview, diff steps, ratings, …) is written by the shared MCP tool handlers
-// behind the HTTP route `/mcp/walkthrough` and reaches this stream via the
-// activity-notifier (`WalkthroughJobs.emitEvent` → registered callback) — the
-// same path the opencode/codex drivers used (doctrine invariants #2, #8, #13).
-//
-// What this file adds on top of those notifier events:
-//   • a forward-only phase machine driven off the RELIABLE content events
-//     (`summary` → analyzing, `block`/`semantic-step` → writing, `rating` →
-//     rating) rather than off the agent's MCP tool-call names — ACP gives MCP
-//     tool calls no machine name (only a human title), so decoding them would
-//     be fragile;
-//   • built-in exploration pills (Read / Grep / Bash) decoded from the agent's
-//     own ACP `session/update` stream (ACP DOES tag these with a `kind`);
-//   • streamed reasoning (`thought`) + a periodic heartbeat that keeps the
-//     stream guard's inactivity timer alive (the only liveness signal — there
-//     is no SSE side-channel);
-//   • context-window occupancy from ACP `usage_update` (throughput token
-//     fields are unavailable over ACP and stay zero — an accepted regression).
+// All walkthrough content is written by the MCP tool handlers behind
+// `/mcp/walkthrough` and broadcast by WalkthroughJobs; it never passes through
+// this stream. What this stream carries: the agent's built-in exploration pills
+// (ACP tags those with a `kind`; MCP tool calls carry only a human title),
+// streamed reasoning, context-window occupancy from `usage_update` (ACP reports
+// no throughput tokens), a coarse connecting → exploring phase with a periodic
+// heartbeat, and the terminal `done` / `error`.
 
 import type { McpServer } from "@agentclientprotocol/sdk";
 import type {
   AcpAgentId,
-  RatingAxis,
-  WalkthroughBlock,
   WalkthroughLifecyclePhase,
   WalkthroughMode,
   WalkthroughStreamEvent,
@@ -59,10 +37,10 @@ import { type AcpConnectionHandle, getAcpConnection } from "../acp/acp-connectio
 import { withAgentKeychainHint } from "../acp/agent-keychain";
 import type { AcpLaunchConfig } from "../acp/presets";
 import {
+  type ActivityBeacon,
   buildActivity,
   decodeAcpSessionUpdate,
   makeAcpDecodeState,
-  makeActivityBeacon,
   mergeContextOccupancy,
   type NormalizedAgentEvent,
   relativizeToolInput,
@@ -73,6 +51,7 @@ import {
   buildWalkthroughPrompt,
   buildWalkthroughSystemPrompt,
   type WalkthroughPromptHints,
+  type WalkthroughReviewMode,
 } from "../prompts/walkthrough";
 
 /** Avoid "Internal error.. Nothing had been written" when joining clauses. */
@@ -90,46 +69,6 @@ const ACP_CANCEL_GRACE_MS = 1_500;
 // in this set is ignored here.
 const EXPLORATION_TOOLS = new Set(["Read", "Grep", "Glob", "Bash", "Write", "Edit", "WebFetch"]);
 
-// ── Continuation context ─────────────────────────────────────────────────────
-
-/**
- * Informational context passed into the provider on resume. Under the agent
- * doctrine the agent no longer CONSUMES this — it calls `get_walkthrough_state`
- * via MCP instead (invariant #6). Kept for the prompt builder (so the agent is
- * told it is continuing) and for back-compat with `WalkthroughJobs`, which still
- * populates `opencodeSessionId` / `codexThreadId` (harmless, unused by the ACP
- * transport — every ACP run is a fresh `newSession`).
- */
-export interface ContinuationContext {
-  walkthroughId: string;
-  existingBlocks: WalkthroughBlock[];
-  existingIssueCount: number;
-  existingRatedAxes: RatingAxis[];
-  opencodeSessionId?: string;
-  /** Codex thread id — retained only for back-compat; unused over ACP. */
-  codexThreadId?: string;
-}
-
-// ── Deps injected by the caller (AiService) ──────────────────────────────────
-
-export interface AcpWalkthroughDeps {
-  /** Mint a session token bound to this walkthroughId (HTTP MCP bearer). */
-  issueSessionToken: (walkthroughId: string) => Promise<string>;
-  /** Invalidate the token when we're done. */
-  clearSessionToken: (token: string) => Promise<void>;
-  /**
-   * Register the heartbeat/content notifier in WalkthroughJobs so the MCP tool
-   * handlers' emitted content events flow into this stream (and the stream
-   * guard's inactivity timer resets on each tool call).
-   */
-  registerActivityNotifier: (
-    walkthroughId: string,
-    callback: (event: WalkthroughStreamEvent) => void,
-  ) => Promise<void>;
-  /** Unregister the notifier (called from finally). */
-  unregisterActivityNotifier: (walkthroughId: string) => Promise<void>;
-}
-
 export interface AcpWalkthroughStreamParams extends WalkthroughPromptHints {
   walkthroughId: string;
   db: Db;
@@ -143,18 +82,23 @@ export interface AcpWalkthroughStreamParams extends WalkthroughPromptHints {
   mode: WalkthroughMode;
   files: PrFileMeta[];
   worktreePath: string;
-  /** Informational only — passed into the prompt; NOT used for session resume. */
-  continuation?: ContinuationContext;
-  onSessionId?: (sessionId: string) => void;
+  reviewMode: WalkthroughReviewMode;
+  /** The row already has content from an earlier run; the prompt tells the agent so. */
+  resumed: boolean;
+  /** Bearer for `/mcp/walkthrough`, issued by WalkthroughJobs for this job. */
+  mcpToken: string;
+  /**
+   * The job's liveness beacon. WalkthroughJobs notes every MCP call the agent
+   * authenticates; this driver notes every ACP session update.
+   */
+  activity: ActivityBeacon;
   /**
    * Caller-owned abort signal (user cancel, scope finalizer, shutdown). Routed
    * to `handle.cancel(sessionId)` so the ACP agent stops producing output. The
    * idle deadline and the absolute ceiling layer on top inside `withAgentTurn`.
    */
-  abortController?: AbortController;
-  /** Resolved ACP registry agent id that drives this generation. */
+  abortController: AbortController;
   acpAgentId: AcpAgentId;
-  deps: AcpWalkthroughDeps;
 }
 
 /**
@@ -180,9 +124,7 @@ export function streamWalkthroughViaAcp(
   }
 
   let errorEmitted = false;
-  let anySummaryEmitted = false;
-  // Tracked outside the harness so the notifier closure (registered before
-  // `withAgentTurn`) can suppress late events after regenerate/timeout.
+  // Silences the heartbeat once the turn was cancelled or timed out.
   let cancelled = false;
   // Distinguishes a timeout from a user cancel in the catch below: a timeout
   // keeps whatever was already committed and defers to auto-continuation.
@@ -192,18 +134,12 @@ export function streamWalkthroughViaAcp(
   let timeoutReason: string | null = null;
   /** Message from a non-abort mid-turn failure; surfaced only when the run committed nothing. */
   let failureReason: string | null = null;
-  // Liveness for the harness' idle deadline. Poked by BOTH signals that can
-  // only come from a live agent: its own ACP session updates, and the MCP
-  // content writes the route handlers push through the activity notifier. The
-  // synthetic phase heartbeat below deliberately does NOT poke it.
-  const activity = makeActivityBeacon();
+  const activity = params.activity;
   // Running context-occupancy gauge. Throughput fields stay zero — ACP doesn't
-  // report them (accepted regression vs. the pre-migration drivers).
+  // report them.
   let tokenUsage: WalkthroughTokenUsage = ZERO_TOKEN_USAGE;
 
-  // Forward-only phase machine — identical lifecycle to the pre-migration
-  // drivers (invariant #13 parity with PRE-migration behavior).
-  let currentPhase: WalkthroughLifecyclePhase = "connecting";
+  let currentPhase: Extract<WalkthroughLifecyclePhase, "connecting" | "exploring"> = "connecting";
   let lastPhaseMessage = "Starting up...";
   let lastReasoningPush = 0;
   // Exploration tool-call ids we surfaced as pills, so their later `tool-result`
@@ -215,59 +151,16 @@ export function streamWalkthroughViaAcp(
   // on the matching `tool-result`, and swept in the `finally` below so a turn
   // that dies mid-tool-call doesn't leak an unended span.
   const openToolSpans = new Map<string, ReturnType<typeof graftedSpan>>();
-  const PHASE_ORDER: WalkthroughLifecyclePhase[] = [
-    "connecting",
-    "exploring",
-    "analyzing",
-    "writing",
-    "rating",
-    "finishing",
-  ];
-  const transitionPhase = (next: WalkthroughLifecyclePhase, message: string): void => {
-    if (currentPhase === next) return;
-    // Forward-only: never roll the phase machine back (heartbeats and late
-    // exploration must not override a "writing" phase with "exploring").
-    if (PHASE_ORDER.indexOf(next) < PHASE_ORDER.indexOf(currentPhase)) return;
-    currentPhase = next;
+  const enterExploring = (message: string): void => {
+    if (currentPhase === "exploring") return;
+    currentPhase = "exploring";
     lastPhaseMessage = message;
-    push({ type: "phase", data: { phase: next, message } });
-  };
-
-  // Content + MCP-tool exploration events emitted by the shared HTTP MCP route
-  // handlers (transport-independent). We drive the phase machine off these
-  // because they are the RELIABLE signal — unlike the agent's ACP tool-call
-  // names, which carry no machine identifier for MCP tools.
-  const onContentEvent = (event: WalkthroughStreamEvent): void => {
-    if (queryDone || errorEmitted || cancelled) return;
-    activity.note();
-    switch (event.type) {
-      case "summary":
-        anySummaryEmitted = true;
-        transitionPhase("analyzing", "Forming assessment and risk analysis...");
-        break;
-      case "semantic-step":
-      case "block":
-        transitionPhase("writing", "Building walkthrough...");
-        break;
-      case "rating":
-        transitionPhase("rating", "Scoring the PR across 9 axes...");
-        break;
-      case "exploration":
-        // The route emits an exploration event for each MCP phase tool; the
-        // final `complete_walkthrough` call is our "finishing" signal.
-        if (event.data.toolName === "complete_walkthrough") {
-          transitionPhase("finishing", "Wrapping up...");
-        }
-        break;
-      default:
-        break;
-    }
-    push(event);
+    push({ type: "phase", data: { phase: currentPhase, message } });
   };
 
   // Agent's own ACP `session/update` stream: reasoning, built-in exploration
-  // pills, context-occupancy. MCP content tool calls are ignored here (they're
-  // surfaced by the route via `onContentEvent`).
+  // pills, context-occupancy. MCP content tool calls are ignored here (the
+  // route surfaces them).
   const handleAgentEvent = (ev: NormalizedAgentEvent): void => {
     if (ev.kind === "reasoning-delta" || ev.kind === "text-delta") {
       recordWalkthroughToken(params.walkthroughId, ev.data);
@@ -292,7 +185,7 @@ export function streamWalkthroughViaAcp(
       if (now - lastReasoningPush >= 30_000) {
         lastReasoningPush = now;
         if (currentPhase === "connecting") {
-          transitionPhase("exploring", "Model is thinking...");
+          enterExploring("Model is thinking...");
         } else {
           push({ type: "phase", data: { phase: currentPhase, message: "Model is thinking..." } });
         }
@@ -302,13 +195,13 @@ export function streamWalkthroughViaAcp(
 
     if (ev.kind === "text-delta") {
       // Visible assistant text signals an active session; nudge into exploring.
-      transitionPhase("exploring", "Reading files and understanding changes...");
+      enterExploring("Reading files and understanding changes...");
       return;
     }
 
     if (ev.kind === "tool-call") {
       if (EXPLORATION_TOOLS.has(ev.toolName)) {
-        transitionPhase("exploring", "Reading files and understanding changes...");
+        enterExploring("Reading files and understanding changes...");
         if (ev.callId) {
           surfacedExplorationCallIds.add(ev.callId);
           openToolSpans.set(
@@ -361,25 +254,17 @@ export function streamWalkthroughViaAcp(
   };
 
   const systemPrompt = buildWalkthroughSystemPrompt(params.mode);
-  // ACP has no separate system-prompt channel — prepend it (chat-acp / opencode
-  // driver both do this; the prepend is the load-bearing copy).
-  const userMessage = `${systemPrompt}\n\n---\n\n${buildWalkthroughPrompt(
-    params,
-    undefined,
-    params.continuation,
-  )}`;
+  // ACP has no separate system-prompt channel — prepend it.
+  const userMessage = `${systemPrompt}\n\n---\n\n${buildWalkthroughPrompt(params)}`;
 
   const queryTask = (async (): Promise<WalkthroughTokenUsage> => {
-    let sessionToken: string | null = null;
     let sessionId: string | null = null;
     let handle: AcpConnectionHandle | null = null;
 
-    await params.deps.registerActivityNotifier(params.walkthroughId, onContentEvent);
-
-    // Periodic phase heartbeat — guarantees the stream guard sees an event every
-    // WALKTHROUGH_HEARTBEAT_MS while the prompt is in flight. With no SSE
-    // side-channel, this (plus the initial "connecting" push) is the ONLY
-    // liveness signal during long extended-thinking gaps.
+    // Periodic phase heartbeat — guarantees the stream guard (and the client's
+    // stall watchdog) sees an event every WALKTHROUGH_HEARTBEAT_MS while the
+    // prompt is in flight, including long extended-thinking gaps. Synthetic, so
+    // it never notes `activity`.
     const heartbeatInterval = setInterval(() => {
       if (queryDone || errorEmitted || cancelled) return;
       push({ type: "phase", data: { phase: currentPhase, message: lastPhaseMessage } });
@@ -440,15 +325,14 @@ export function streamWalkthroughViaAcp(
           h.stop();
         },
         run: async (ctx) => {
-          // ── 1. Issue session token + hand the agent our HTTP MCP endpoint ──
-          sessionToken = await params.deps.issueSessionToken(params.walkthroughId);
+          // ── 1. Hand the agent our HTTP MCP endpoint ──
           const mcpUrl = `http://127.0.0.1:${serverEnv.port}/mcp/walkthrough`;
           const mcpServers: McpServer[] = [
             {
               type: "http",
               name: `${WALKTHROUGH_MCP_SERVER}-${params.walkthroughId}`,
               url: mcpUrl,
-              headers: [{ name: "Authorization", value: `Bearer ${sessionToken}` }],
+              headers: [{ name: "Authorization", value: `Bearer ${params.mcpToken}` }],
             },
           ];
           debug("walkthrough-acp", `registering MCP ${WALKTHROUGH_MCP_SERVER} → ${mcpUrl}`);
@@ -473,7 +357,6 @@ export function streamWalkthroughViaAcp(
           }
           sessionId = created.sessionId;
           debug("walkthrough-acp", "created session:", sessionId);
-          if (params.onSessionId) params.onSessionId(sessionId);
 
           // Push a phase event immediately so the stream guard's first-event
           // timer resets — the model may take minutes to produce its first
@@ -532,7 +415,6 @@ export function streamWalkthroughViaAcp(
 
           if (ctx.wasCancelled() || ctx.wasTimeout()) {
             cancelled = true;
-            anySummaryEmitted = false;
           } else if (stopReason === "refusal" && !errorEmitted) {
             errorEmitted = true;
             push({
@@ -584,16 +466,6 @@ export function streamWalkthroughViaAcp(
       for (const span of openToolSpans.values()) span.end();
       openToolSpans.clear();
       if (handle && sessionId) handle.setListener(sessionId, null);
-      await params.deps.unregisterActivityNotifier(params.walkthroughId).catch(() => {
-        /* ignore */
-      });
-      if (sessionToken) {
-        try {
-          await params.deps.clearSessionToken(sessionToken);
-        } catch {
-          /* ignore */
-        }
-      }
     }
   })();
 
@@ -628,15 +500,12 @@ export function streamWalkthroughViaAcp(
 
     const finalTokenUsage = await resultPromise;
 
-    // Parity with the pre-migration drivers: a resumed run past Phase A skips
-    // `set_overview`, so the in-memory `anySummaryEmitted` flag stays false even
-    // though the row is fully populated. DB is authoritative (invariant #1) —
-    // fall back to the persisted summary before emitting the fallback error.
-    // Skip the fallback when the run was cancelled by the caller (explicit
-    // semantics owned by `withAgentTurn`). A timeout still consults the DB —
-    // its whole point is to hand the committed partial to auto-continuation.
-    let summaryPersisted = anySummaryEmitted;
-    if (!summaryPersisted && (!cancelled || timedOut || failureReason !== null)) {
+    // The DB is authoritative (invariant #1): a run (or an earlier run this one
+    // resumes) that persisted a summary ends in `done`. Skipped when the caller
+    // cancelled; a timeout still consults the DB — its whole point is to hand
+    // the committed partial to auto-continuation.
+    let summaryPersisted = false;
+    if (!cancelled || timedOut || failureReason !== null) {
       try {
         const row = params.db
           .select({ summary: walkthroughsTable.summary })

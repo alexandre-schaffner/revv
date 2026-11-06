@@ -16,13 +16,11 @@ const FLUID_DEFAULT_CHUNK_LEN = 12;
  * chunks. All other event kinds pass through untouched, and deltas already
  * shorter than the target emit as-is (no overhead).
  *
- * Why this exists: provider drivers don't all stream at the same
- * granularity. The Claude SDK without `includePartialMessages: true` hands
- * back each content block as a single chunk — potentially several
- * paragraphs in one event. Opencode's daemon usually paces deltas per
- * model-token, but bursty event flushes can still pile up. Both paths
- * route through `fluidEmit` so the chat bubble sees a uniform, typewriter-
- * like cadence regardless of upstream behaviour.
+ * Why this exists: ACP agents don't all stream at the same granularity —
+ * some hand back a whole content block (several paragraphs) as one
+ * `agent_message_chunk`, others pace per token but flush in bursts. Routing
+ * through `fluidEmit` gives the chat bubble a uniform, typewriter-like
+ * cadence regardless of upstream behaviour.
  *
  * Splits prefer the next whitespace/punctuation within a 2x lookahead so
  * words aren't sliced mid-letter. Long unbroken runs (URLs, identifier
@@ -46,13 +44,8 @@ export function fluidEmit(
       emit(ev);
       return;
     }
-    const partIdField = ev.partId !== undefined ? { partId: ev.partId } : {};
     for (const chunk of splitForFluidStream(ev.data, targetLen)) {
-      if (ev.kind === "text-delta") {
-        emit({ kind: "text-delta", data: chunk, ...partIdField });
-      } else {
-        emit({ kind: "reasoning-delta", data: chunk, ...partIdField });
-      }
+      emit({ kind: ev.kind, data: chunk });
     }
   };
 }

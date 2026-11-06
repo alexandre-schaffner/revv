@@ -3,10 +3,8 @@ import { isAbsolute, relative } from "node:path";
 import {
   HUNK_SMELL_META,
   hunkNewEnd,
-  type RatingAxis,
   REVIEW_MODE,
   type RiskLevel,
-  type WalkthroughBlock,
   type WalkthroughLead,
   type WalkthroughMode,
   type WalkthroughStackSnapshot,
@@ -32,16 +30,12 @@ import WALKTHROUGH_SYSTEM_REVIEWER_PROMPT from "./walkthrough-system-reviewer.md
   type: "text",
 };
 
-// ── Continuation context (imported here to avoid circular deps) ──────────────
-//
-// Retained for provider-level bookkeeping (e.g. opencode's session id for
-// `--continue`). The agent itself no longer consumes this — per doctrine
-// invariant #6, it calls `get_walkthrough_state` via MCP instead.
-
-export interface PromptContinuationContext {
-  walkthroughId: string;
-  existingBlocks: WalkthroughBlock[];
-  existingRatedAxes: RatingAxis[];
+export interface WalkthroughReviewMode {
+  readonly mode: "full" | "incremental";
+  readonly parentWalkthroughId: string | null;
+  readonly baseHeadSha: string | null;
+  readonly headSha: string;
+  readonly diffSource?: PromptDiffSource;
 }
 
 // ── MCP-based walkthrough prompt (phase-bound, A→B→C→D) ─────────────────────
@@ -292,16 +286,11 @@ export function buildWalkthroughPrompt(
     };
     mode?: WalkthroughMode;
     files: PrFileMeta[];
-    reviewMode?: {
-      readonly mode: "full" | "incremental";
-      readonly parentWalkthroughId: string | null;
-      readonly baseHeadSha: string | null;
-      readonly headSha: string;
-      readonly diffSource?: PromptDiffSource;
-    };
+    reviewMode?: WalkthroughReviewMode;
+    /** An earlier run already wrote part of this walkthrough. */
+    resumed?: boolean;
   },
   maxTokenBudget = 40000,
-  continuation?: PromptContinuationContext,
 ): string {
   const mode = params.mode ?? REVIEW_MODE.reviewer;
   const lines: string[] = [
@@ -446,10 +435,10 @@ export function buildWalkthroughPrompt(
     );
   }
 
-  if (continuation) {
+  if (params.resumed) {
     lines.push(
       "",
-      "(Informational only — authoritative state lives in get_walkthrough_state. Provider hint: continuation context was provided; if your state query shows a resume scenario, follow the resume discipline in the system prompt.)",
+      "(An earlier run already wrote part of this walkthrough. Authoritative state lives in get_walkthrough_state; if your state query shows a resume scenario, follow the resume discipline in the system prompt.)",
     );
   }
 

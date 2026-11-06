@@ -12,7 +12,7 @@
 
 **Eden treaty** for end-to-end type safety is a nice fit here. The frontend gets fully type-checked API calls with no schema duplication step, and the Elysia route definitions become the single source of truth for the contract.
 
-**Dual agent path with shared MCP handlers** solves the right problem. Enforcing parity via shared in-process handler code rather than hoping two independent implementations stay in sync is the correct architectural choice.
+**One agent transport with shared MCP handlers** solves the right problem. Every agent (Claude Code, Codex, opencode, Cursor) is driven over ACP, and every content write lands through the same in-process MCP tool handlers, so agents differ only in their launch preset rather than in independently maintained drivers.
 
 ---
 
@@ -31,7 +31,7 @@ packages/shared Cross-app types, SSE event schemas, constants
 
 The server uses the [Effect](https://effect.website/) library pervasively. Every service is a `Context.Tag` + `Layer`, composed through `Layer.provide` / `Layer.mergeAll`. Dependency injection is compile-time typed via the `Effect<A, E, R>` `R` parameter; errors are typed via the `E` channel.
 
-**Key services:** `WalkthroughJobs`, `PollScheduler`, `Broadcaster`, `SettingsService`, `OpencodeSupervisor`, `ChatSessionService`, `RepoCloneService`, `SyncService`, `AiService`.
+**Key services:** `WalkthroughJobs`, `PollScheduler`, `Broadcaster`, `SettingsService`, `ChatSessionService`, `RepoCloneService`, `SyncService`, `AiService`.
 
 **Database:** Drizzle ORM on SQLite. 25 tables. All timestamps stored as ISO 8601 text. JSON arrays/objects stored as text columns. No migration runner — schema applied directly on boot.
 
@@ -45,12 +45,7 @@ The server uses the [Effect](https://effect.website/) library pervasively. Every
 
 ### Agent Pipeline
 
-Two agent paths, both surfaced through the same `AiService.streamWalkthrough()` interface:
-
-1. **Claude Agent SDK** — in-process MCP server; tool handlers called synchronously within the Bun process
-2. **Opencode** — calls the `opencode serve` HTTP daemon; tools served over `/mcp/walkthrough`
-
-Both paths share the same MCP tool handler implementations, satisfying the agent-path parity invariant.
+One agent transport, surfaced through `AiService.streamWalkthrough()`: an ACP (Agent Client Protocol) subprocess for the configured agent, driven over stdio from a per-worktree connection pool (`ai/acp/acp-connection.ts`). The agent calls back into `/mcp/walkthrough` over HTTP with a per-job bearer token; the route runs the shared in-process tool handlers. Per-agent differences are confined to the launch preset (`ai/acp/presets.ts`), which is what keeps the agent-parity invariant cheap to hold.
 
 **MCP tool surface (write-only path for walkthrough content):**
 
@@ -99,11 +94,7 @@ At ~1545 lines, this file conflates transport concerns (SSE event dispatch and m
 
 The `settings.json` singleton, `id: "default"` user, and the lack of user scoping in `WalkthroughJobs` mean multi-user support would require a significant rework rather than an incremental addition. This is fine if it's a conscious product decision, but it should be explicit.
 
-### 4. `OpencodeSupervisor` Crash-Loop Window Resets on Server Restart
-
-The 60-second rolling crash-loop window is tracked in memory. A server restart resets the counter, so a persistently broken opencode daemon gets 3 free retry attempts on every server restart rather than hitting a terminal error state. This can cause repeated startup noise without a clean failure mode.
-
-### 5. SSE Broadcaster Has No Message Queue
+### 4. SSE Broadcaster Has No Message Queue
 
 The design correctly requires clients to reconcile from the DB on reconnect, and the SSE store (`events.svelte.ts`) does this — the server does not replay missed events. But it's an implicit contract that every future SSE consumer must also uphold. A missed `lifecycle:complete` during a brief disconnect requires a round-trip re-fetch to recover. This adds cognitive load on every new feature that introduces SSE events.
 
@@ -111,6 +102,6 @@ The design correctly requires clients to reconcile from the DB on reconnect, and
 
 ## Bottom Line
 
-The core infrastructure choices — Effect for the server, Svelte 5 runes, immutable walkthrough records, MCP as the sole write gateway — are sound. The architecture has been designed with crash safety and agent-path parity as first-class properties, which is unusually disciplined.
+The core infrastructure choices — Effect for the server, Svelte 5 runes, immutable walkthrough records, MCP as the sole write gateway — are sound. The architecture has been designed with crash safety and agent parity as first-class properties, which is unusually disciplined.
 
 The migration story needs to be fixed before real users accumulate data. The walkthrough store will need splitting as the feature set grows. Everything else is manageable with discipline.

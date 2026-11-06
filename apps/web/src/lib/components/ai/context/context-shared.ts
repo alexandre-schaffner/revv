@@ -13,16 +13,6 @@ export type ContextState = {
   usedTokens: number;
   maxTokens: number;
   usage?: ContextUsage | undefined;
-  /** Optional pre-computed cost breakdown in USD. Omitted ⇒ footer hides. */
-  cost?: ContextCost | undefined;
-};
-
-export type ContextCost = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheCreation?: number;
-  total?: number;
 };
 
 export type ContextStateGetter = () => ContextState;
@@ -53,11 +43,4 @@ export function formatPercent(ratio: number): string {
   if (clamped >= 0.999) return "100%";
   if (clamped < 0.01) return `${(clamped * 100).toFixed(1)}%`;
   return `${(clamped * 100).toFixed(clamped < 0.1 ? 1 : 0)}%`;
-}
-
-export function formatCost(usd: number | undefined): string | null {
-  if (usd === undefined || !Number.isFinite(usd)) return null;
-  if (usd === 0) return "$0.00";
-  if (usd < 0.01) return `$${usd.toFixed(4)}`;
-  return `$${usd.toFixed(2)}`;
 }

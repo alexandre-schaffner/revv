@@ -45,7 +45,7 @@ export function okResult(text: string): WalkthroughToolResult {
 }
 
 /**
- * Some agents (notably weaker tool-using models routed via opencode) emit
+ * Some agents (notably weaker tool-using models) emit
  * single-field markdown payloads as a JSON-wrapped string — e.g. passing
  * `{markdown: '{"markdown": "Solid engineering..."}'}` instead of
  * `{markdown: 'Solid engineering...'}`. The double-wrap leaks the literal

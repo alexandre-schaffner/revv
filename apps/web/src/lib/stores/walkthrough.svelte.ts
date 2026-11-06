@@ -1165,7 +1165,6 @@ async function doHydrateFromCache(prId: string, options?: HydrateOptions): Promi
       | {
           status: "complete" | "generating" | "error" | "superseded";
           walkthrough: WalkthroughPayload;
-          snapshotAt: string;
           seqAt?: number;
           stale?: boolean;
           historical?: boolean;

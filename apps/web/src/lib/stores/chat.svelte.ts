@@ -28,7 +28,6 @@ import {
   type ChatSessionContext,
   type ChatTask,
   type InteractionMode,
-  type NormalizedQuestion,
 } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import {
@@ -53,10 +52,8 @@ import {
   rebaseProposedCommits,
   rejectPlan,
   resolveConflictsAndPush,
-  type SubmitQuestionAnswerError,
   setInteractionMode as setInteractionModeApi,
   streamChatMessage,
-  submitQuestionAnswer,
 } from "$lib/api/chat";
 import { openSettings } from "$lib/stores/settingsModal.svelte";
 import {
@@ -95,12 +92,6 @@ export type ChatItem =
       output?: string;
       /** Whether the tool call ended in error. */
       isError?: boolean;
-      /**
-       * When set, this activity row was emitted by a sub-agent. The
-       * SubagentInvocation card filters its nested activities by this
-       * id; the top-level render loop skips them.
-       */
-      subagentInvocationId?: string;
     }
   | {
       kind: "task-list";
@@ -114,25 +105,6 @@ export type ChatItem =
       turnId: string;
       markdown: string;
       status: "pending" | "approved" | "rejected" | "superseded";
-    }
-  | {
-      kind: "subagent";
-      id: string;
-      parentTurnId: string;
-      subagentType: string;
-      description: string;
-      status: "running" | "completed" | "errored";
-      result: string | null;
-    }
-  | {
-      kind: "question";
-      id: string;
-      turnId: string;
-      questions: ReadonlyArray<NormalizedQuestion>;
-      status: "pending" | "answered" | "rejected" | "superseded";
-      answers: Readonly<Record<string, ReadonlyArray<string>>> | null;
-      customAnswers: Readonly<Record<string, string>> | null;
-      previewFormat: "markdown" | "html";
     };
 
 let chatHistories = $state(new Map<string, ChatItem[]>());
@@ -617,7 +589,6 @@ function entryToChatItem(entry: PersistedChatEntry): ChatItem {
       ...(entry.callId != null ? { callId: entry.callId } : {}),
       ...(entry.output != null ? { output: entry.output } : {}),
       ...(entry.isError != null ? { isError: entry.isError } : {}),
-      ...(entry.subagentInvocationId ? { subagentInvocationId: entry.subagentInvocationId } : {}),
     };
   }
   if (entry.entryKind === "task-list") {
@@ -628,36 +599,12 @@ function entryToChatItem(entry: PersistedChatEntry): ChatItem {
       tasks: entry.tasks,
     };
   }
-  if (entry.entryKind === "plan") {
-    return {
-      kind: "plan",
-      id: entry.id,
-      turnId: entry.turnId,
-      markdown: entry.planMarkdown,
-      status: entry.status,
-    };
-  }
-  if (entry.entryKind === "question") {
-    return {
-      kind: "question",
-      id: entry.id,
-      turnId: entry.turnId,
-      questions: entry.questions,
-      status: entry.status,
-      answers: entry.answers,
-      customAnswers: entry.customAnswers,
-      previewFormat: entry.previewFormat,
-    };
-  }
-  // subagent
   return {
-    kind: "subagent",
+    kind: "plan",
     id: entry.id,
-    parentTurnId: entry.parentTurnId,
-    subagentType: entry.subagentType,
-    description: entry.description,
+    turnId: entry.turnId,
+    markdown: entry.planMarkdown,
     status: entry.status,
-    result: entry.result,
   };
 }
 
@@ -705,7 +652,7 @@ export interface SendChatMessageParams {
 
 /**
  * Chronological turn writer. A turn is a sequence of prose runs and
- * timeline rows (tool calls, plans, questions, sub-agents) and the panel
+ * timeline rows (tool calls, plans) and the panel
  * must show them in the order the agent produced them. So: text opens an
  * assistant bubble lazily and appends into it; anything else seals that
  * bubble first and appends after it, which means the next prose run opens
@@ -824,9 +771,6 @@ export function sendChatMessage(params: SendChatMessageParams): void {
           turnId,
           ...(activity.payload !== undefined ? { payload: activity.payload } : {}),
           ...(activity.callId !== undefined ? { callId: activity.callId } : {}),
-          ...(activity.subagentInvocationId
-            ? { subagentInvocationId: activity.subagentInvocationId }
-            : {}),
         });
       },
       onActivityResult: ({ callId, output, isError }) => {
@@ -872,51 +816,6 @@ export function sendChatMessage(params: SendChatMessageParams): void {
           status: "pending",
         });
       },
-      onSubagentStart: ({ invocationId, parentTurnId, subagentType, description }) => {
-        turn.row({
-          kind: "subagent",
-          id: invocationId,
-          parentTurnId,
-          subagentType,
-          description,
-          status: "running",
-          result: null,
-        });
-      },
-      onSubagentEnd: ({ invocationId, result, ok }) => {
-        patchItem(prId, invocationId, (item) =>
-          item.kind === "subagent"
-            ? {
-                ...item,
-                status: ok ? "completed" : "errored",
-                result,
-              }
-            : item,
-        );
-      },
-      onQuestionPosted: ({ questionId, turnId: qTurnId, questions, previewFormat }) => {
-        turn.row({
-          kind: "question",
-          id: questionId,
-          turnId: qTurnId,
-          questions,
-          status: "pending",
-          answers: null,
-          customAnswers: null,
-          previewFormat,
-        });
-      },
-      onQuestionResolved: ({ questionId, status, answers }) => {
-        patchItem(prId, questionId, (item) =>
-          item.kind === "question"
-            ? {
-                ...item,
-                status,
-                answers: answers ?? item.answers,
-              }
-            : item,
-        );
-      },
       onDone: () => {
         turn.seal();
         setStreaming(prId, false);
@@ -944,27 +843,6 @@ export function sendChatMessage(params: SendChatMessageParams): void {
           setActiveTurn(prId, null);
           abortControllers.delete(prId);
           toast.error("Approve or reject the open plan before sending a new message.");
-          return;
-        }
-        if (err.code === "QUESTION_PENDING") {
-          turn.seal();
-          setStreaming(prId, false);
-          setActiveTurn(prId, null);
-          abortControllers.delete(prId);
-          toast.error("Answer the open question before sending a new message.");
-          return;
-        }
-        // AGENT_UNAVAILABLE: user toggled plan mode but the opencode
-        // daemon has no `plan` agent. Disable the toggle and surface
-        // the message so the user knows what to do.
-        if (err.code === "AGENT_UNAVAILABLE") {
-          turn.seal();
-          setStreaming(prId, false);
-          setActiveTurn(prId, null);
-          abortControllers.delete(prId);
-          interactionModes.set(prId, "default");
-          interactionModes = new Map(interactionModes);
-          toast.error(err.message ?? "Plan mode unavailable on this opencode install.");
           return;
         }
         // Special case: the PR head advanced but the worktree has
@@ -1080,89 +958,6 @@ export async function rejectPlanAction(prId: string, planId: string): Promise<vo
   }
 }
 
-// ── Question answer ──────────────────────────────────────────────────────
-
-let submittingQuestionIds = $state(new Set<string>());
-
-export function isSubmittingQuestion(questionId: string): boolean {
-  return submittingQuestionIds.has(questionId);
-}
-
-function markSubmittingQuestion(questionId: string, submitting: boolean): void {
-  if (submitting) {
-    submittingQuestionIds.add(questionId);
-  } else {
-    submittingQuestionIds.delete(questionId);
-  }
-  submittingQuestionIds = new Set(submittingQuestionIds);
-}
-
-export interface SubmitQuestionAction {
-  decision: "answer" | "reject";
-  answers?: Record<string, ReadonlyArray<string>>;
-  customAnswers?: Record<string, string>;
-}
-
-/**
- * Submit the user's response (or rejection) to an open question. Optimistic:
- * flips the local item to its terminal state before the server confirms so
- * the UI feels snappy; reverts on error. The server's SSE broadcast keeps
- * other tabs in sync.
- */
-export async function submitQuestionAnswers(
-  prId: string,
-  questionId: string,
-  action: SubmitQuestionAction,
-): Promise<void> {
-  if (submittingQuestionIds.has(questionId)) return;
-  markSubmittingQuestion(questionId, true);
-  const targetStatus: "answered" | "rejected" =
-    action.decision === "reject" ? "rejected" : "answered";
-  // Snapshot prior state so we can revert on error.
-  const items = chatHistories.get(prId) ?? [];
-  const prior = items.find((i) => i.id === questionId);
-  patchItem(prId, questionId, (item) =>
-    item.kind === "question"
-      ? {
-          ...item,
-          status: targetStatus,
-          answers: action.answers ?? item.answers,
-          customAnswers: action.customAnswers ?? item.customAnswers,
-        }
-      : item,
-  );
-  try {
-    const result = await submitQuestionAnswer(prId, questionId, action);
-    // If the server auto-superseded a pending plan (because the agent
-    // moved past it by asking a question), flip the plan card locally
-    // so the UI no longer shows Approve/Reject buttons for a stale plan.
-    if (result.supersededPlanId) {
-      patchItem(prId, result.supersededPlanId, (item) =>
-        item.kind === "plan" ? { ...item, status: "superseded" } : item,
-      );
-    }
-  } catch (err) {
-    const e = err as SubmitQuestionAnswerError;
-    if (e.code === "QUESTION_EXPIRED") {
-      // Server already cleaned up the in-memory deferred (restart, etc).
-      // Flip locally to `superseded` so the UI reflects that the agent
-      // can no longer hear this answer; user needs to send a new message.
-      patchItem(prId, questionId, (item) =>
-        item.kind === "question" ? { ...item, status: "superseded" } : item,
-      );
-      toast.error("That question expired. Send a new message to continue.");
-    } else {
-      // Revert optimistic state.
-      if (prior && prior.kind === "question") {
-        patchItem(prId, questionId, () => prior);
-      }
-      toast.error(e?.message ?? "Failed to submit answer");
-    }
-  } finally {
-    markSubmittingQuestion(questionId, false);
-  }
-}
-
 export interface SendProposedFeedbackParams {
   prId: string;
   sha: string;
@@ -1249,13 +1044,7 @@ export async function clearChatHistory(prId: string): Promise<void> {
     }
   }
   proposedComments = new Map(proposedComments);
-  // Clear frontend-only queue, checkpoints, and approval state.
   clearQueuedMessages(prId);
-  clearToolApprovals(prId);
-  if (checkpoints.has(prId)) {
-    checkpoints.delete(prId);
-    checkpoints = new Map(checkpoints);
-  }
   try {
     await clearChat(prId);
   } catch (err) {
@@ -1716,113 +1505,4 @@ function dequeueAndSend(prId: string): void {
     message: next.text,
     ...(next.attachments !== undefined ? { attachments: next.attachments } : {}),
   });
-}
-
-// ── Checkpoints ────────────────────────────────────────────────────────────
-//
-// Lightweight conversation restore points. Restoring truncates the chat
-// history to everything up to (and including) the checkpoint marker. This
-// is a purely frontend operation — the server session is NOT rewound; the
-// user simply gets a clean visual slate from a prior point in the timeline.
-
-export interface ChatCheckpoint {
-  id: string;
-  label?: string | undefined;
-  /** Index in the ChatItem[] array after which this checkpoint was placed. */
-  afterIndex: number;
-}
-
-let checkpoints = $state(new Map<string, ChatCheckpoint[]>());
-
-export function getCheckpoints(prId: string): ChatCheckpoint[] {
-  return checkpoints.get(prId) ?? [];
-}
-
-/**
- * Restore to a checkpoint by truncating the visible items list. Does NOT
- * touch the server session — the user can still scroll or re-fetch the
- * full history.
- */
-export function restoreToCheckpoint(prId: string, checkpointId: string): void {
-  const cps = checkpoints.get(prId) ?? [];
-  const cp = cps.find((c) => c.id === checkpointId);
-  if (!cp) return;
-  const items = chatHistories.get(prId) ?? [];
-  setItems(prId, items.slice(0, cp.afterIndex + 1));
-  // Remove checkpoints that came after the restored one.
-  const cpIdx = cps.indexOf(cp);
-  checkpoints.set(prId, cps.slice(0, cpIdx + 1));
-  checkpoints = new Map(checkpoints);
-}
-
-// ── Tool approval ──────────────────────────────────────────────────────────
-//
-// When the agent requests tool approval (e.g., dangerous file writes),
-// the streaming callback emits a tool-approval-requested event. The UI
-// renders a Confirmation card; the user approves/denies; the response is
-// sent back via the SSE acknowledge channel. This store tracks pending
-// approvals so the UI can render the right state.
-
-export interface ToolApproval {
-  id: string;
-  tool: string;
-  message?: string;
-  input?: unknown;
-  responded: boolean;
-  decision?: "approved" | "denied";
-}
-
-let toolApprovals = $state(new Map<string, ToolApproval[]>());
-
-export function getToolApprovals(prId: string): ToolApproval[] {
-  return toolApprovals.get(prId) ?? [];
-}
-
-export function respondToToolApproval(
-  prId: string,
-  approvalId: string,
-  decision: "approved" | "denied",
-): void {
-  const existing = toolApprovals.get(prId) ?? [];
-  const next = existing.map((a) => (a.id === approvalId ? { ...a, responded: true, decision } : a));
-  toolApprovals.set(prId, next);
-  toolApprovals = new Map(toolApprovals);
-  // TODO: When the server supports tool-approval acknowledgements via the
-  // SSE channel, dispatch the decision here. For now this is UI-only state.
-}
-
-export function clearToolApprovals(prId: string): void {
-  if (!toolApprovals.has(prId)) return;
-  toolApprovals.delete(prId);
-  toolApprovals = new Map(toolApprovals);
-}
-
-/**
- * Apply a `chat:question-resolved` SSE broadcast from another client.
- * Mirrors the optimistic patch in `submitQuestionAnswers` so every open tab
- * sees the card flip to its terminal state without a full history reload.
- */
-export function onChatQuestionResolved(
-  prId: string,
-  questionId: string,
-  status: "answered" | "rejected",
-  answers?: Readonly<Record<string, ReadonlyArray<string>>>,
-  customAnswers?: Readonly<Record<string, string>>,
-  supersededPlanId?: string,
-): void {
-  patchItem(prId, questionId, (item) =>
-    item.kind === "question"
-      ? {
-          ...item,
-          status,
-          answers: answers ?? item.answers,
-          customAnswers: customAnswers ?? item.customAnswers,
-        }
-      : item,
-  );
-  if (supersededPlanId) {
-    patchItem(prId, supersededPlanId, (item) =>
-      item.kind === "plan" ? { ...item, status: "superseded" } : item,
-    );
-  }
 }
