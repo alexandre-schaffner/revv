@@ -1,3 +1,5 @@
+import { isThreadResolved } from "./review";
+
 export interface CommentPermissionMessage {
   readonly authorRole: string;
   readonly authorLogin: string | null;
@@ -34,4 +36,27 @@ export function isPublishableDraftComment(message: DraftReviewMessage): boolean 
     (message.authorRole === "reviewer" || message.authorRole === "ai_agent") &&
     message.body.trim().length > 0
   );
+}
+
+export interface DraftThread {
+  readonly status: string;
+  readonly externalCommentId: string | null;
+}
+
+/**
+ * What a thread not yet on GitHub posts as one review comment: its publishable
+ * drafts, joined. Null when it posts nothing (resolved, already on GitHub, or
+ * no draft with text).
+ */
+export function draftCommentBody(
+  thread: DraftThread,
+  messages: readonly DraftReviewMessage[],
+): string | null {
+  if (isThreadResolved(thread.status)) return null;
+  if (thread.externalCommentId !== null) return null;
+  const body = messages
+    .filter(isPublishableDraftComment)
+    .map((m) => m.body)
+    .join("\n\n");
+  return body === "" ? null : body;
 }

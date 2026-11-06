@@ -201,18 +201,7 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
       body: t.Object({
         action: t.Union([t.Literal("approve"), t.Literal("request_changes"), t.Literal("comment")]),
         body: t.Optional(t.String()),
-        comments: t.Optional(
-          t.Array(
-            t.Object({
-              path: t.String(),
-              body: t.String(),
-              line: t.Number(),
-              side: t.Union([t.Literal("LEFT"), t.Literal("RIGHT")]),
-              startLine: t.Optional(t.Number()),
-              threadId: t.String(),
-            }),
-          ),
-        ),
+        threadIds: t.Optional(t.Array(t.String())),
         issueIds: t.Optional(t.Array(t.String())),
       }),
     },
