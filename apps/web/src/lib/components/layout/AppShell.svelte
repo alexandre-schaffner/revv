@@ -60,14 +60,9 @@ const chatOverlay = $derived(rightPanelOpen && chatStacked);
 const pr = $derived(getSelectedPr());
 const walkthroughStatus = $derived(pr ? getPrWalkthroughStatus(pr.id) : "idle");
 const activeTab = $derived(getActiveTab());
-const isSettingsRoute = $derived(page.url.pathname.startsWith("/settings"));
 const isReviewRoute = $derived(page.url.pathname.startsWith("/review/"));
-const showFloatingActions = $derived(
-  !!pr && isReviewRoute && !isSettingsRoute && activeTab === "walkthrough",
-);
-const showReviewBar = $derived(
-  !!pr && isReviewRoute && !isSettingsRoute && activeTab === "conversation",
-);
+const showFloatingActions = $derived(!!pr && isReviewRoute && activeTab === "walkthrough");
+const showReviewBar = $derived(!!pr && isReviewRoute && activeTab === "conversation");
 
 // New-commit-available signal: the PR's current headSha differs from the
 // SHA the diff was loaded against. `getLoadedHeadSha` returns null until the
@@ -260,7 +255,7 @@ function onRightHandleDblClick(): void {
 	<!-- `inert` while the chat is stacked over it: the main pane is covered, so
 		 it shouldn't answer clicks, focus, or Tab. -->
 	<main class="main-area" bind:this={mainEl} inert={chatOverlay}>
-		{#if pr && isReviewRoute && !isSettingsRoute}
+		{#if pr && isReviewRoute}
 			<div class="tabs-float">
 				<FloatingTabs
 					{activeTab}

@@ -6,7 +6,6 @@ import { toast } from "svelte-sonner";
 import { page } from "$app/state";
 import { assertRuntimeChannel, fetchRuntimeHealth } from "$lib/api/runtime";
 import PrDeepLinkCoordinator from "$lib/components/deep-link/PrDeepLinkCoordinator.svelte";
-import CacheInspector from "$lib/components/dev/CacheInspector.svelte";
 import AppShell from "$lib/components/layout/AppShell.svelte";
 import OnboardingGate from "$lib/components/onboarding/OnboardingGate.svelte";
 import { Toaster } from "$lib/components/ui/sonner";
@@ -33,7 +32,6 @@ import { warnIfServiceOutOfDate } from "$lib/updater/service-build-warning";
 
 let { children } = $props();
 let hydrated = false;
-let cacheInspectorOpen = $state(false);
 
 // Keep `selectedPrId` in sync with the URL.
 //
@@ -58,7 +56,7 @@ $effect(() => {
 // column's content both read from this store. Resolution order:
 //   1. /repo/{id}/... — repoId is explicit in the path.
 //   2. /review/{prId} — derive from the active PR's repositoryId.
-//   3. Everything else (/, /settings, …) — null.
+//   3. Everything else (/, …) — null.
 //
 // Same single-source-of-truth pattern as selectedPrId. Re-runs whenever
 // the URL changes or when the active PR resolves (the latter matters on
@@ -87,17 +85,6 @@ $effect(() => {
 // not clobbered.
 $effect(() => {
   setSidebarView(getSelectedPrId() ? "files" : "prs");
-});
-
-$effect(() => {
-  function handleKeydown(e: KeyboardEvent): void {
-    if (import.meta.env.DEV && e.metaKey && e.shiftKey && e.key === "C") {
-      e.preventDefault();
-      cacheInspectorOpen = !cacheInspectorOpen;
-    }
-  }
-  window.addEventListener("keydown", handleKeydown);
-  return () => window.removeEventListener("keydown", handleKeydown);
 });
 
 // When user becomes authenticated, hydrate app data.
@@ -217,8 +204,5 @@ async function hydrate() {
 	</OnboardingGate>
 	<PrDeepLinkCoordinator />
 	<Toaster />
-	{#if import.meta.env.DEV && cacheInspectorOpen}
-		<CacheInspector onclose={() => { cacheInspectorOpen = false; }} />
-	{/if}
 </TooltipProvider>
 </IconContext>

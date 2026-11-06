@@ -1,7 +1,6 @@
 <script lang="ts">
 import type { RecapPeriod } from "@revv/shared";
 import { page } from "$app/state";
-import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import PillTabs from "$lib/components/layout/PillTabs.svelte";
 import RecapPeriodView from "$lib/components/recaps/RecapPeriodView.svelte";
 import { getCmdHeld } from "$lib/stores/shortcuts.svelte";
@@ -34,23 +33,21 @@ $effect(() => {
 });
 </script>
 
-<AuthGuard>
-	<div class="period-page">
-		<div class="tabs-float">
-			<PillTabs
-				{tabs}
-				activeTab={activePeriod}
-				onTabChange={(tab) => (activePeriod = tab as RecapPeriod)}
-				{cmdHeld}
-			/>
-		</div>
-		<div class="page">
-			<div class="content">
-				<RecapPeriodView {repoId} period={activePeriod} />
-			</div>
+<div class="period-page">
+	<div class="tabs-float">
+		<PillTabs
+			{tabs}
+			activeTab={activePeriod}
+			onTabChange={(tab) => (activePeriod = tab as RecapPeriod)}
+			{cmdHeld}
+		/>
+	</div>
+	<div class="page">
+		<div class="content">
+			<RecapPeriodView {repoId} period={activePeriod} />
 		</div>
 	</div>
-</AuthGuard>
+</div>
 
 <style>
 	/* Positioning context for RecapPeriodView's floating actions, outside

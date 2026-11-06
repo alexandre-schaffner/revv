@@ -5,7 +5,6 @@ import { untrack } from "svelte";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
 import { Shimmer } from "$lib/components/ai/shimmer";
-import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import GenActionBar, { type GenActionState } from "$lib/components/layout/GenActionBar.svelte";
 import { recapWindowIsStale, utcDayKey } from "$lib/components/recaps/period-window";
 import RecapArchivePopover from "$lib/components/recaps/RecapArchivePopover.svelte";
@@ -151,67 +150,65 @@ async function onGenerate(): Promise<void> {
 }
 </script>
 
-<AuthGuard>
-	<div class="recap-route">
-		<div class="page">
-			<RecapDetail
-				{recap}
-				{loading}
-				period={recap?.period}
-				{onBack}
-				{stream}
-				archive={recap ? archivePopover : undefined}
-			/>
-		</div>
-
-		{#snippet archivePopover()}
-			{#if recap}
-				<RecapArchivePopover
-					{repoId}
-					period={recap.period}
-					{recaps}
-					activeRecapId={recapId}
-					initialDayKey={utcDayKey(recap.periodStart)}
-				/>
-			{/if}
-		{/snippet}
-
-		{#if showGenerateFab || genActionState}
-			<div class="actions-float" style={actionsFloatStyle}>
-				<div class="actions-row" role="toolbar" aria-label="Recap actions">
-					{#if showGenerateFab}
-						<GlassPill
-							variant="accent"
-							onclick={onGenerate}
-							disabled={generating}
-							title="Write a brand-new recap for {currentPeriodLabel} {periodLabelLower} window. The recap below stays as-is."
-						>
-							{#if generating}
-								<Spinner size={14} class="motion-essential-spin" aria-hidden="true" />
-							{:else}
-								<PenNib size={16} aria-hidden="true" />
-							{/if}
-							<Shimmer active={!generating}>
-								{generating
-									? `Generating ${currentPeriodLabel} recap…`
-									: `Generate ${currentPeriodLabel} recap`}
-							</Shimmer>
-						</GlassPill>
-					{/if}
-					{#if genActionState}
-						<GenActionBar
-							uiState={genActionState}
-							pendingAction={pendingAction}
-							{onStop}
-							onResume={onRegenerate}
-							onRegenerate={onRegenerate}
-						/>
-					{/if}
-				</div>
-			</div>
-		{/if}
+<div class="recap-route">
+	<div class="page">
+		<RecapDetail
+			{recap}
+			{loading}
+			period={recap?.period}
+			{onBack}
+			{stream}
+			archive={recap ? archivePopover : undefined}
+		/>
 	</div>
-</AuthGuard>
+
+	{#snippet archivePopover()}
+		{#if recap}
+			<RecapArchivePopover
+				{repoId}
+				period={recap.period}
+				{recaps}
+				activeRecapId={recapId}
+				initialDayKey={utcDayKey(recap.periodStart)}
+			/>
+		{/if}
+	{/snippet}
+
+	{#if showGenerateFab || genActionState}
+		<div class="actions-float" style={actionsFloatStyle}>
+			<div class="actions-row" role="toolbar" aria-label="Recap actions">
+				{#if showGenerateFab}
+					<GlassPill
+						variant="accent"
+						onclick={onGenerate}
+						disabled={generating}
+						title="Write a brand-new recap for {currentPeriodLabel} {periodLabelLower} window. The recap below stays as-is."
+					>
+						{#if generating}
+							<Spinner size={14} class="motion-essential-spin" aria-hidden="true" />
+						{:else}
+							<PenNib size={16} aria-hidden="true" />
+						{/if}
+						<Shimmer active={!generating}>
+							{generating
+								? `Generating ${currentPeriodLabel} recap…`
+								: `Generate ${currentPeriodLabel} recap`}
+						</Shimmer>
+					</GlassPill>
+				{/if}
+				{#if genActionState}
+					<GenActionBar
+						uiState={genActionState}
+						pendingAction={pendingAction}
+						{onStop}
+						onResume={onRegenerate}
+						onRegenerate={onRegenerate}
+					/>
+				{/if}
+			</div>
+		</div>
+	{/if}
+</div>
 
 <style>
 	/* Positioning context for the floating action bar — mirrors the role

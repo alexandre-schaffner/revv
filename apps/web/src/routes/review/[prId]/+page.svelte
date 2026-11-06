@@ -3,7 +3,6 @@ import type { ReviewMode } from "@revv/shared";
 import { onDestroy, untrack } from "svelte";
 import { page } from "$app/state";
 import { api } from "$lib/api/client";
-import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import ConversationTab from "$lib/components/conversation/ConversationTab.svelte";
 import ReviewLayout from "$lib/components/review/ReviewLayout.svelte";
 import { readStackPlace } from "$lib/components/stack/margin/place";
@@ -401,85 +400,83 @@ onDestroy(() => {
 });
 </script>
 
-<AuthGuard>
 {#if isLoading}
-	<div class="loading">
-		<Dotmatrix variant="square-9" />
-		<p>Loading diff…</p>
-	</div>
+<div class="loading">
+	<Dotmatrix variant="square-9" />
+	<p>Loading diff…</p>
+</div>
 {:else if loadError}
-	<div class="loading error">
-		<p>{loadError}</p>
-	</div>
+<div class="loading error">
+	<p>{loadError}</p>
+</div>
 {:else if pr !== null}
-	<div class="review-page">
-		{#if activeTab === 'diff'}
-			{#if files.length > 0}
-				<ReviewLayout prId={page.params['prId'] ?? ''} {files} />
-			{:else}
-				<div class="loading">
-					<p>No changed files in this PR</p>
-				</div>
-			{/if}
+<div class="review-page">
+	{#if activeTab === 'diff'}
+		{#if files.length > 0}
+			<ReviewLayout prId={page.params['prId'] ?? ''} {files} />
+		{:else}
+			<div class="loading">
+				<p>No changed files in this PR</p>
+			</div>
 		{/if}
+	{/if}
 
-		<!-- Scroll root for walkthrough and conversation tabs. Kept mounted
-		     across diff-tab switches so the walkthrough never unmounts. -->
+	<!-- Scroll root for walkthrough and conversation tabs. Kept mounted
+	     across diff-tab switches so the walkthrough never unmounts. -->
+	<div
+		class="review-content"
+		class:review-content--hidden={activeTab === 'diff'}
+		bind:this={scrollRootEl}
+		onscroll={handleScrollRootScroll}
+	>
 		<div
-			class="review-content"
-			class:review-content--hidden={activeTab === 'diff'}
-			bind:this={scrollRootEl}
-			onscroll={handleScrollRootScroll}
+			class="page-title-section"
+			class:page-title-section--narrow={activeTab === 'walkthrough' || activeTab === 'conversation'}
 		>
-			<div
-				class="page-title-section"
-				class:page-title-section--narrow={activeTab === 'walkthrough' || activeTab === 'conversation'}
-			>
-				<h1 class="page-title">{pr.title}</h1>
-				<span class="page-subtitle">#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}</span>
-				{#if stackPlace}
-					<div class="title-stack-line"><StackPlaceLine place={stackPlace} /></div>
-				{/if}
-				{#if activeTab === 'walkthrough' && walkthroughRiskLevel}
-					<Badge
-						variant="outline"
-						class={riskClasses[walkthroughRiskLevel] ?? ''}
-						title={riskTitle}
-					>
-						{walkthroughRiskLevel} risk
-					</Badge>
-				{/if}
-				{#if stackPlace}
-					<div class="title-stack-thumb"><StackThumbIndex place={stackPlace} /></div>
-					<div class="title-stack-note"><StackPlaceNote place={stackPlace} /></div>
-				{/if}
-			</div>
+			<h1 class="page-title">{pr.title}</h1>
+			<span class="page-subtitle">#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}</span>
+			{#if stackPlace}
+				<div class="title-stack-line"><StackPlaceLine place={stackPlace} /></div>
+			{/if}
+			{#if activeTab === 'walkthrough' && walkthroughRiskLevel}
+				<Badge
+					variant="outline"
+					class={riskClasses[walkthroughRiskLevel] ?? ''}
+					title={riskTitle}
+				>
+					{walkthroughRiskLevel} risk
+				</Badge>
+			{/if}
+			{#if stackPlace}
+				<div class="title-stack-thumb"><StackThumbIndex place={stackPlace} /></div>
+				<div class="title-stack-note"><StackPlaceNote place={stackPlace} /></div>
+			{/if}
+		</div>
 
-			<!-- Walkthrough: always mounted to avoid re-render freeze on tab switch.
-			     Heavy blocks (PierreFile, FileDiff, markdown) stay alive in DOM. -->
-			<div class="tab-wrapper" class:tab-wrapper--hidden={activeTab !== 'walkthrough'}>
-				<GuidedWalkthrough
-					prId={page.params['prId'] ?? ''}
-					scrollRoot={scrollRootEl}
-					isActive={activeTab === 'walkthrough'}
-				/>
-			</div>
+		<!-- Walkthrough: always mounted to avoid re-render freeze on tab switch.
+		     Heavy blocks (PierreFile, FileDiff, markdown) stay alive in DOM. -->
+		<div class="tab-wrapper" class:tab-wrapper--hidden={activeTab !== 'walkthrough'}>
+			<GuidedWalkthrough
+				prId={page.params['prId'] ?? ''}
+				scrollRoot={scrollRootEl}
+				isActive={activeTab === 'walkthrough'}
+			/>
+		</div>
 
-			<div class="tab-wrapper" class:tab-wrapper--hidden={activeTab !== 'conversation'}>
-				<ConversationTab
-					prId={page.params['prId'] ?? ''}
-					isActive={activeTab === 'conversation'}
-				/>
-			</div>
+		<div class="tab-wrapper" class:tab-wrapper--hidden={activeTab !== 'conversation'}>
+			<ConversationTab
+				prId={page.params['prId'] ?? ''}
+				isActive={activeTab === 'conversation'}
+			/>
 		</div>
 	</div>
+</div>
 {:else}
-	<div class="loading">
-		<Dotmatrix variant="square-9" />
-		<p>Loading…</p>
-	</div>
+<div class="loading">
+	<Dotmatrix variant="square-9" />
+	<p>Loading…</p>
+</div>
 {/if}
-</AuthGuard>
 
 <style>
 	.review-page {
