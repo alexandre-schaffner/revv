@@ -28,6 +28,8 @@ import {
   chatTasks,
   pullRequests,
 } from "../db/schema/index";
+import type { DbError } from "../domain/errors";
+import { dbTry } from "../effects/db-try";
 import { DbService } from "./Db";
 import { resolveProposedBaseSha } from "./GitOps";
 
@@ -147,13 +149,16 @@ export class ChatSessionService extends Context.Service<
       agent: string,
       model: string,
       prHeadSha: string,
-    ) => Effect.Effect<ChatSessionRow | null>;
+    ) => Effect.Effect<ChatSessionRow | null, DbError>;
     /**
      * Find the most recently active chat session for a PR+agent pair,
      * regardless of prHeadSha. Used by commit-management endpoints where the
      * worktree may be on an old SHA.
      */
-    readonly findLatestForPr: (prId: string, agent: string) => Effect.Effect<ChatSessionRow | null>;
+    readonly findLatestForPr: (
+      prId: string,
+      agent: string,
+    ) => Effect.Effect<ChatSessionRow | null, DbError>;
     /**
      * {@link findLatestForPr}, with the proposed-commit baseline already
      * resolved against the PR's current head.
@@ -170,7 +175,7 @@ export class ChatSessionService extends Context.Service<
     readonly findLatestForPrWithBase: (
       prId: string,
       agent: string,
-    ) => Effect.Effect<ResolvedChatSession | null>;
+    ) => Effect.Effect<ResolvedChatSession | null, DbError>;
     /**
      * Look up the existing row for (prId, agent, model, prHeadSha) or insert a
      * fresh one with `session_id = NULL`. Used by the chat route at the
@@ -178,7 +183,9 @@ export class ChatSessionService extends Context.Service<
      * the row before the agent emits its session id (which arrives
      * mid-stream).
      */
-    readonly findOrCreate: (params: FindOrCreateChatSessionParams) => Effect.Effect<ChatSessionRow>;
+    readonly findOrCreate: (
+      params: FindOrCreateChatSessionParams,
+    ) => Effect.Effect<ChatSessionRow, DbError>;
     /**
      * Patch the agent-side session id (and refresh worktree/branch which
      * stay informational) onto an existing row. Called from the route's
@@ -189,7 +196,7 @@ export class ChatSessionService extends Context.Service<
       readonly sessionId: string;
       readonly worktreePath: string;
       readonly branchName: string;
-    }) => Effect.Effect<void>;
+    }) => Effect.Effect<void, DbError>;
     /**
      * Update the prHeadSha of an existing session row. Called by the
      * merge-and-push flow after a successful push so the session lookup
@@ -199,8 +206,8 @@ export class ChatSessionService extends Context.Service<
     readonly updatePrHeadSha: (params: {
       readonly chatSessionId: string;
       readonly prHeadSha: string;
-    }) => Effect.Effect<void>;
-    readonly clearAllForPr: (prId: string, agent: string) => Effect.Effect<void>;
+    }) => Effect.Effect<void, DbError>;
+    readonly clearAllForPr: (prId: string, agent: string) => Effect.Effect<void, DbError>;
 
     /**
      * Insert a finalized user message. Returns the row's id + the
@@ -212,7 +219,7 @@ export class ChatSessionService extends Context.Service<
       readonly turnId: string;
       readonly content: string;
       readonly attachments?: ReadonlyArray<ChatAttachmentMetadata>;
-    }) => Effect.Effect<{ readonly id: string; readonly sequence: number }>;
+    }) => Effect.Effect<{ readonly id: string; readonly sequence: number }, DbError>;
 
     /**
      * Insert a streaming assistant placeholder. `is_streaming = 1`,
@@ -222,13 +229,13 @@ export class ChatSessionService extends Context.Service<
     readonly beginAssistantMessage: (params: {
       readonly chatSessionId: string;
       readonly turnId: string;
-    }) => Effect.Effect<{ readonly id: string; readonly sequence: number }>;
+    }) => Effect.Effect<{ readonly id: string; readonly sequence: number }, DbError>;
 
     /** Append `chunk` to the assistant message body in-place. */
     readonly appendAssistantContent: (params: {
       readonly messageId: string;
       readonly chunk: string;
-    }) => Effect.Effect<void>;
+    }) => Effect.Effect<void, DbError>;
 
     /**
      * Mark the assistant message as no-longer-streaming. If `error` is
@@ -237,7 +244,7 @@ export class ChatSessionService extends Context.Service<
     readonly finalizeAssistantMessage: (params: {
       readonly messageId: string;
       readonly error?: string | null;
-    }) => Effect.Effect<void>;
+    }) => Effect.Effect<void, DbError>;
 
     readonly appendActivity: (params: {
       readonly chatSessionId: string;
@@ -247,7 +254,7 @@ export class ChatSessionService extends Context.Service<
       readonly summary: string;
       readonly payload?: unknown;
       readonly callId?: string | null;
-    }) => Effect.Effect<{ readonly id: string; readonly sequence: number }>;
+    }) => Effect.Effect<{ readonly id: string; readonly sequence: number }, DbError>;
 
     /**
      * Stamp a tool's captured output onto its activity row, matched by provider
@@ -263,7 +270,7 @@ export class ChatSessionService extends Context.Service<
       readonly callId: string;
       readonly output: string;
       readonly isError: boolean;
-    }) => Effect.Effect<void>;
+    }) => Effect.Effect<void, DbError>;
 
     /**
      * Back-fill an activity's tool input (matched by provider `callId` within a
@@ -277,17 +284,19 @@ export class ChatSessionService extends Context.Service<
       readonly turnId: string;
       readonly callId: string;
       readonly payload: unknown;
-    }) => Effect.Effect<void>;
+    }) => Effect.Effect<void, DbError>;
 
     /** Read the full timeline for a session, ordered by sequence. */
-    readonly listTimeline: (chatSessionId: string) => Effect.Effect<readonly ChatTimelineEntry[]>;
+    readonly listTimeline: (
+      chatSessionId: string,
+    ) => Effect.Effect<readonly ChatTimelineEntry[], DbError>;
 
     // ── interaction mode ────────────────────────────────────────────────
 
     readonly setInteractionMode: (params: {
       readonly chatSessionId: string;
       readonly mode: InteractionMode;
-    }) => Effect.Effect<void>;
+    }) => Effect.Effect<void, DbError>;
 
     // ── tasks ───────────────────────────────────────────────────────────
 
@@ -302,7 +311,7 @@ export class ChatSessionService extends Context.Service<
       readonly chatSessionId: string;
       readonly turnId: string;
       readonly tasks: ReadonlyArray<ChatTask>;
-    }) => Effect.Effect<readonly ChatTaskRow[]>;
+    }) => Effect.Effect<readonly ChatTaskRow[], DbError>;
 
     // ── plans ───────────────────────────────────────────────────────────
 
@@ -314,14 +323,14 @@ export class ChatSessionService extends Context.Service<
       readonly chatSessionId: string;
       readonly turnId: string;
       readonly markdown: string;
-    }) => Effect.Effect<ChatPlanRow>;
+    }) => Effect.Effect<ChatPlanRow, DbError>;
 
     readonly decidePlan: (params: {
       readonly planId: string;
       readonly decision: "approved" | "rejected" | "superseded";
-    }) => Effect.Effect<ChatPlanRow | null>;
+    }) => Effect.Effect<ChatPlanRow | null, DbError>;
 
-    readonly findPendingPlan: (chatSessionId: string) => Effect.Effect<ChatPlanRow | null>;
+    readonly findPendingPlan: (chatSessionId: string) => Effect.Effect<ChatPlanRow | null, DbError>;
   }
 >()("ChatSessionService") {}
 
@@ -431,7 +440,7 @@ export const ChatSessionServiceLive = Layer.effect(
 
     return {
       find: (prId, agent, model, prHeadSha) =>
-        Effect.sync(() => {
+        dbTry("chat find", () => {
           const row = db
             .select()
             .from(chatSessions)
@@ -448,7 +457,7 @@ export const ChatSessionServiceLive = Layer.effect(
         }),
 
       findLatestForPr: (prId, agent) =>
-        Effect.sync(() => {
+        dbTry("chat findLatestForPr", () => {
           const row = db
             .select()
             .from(chatSessions)
@@ -461,7 +470,7 @@ export const ChatSessionServiceLive = Layer.effect(
 
       findLatestForPrWithBase: (prId, agent) =>
         Effect.gen(function* () {
-          const row = yield* Effect.sync(() => {
+          const row = yield* dbTry("chat findLatestForPrWithBase", () => {
             const found = db
               .select()
               .from(chatSessions)
@@ -476,7 +485,8 @@ export const ChatSessionServiceLive = Layer.effect(
           // as "no known PR head" and resolves to the session baseline — the
           // historical answer. Letting it throw would take down the fiber for
           // a lookup whose absence is already a handled case.
-          const prHeadSha = yield* Effect.try(
+          const prHeadSha = yield* dbTry(
+            "chat PR head lookup",
             () =>
               db
                 .select({ headSha: pullRequests.headSha })
@@ -502,7 +512,7 @@ export const ChatSessionServiceLive = Layer.effect(
         }),
 
       findOrCreate: ({ prId, agent, model, prHeadSha, worktreePath, branchName }) =>
-        Effect.sync(() => {
+        dbTry("chat findOrCreate", () => {
           const existing = db
             .select()
             .from(chatSessions)
@@ -563,7 +573,7 @@ export const ChatSessionServiceLive = Layer.effect(
         }),
 
       setAgentSessionId: ({ chatSessionId, sessionId, worktreePath, branchName }) =>
-        Effect.sync(() => {
+        dbTry("chat setAgentSessionId", () => {
           db.update(chatSessions)
             .set({
               sessionId,
@@ -576,7 +586,7 @@ export const ChatSessionServiceLive = Layer.effect(
         }),
 
       updatePrHeadSha: ({ chatSessionId, prHeadSha }) =>
-        Effect.sync(() => {
+        dbTry("chat updatePrHeadSha", () => {
           db.update(chatSessions)
             .set({ prHeadSha, lastActivityAt: nowIso() })
             .where(eq(chatSessions.id, chatSessionId))
@@ -584,14 +594,14 @@ export const ChatSessionServiceLive = Layer.effect(
         }),
 
       clearAllForPr: (prId, agent) =>
-        Effect.sync(() => {
+        dbTry("chat clearAllForPr", () => {
           db.delete(chatSessions)
             .where(and(eq(chatSessions.pullRequestId, prId), eq(chatSessions.agent, agent)))
             .run();
         }),
 
       appendUserMessage: ({ chatSessionId, turnId, content, attachments }) =>
-        Effect.sync(() => {
+        dbTry("chat appendUserMessage", () => {
           const sequence = allocateSequence(chatSessionId);
           const id = crypto.randomUUID();
           const now = nowIso();
@@ -616,7 +626,7 @@ export const ChatSessionServiceLive = Layer.effect(
         }),
 
       beginAssistantMessage: ({ chatSessionId, turnId }) =>
-        Effect.sync(() => {
+        dbTry("chat beginAssistantMessage", () => {
           const sequence = allocateSequence(chatSessionId);
           const id = crypto.randomUUID();
           const now = nowIso();
@@ -639,7 +649,7 @@ export const ChatSessionServiceLive = Layer.effect(
         }),
 
       appendAssistantContent: ({ messageId, chunk }) =>
-        Effect.sync(() => {
+        dbTry("chat appendAssistantContent", () => {
           if (chunk.length === 0) return;
           // SQL `||` concat — atomic and cheap. Avoids a read-modify-
           // write race if two stream callbacks ever interleaved.
@@ -649,7 +659,7 @@ export const ChatSessionServiceLive = Layer.effect(
         }),
 
       finalizeAssistantMessage: ({ messageId, error }) =>
-        Effect.sync(() => {
+        dbTry("chat finalizeAssistantMessage", () => {
           db.update(chatMessages)
             .set({
               isStreaming: 0,
@@ -669,7 +679,7 @@ export const ChatSessionServiceLive = Layer.effect(
         payload,
         callId,
       }) =>
-        Effect.sync(() => {
+        dbTry("chat appendActivity", () => {
           const sequence = allocateSequence(chatSessionId);
           const id = crypto.randomUUID();
           const now = nowIso();
@@ -693,7 +703,7 @@ export const ChatSessionServiceLive = Layer.effect(
         }),
 
       updateActivityResult: ({ chatSessionId, turnId, callId, output, isError }) =>
-        Effect.sync(() => {
+        dbTry("chat updateActivityResult", () => {
           db.update(chatActivities)
             .set({ output, isError })
             .where(
@@ -707,7 +717,7 @@ export const ChatSessionServiceLive = Layer.effect(
         }),
 
       updateActivityInput: ({ chatSessionId, turnId, callId, payload }) =>
-        Effect.sync(() => {
+        dbTry("chat updateActivityInput", () => {
           db.update(chatActivities)
             .set({ payloadJson: payload === undefined ? null : JSON.stringify(payload) })
             .where(
@@ -721,7 +731,7 @@ export const ChatSessionServiceLive = Layer.effect(
         }),
 
       listTimeline: (chatSessionId) =>
-        Effect.sync(() => {
+        dbTry("chat listTimeline", () => {
           const messages = db
             .select()
             .from(chatMessages)
@@ -846,7 +856,7 @@ export const ChatSessionServiceLive = Layer.effect(
       // ── interaction mode ───────────────────────────────────────
 
       setInteractionMode: ({ chatSessionId, mode }) =>
-        Effect.sync(() => {
+        dbTry("chat setInteractionMode", () => {
           db.update(chatSessions)
             .set({ interactionMode: mode, lastActivityAt: nowIso() })
             .where(eq(chatSessions.id, chatSessionId))
@@ -856,7 +866,7 @@ export const ChatSessionServiceLive = Layer.effect(
       // ── tasks ──────────────────────────────────────────────────
 
       applyTaskListSnapshot: ({ chatSessionId, turnId, tasks }) =>
-        Effect.sync(() => {
+        dbTry("chat applyTaskListSnapshot", () => {
           const result: ChatTaskRow[] = [];
           db.transaction((tx) => {
             const now = nowIso();
@@ -952,7 +962,7 @@ export const ChatSessionServiceLive = Layer.effect(
       // ── plans ──────────────────────────────────────────────────
 
       createPlan: ({ chatSessionId, turnId, markdown }) =>
-        Effect.sync(() => {
+        dbTry("chat createPlan", () => {
           const id = crypto.randomUUID();
           const now = nowIso();
           let row: ChatPlanRow | null = null;
@@ -1004,7 +1014,7 @@ export const ChatSessionServiceLive = Layer.effect(
         }),
 
       decidePlan: ({ planId, decision }) =>
-        Effect.sync(() => {
+        dbTry("chat decidePlan", () => {
           const now = nowIso();
           db.update(chatPlans)
             .set({ status: decision, decidedAt: now })
@@ -1015,7 +1025,7 @@ export const ChatSessionServiceLive = Layer.effect(
         }),
 
       findPendingPlan: (chatSessionId) =>
-        Effect.sync(() => {
+        dbTry("chat findPendingPlan", () => {
           const row = db
             .select()
             .from(chatPlans)

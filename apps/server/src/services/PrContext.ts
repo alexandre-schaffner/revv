@@ -2,7 +2,12 @@ import type { PullRequest, Repository } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { repositories } from "../db/schema";
-import { GitHubAuthError, type GitHubError, type NotFoundError } from "../domain/errors";
+import {
+  type DbError,
+  GitHubAuthError,
+  type GitHubError,
+  type NotFoundError,
+} from "../domain/errors";
 import type { ObservedPr } from "../domain/observed-pr";
 import { withDb } from "../effects/with-db";
 import { DbService } from "./Db";
@@ -56,7 +61,7 @@ export interface PrContextWithDiff extends PrContextBasic {
   readonly commits: readonly PrCommit[];
 }
 
-export type PrContextError = NotFoundError | GitHubAuthError | GitHubError;
+export type PrContextError = NotFoundError | GitHubAuthError | GitHubError | DbError;
 
 export class PrContextService extends Context.Service<
   PrContextService,

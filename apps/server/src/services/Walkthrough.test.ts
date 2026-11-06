@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { eq } from "drizzle-orm";
-import { type Context, Effect, Layer } from "effect";
+import { Cause, type Context, Effect, Layer } from "effect";
 import { createDb, type Db } from "../db/index";
 import { reviewRounds, walkthroughs } from "../db/schema";
 import { DbService } from "./Db";
@@ -141,6 +141,28 @@ describe("setStatus", () => {
     expect(round?.status).toBe("complete");
     expect(walkthrough?.completedAt).toBeTruthy();
     expect(round?.completedAt).toBe(walkthrough?.completedAt);
+  });
+
+  // The status writer used to end in `Effect.catch(() => Effect.void)`, which
+  // can't see a throw from raw Drizzle: a failed write died as a defect
+  // instead of reaching the orchestrator as a failure it could handle.
+  it("fails with DbError when the write doesn't commit", async () => {
+    const db = createDb(":memory:");
+    seedWalkthroughRound(db);
+    db.$client.close();
+
+    const exit = await Effect.runPromiseExit(
+      Effect.flatMap(WalkthroughService, (service) => service.setStatus("wt-1", "complete")).pipe(
+        Effect.provide(WalkthroughServiceLive),
+        Effect.provide(Layer.succeed(DbService, { db })),
+      ),
+    );
+
+    expect(exit._tag).toBe("Failure");
+    if (exit._tag === "Failure") {
+      expect(Cause.hasFails(exit.cause)).toBe(true);
+      expect(Cause.hasDies(exit.cause)).toBe(false);
+    }
   });
 });
 

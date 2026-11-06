@@ -20,9 +20,11 @@ import type { WalkthroughGenerationMode, WalkthroughMode } from "@revv/shared";
 import { and, desc, eq, gt } from "drizzle-orm";
 import { Effect } from "effect";
 import { walkthroughs } from "../db/schema/walkthroughs";
-import { DbError } from "../domain/errors";
+import type { DbError } from "../domain/errors";
+import { dbTry } from "../effects/db-try";
 import { DbService } from "./Db";
 import { resolveReviewModeForPr } from "./review-mode";
+import { WalkthroughService } from "./Walkthrough";
 import {
   type StartJobError,
   WALKTHROUGH_CANCELLED_MESSAGE,
@@ -70,49 +72,39 @@ export const requestWalkthroughAtHead = (params: {
 }): Effect.Effect<
   WalkthroughRequestOutcome,
   WalkthroughRequestError,
-  DbService | WalkthroughJobs
+  DbService | WalkthroughJobs | WalkthroughService
 > =>
   Effect.gen(function* () {
     const { db } = yield* DbService;
     const jobs = yield* WalkthroughJobs;
+    const walkthroughService = yield* WalkthroughService;
     const { headSha } = params;
     // The perspective the PR's review page shows (`getCurrentWalkthroughHandler`):
     // the newest walkthrough's — the user's last pick — else identity. Asking
     // in the other perspective would retire the one the user chose. An
     // unresolved identity is still the right answer to write under: the web
     // falls back to the same `reviewer` while identity is unknown.
-    const newest = yield* Effect.try({
-      try: () =>
-        db
-          .select({ mode: walkthroughs.mode })
-          .from(walkthroughs)
-          .where(eq(walkthroughs.pullRequestId, params.prId))
-          .orderBy(desc(walkthroughs.generatedAt))
-          .get(),
-      catch: (cause) => new DbError({ message: "requestWalkthroughAtHead: latest mode", cause }),
-    });
-    const mode = newest?.mode ?? (yield* resolveReviewModeForPr(params.prId)).mode;
+    const lastMode = yield* walkthroughService.getLatestMode(params.prId);
+    const mode = lastMode ?? (yield* resolveReviewModeForPr(params.prId)).mode;
 
-    const runsAtHead = yield* Effect.try({
-      try: () =>
-        db
-          .select({
-            id: walkthroughs.id,
-            status: walkthroughs.status,
-            errorMessage: walkthroughs.errorMessage,
-          })
-          .from(walkthroughs)
-          .where(
-            and(
-              eq(walkthroughs.pullRequestId, params.prId),
-              eq(walkthroughs.prHeadSha, headSha),
-              eq(walkthroughs.mode, mode),
-            ),
-          )
-          .orderBy(desc(walkthroughs.generatedAt))
-          .all(),
-      catch: (cause) => new DbError({ message: "requestWalkthroughAtHead: runs at head", cause }),
-    });
+    const runsAtHead = yield* dbTry("requestWalkthroughAtHead: runs at head", () =>
+      db
+        .select({
+          id: walkthroughs.id,
+          status: walkthroughs.status,
+          errorMessage: walkthroughs.errorMessage,
+        })
+        .from(walkthroughs)
+        .where(
+          and(
+            eq(walkthroughs.pullRequestId, params.prId),
+            eq(walkthroughs.prHeadSha, headSha),
+            eq(walkthroughs.mode, mode),
+          ),
+        )
+        .orderBy(desc(walkthroughs.generatedAt))
+        .all(),
+    );
 
     const complete = runsAtHead.find((row) => row.status === "complete");
     if (complete) {
@@ -131,8 +123,9 @@ export const requestWalkthroughAtHead = (params: {
         return { kind: "budget_exhausted", scope: "head", runs: runsAtHead.length };
       }
       const since = new Date(Date.now() - HOUR_MS).toISOString();
-      const runsThisHour = yield* Effect.try({
-        try: () =>
+      const runsThisHour = yield* dbTry(
+        "requestWalkthroughAtHead: runs this hour",
+        () =>
           db
             .select({ id: walkthroughs.id })
             .from(walkthroughs)
@@ -144,9 +137,7 @@ export const requestWalkthroughAtHead = (params: {
               ),
             )
             .all().length,
-        catch: (cause) =>
-          new DbError({ message: "requestWalkthroughAtHead: runs this hour", cause }),
-      });
+      );
       if (runsThisHour >= MAX_RUNS_PER_PR_PER_HOUR) {
         return { kind: "budget_exhausted", scope: "pr_hour", runs: runsThisHour };
       }

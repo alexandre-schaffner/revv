@@ -60,7 +60,7 @@ export function buildContinuationAdjudicationState(input: {
 }
 
 /** Validate and close a run whose automatic-continuation budget has ended. */
-export function finishWalkthroughAtBudgetEnd(input: {
+export function finishWalkthroughAtBudgetEnd<E>(input: {
   readonly state: ContinuationLoopMetrics;
   readonly stoppedEarlyBecause: string | null;
   readonly adjudicationEnabled: boolean;
@@ -72,9 +72,9 @@ export function finishWalkthroughAtBudgetEnd(input: {
   readonly setStatus: (
     status: WalkthroughStatus,
     options?: { tokenUsage?: WalkthroughTokenUsage; errorMessage?: string },
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, E>;
   readonly emitEvent: (event: WalkthroughStreamEvent) => Effect.Effect<unknown>;
-}): Effect.Effect<void, never, JevService> {
+}): Effect.Effect<void, E, JevService> {
   return Effect.gen(function* () {
     yield* input.awaitPendingJudgments;
     const finalState = yield* input.loadFinalState;

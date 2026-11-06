@@ -2,11 +2,11 @@ import type { PullRequest } from "@revv/shared";
 import { and, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { pullRequests, remoteUsers, repositories, walkthroughs } from "../db/schema/index";
-import { NotFoundError, ValidationError } from "../domain/errors";
+import { type DbError, NotFoundError } from "../domain/errors";
 import type { ObservedPr } from "../domain/observed-pr";
+import { dbTry } from "../effects/db-try";
 import { DbService } from "./Db";
 import { extractGitHubMentions } from "./sync-engine/mentions";
-import type { SyncWatermark } from "./sync-engine/watermark";
 
 function rowToPr(
   row: typeof pullRequests.$inferSelect,
@@ -135,11 +135,11 @@ export class PullRequestService extends Context.Service<
     readonly listPrs: (
       accountId?: string,
       repoId?: string,
-    ) => Effect.Effect<PullRequest[], never, DbService>;
+    ) => Effect.Effect<PullRequest[], DbError, DbService>;
     readonly getPr: (
       id: string,
       accountId?: string,
-    ) => Effect.Effect<PullRequest, NotFoundError, DbService>;
+    ) => Effect.Effect<PullRequest, NotFoundError | DbError, DbService>;
     /**
      * Upsert PR rows from GitHub.
      *
@@ -156,10 +156,7 @@ export class PullRequestService extends Context.Service<
      *     `stack` is `seen` (see `StackSighting`): an `unseen` one leaves the
      *     stored ones be. A fresh insert of an `unseen` row starts unstacked.
      */
-    readonly upsertPrs: (
-      prs: readonly ObservedPr[],
-    ) => Effect.Effect<void, ValidationError, DbService>;
-    readonly deletePrs: (ids: string[]) => Effect.Effect<void, ValidationError, DbService>;
+    readonly upsertPrs: (prs: readonly ObservedPr[]) => Effect.Effect<void, DbError, DbService>;
     /**
      * Windowed read of archived (closed/merged) PRs. Supports:
      *   - per-repo filtering for the sidebar / recap pipeline
@@ -171,7 +168,7 @@ export class PullRequestService extends Context.Service<
     readonly listArchivedPrs: (
       accountId?: string,
       params?: ListArchivedPrsParams,
-    ) => Effect.Effect<ListArchivedPrsResult, ValidationError, DbService>;
+    ) => Effect.Effect<ListArchivedPrsResult, DbError, DbService>;
     /**
      * Per-window read used by the recap pipeline. Returns every archived PR
      * for the repo whose `closedAt` falls in `[since, until)`, joined to the
@@ -184,7 +181,7 @@ export class PullRequestService extends Context.Service<
       since: string,
       until: string,
       accountId?: string,
-    ) => Effect.Effect<ReadonlyArray<ArchivedPrWithWalkthrough>, ValidationError, DbService>;
+    ) => Effect.Effect<ReadonlyArray<ArchivedPrWithWalkthrough>, DbError, DbService>;
     /**
      * PRs in flight *as of* `until`: created before the window closed and not
      * yet closed at that instant. Joined to their latest non-superseded
@@ -205,25 +202,24 @@ export class PullRequestService extends Context.Service<
       repoId: string,
       until: string,
       accountId?: string,
-    ) => Effect.Effect<ReadonlyArray<ArchivedPrWithWalkthrough>, ValidationError, DbService>;
+    ) => Effect.Effect<ReadonlyArray<ArchivedPrWithWalkthrough>, DbError, DbService>;
     readonly markPrsClosed: (
       updates: Array<{ id: string; status: "closed" | "merged"; closedAt: string }>,
-    ) => Effect.Effect<void, ValidationError, DbService>;
-    readonly setPrDraft: (
-      id: string,
-      isDraft: boolean,
-    ) => Effect.Effect<void, ValidationError, DbService>;
+    ) => Effect.Effect<void, DbError, DbService>;
+    readonly setPrDraft: (id: string, isDraft: boolean) => Effect.Effect<void, DbError, DbService>;
     /**
      * Read the high-water-mark for review-comment sync. Used as the `?since=`
      * parameter on the next poll so we don't re-download comments we've
      * already ingested. Null on a cache cold-start.
      */
-    readonly getCommentsSyncedAt: (prId: string) => Effect.Effect<string | null, never, DbService>;
+    readonly getCommentsSyncedAt: (
+      prId: string,
+    ) => Effect.Effect<string | null, DbError, DbService>;
     /** Persist the watermark after a successful sync. */
     readonly setCommentsSyncedAt: (
       prId: string,
       timestamp: string,
-    ) => Effect.Effect<void, never, DbService>;
+    ) => Effect.Effect<void, DbError, DbService>;
     /**
      * Read the GraphQL-thread fingerprint for a PR. Used to skip redundant
      * downstream DB writes and SSE events when nothing changed on GitHub.
@@ -231,14 +227,12 @@ export class PullRequestService extends Context.Service<
      */
     readonly getThreadsFingerprint: (
       prId: string,
-    ) => Effect.Effect<string | null, never, DbService>;
+    ) => Effect.Effect<string | null, DbError, DbService>;
     /** Store a new threads fingerprint after each GraphQL pull. */
     readonly setThreadsFingerprint: (
       prId: string,
       fingerprint: string,
-    ) => Effect.Effect<void, never, DbService>;
-    /** Read all sync watermarks for a PR as one typed projection. */
-    readonly getSyncWatermark: (prId: string) => Effect.Effect<SyncWatermark, never, DbService>;
+    ) => Effect.Effect<void, DbError, DbService>;
     /**
      * Append GitHub logins to a PR's `mentionedUsers` JSON array.
      * Idempotent: merges new logins into the existing set, skipping
@@ -248,7 +242,7 @@ export class PullRequestService extends Context.Service<
     readonly appendMentionedUsers: (
       prId: string,
       logins: string[],
-    ) => Effect.Effect<void, ValidationError, DbService>;
+    ) => Effect.Effect<void, DbError, DbService>;
   }
 >()("PullRequestService") {}
 
@@ -258,96 +252,74 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
       const { db } = yield* DbService;
 
       const repoIds = accountId
-        ? db
-            .select({ id: repositories.id })
-            .from(repositories)
-            .where(eq(repositories.accountId, accountId))
-            .all()
-            .map((r) => r.id)
+        ? yield* dbTry("listPrs repos", () =>
+            db
+              .select({ id: repositories.id })
+              .from(repositories)
+              .where(eq(repositories.accountId, accountId))
+              .all()
+              .map((r) => r.id),
+          )
         : null;
 
       if (accountId && repoIds !== null && repoIds.length === 0) return [];
 
-      const rows = yield* Effect.try({
-        try: () => {
-          const conditions: (ReturnType<typeof eq> | ReturnType<typeof inArray>)[] = [
-            eq(pullRequests.status, "open"),
-          ];
-          if (repoIds && repoIds.length > 0) {
-            conditions.push(inArray(pullRequests.repositoryId, repoIds));
-          }
-          if (repoId) conditions.push(eq(pullRequests.repositoryId, repoId));
-          return db
-            .select({
-              pr: pullRequests,
-              avatarContent: remoteUsers.avatarContent,
-            })
-            .from(pullRequests)
-            .leftJoin(
-              remoteUsers,
-              and(
-                eq(remoteUsers.provider, "github"),
-                eq(remoteUsers.login, pullRequests.authorLogin),
-              ),
-            )
-            .where(and(...conditions))
-            .orderBy(desc(pullRequests.updatedAt))
-            .all();
-        },
-        catch: (e) => new ValidationError({ message: String(e) }),
-      }).pipe(
-        Effect.orElseSucceed(
-          () =>
-            [] as {
-              pr: typeof pullRequests.$inferSelect;
-              avatarContent: string | null;
-            }[],
-        ),
-      );
+      const rows = yield* dbTry("listPrs", () => {
+        const conditions: (ReturnType<typeof eq> | ReturnType<typeof inArray>)[] = [
+          eq(pullRequests.status, "open"),
+        ];
+        if (repoIds && repoIds.length > 0) {
+          conditions.push(inArray(pullRequests.repositoryId, repoIds));
+        }
+        if (repoId) conditions.push(eq(pullRequests.repositoryId, repoId));
+        return db
+          .select({
+            pr: pullRequests,
+            avatarContent: remoteUsers.avatarContent,
+          })
+          .from(pullRequests)
+          .leftJoin(
+            remoteUsers,
+            and(
+              eq(remoteUsers.provider, "github"),
+              eq(remoteUsers.login, pullRequests.authorLogin),
+            ),
+          )
+          .where(and(...conditions))
+          .orderBy(desc(pullRequests.updatedAt))
+          .all();
+      });
       return rows.map((r) => rowToPr(r.pr, r.avatarContent));
     }),
 
   getPr: (id, accountId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      const row = yield* Effect.try({
-        try: () =>
-          db
-            .select({
-              pr: pullRequests,
-              avatarContent: remoteUsers.avatarContent,
-            })
-            .from(pullRequests)
-            .leftJoin(
-              remoteUsers,
-              and(
-                eq(remoteUsers.provider, "github"),
-                eq(remoteUsers.login, pullRequests.authorLogin),
-              ),
-            )
-            .where(eq(pullRequests.id, id))
-            .get(),
-        catch: (e) => new ValidationError({ message: String(e) }),
-      }).pipe(
-        Effect.catch(() =>
-          Effect.succeed(
-            null as {
-              pr: typeof pullRequests.$inferSelect;
-              avatarContent: string | null;
-            } | null,
-          ),
-        ),
+      const row = yield* dbTry("getPr", () =>
+        db
+          .select({
+            pr: pullRequests,
+            avatarContent: remoteUsers.avatarContent,
+          })
+          .from(pullRequests)
+          .leftJoin(
+            remoteUsers,
+            and(
+              eq(remoteUsers.provider, "github"),
+              eq(remoteUsers.login, pullRequests.authorLogin),
+            ),
+          )
+          .where(eq(pullRequests.id, id))
+          .get(),
       );
       if (!row) {
         return yield* Effect.fail(new NotFoundError({ resource: "pull_request", id }));
       }
       // When accountId is supplied (API routes), verify ownership through the repository.
       if (accountId) {
-        const repo = db
-          .select()
-          .from(repositories)
-          .where(eq(repositories.id, row.pr.repositoryId))
-          .get();
+        const repo = yield* dbTry("getPr owner", () =>
+          db.select().from(repositories).where(eq(repositories.id, row.pr.repositoryId)).get(),
+        );
         if (!repo || repo.accountId !== accountId) {
           return yield* Effect.fail(new NotFoundError({ resource: "pull_request", id }));
         }
@@ -360,133 +332,116 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
       const { db } = yield* DbService;
       if (prs.length === 0) return;
       const bodyMentionsByPrId = new Map<string, string[]>();
-      yield* Effect.try({
-        try: () => {
-          const withStack: (typeof pullRequests.$inferInsert)[] = [];
-          const withoutStack: (typeof pullRequests.$inferInsert)[] = [];
-          for (const pr of prs) {
-            // Extract @-mentions from the PR body. Used verbatim for a fresh
-            // insert; merged (not assigned) into an existing row afterwards.
-            const bodyMentions = pr.body ? extractGitHubMentions(pr.body) : [];
-            if (bodyMentions.length > 0) bodyMentionsByPrId.set(pr.id, bodyMentions);
-            const base: typeof pullRequests.$inferInsert = {
-              id: pr.id,
-              externalId: pr.externalId,
-              repositoryId: pr.repositoryId,
-              title: pr.title,
-              authorLogin: pr.authorLogin,
-              status: pr.status,
-              reviewStatus: pr.reviewStatus,
-              isDraft: pr.isDraft,
-              sourceBranch: pr.sourceBranch,
-              targetBranch: pr.targetBranch,
-              url: pr.url,
-              additions: pr.additions,
-              deletions: pr.deletions,
-              changedFiles: pr.changedFiles,
-              createdAt: pr.createdAt,
-              updatedAt: pr.updatedAt,
-              fetchedAt: pr.fetchedAt,
-              requestedReviewers: JSON.stringify(pr.requestedReviewers ?? []),
-              mentionedUsers: JSON.stringify(bodyMentions),
-            };
-            // Only set optional fields when non-null to satisfy exactOptionalPropertyTypes
-            if (pr.body !== null) base.body = pr.body;
-            if (pr.headSha !== null) base.headSha = pr.headSha;
-            if (pr.baseSha !== null) base.baseSha = pr.baseSha;
-            if (pr.closedAt !== null) base.closedAt = pr.closedAt;
-            if (pr.stack.kind === "seen" && pr.stack.place) {
-              base.stackNumber = pr.stack.place.number;
-              base.stackPosition = pr.stack.place.position;
-            }
-            (pr.stack.kind === "seen" ? withStack : withoutStack).push(base);
+      yield* dbTry("upsertPrs", () => {
+        const withStack: (typeof pullRequests.$inferInsert)[] = [];
+        const withoutStack: (typeof pullRequests.$inferInsert)[] = [];
+        for (const pr of prs) {
+          // Extract @-mentions from the PR body. Used verbatim for a fresh
+          // insert; merged (not assigned) into an existing row afterwards.
+          const bodyMentions = pr.body ? extractGitHubMentions(pr.body) : [];
+          if (bodyMentions.length > 0) bodyMentionsByPrId.set(pr.id, bodyMentions);
+          const base: typeof pullRequests.$inferInsert = {
+            id: pr.id,
+            externalId: pr.externalId,
+            repositoryId: pr.repositoryId,
+            title: pr.title,
+            authorLogin: pr.authorLogin,
+            status: pr.status,
+            reviewStatus: pr.reviewStatus,
+            isDraft: pr.isDraft,
+            sourceBranch: pr.sourceBranch,
+            targetBranch: pr.targetBranch,
+            url: pr.url,
+            additions: pr.additions,
+            deletions: pr.deletions,
+            changedFiles: pr.changedFiles,
+            createdAt: pr.createdAt,
+            updatedAt: pr.updatedAt,
+            fetchedAt: pr.fetchedAt,
+            requestedReviewers: JSON.stringify(pr.requestedReviewers ?? []),
+            mentionedUsers: JSON.stringify(bodyMentions),
+          };
+          // Only set optional fields when non-null to satisfy exactOptionalPropertyTypes
+          if (pr.body !== null) base.body = pr.body;
+          if (pr.headSha !== null) base.headSha = pr.headSha;
+          if (pr.baseSha !== null) base.baseSha = pr.baseSha;
+          if (pr.closedAt !== null) base.closedAt = pr.closedAt;
+          if (pr.stack.kind === "seen" && pr.stack.place) {
+            base.stackNumber = pr.stack.place.number;
+            base.stackPosition = pr.stack.place.position;
           }
-          const upsert = (values: (typeof pullRequests.$inferInsert)[], takeStack: boolean) =>
-            db
-              .insert(pullRequests)
-              .values(values)
-              .onConflictDoUpdate({
-                target: pullRequests.id,
-                // Drizzle expands a bare column reference like
-                // `pullRequests.headSha` to `head_sha = head_sha`
-                // — a no-op self-assignment. We need the EXCLUDED
-                // (newly-supplied) value, so every column the poll
-                // is meant to refresh has to go through
-                // `sql\`excluded.<col>\`` explicitly. Without this
-                // the row never moves past its initial-insert state,
-                // PollScheduler's existingShaMap-vs-fresh comparison
-                // fires `supersedeForPr` on every cycle, and an
-                // in-flight walkthrough at the latest SHA gets
-                // cancelled the next time the poll ticks.
-                set: {
-                  title: sql`excluded.title`,
-                  body: sql`excluded.body`,
-                  status: sql`excluded.status`,
-                  isDraft: sql`excluded.is_draft`,
-                  // Diff stats are conditional. GitHub's list-PRs endpoint —
-                  // the poll's source for every open PR — returns the "simple"
-                  // PR object, which has no additions/deletions/changed_files,
-                  // so those arrive as 0. Assigning them unconditionally
-                  // overwrote the real numbers a detail fetch had recorded, and
-                  // left every open PR at changed_files = 0 forever, which
-                  // silently disabled the diff-cache completeness guard.
-                  //
-                  // `changed_files` is the discriminator: any PR with commits
-                  // has at least one changed file, whereas additions or
-                  // deletions can legitimately be 0 (pure rename, mode change).
-                  // `pull_requests.<col>` is SQLite's way of naming the original
-                  // row inside DO UPDATE, i.e. "keep what we already had".
-                  additions: sql`CASE WHEN excluded.changed_files > 0 THEN excluded.additions ELSE pull_requests.additions END`,
-                  deletions: sql`CASE WHEN excluded.changed_files > 0 THEN excluded.deletions ELSE pull_requests.deletions END`,
-                  changedFiles: sql`CASE WHEN excluded.changed_files > 0 THEN excluded.changed_files ELSE pull_requests.changed_files END`,
-                  headSha: sql`excluded.head_sha`,
-                  baseSha: sql`excluded.base_sha`,
-                  updatedAt: sql`excluded.updated_at`,
-                  fetchedAt: sql`excluded.fetched_at`,
-                  requestedReviewers: sql`excluded.requested_reviewers`,
-                  closedAt: sql`excluded.closed_at`,
-                  // `mentioned_users` is deliberately absent: it is the union of
-                  // body mentions AND mentions found in review comments (see
-                  // `appendMentionedUsers`). Assigning the body-only set here
-                  // erased the comment-sourced half on every poll tick.
-                  ...(takeStack
-                    ? {
-                        stackNumber: sql`excluded.stack_number`,
-                        stackPosition: sql`excluded.stack_position`,
-                      }
-                    : {}),
-                },
-              })
-              .run();
-          db.transaction(() => {
-            if (withStack.length > 0) upsert(withStack, true);
-            if (withoutStack.length > 0) upsert(withoutStack, false);
-          });
-        },
-        catch: (e) => new ValidationError({ message: String(e) }),
+          (pr.stack.kind === "seen" ? withStack : withoutStack).push(base);
+        }
+        const upsert = (values: (typeof pullRequests.$inferInsert)[], takeStack: boolean) =>
+          db
+            .insert(pullRequests)
+            .values(values)
+            .onConflictDoUpdate({
+              target: pullRequests.id,
+              // Drizzle expands a bare column reference like
+              // `pullRequests.headSha` to `head_sha = head_sha`
+              // — a no-op self-assignment. We need the EXCLUDED
+              // (newly-supplied) value, so every column the poll
+              // is meant to refresh has to go through
+              // `sql\`excluded.<col>\`` explicitly. Without this
+              // the row never moves past its initial-insert state,
+              // PollScheduler's existingShaMap-vs-fresh comparison
+              // fires `supersedeForPr` on every cycle, and an
+              // in-flight walkthrough at the latest SHA gets
+              // cancelled the next time the poll ticks.
+              set: {
+                title: sql`excluded.title`,
+                body: sql`excluded.body`,
+                status: sql`excluded.status`,
+                isDraft: sql`excluded.is_draft`,
+                // Diff stats are conditional. GitHub's list-PRs endpoint —
+                // the poll's source for every open PR — returns the "simple"
+                // PR object, which has no additions/deletions/changed_files,
+                // so those arrive as 0. Assigning them unconditionally
+                // overwrote the real numbers a detail fetch had recorded, and
+                // left every open PR at changed_files = 0 forever, which
+                // silently disabled the diff-cache completeness guard.
+                //
+                // `changed_files` is the discriminator: any PR with commits
+                // has at least one changed file, whereas additions or
+                // deletions can legitimately be 0 (pure rename, mode change).
+                // `pull_requests.<col>` is SQLite's way of naming the original
+                // row inside DO UPDATE, i.e. "keep what we already had".
+                additions: sql`CASE WHEN excluded.changed_files > 0 THEN excluded.additions ELSE pull_requests.additions END`,
+                deletions: sql`CASE WHEN excluded.changed_files > 0 THEN excluded.deletions ELSE pull_requests.deletions END`,
+                changedFiles: sql`CASE WHEN excluded.changed_files > 0 THEN excluded.changed_files ELSE pull_requests.changed_files END`,
+                headSha: sql`excluded.head_sha`,
+                baseSha: sql`excluded.base_sha`,
+                updatedAt: sql`excluded.updated_at`,
+                fetchedAt: sql`excluded.fetched_at`,
+                requestedReviewers: sql`excluded.requested_reviewers`,
+                closedAt: sql`excluded.closed_at`,
+                // `mentioned_users` is deliberately absent: it is the union of
+                // body mentions AND mentions found in review comments (see
+                // `appendMentionedUsers`). Assigning the body-only set here
+                // erased the comment-sourced half on every poll tick.
+                ...(takeStack
+                  ? {
+                      stackNumber: sql`excluded.stack_number`,
+                      stackPosition: sql`excluded.stack_position`,
+                    }
+                  : {}),
+              },
+            })
+            .run();
+        db.transaction(() => {
+          if (withStack.length > 0) upsert(withStack, true);
+          if (withoutStack.length > 0) upsert(withoutStack, false);
+        });
       });
 
       // Merge body mentions into whatever the row already accumulated. Runs
       // after the upsert so fresh inserts (which took `mentionedUsers` from the
       // insert values) are a no-op here.
-      yield* Effect.try({
-        try: () => {
-          for (const [prId, logins] of bodyMentionsByPrId) {
-            mergeMentionedUsers(db, prId, logins);
-          }
-        },
-        catch: (e) => new ValidationError({ message: String(e) }),
-      });
-    }),
-
-  deletePrs: (ids) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      if (ids.length === 0) return;
-      yield* Effect.tryPromise({
-        try: () =>
-          Promise.resolve(db.delete(pullRequests).where(inArray(pullRequests.id, ids)).run()),
-        catch: (e) => new ValidationError({ message: String(e) }),
+      yield* dbTry("upsertPrs", () => {
+        for (const [prId, logins] of bodyMentionsByPrId) {
+          mergeMentionedUsers(db, prId, logins);
+        }
       });
     }),
 
@@ -499,79 +454,78 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
       );
 
       const repoIds = accountId
-        ? db
-            .select({ id: repositories.id })
-            .from(repositories)
-            .where(eq(repositories.accountId, accountId))
-            .all()
-            .map((r) => r.id)
+        ? yield* dbTry("listPrs repos", () =>
+            db
+              .select({ id: repositories.id })
+              .from(repositories)
+              .where(eq(repositories.accountId, accountId))
+              .all()
+              .map((r) => r.id),
+          )
         : null;
 
       if (accountId && (!repoIds || repoIds.length === 0)) {
         return { prs: [], nextCursor: null };
       }
 
-      return yield* Effect.try({
-        try: () => {
-          const conditions: (
-            | ReturnType<typeof eq>
-            | ReturnType<typeof ne>
-            | ReturnType<typeof gte>
-            | ReturnType<typeof lt>
-            | ReturnType<typeof inArray>
-          )[] = [ne(pullRequests.status, "open")];
-          if (repoIds && repoIds.length > 0) {
-            conditions.push(inArray(pullRequests.repositoryId, repoIds));
-          }
-          if (params?.repoId !== undefined) {
-            conditions.push(eq(pullRequests.repositoryId, params.repoId));
-          }
-          if (params?.authorLogins && params.authorLogins.length > 0) {
-            conditions.push(inArray(pullRequests.authorLogin, [...params.authorLogins]));
-          }
-          if (params?.since !== undefined) {
-            conditions.push(gte(pullRequests.closedAt, params.since));
-          }
-          if (params?.until !== undefined) {
-            conditions.push(lt(pullRequests.closedAt, params.until));
-          }
-          if (params?.cursor !== undefined) {
-            // Cursor is the closedAt of the last row from the prior page.
-            // Strict `<` so the cursor row itself is not redelivered.
-            conditions.push(lt(pullRequests.closedAt, params.cursor));
-          }
+      return yield* dbTry("listArchivedPrs", () => {
+        const conditions: (
+          | ReturnType<typeof eq>
+          | ReturnType<typeof ne>
+          | ReturnType<typeof gte>
+          | ReturnType<typeof lt>
+          | ReturnType<typeof inArray>
+        )[] = [ne(pullRequests.status, "open")];
+        if (repoIds && repoIds.length > 0) {
+          conditions.push(inArray(pullRequests.repositoryId, repoIds));
+        }
+        if (params?.repoId !== undefined) {
+          conditions.push(eq(pullRequests.repositoryId, params.repoId));
+        }
+        if (params?.authorLogins && params.authorLogins.length > 0) {
+          conditions.push(inArray(pullRequests.authorLogin, [...params.authorLogins]));
+        }
+        if (params?.since !== undefined) {
+          conditions.push(gte(pullRequests.closedAt, params.since));
+        }
+        if (params?.until !== undefined) {
+          conditions.push(lt(pullRequests.closedAt, params.until));
+        }
+        if (params?.cursor !== undefined) {
+          // Cursor is the closedAt of the last row from the prior page.
+          // Strict `<` so the cursor row itself is not redelivered.
+          conditions.push(lt(pullRequests.closedAt, params.cursor));
+        }
 
-          // Probe with limit + 1 so we can detect whether more rows exist
-          // without a separate COUNT query.
-          const rows = db
-            .select({
-              pr: pullRequests,
-              avatarContent: remoteUsers.avatarContent,
-            })
-            .from(pullRequests)
-            .leftJoin(
-              remoteUsers,
-              and(
-                eq(remoteUsers.provider, "github"),
-                eq(remoteUsers.login, pullRequests.authorLogin),
-              ),
-            )
-            .where(and(...conditions))
-            .orderBy(desc(pullRequests.closedAt))
-            .limit(limit + 1)
-            .all();
+        // Probe with limit + 1 so we can detect whether more rows exist
+        // without a separate COUNT query.
+        const rows = db
+          .select({
+            pr: pullRequests,
+            avatarContent: remoteUsers.avatarContent,
+          })
+          .from(pullRequests)
+          .leftJoin(
+            remoteUsers,
+            and(
+              eq(remoteUsers.provider, "github"),
+              eq(remoteUsers.login, pullRequests.authorLogin),
+            ),
+          )
+          .where(and(...conditions))
+          .orderBy(desc(pullRequests.closedAt))
+          .limit(limit + 1)
+          .all();
 
-          const hasMore = rows.length > limit;
-          const trimmed = hasMore ? rows.slice(0, limit) : rows;
-          const lastRow = trimmed[trimmed.length - 1];
-          const nextCursor = hasMore && lastRow ? (lastRow.pr.closedAt ?? null) : null;
+        const hasMore = rows.length > limit;
+        const trimmed = hasMore ? rows.slice(0, limit) : rows;
+        const lastRow = trimmed[trimmed.length - 1];
+        const nextCursor = hasMore && lastRow ? (lastRow.pr.closedAt ?? null) : null;
 
-          return {
-            prs: trimmed.map((r) => rowToPr(r.pr, r.avatarContent)),
-            nextCursor,
-          };
-        },
-        catch: (e) => new ValidationError({ message: String(e) }),
+        return {
+          prs: trimmed.map((r) => rowToPr(r.pr, r.avatarContent)),
+          nextCursor,
+        };
       });
     }),
 
@@ -585,94 +539,91 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
           return [] as ReadonlyArray<ArchivedPrWithWalkthrough>;
         }
       }
-      return yield* Effect.try({
-        try: () => {
-          const prRows = db
-            .select({
-              pr: pullRequests,
-              avatarContent: remoteUsers.avatarContent,
-            })
-            .from(pullRequests)
-            .leftJoin(
-              remoteUsers,
-              and(
-                eq(remoteUsers.provider, "github"),
-                eq(remoteUsers.login, pullRequests.authorLogin),
-              ),
-            )
-            .where(
-              and(
-                eq(pullRequests.repositoryId, repoId),
-                ne(pullRequests.status, "open"),
-                gte(pullRequests.closedAt, since),
-                lt(pullRequests.closedAt, until),
-              ),
-            )
-            .orderBy(desc(pullRequests.closedAt))
-            .all();
+      return yield* dbTry("listArchivedPrsForWindow", () => {
+        const prRows = db
+          .select({
+            pr: pullRequests,
+            avatarContent: remoteUsers.avatarContent,
+          })
+          .from(pullRequests)
+          .leftJoin(
+            remoteUsers,
+            and(
+              eq(remoteUsers.provider, "github"),
+              eq(remoteUsers.login, pullRequests.authorLogin),
+            ),
+          )
+          .where(
+            and(
+              eq(pullRequests.repositoryId, repoId),
+              ne(pullRequests.status, "open"),
+              gte(pullRequests.closedAt, since),
+              lt(pullRequests.closedAt, until),
+            ),
+          )
+          .orderBy(desc(pullRequests.closedAt))
+          .all();
 
-          if (prRows.length === 0) {
-            return [] as ReadonlyArray<ArchivedPrWithWalkthrough>;
+        if (prRows.length === 0) {
+          return [] as ReadonlyArray<ArchivedPrWithWalkthrough>;
+        }
+
+        const prIds = prRows.map((r) => r.pr.id);
+
+        // Latest non-superseded complete walkthrough per PR. We pull all
+        // candidates and pick the freshest in JS — SQLite's window
+        // functions work but are clunkier than the JS path for a list
+        // bounded by the period (usually ≤ a few dozen PRs).
+        const wtRows = db
+          .select({
+            id: walkthroughs.id,
+            pullRequestId: walkthroughs.pullRequestId,
+            summary: walkthroughs.summary,
+            sentiment: walkthroughs.sentiment,
+            riskLevel: walkthroughs.riskLevel,
+            completedAt: walkthroughs.completedAt,
+            generatedAt: walkthroughs.generatedAt,
+          })
+          .from(walkthroughs)
+          .where(
+            and(
+              inArray(walkthroughs.pullRequestId, prIds),
+              eq(walkthroughs.status, "complete"),
+              isNull(walkthroughs.supersededBy),
+            ),
+          )
+          .all();
+
+        const latestByPr = new Map<string, (typeof wtRows)[number]>();
+        for (const w of wtRows) {
+          const current = latestByPr.get(w.pullRequestId);
+          if (!current) {
+            latestByPr.set(w.pullRequestId, w);
+            continue;
           }
+          // Prefer the larger completedAt; fall back to generatedAt for
+          // pre-migration rows whose completedAt is still null (the
+          // 0220 backfill should cover all of these, but defend anyway).
+          const curTs = current.completedAt ?? current.generatedAt;
+          const newTs = w.completedAt ?? w.generatedAt;
+          if (newTs > curTs) latestByPr.set(w.pullRequestId, w);
+        }
 
-          const prIds = prRows.map((r) => r.pr.id);
-
-          // Latest non-superseded complete walkthrough per PR. We pull all
-          // candidates and pick the freshest in JS — SQLite's window
-          // functions work but are clunkier than the JS path for a list
-          // bounded by the period (usually ≤ a few dozen PRs).
-          const wtRows = db
-            .select({
-              id: walkthroughs.id,
-              pullRequestId: walkthroughs.pullRequestId,
-              summary: walkthroughs.summary,
-              sentiment: walkthroughs.sentiment,
-              riskLevel: walkthroughs.riskLevel,
-              completedAt: walkthroughs.completedAt,
-              generatedAt: walkthroughs.generatedAt,
-            })
-            .from(walkthroughs)
-            .where(
-              and(
-                inArray(walkthroughs.pullRequestId, prIds),
-                eq(walkthroughs.status, "complete"),
-                isNull(walkthroughs.supersededBy),
-              ),
-            )
-            .all();
-
-          const latestByPr = new Map<string, (typeof wtRows)[number]>();
-          for (const w of wtRows) {
-            const current = latestByPr.get(w.pullRequestId);
-            if (!current) {
-              latestByPr.set(w.pullRequestId, w);
-              continue;
-            }
-            // Prefer the larger completedAt; fall back to generatedAt for
-            // pre-migration rows whose completedAt is still null (the
-            // 0220 backfill should cover all of these, but defend anyway).
-            const curTs = current.completedAt ?? current.generatedAt;
-            const newTs = w.completedAt ?? w.generatedAt;
-            if (newTs > curTs) latestByPr.set(w.pullRequestId, w);
-          }
-
-          return prRows.map((pr): ArchivedPrWithWalkthrough => {
-            const w = latestByPr.get(pr.pr.id);
-            return {
-              pr: rowToPr(pr.pr, pr.avatarContent),
-              walkthrough: w
-                ? {
-                    id: w.id,
-                    summary: w.summary,
-                    sentiment: w.sentiment ?? null,
-                    riskLevel: w.riskLevel,
-                    completedAt: w.completedAt ?? null,
-                  }
-                : null,
-            };
-          });
-        },
-        catch: (e) => new ValidationError({ message: String(e) }),
+        return prRows.map((pr): ArchivedPrWithWalkthrough => {
+          const w = latestByPr.get(pr.pr.id);
+          return {
+            pr: rowToPr(pr.pr, pr.avatarContent),
+            walkthrough: w
+              ? {
+                  id: w.id,
+                  summary: w.summary,
+                  sentiment: w.sentiment ?? null,
+                  riskLevel: w.riskLevel,
+                  completedAt: w.completedAt ?? null,
+                }
+              : null,
+          };
+        });
       });
     }),
 
@@ -685,224 +636,171 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
           return [] as ReadonlyArray<ArchivedPrWithWalkthrough>;
         }
       }
-      return yield* Effect.try({
-        try: () => {
-          const prRows = db
-            .select({
-              pr: pullRequests,
-              avatarContent: remoteUsers.avatarContent,
-            })
-            .from(pullRequests)
-            .leftJoin(
-              remoteUsers,
-              and(
-                eq(remoteUsers.provider, "github"),
-                eq(remoteUsers.login, pullRequests.authorLogin),
-              ),
-            )
-            .where(
-              and(
-                eq(pullRequests.repositoryId, repoId),
-                // "Open at `until`" reconstructed from timestamps rather than
-                // the mutable `status` column, which only ever describes now.
-                lt(pullRequests.createdAt, until),
-                or(isNull(pullRequests.closedAt), gte(pullRequests.closedAt, until)),
-              ),
-            )
-            .orderBy(desc(pullRequests.updatedAt))
-            .limit(20)
-            .all();
+      return yield* dbTry("listOpenPrsAsOfWindow", () => {
+        const prRows = db
+          .select({
+            pr: pullRequests,
+            avatarContent: remoteUsers.avatarContent,
+          })
+          .from(pullRequests)
+          .leftJoin(
+            remoteUsers,
+            and(
+              eq(remoteUsers.provider, "github"),
+              eq(remoteUsers.login, pullRequests.authorLogin),
+            ),
+          )
+          .where(
+            and(
+              eq(pullRequests.repositoryId, repoId),
+              // "Open at `until`" reconstructed from timestamps rather than
+              // the mutable `status` column, which only ever describes now.
+              lt(pullRequests.createdAt, until),
+              or(isNull(pullRequests.closedAt), gte(pullRequests.closedAt, until)),
+            ),
+          )
+          .orderBy(desc(pullRequests.updatedAt))
+          .limit(20)
+          .all();
 
-          if (prRows.length === 0) {
-            return [] as ReadonlyArray<ArchivedPrWithWalkthrough>;
+        if (prRows.length === 0) {
+          return [] as ReadonlyArray<ArchivedPrWithWalkthrough>;
+        }
+
+        const prIds = prRows.map((r) => r.pr.id);
+
+        const wtRows = db
+          .select({
+            id: walkthroughs.id,
+            pullRequestId: walkthroughs.pullRequestId,
+            summary: walkthroughs.summary,
+            sentiment: walkthroughs.sentiment,
+            riskLevel: walkthroughs.riskLevel,
+            completedAt: walkthroughs.completedAt,
+            generatedAt: walkthroughs.generatedAt,
+          })
+          .from(walkthroughs)
+          .where(
+            and(
+              inArray(walkthroughs.pullRequestId, prIds),
+              eq(walkthroughs.status, "complete"),
+              isNull(walkthroughs.supersededBy),
+            ),
+          )
+          .all();
+
+        const latestByPr = new Map<string, (typeof wtRows)[number]>();
+        for (const w of wtRows) {
+          const current = latestByPr.get(w.pullRequestId);
+          if (!current) {
+            latestByPr.set(w.pullRequestId, w);
+            continue;
           }
+          const curTs = current.completedAt ?? current.generatedAt;
+          const newTs = w.completedAt ?? w.generatedAt;
+          if (newTs > curTs) latestByPr.set(w.pullRequestId, w);
+        }
 
-          const prIds = prRows.map((r) => r.pr.id);
+        // Sort: PRs with walkthroughs first, then by updatedAt DESC
+        const withWt = prRows.filter((r) => latestByPr.has(r.pr.id));
+        const withoutWt = prRows.filter((r) => !latestByPr.has(r.pr.id));
+        const sorted = [...withWt, ...withoutWt];
 
-          const wtRows = db
-            .select({
-              id: walkthroughs.id,
-              pullRequestId: walkthroughs.pullRequestId,
-              summary: walkthroughs.summary,
-              sentiment: walkthroughs.sentiment,
-              riskLevel: walkthroughs.riskLevel,
-              completedAt: walkthroughs.completedAt,
-              generatedAt: walkthroughs.generatedAt,
-            })
-            .from(walkthroughs)
-            .where(
-              and(
-                inArray(walkthroughs.pullRequestId, prIds),
-                eq(walkthroughs.status, "complete"),
-                isNull(walkthroughs.supersededBy),
-              ),
-            )
-            .all();
-
-          const latestByPr = new Map<string, (typeof wtRows)[number]>();
-          for (const w of wtRows) {
-            const current = latestByPr.get(w.pullRequestId);
-            if (!current) {
-              latestByPr.set(w.pullRequestId, w);
-              continue;
-            }
-            const curTs = current.completedAt ?? current.generatedAt;
-            const newTs = w.completedAt ?? w.generatedAt;
-            if (newTs > curTs) latestByPr.set(w.pullRequestId, w);
-          }
-
-          // Sort: PRs with walkthroughs first, then by updatedAt DESC
-          const withWt = prRows.filter((r) => latestByPr.has(r.pr.id));
-          const withoutWt = prRows.filter((r) => !latestByPr.has(r.pr.id));
-          const sorted = [...withWt, ...withoutWt];
-
-          return sorted.map((r): ArchivedPrWithWalkthrough => {
-            const w = latestByPr.get(r.pr.id);
-            return {
-              pr: rowToPr(r.pr, r.avatarContent),
-              walkthrough: w
-                ? {
-                    id: w.id,
-                    summary: w.summary,
-                    sentiment: w.sentiment ?? null,
-                    riskLevel: w.riskLevel,
-                    completedAt: w.completedAt ?? null,
-                  }
-                : null,
-            };
-          });
-        },
-        catch: (e) => new ValidationError({ message: String(e) }),
+        return sorted.map((r): ArchivedPrWithWalkthrough => {
+          const w = latestByPr.get(r.pr.id);
+          return {
+            pr: rowToPr(r.pr, r.avatarContent),
+            walkthrough: w
+              ? {
+                  id: w.id,
+                  summary: w.summary,
+                  sentiment: w.sentiment ?? null,
+                  riskLevel: w.riskLevel,
+                  completedAt: w.completedAt ?? null,
+                }
+              : null,
+          };
+        });
       });
     }),
 
   setPrDraft: (id, isDraft) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      yield* Effect.try({
-        try: () => db.update(pullRequests).set({ isDraft }).where(eq(pullRequests.id, id)).run(),
-        catch: (e) => new ValidationError({ message: String(e) }),
-      });
+      yield* dbTry("setPrDraft", () =>
+        db.update(pullRequests).set({ isDraft }).where(eq(pullRequests.id, id)).run(),
+      );
     }),
 
   markPrsClosed: (updates) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
       if (updates.length === 0) return;
-      yield* Effect.tryPromise({
-        try: () => {
-          const fetchedAt = new Date().toISOString();
-          for (const { id, status, closedAt } of updates) {
-            db.update(pullRequests)
-              .set({ status, closedAt, fetchedAt })
-              .where(eq(pullRequests.id, id))
-              .run();
-          }
-          return Promise.resolve();
-        },
-        catch: (e) => new ValidationError({ message: String(e) }),
+      yield* dbTry("markPrsClosed", () => {
+        const fetchedAt = new Date().toISOString();
+        for (const { id, status, closedAt } of updates) {
+          db.update(pullRequests)
+            .set({ status, closedAt, fetchedAt })
+            .where(eq(pullRequests.id, id))
+            .run();
+        }
       });
     }),
-
-  // ── Watermark methods: sync helpers used by SyncService. Wrap the
-  // Drizzle calls in Effect.try so a SQLite throw surfaces as a typed
-  // failure (caught locally) rather than an Effect defect that would
-  // crash the calling fiber. The error channel stays `never` from the
-  // caller's perspective via the trailing catchAll.
 
   getCommentsSyncedAt: (prId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      const row = yield* Effect.try({
-        try: () =>
-          db
-            .select({ ts: pullRequests.commentsSyncedAt })
-            .from(pullRequests)
-            .where(eq(pullRequests.id, prId))
-            .get(),
-        catch: (e) => new ValidationError({ message: String(e) }),
-      });
+      const row = yield* dbTry("getCommentsSyncedAt", () =>
+        db
+          .select({ ts: pullRequests.commentsSyncedAt })
+          .from(pullRequests)
+          .where(eq(pullRequests.id, prId))
+          .get(),
+      );
       return row?.ts ?? null;
-    }).pipe(Effect.catch(() => Effect.succeed(null))),
+    }),
 
   setCommentsSyncedAt: (prId, timestamp) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      yield* Effect.try({
-        try: () =>
-          db
-            .update(pullRequests)
-            .set({ commentsSyncedAt: timestamp })
-            .where(eq(pullRequests.id, prId))
-            .run(),
-        catch: (e) => new ValidationError({ message: String(e) }),
-      });
-    }).pipe(Effect.catch(() => Effect.void)),
+      yield* dbTry("setCommentsSyncedAt", () =>
+        db
+          .update(pullRequests)
+          .set({ commentsSyncedAt: timestamp })
+          .where(eq(pullRequests.id, prId))
+          .run(),
+      );
+    }),
 
   getThreadsFingerprint: (prId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      const row = yield* Effect.try({
-        try: () =>
-          db
-            .select({ fp: pullRequests.threadsFingerprint })
-            .from(pullRequests)
-            .where(eq(pullRequests.id, prId))
-            .get(),
-        catch: (e) => new ValidationError({ message: String(e) }),
-      });
+      const row = yield* dbTry("getThreadsFingerprint", () =>
+        db
+          .select({ fp: pullRequests.threadsFingerprint })
+          .from(pullRequests)
+          .where(eq(pullRequests.id, prId))
+          .get(),
+      );
       return row?.fp ?? null;
-    }).pipe(Effect.catch(() => Effect.succeed(null))),
+    }),
 
   setThreadsFingerprint: (prId, fingerprint) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      yield* Effect.try({
-        try: () =>
-          db
-            .update(pullRequests)
-            .set({ threadsFingerprint: fingerprint })
-            .where(eq(pullRequests.id, prId))
-            .run(),
-        catch: (e) => new ValidationError({ message: String(e) }),
-      });
-    }).pipe(Effect.catch(() => Effect.void)),
-
-  getSyncWatermark: (prId) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const row = yield* Effect.try({
-        try: () =>
-          db
-            .select({
-              commentsSyncedAt: pullRequests.commentsSyncedAt,
-              threadsFingerprint: pullRequests.threadsFingerprint,
-            })
-            .from(pullRequests)
-            .where(eq(pullRequests.id, prId))
-            .get(),
-        catch: (e) => new ValidationError({ message: String(e) }),
-      });
-      return {
-        commentsSyncedAt: row?.commentsSyncedAt ?? null,
-        threadsFingerprint: row?.threadsFingerprint ?? null,
-      };
-    }).pipe(
-      Effect.catch(() =>
-        Effect.succeed({
-          commentsSyncedAt: null,
-          threadsFingerprint: null,
-        }),
-      ),
-    ),
+      yield* dbTry("setThreadsFingerprint", () =>
+        db
+          .update(pullRequests)
+          .set({ threadsFingerprint: fingerprint })
+          .where(eq(pullRequests.id, prId))
+          .run(),
+      );
+    }),
 
   appendMentionedUsers: (prId, logins) =>
     Effect.gen(function* () {
       if (logins.length === 0) return;
       const { db } = yield* DbService;
-      yield* Effect.try({
-        try: () => mergeMentionedUsers(db, prId, logins),
-        catch: (e) => new ValidationError({ message: String(e) }),
-      });
+      yield* dbTry("appendMentionedUsers", () => mergeMentionedUsers(db, prId, logins));
     }),
 });

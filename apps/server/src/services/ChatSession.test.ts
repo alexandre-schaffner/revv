@@ -28,7 +28,7 @@ function seedChatSession(db: Db): void {
     .run();
 }
 
-function run<A>(db: Db, effect: Effect.Effect<A, never, ChatSessionService>): Promise<A> {
+function run<A, E>(db: Db, effect: Effect.Effect<A, E, ChatSessionService>): Promise<A> {
   return Effect.runPromise(
     effect.pipe(
       Effect.provide(ChatSessionServiceLive),

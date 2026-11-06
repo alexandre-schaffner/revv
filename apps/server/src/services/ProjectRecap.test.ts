@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { Effect, Layer } from "effect";
+import { type Context, Effect, Layer } from "effect";
 import { createDb, type Db } from "../db/index";
 import { account, projectRecaps, repositories, user } from "../db/schema";
 import { DbService } from "./Db";
@@ -222,5 +222,39 @@ describe("listForRepo from/to range filter", () => {
     });
     expect(page.recaps).toHaveLength(2);
     expect(page.nextCursor).not.toBeNull();
+  });
+});
+
+describe("DB failures", () => {
+  const runExit = <A, E>(
+    db: Db,
+    use: (svc: Context.Service.Shape<typeof ProjectRecapService>) => Effect.Effect<A, E, DbService>,
+  ) =>
+    Effect.runPromiseExit(
+      Effect.flatMap(ProjectRecapService, use).pipe(
+        Effect.provide(ProjectRecapServiceLive),
+        Effect.provide(Layer.succeed(DbService, { db })),
+      ),
+    );
+
+  // Regression: a failed bump answered 0, so resume-on-boot kept relaunching a
+  // row past its resume budget.
+  it("fails incrementResumeAttempts with DbError instead of answering 0", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+    db.$client.close();
+    const exit = await runExit(db, (svc) => svc.incrementResumeAttempts("daily-2026-06-01"));
+    expect(exit._tag).toBe("Failure");
+    expect(JSON.stringify(exit)).toContain("DbError");
+  });
+
+  it("tells a missing recap apart from a DB failure in resetForRerun", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+    const missing = await runExit(db, (svc) => svc.resetForRerun("nope"));
+    expect(JSON.stringify(missing)).toContain("RecapNotFoundError");
+    db.$client.close();
+    const broken = await runExit(db, (svc) => svc.resetForRerun("daily-2026-06-01"));
+    expect(JSON.stringify(broken)).toContain("DbError");
   });
 });
