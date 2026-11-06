@@ -1,0 +1,184 @@
+/**
+ * One-shot entrances.
+ *
+ *   <div use:enterOnce={{ key: `wt:${id}:block`, look: "rise", cascade: BLOCKS }}>
+ *
+ * The tween starts the first time the node is laid out, so a node mounted
+ * inside a `display: none` tab waits until the tab shows. A played `key` is
+ * remembered for the session: remounting the node (switching PRs and back)
+ * or re-showing its tab never replays it. A node whose `key` changes to one
+ * not yet played plays again, so a state change can carry its own entrance
+ * (`key: \`${axis}:${state}\``). Nodes laid out in the same frame under one
+ * `cascade.group` stagger in DOM order.
+ */
+import type { Action } from "svelte/action";
+
+import { gsap } from "./gsap";
+import { prefersReducedMotion } from "./reduced-motion";
+import { tokens } from "./tokens";
+
+interface Look {
+  from: gsap.TweenVars;
+  duration: number;
+  ease: string;
+}
+
+const LOOKS = {
+  /** Opacity, a 10px rise and a blur: walkthrough blocks and their annotations. */
+  rise: {
+    from: { opacity: 0, y: 10, filter: "blur(4px)" },
+    duration: tokens.ceremonialMedium,
+    ease: tokens.easeStandard,
+  },
+  /** A short fade up for a whole surface: walkthrough body, chapter stepper. */
+  surface: { from: { opacity: 0, y: 4 }, duration: tokens.smooth, ease: tokens.easeStandard },
+  /** The same fade up at card pace: issue cards. */
+  card: {
+    from: { opacity: 0, y: 4 },
+    duration: tokens.ceremonialMedium,
+    ease: tokens.easeStandard,
+  },
+  /** Focus pull without a fade: the issues section, whose cards fade on their own. */
+  settle: {
+    from: { y: 6, filter: "blur(3px)" },
+    duration: tokens.ceremonialMedium,
+    ease: tokens.easeStandard,
+  },
+  /** A spec-panel row fading up. */
+  row: { from: { opacity: 0, y: 4 }, duration: tokens.ceremonialMedium, ease: tokens.easeOutExpo },
+  /** A spec-panel row settling in from the left. */
+  nudge: { from: { opacity: 0.7, x: -2 }, duration: tokens.quick, ease: tokens.easeOutExpo },
+  /** An overlay that starts lit and fades to its resting `opacity: 0`: a row gutter's glow. */
+  flash: { from: { opacity: 1 }, duration: tokens.slow, ease: tokens.easeOutExpo },
+  /** A rating cell dropping into place as its verdict lands. */
+  drop: { from: { opacity: 0.6, y: -1 }, duration: tokens.smooth, ease: tokens.easeOutExpo },
+  /** A verdict icon popping in. */
+  pop: { from: { opacity: 0, scale: 0.85 }, duration: tokens.quick, ease: tokens.easeOutExpo },
+} satisfies Record<string, Look>;
+
+export type EnterLook = keyof typeof LOOKS;
+
+export interface EnterCascade {
+  group: string;
+  /** Seconds between consecutive nodes. */
+  step: number;
+  /** Nodes past this index share the last delay. */
+  cap: number;
+  /** Nodes of one group sharing a beat take one step together (a block and its annotation). */
+  beat?: string | undefined;
+}
+
+export interface EnterParams {
+  /** Played once per session. Omit to play on every mount. */
+  key?: string | undefined;
+  look: EnterLook;
+  /** Seconds. */
+  delay?: number;
+  cascade?: EnterCascade | undefined;
+}
+
+const played = new Set<string>();
+
+/** True the first time `key` is asked for: for entrances that run their own timeline. */
+export function firstEntrance(key: string): boolean {
+  if (played.has(key)) return false;
+  played.add(key);
+  return true;
+}
+
+const waiting = new Map<Element, EnterParams>();
+let observer: ResizeObserver | null = null;
+
+interface CascadeCursor {
+  next: number;
+  beats: Map<string, number>;
+}
+
+function cascadeSlot(cascade: EnterCascade, cursors: Map<string, CascadeCursor>): number {
+  let cursor = cursors.get(cascade.group);
+  if (!cursor) {
+    cursor = { next: 0, beats: new Map() };
+    cursors.set(cascade.group, cursor);
+  }
+  const shared = cascade.beat === undefined ? undefined : cursor.beats.get(cascade.beat);
+  if (shared !== undefined) return shared;
+  const slot = cursor.next++;
+  if (cascade.beat !== undefined) cursor.beats.set(cascade.beat, slot);
+  return slot;
+}
+
+function play(node: Element, params: EnterParams, cursors: Map<string, CascadeCursor>): void {
+  if (params.key !== undefined && !firstEntrance(params.key)) return;
+  if (prefersReducedMotion()) return;
+  const look: Look = LOOKS[params.look];
+  let delay = params.delay ?? 0;
+  if (params.cascade) {
+    const { step, cap } = params.cascade;
+    delay += Math.min(cascadeSlot(params.cascade, cursors), cap) * step;
+  }
+  gsap.from(node, {
+    ...look.from,
+    duration: look.duration,
+    ease: look.ease,
+    delay,
+    // Leftover inline transform/filter keeps every entered node on its own
+    // compositing layer; a long walkthrough then runs WKWebView out of layer
+    // budget and tiles flicker.
+    clearProps: "opacity,transform,filter",
+  });
+}
+
+function onLayout(entries: ResizeObserverEntry[]): void {
+  const cursors = new Map<string, CascadeCursor>();
+  for (const { target } of entries) {
+    const params = waiting.get(target);
+    if (!params || target.getClientRects().length === 0) continue;
+    waiting.delete(target);
+    observer?.unobserve(target);
+    play(target, params, cursors);
+  }
+}
+
+function awaitLayout(node: Element, params: EnterParams | undefined): void {
+  if (!params || (params.key !== undefined && played.has(params.key))) return;
+  waiting.set(node, params);
+  observer ??= new ResizeObserver(onLayout);
+  observer.observe(node);
+}
+
+/** `undefined` params: no entrance. */
+export const enterOnce: Action<HTMLElement, EnterParams | undefined> = (node, params) => {
+  let key = params?.key;
+  awaitLayout(node, params);
+  return {
+    update(next: EnterParams | undefined) {
+      if (waiting.has(node) && next) waiting.set(node, next);
+      else if (next?.key !== key) awaitLayout(node, next);
+      key = next?.key;
+    },
+    destroy() {
+      if (waiting.delete(node)) observer?.unobserve(node);
+      gsap.killTweensOf(node);
+    },
+  };
+};
+
+/**
+ * Draw the eye to a node the user just jumped to: its outline flashes the
+ * accent, holds, and fades. The node's CSS paints the outline from
+ * `--jump-highlight` (0–1), because GSAP can't interpolate `color-mix()`.
+ */
+export function pulseHighlight(node: HTMLElement): void {
+  if (prefersReducedMotion()) return;
+  gsap.fromTo(
+    node,
+    { "--jump-highlight": 1 },
+    {
+      "--jump-highlight": 0,
+      delay: tokens.ceremonialSlow * 0.7,
+      duration: tokens.ceremonialSlow * 0.3,
+      ease: tokens.easeSoft,
+      clearProps: "--jump-highlight",
+    },
+  );
+}

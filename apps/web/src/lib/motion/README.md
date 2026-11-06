@@ -20,6 +20,7 @@ timelines (right-panel slide + vignette crossfade).
 | `presets.ts` | Timelines for bits-ui content (`dialogSpringIn`, `popoverPopIn`, `tooltipPopIn`, …). |
 | `actions.ts` | `gsapPress` (button feedback), `gsapHover` (eases a 0–1 CSS variable on hover/focus) and `bitsAnim` (drives bits-ui content from `data-state`). |
 | `transitions.ts` | Svelte custom transitions (`gsapFade`, `gsapFadeY`, `gsapPop`, `gsapRise`, `gsapSlide`). |
+| `enter.ts` | `enterOnce` — a one-shot entrance that waits for the node's first layout (so a hidden tab doesn't spend it), cascades nodes arriving together, and remembers its `key` for the session so a remount or a re-shown tab never replays it. `firstEntrance` gives the same once-per-key answer to an entrance with its own timeline (`MergedStamp`). `pulseHighlight` flashes the outline of a node the user jumped to. |
 | `crossfade.ts` | `crossfadeDocument` — fade the whole page through a change (theme switches). `turnLook` — turn one element to a new look at the same pace, cutting instead while a page crossfade already fades it. |
 | `frames.ts` | `afterPaint` — internal to `crossfade.ts`: `turnLook` starts once the heavy frame that caused it has been drawn. |
 | `stack.ts` | `snapshotStack` + `flipStack`: FLIP fold/unfold for a stack of cards (homepage PR stacks). |
@@ -51,6 +52,23 @@ For a bits-ui content surface:
 </div>
 ```
 
+## One-shot entrances
+
+Don't write an entrance as a CSS `@keyframes`: browsers restart a CSS
+animation every time its subtree leaves `display: none`, so every review tab
+switch would replay it. Use `use:enterOnce`:
+
+```svelte
+<div use:enterOnce={{ key: `wt:${walkthroughId}:block:${block.id}`, look: "rise",
+  cascade: { group: "walkthrough-blocks", step: 0.085, cap: 10 } }}>
+```
+
+The looks (`rise`, `surface`, `card`, `settle`, `row`, …) live in `enter.ts`
+with their duration and ease tokens. A `key` that changes to one not yet
+played plays again, which is how a state change carries its own one-shot
+(a rating cell resolving). Scope keys to what they describe — a walkthrough
+id, not just a PR — so a new run enters afresh.
+
 ## Tokens
 
 `tokens.ts` is a flat const object. **If you change a duration or ease, edit
@@ -67,7 +85,8 @@ wrapper — the synchronous check is enough for every case we have.
 
 The defensive `@media (prefers-reduced-motion: reduce)` block in `app.css`
 covers the CSS animations that intentionally stayed off GSAP — see the
-"Surviving CSS animations" section below.
+"Surviving CSS animations" section below. Components don't add their own
+reduced-motion blocks.
 
 ## Surviving CSS animations
 
@@ -94,5 +113,12 @@ Kept off GSAP by design — moving them would be a regression:
   with everything else. Glass surfaces are frozen to solid fills for the
   fade, found by their `data-glass` attribute: a new `backdrop-filter`
   surface must carry it.
+- **`cell-pulse`** — the running rating cell's background pulse
+  (`review/spec-panel/RatingCell.svelte`). An infinite running-state loop,
+  like the spinner.
+- **`footer-bounce`** — the "All checks passed" scale bump
+  (`review/spec-panel/RatingsFooter.svelte`), 1 → 1.02 → 1, which a
+  from-tween can't express. Its class drops on `animationend`, so a re-shown
+  tab doesn't restart it.
 - **`transition: background-color` / `color`** on hover states — compositor
   paint crossfades on dozens of list items.

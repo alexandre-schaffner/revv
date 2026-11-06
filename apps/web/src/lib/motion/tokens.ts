@@ -22,6 +22,7 @@ export const tokens = {
   easeOutExpo: "0.16, 1, 0.3, 1",
   easeOutQuart: "0.25, 1, 0.5, 1",
   easeSoft: "0.4, 0, 0.2, 1",
+  easeStandard: "0.22, 0.61, 0.36, 1",
 
   stagger: {
     tight: 0.025,

@@ -4,6 +4,7 @@
 
 export * from "./actions";
 export { crossfadeDocument, turnLook } from "./crossfade";
+export * from "./enter";
 export { gsap, initGsap } from "./gsap";
 export * from "./presets";
 export { prefersReducedMotion } from "./reduced-motion";
