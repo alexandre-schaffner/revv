@@ -42,6 +42,7 @@ function failStart(prId: string, message: string): void {
   updateEntry(prId, (e) => {
     e.isStreaming = false;
     e.streamError = message;
+    e.streamErrorCode = null;
   });
 }
 
@@ -165,6 +166,7 @@ export function resume(prId: string, mode: WalkthroughMode = getSelectedMode(prI
       isStreaming: true,
       doneReceived: false,
       streamError: null,
+      streamErrorCode: null,
       superseded: false,
       historical: false,
       liveGeneration: true,
@@ -179,6 +181,8 @@ export function resume(prId: string, mode: WalkthroughMode = getSelectedMode(prI
         e.isStreaming = false;
         e.liveGeneration = false;
         e.streamError = message;
+        e.streamErrorCode = null;
+        e.streamErrorCode = null;
       });
     try {
       const { data, error } = await api.api.reviews({ id: prId }).walkthrough.resume.post({ mode });
@@ -247,6 +251,7 @@ function failClone(prId: string, message: string): void {
     e.cloneRepoId = null;
     e.isStreaming = false;
     e.streamError = message;
+    e.streamErrorCode = null;
   });
 }
 
