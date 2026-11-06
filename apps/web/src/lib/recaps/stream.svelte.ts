@@ -8,19 +8,10 @@ import type {
 } from "@revv/shared";
 import { streamSse } from "$lib/api/sse-stream";
 
-// ── Entry shape ─────────────────────────────────────────────────────────────
-
 export interface RecapStreamEntry {
   lede: string;
-  /**
-   * Per-PR structured entries indexed by prId so re-emits / reconnects merge
-   * cleanly. Render order is `position`, ascending.
-   */
+  /** Keyed by prId so re-emits on reconnect merge; render in `position` order. */
   entries: Map<string, RecapPrEntry>;
-  /**
-   * Per-theme summary paragraphs indexed by theme label. Idempotent on the
-   * server side too — `set_theme_summary` upserts on (recapId, theme).
-   */
   themeSummaries: Map<string, RecapThemeSummary>;
   thoughts: string;
   phase: RecapStreamPhase;
@@ -33,15 +24,10 @@ export interface RecapStreamEntry {
   streamError: string | null;
 }
 
-/** The stream reached an end the server announced: done, stopped, or failed. */
 export function recapStreamEnded(entry: RecapStreamEntry | undefined): boolean {
   return !!entry && (entry.doneReceived || entry.stopped || entry.streamError !== null);
 }
 
-/**
- * The recap as the reader should see it mid-run: what the stream has written
- * since the row was read wins, entries in `position` order.
- */
 export function mergeRecapStream(
   recap: ProjectRecap,
   stream: RecapStreamEntry | undefined,
@@ -75,20 +61,13 @@ function freshEntry(): RecapStreamEntry {
   };
 }
 
-// ── Reactive state ────────────────────────────────────────────────────────────
-
 let entries = $state<Map<string, RecapStreamEntry>>(new Map());
 
-// Abort controllers keyed by recapId.
 const controllers = new Map<string, AbortController>();
-
-// ── Getters ───────────────────────────────────────────────────────────────────
 
 export function getRecapStreamEntry(recapId: string): RecapStreamEntry | undefined {
   return entries.get(recapId);
 }
-
-// ── Mutations ─────────────────────────────────────────────────────────────────
 
 function setEntry(recapId: string, entry: RecapStreamEntry): void {
   const next = new Map(entries);
@@ -102,8 +81,6 @@ function deleteEntry(recapId: string): void {
   next.delete(recapId);
   entries = next;
 }
-
-// ── Event reducer ───────────────────────────────────────────────────────────
 
 function applyEvents(recapId: string, evs: RecapStreamEvent[]): void {
   const current = entries.get(recapId);
@@ -154,18 +131,14 @@ function applyEvents(recapId: string, evs: RecapStreamEvent[]): void {
   setEntry(recapId, entry);
 }
 
-// ── Stream lifecycle ─────────────────────────────────────────────────────────
-
 export async function streamRecap(recapId: string): Promise<void> {
-  // Already streaming?
   const existing = entries.get(recapId);
   if (existing?.isStreaming) return;
 
   abortRecapStream(recapId);
 
-  // Reuse the existing entry only when it's in a clean "could resume"
-  // state. The server's `lede` and `entry` snapshot events on connect
-  // will overwrite stale data with the canonical DB state.
+  // The server replays `lede` and `entry` snapshots from the DB on connect,
+  // overwriting whatever a resumable entry still holds.
   const base = existing && !recapStreamEnded(existing) ? existing : freshEntry();
   setEntry(recapId, { ...base, isStreaming: true });
 

@@ -24,8 +24,6 @@ export function getCmdHeld(): boolean {
 let paletteOpen = $state(false);
 let paletteMode = $state<PaletteMode>("search");
 
-// ── Palette state ────────────────────────────────────────
-
 export function getPaletteOpen(): boolean {
   return paletteOpen;
 }
@@ -50,8 +48,6 @@ function togglePalette(mode: PaletteMode): void {
   paletteMode = mode;
   paletteOpen = true;
 }
-
-// ── App-wide commands ────────────────────────────────────
 
 const onPr = (): boolean => getSelectedPrId() !== null;
 const inStack = (): boolean => getStackView() !== null;
@@ -235,8 +231,6 @@ const APP_COMMANDS: readonly Command[] = [
   },
 ];
 
-// ── Global keydown listener ──────────────────────────────
-
 function handleKeydown(e: KeyboardEvent): void {
   if (e.metaKey && !cmdHeld) cmdHeld = true;
   dispatchCommandKey(e);
@@ -250,7 +244,6 @@ function handleBlur(): void {
   cmdHeld = false;
 }
 
-/** Register the app-wide commands and attach the ⌘ dispatcher. */
 export function initShortcuts(): () => void {
   const unregister = registerCommands(APP_COMMANDS);
   // Capture phase, so ⌘ combos work even while an input has focus.

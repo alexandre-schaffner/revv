@@ -1,7 +1,3 @@
-/**
- * Public surface of the motion module.
- */
-
 export * from "./actions";
 export { crossfadeDocument, turnLook } from "./crossfade";
 export * from "./enter";

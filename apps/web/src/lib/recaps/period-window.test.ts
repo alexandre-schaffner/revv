@@ -222,8 +222,6 @@ describe("selectionBoundaries", () => {
 });
 
 describe("recapWindowIsStale", () => {
-  // Pinning tests: behaviour must not move when this was lifted out of
-  // RecapPeriodView.svelte and re-expressed on top of isCurrentPeriod.
   it("is true for a closed full day, whatever the date", () => {
     expect(
       recapWindowIsStale({

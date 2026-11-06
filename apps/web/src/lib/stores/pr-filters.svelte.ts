@@ -100,8 +100,6 @@ function toSortedOptions(counts: AuthorAccumulator): PrAuthorFilterOption[] {
     .sort((a, b) => b.count - a.count || a.login.localeCompare(b.login));
 }
 
-// Rebuilt only when the open-PR list changes, never when the filter popover
-// opens, so opening it is a lookup even on repos with hundreds of contributors.
 const authorOptionsByRepo = $derived.by((): Map<string, PrAuthorFilterOption[]> => {
   const byRepo = new Map<string, AuthorAccumulator>();
   for (const pr of getPullRequests()) {
@@ -150,7 +148,6 @@ export function toggleAuthorFilter(login: string): void {
   applyAuthorFilter(next);
 }
 
-/** Add or remove a batch of logins in one update (selecting or deselecting a team). */
 export function setAuthorFilters(logins: readonly string[], selected: boolean): void {
   if (logins.length === 0) return;
   const next = new Set(selectedAuthorLogins);

@@ -17,7 +17,6 @@ export interface XtermInk {
   readonly selection: string;
 }
 
-/** Reads a custom property off `el`, or `fallback` when it is unset. */
 export function cssTokens(el: HTMLElement): (name: string, fallback: string) => string {
   const cs = getComputedStyle(el);
   return (name, fallback) => cs.getPropertyValue(name).trim() || fallback;
@@ -57,7 +56,6 @@ export function xtermTheme(ink: XtermInk): ITheme {
   };
 }
 
-/** Opens a terminal with a fit addon in `container`. */
 export async function openXterm(
   container: HTMLElement,
   options: ITerminalOptions,

@@ -90,7 +90,6 @@ export function writeStored<T>(key: string, codec: StorageCodec<T>, value: T): v
   }
 }
 
-/** A reactive value backed by one storage key. */
 class Persisted<T> {
   #value: T = $state() as T;
   readonly #key: string;

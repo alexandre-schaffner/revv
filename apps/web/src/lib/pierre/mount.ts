@@ -1,5 +1,5 @@
-// Static Pierre blocks: a file excerpt or a diff rendered once, with no
-// interaction, in our own card chrome (Pierre's file header is off).
+// Static Pierre blocks: rendered once, with no interaction, inside our own
+// card chrome.
 
 import {
   DIFFS_TAG_NAME,
@@ -67,7 +67,6 @@ export type PierreDiffParams =
   | { fileDiff: FileDiffMetadata; prerenderedHtml?: string | undefined }
   | { oldFile: FileContents; newFile: FileContents };
 
-/** A unified diff, from a parsed patch or from the two versions of the file. */
 export function pierreDiff(
   el: HTMLElement,
   params: PierreDiffParams,

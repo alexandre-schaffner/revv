@@ -1,16 +1,10 @@
-// Pure change-detector for walkthrough store entries.
+// `updateEntry` skips the reactive `store.entries` write on a no-op, so an
+// `$effect` that calls it can't re-invalidate on its own output (Svelte's
+// `effect_update_depth_exceeded`, a hard UI freeze).
 //
-// Extracted from the `.svelte.ts` store so it can be unit-tested without the
-// Svelte runtime. Used by `updateEntry` to skip the reactive `store.entries`
-// write on a genuine no-op — which is what prevents an `$effect` that calls
-// `updateEntry` from re-invalidating on its own output →
-// `effect_update_depth_exceeded` (a hard UI freeze).
-//
-// A SHALLOW comparison is sound here specifically because `updateEntryInMap`
-// freezes the existing entry's direct mutable field references before handing
-// a shallow clone to the updater. Scalar assignments and reference replacements
-// still work; in-place mutations like `entry.blocks.push(...)` throw instead
-// of being mistaken for no-ops.
+// A shallow comparison is sound because `updateEntryInMap` freezes the entry's
+// direct field references before handing a clone to the updater: in-place
+// mutations like `entry.blocks.push(...)` throw instead of passing for no-ops.
 
 type MutableEntryMap<T extends object> = {
   get(key: string): T | undefined;
@@ -19,12 +13,6 @@ type MutableEntryMap<T extends object> = {
 
 export type EntryUpdateResult = "missing" | "unchanged" | "changed";
 
-/**
- * True when `a` and `b` have identical own enumerable keys with `===`-equal
- * values (or are the same reference). `b` is expected to be a shallow clone of
- * `a` (`{ ...a }`) that an updater may have mutated, so the key sets match by
- * construction; the length guard is defensive.
- */
 export function shallowEntryEqual<T extends object>(a: T, b: T): boolean {
   if (a === b) return true;
   const aKeys = Object.keys(a);
@@ -47,11 +35,8 @@ function freezeMutableFieldReferences<T extends object>(entry: T): void {
 }
 
 /**
- * Shared write primitive for walkthrough entry maps.
- *
- * Updaters mutate a shallow clone. When they make a real change, they must
- * replace the changed field's reference; mutating existing field references in
- * place is rejected by shallow-freezing them first.
+ * Updaters mutate a shallow clone. A real change must replace the changed
+ * field's reference; mutating an existing field reference in place throws.
  */
 export function updateEntryInMap<T extends object>(
   entries: MutableEntryMap<T>,

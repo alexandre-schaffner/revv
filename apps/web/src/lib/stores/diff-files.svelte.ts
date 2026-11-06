@@ -19,11 +19,10 @@ export interface ReviewFile {
   isNew?: boolean;
   isDeleted?: boolean;
   /**
-   * Server-rendered HTML for the unified-mode diff, produced by
-   * `@pierre/diffs/ssr` (`preloadPatchFile`). When present and the current
-   * diff mode is `'unified'`, `DiffViewerInner` calls `instance.hydrate(...)`
-   * for an instant first paint. Absent on cache misses, oversized patches,
-   * and split mode — `render(...)` is the fallback in those cases.
+   * Server-rendered HTML (`@pierre/diffs/ssr`) of the unified diff, sent only
+   * for the first visible file and never for oversized patches. Hydrated for
+   * an instant first paint in unified, unwrapped mode; otherwise the client
+   * renders from `patch`.
    */
   prerenderedHtml?: string;
 }
@@ -34,9 +33,7 @@ const REFETCH_WINDOW_MS = 60_000;
 let files = $state<ReviewFile[]>([]);
 /** The load the review page waits on. A refresh of the view on screen doesn't show here. */
 let load = $state<RequestState<void>>(RequestState.idle());
-/** The PR `files` belong to, and when they arrived. */
 let loaded = $state<{ prId: string; at: number } | null>(null);
-/** Only the latest load may write; anything older lost the race. */
 let requestSeq = 0;
 
 // The head each PR's files were loaded against. When `prs:updated` brings a
@@ -86,7 +83,6 @@ function install(prId: string, next: ReviewFile[]): void {
   files = next;
   load = RequestState.ok(undefined);
   loaded = { prId, at: Date.now() };
-  // The open file stays open when it is still part of the diff.
   const active = getActiveFilePath();
   const first = next[0];
   if (first && !next.some((f) => f.path === active)) setActiveFilePath(first.path);

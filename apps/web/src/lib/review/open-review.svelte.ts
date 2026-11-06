@@ -1,8 +1,3 @@
-// Opening a PR on the review page: everything the page loads for it, asked as
-// the facts each load needs arrive (the PR row, its head, the head the diff
-// was loaded against, settings), and dropped when the page goes. The page
-// only names the PR.
-
 import { onDestroy, untrack } from "svelte";
 import { ensureHunkScan } from "$lib/hunk-scan/store.svelte";
 import { getToken } from "$lib/session/token.svelte";

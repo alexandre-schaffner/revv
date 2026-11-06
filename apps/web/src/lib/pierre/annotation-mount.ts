@@ -44,7 +44,7 @@ export class AnnotationMounts {
     }
   }
 
-  /** Unmount everything; call before the Pierre instance is cleaned up. */
+  /** Call before the Pierre instance is cleaned up. */
   clear(): void {
     for (const instance of this.#mounted.values()) unmountLogged(instance);
     this.#mounted.clear();

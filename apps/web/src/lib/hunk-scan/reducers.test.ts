@@ -29,7 +29,7 @@ function row(over: Partial<HunkScanRow> = {}): HunkScanRow {
   };
 }
 
-// Frozen like `updateEntryInMap` freezes entry fields: any in-place write throws.
+// Frozen: the reducers must never write in place.
 function frozen(rows: HunkScanRow[]): readonly HunkScanRow[] {
   return Object.freeze(rows);
 }

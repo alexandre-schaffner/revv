@@ -14,7 +14,6 @@ export function registerCommands(commands: readonly Command[]): () => void {
   };
 }
 
-/** Register commands for as long as the calling component is mounted. */
 export function useCommands(commands: readonly Command[]): void {
   onDestroy(registerCommands(commands));
 }
@@ -29,8 +28,6 @@ export function dispatchCommandKey(e: KeyboardEvent): boolean {
   if (!(cmd.ignoreRepeat && e.repeat)) cmd.run();
   return true;
 }
-
-// ── Palette ──────────────────────────────────────────────
 
 let query = $state("");
 

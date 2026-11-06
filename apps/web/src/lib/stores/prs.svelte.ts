@@ -44,11 +44,9 @@ export function getArchivedByRepo(): Map<string, PullRequest[]> {
 }
 
 /**
- * Look a PR up by id across *both* lists. Open PRs live in `pullRequests`
- * and closed/merged ones move to `archivedPrs`, so any caller that searches
- * only the open list silently stops finding a PR the moment it merges —
- * which is how the review page ended up unable to restamp the pulled head
- * SHA for a merged PR.
+ * Searches the open list, the archive and deep-linked PRs. A PR moves to the
+ * archive the moment it merges, so a lookup in the open list alone silently
+ * stops finding it.
  */
 export function getPrById(prId: string): PullRequest | null {
   return (
@@ -200,8 +198,6 @@ function archivedAuthorsQuery(): { authors?: string } {
   return archiveAuthors.size === 0 ? {} : { authors: [...archiveAuthors].join(",") };
 }
 
-// Rapid filter toggles fire overlapping archive reloads; only the latest one's
-// result may land.
 let archivedFetchToken = 0;
 
 async function fetchArchivedPrs(): Promise<void> {
@@ -222,10 +218,6 @@ export function setArchiveAuthors(authors: ReadonlySet<string>): void {
   void fetchArchivedPrs();
 }
 
-/**
- * Append the next page of archived PRs (the sidebar's "show more"). No-op when
- * the archive is exhausted or a page is already loading.
- */
 export async function fetchMoreArchived(): Promise<void> {
   if (archivedNextCursor === null) return;
   if (archivedLoadingMore) return;
@@ -332,10 +324,8 @@ export function onPrArchived(data: {
 }
 
 /**
- * Owner-only PR mutations. Optimistic with entity-scoped rollback per
- * conventions §4.6: flip the affected fields locally before awaiting the
- * server, restore them on throw. The successful round-trip's `prs:updated`
- * broadcast reconciles the canonical list.
+ * Owner-only PR mutations are optimistic (conventions §4.6); the successful
+ * round-trip's `prs:updated` broadcast reconciles the canonical list.
  */
 function flipPrDraftLocally(prId: string, isDraft: boolean): void {
   pullRequests = pullRequests.map((p) => (p.id === prId ? { ...p, isDraft } : p));

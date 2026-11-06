@@ -4,7 +4,6 @@
 
 import { jsonCodec, readStored, STORAGE_KEYS, writeStored } from "$lib/stores/persisted.svelte";
 
-/** An account a window signed in to: its session token and how to show it. */
 export interface HeldSession {
   readonly userId: string;
   readonly token: string;
@@ -43,7 +42,6 @@ export function heldToken(userId: string): string | null {
   return getHeldSessions().find((s) => s.userId === userId)?.token ?? null;
 }
 
-/** Remember `session` as its user's, replacing the one held before. */
 export function holdSession(session: HeldSession): void {
   writeHeld([...getHeldSessions().filter((s) => s.userId !== session.userId), session]);
 }

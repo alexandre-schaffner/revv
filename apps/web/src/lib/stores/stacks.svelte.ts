@@ -91,7 +91,6 @@ const reads = createResource<string, void>({
   },
 });
 
-/** Read the stack `prId` is filed under as `stackNumber`, unless a fresh read is on hand. */
 export function ensureStack(prId: string, stackNumber: number): Promise<void> {
   const pr = getPrById(prId);
   if (!pr) return Promise.resolve();

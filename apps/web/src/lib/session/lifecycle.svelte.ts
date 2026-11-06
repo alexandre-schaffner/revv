@@ -1,7 +1,6 @@
 // The signed-in session's lifecycle, in one ordered place: start (realtime
 // stream + first reads), switch to another local account, and end (sign-out,
-// account removal, host change). Imported by the root layout and the auth UI;
-// nothing below it imports it back.
+// account removal, host change). Nothing it imports may import it back.
 //
 // Sync cadence is the server's PollScheduler alone (it restarts itself when
 // `autoFetchInterval` changes); the client never polls GitHub on a timer.
@@ -50,7 +49,6 @@ import { reset as resetWalkthrough } from "$lib/walkthrough/store.svelte";
 import { heldToken, releaseSession } from "./held-sessions";
 import { getToken, setToken } from "./token.svelte";
 
-/** The user whose session is running; null between sessions. */
 let sessionUserId: string | null = null;
 /**
  * The GitHub host an account switch targets. The settings store may not hold

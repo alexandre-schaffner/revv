@@ -5,7 +5,6 @@ import { renderPrLens } from "./prlens";
 import { DIAGRAM_SELECTOR, diagramSource } from "./prlens-fence";
 import { applyColourAttributes } from "./prlens-theme";
 
-/** The element a diagram is allowed to grow across. Nearest ancestor wins. */
 const BREAKOUT_HOST = "[data-prlens-breakout]";
 
 /**
@@ -34,8 +33,7 @@ const MAX_BREAKOUT_RATIO = 1.5;
  * Overhang splits evenly either side rather than hanging off the right: a
  * diagram's width comes from its own content, so anchored left it reads as
  * slipped sideways, while centred it reads as deliberately wider. Whatever
- * one side can't take, the other absorbs, degrading toward the old
- * left-anchored growth rather than no growth.
+ * one side can't take, the other absorbs.
  *
  * The room it may take is bounded twice over — by the host, and by
  * `MAX_BREAKOUT_RATIO` — because a genuinely wide diagram would otherwise take
@@ -54,8 +52,6 @@ function applyBreakout(container: HTMLElement, naturalWidth: number): void {
   const host = container.closest<HTMLElement>(BREAKOUT_HOST);
   if (host === null || host === container) return;
 
-  // Measure where the diagram naturally sits, not where a previous pass left
-  // it, or the next pass measures its own offset.
   container.style.removeProperty("width");
   container.style.removeProperty("max-width");
   container.style.removeProperty("margin-left");
@@ -68,15 +64,12 @@ function applyBreakout(container: HTMLElement, naturalWidth: number): void {
   const box = container.getBoundingClientRect();
   if (box.width <= 0) return;
 
-  // Room past each edge, floored at 0 — a narrower host on one side owes
-  // nothing to the other.
   const roomLeft = Math.max(box.left - hostLeft, 0);
   const roomRight = Math.max(hostRight - box.right, 0);
   if (!Number.isFinite(roomLeft) || !Number.isFinite(roomRight)) return;
   if (roomLeft + roomRight <= 0) return;
 
-  // The SVG scales to the container's content box, so the box has to carry the
-  // diagram's natural width plus whatever the frame costs.
+  // The SVG scales to the container's content box, not its border box.
   const style = getComputedStyle(container);
   const frame =
     Number.parseFloat(style.paddingLeft) +
@@ -84,8 +77,6 @@ function applyBreakout(container: HTMLElement, naturalWidth: number): void {
     Number.parseFloat(style.borderLeftWidth) +
     Number.parseFloat(style.borderRightWidth);
 
-  // Never past natural size — an SVG blown up beyond it just looks oversized —
-  // never past the host, and never past the cap.
   const width = Math.min(
     box.width + roomLeft + roomRight,
     box.width * MAX_BREAKOUT_RATIO,
@@ -93,8 +84,6 @@ function applyBreakout(container: HTMLElement, naturalWidth: number): void {
   );
   if (width <= box.width) return;
 
-  // Left gets half the overhang, or more if the right gutter can't absorb
-  // its share; capped by the left gutter's own room.
   const overhang = width - box.width;
   const shift = Math.min(Math.max(overhang / 2, overhang - roomRight), roomLeft);
 
@@ -103,7 +92,6 @@ function applyBreakout(container: HTMLElement, naturalWidth: number): void {
   if (shift > 0) container.style.marginLeft = `${-Math.round(shift)}px`;
 }
 
-/** Re-indent the body so a rejected diagram is still readable as the fallback. */
 function formatSource(source: string): string {
   try {
     return JSON.stringify(JSON.parse(source), null, 2);
@@ -113,21 +101,16 @@ function formatSource(source: string): string {
 }
 
 /**
- * Stand a failure in for the diagram: what went wrong, and the source folded
- * away behind a disclosure.
- *
  * The source stays reachable — it is the only way to see *which* diagram broke
- * and to correct it from the chat — but it does not stay open. A graph document
- * runs to hundreds of lines, and dumped inline it evicts the prose around it
- * from the screen entirely, turning one unrenderable diagram into a chapter the
- * reader cannot read.
+ * and to correct it from the chat — but folded: a graph document runs to
+ * hundreds of lines, and dumped inline it pushes the surrounding prose off
+ * screen.
  */
 function showFallback(container: HTMLElement, source: string, error: string): void {
   const note = document.createElement("div");
   note.className = "prlens-error";
   note.textContent = error || "Diagram failed to render.";
 
-  // A source that could not even be decoded has nothing to disclose.
   if (source.trim().length === 0) {
     container.replaceChildren(note);
     return;
@@ -156,24 +139,16 @@ function reveal(container: HTMLElement): void {
   );
 }
 
-/** Draws the `prlens` diagram placeholders under the node in the given theme. */
 export const prlensDiagrams = decorationAction<ResolvedTheme>((node) => {
   let destroyed = false;
 
-  // Natural widths of the diagrams rendered under this node, so a host resize
-  // can re-measure their breakout without re-rendering the SVG.
   const naturalWidths = new Map<HTMLElement, number>();
-  // Breakout hosts currently under observation. Tracked so they can be dropped
-  // symmetrically with `naturalWidths`; observing is per-diagram, so without
-  // this the observer accumulates hosts whose diagrams are long gone.
   const observedHosts = new Set<HTMLElement>();
   const resizeObserver = new ResizeObserver(() => {
     for (const [diagram, naturalWidth] of naturalWidths) {
       if (node.contains(diagram)) applyBreakout(diagram, naturalWidth);
       else naturalWidths.delete(diagram);
     }
-    // A host is an ancestor of `node`, so `node.contains(host)` is always
-    // false; drop a host only once no tracked diagram still resolves to it.
     const live = new Set<HTMLElement>();
     for (const diagram of naturalWidths.keys()) {
       const host = diagram.closest<HTMLElement>(BREAKOUT_HOST);
@@ -195,15 +170,12 @@ export const prlensDiagrams = decorationAction<ResolvedTheme>((node) => {
 
   const apply = async (theme: ResolvedTheme): Promise<void> => {
     const animate = !prefersReducedMotion();
-    // Theme *and* motion change the emitted markup, so the "already rendered"
-    // marker carries both.
     const marker = `${theme}:${animate ? "motion" : "still"}`;
     const pending = Array.from(node.querySelectorAll<HTMLElement>(DIAGRAM_SELECTOR)).filter(
       (container) => container.dataset.prlensRender !== marker,
     );
 
     for (const container of pending) {
-      // A detached container drops out of the batch; only teardown aborts it.
       if (destroyed) return;
       if (!node.contains(container)) continue;
 

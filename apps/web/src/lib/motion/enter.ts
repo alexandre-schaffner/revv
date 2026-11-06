@@ -29,35 +29,31 @@ interface Look {
 }
 
 const LOOKS = {
-  /** Opacity, a 10px rise and a blur: walkthrough blocks and their annotations. */
+  /** Walkthrough blocks and their annotations. */
   rise: {
     from: { opacity: 0, y: 10, filter: "blur(4px)" },
     duration: tokens.ceremonialMedium,
     ease: tokens.easeStandard,
   },
-  /** A short fade up for a whole surface: walkthrough body, chapter stepper. */
+  /** A whole surface: walkthrough body, chapter stepper. */
   surface: { from: { opacity: 0, y: 4 }, duration: tokens.smooth, ease: tokens.easeStandard },
-  /** The same fade up at card pace: issue cards. */
+  /** Issue cards. */
   card: {
     from: { opacity: 0, y: 4 },
     duration: tokens.ceremonialMedium,
     ease: tokens.easeStandard,
   },
-  /** Focus pull without a fade: the issues section, whose cards fade on their own. */
+  /** The issues section, whose cards fade on their own. */
   settle: {
     from: { y: 6, filter: "blur(3px)" },
     duration: tokens.ceremonialMedium,
     ease: tokens.easeStandard,
   },
-  /** A spec-panel row fading up. */
   row: { from: { opacity: 0, y: 4 }, duration: tokens.ceremonialMedium, ease: tokens.easeOutExpo },
-  /** A spec-panel row settling in from the left. */
   nudge: { from: { opacity: 0.7, x: -2 }, duration: tokens.quick, ease: tokens.easeOutExpo },
-  /** An overlay that starts lit and fades to its resting `opacity: 0`: a row gutter's glow. */
+  /** For an overlay whose resting style is `opacity: 0`: a row gutter's glow. */
   flash: { from: { opacity: 1 }, duration: tokens.slow, ease: tokens.easeOutExpo },
-  /** A rating cell dropping into place as its verdict lands. */
   drop: { from: { opacity: 0.6, y: -1 }, duration: tokens.smooth, ease: tokens.easeOutExpo },
-  /** A verdict icon popping in. */
   pop: { from: { opacity: 0, scale: 0.85 }, duration: tokens.quick, ease: tokens.easeOutExpo },
 } satisfies Record<string, Look>;
 
@@ -112,7 +108,6 @@ function cascadeSlot(cascade: EnterCascade, cursors: Map<string, CascadeCursor>)
   return slot;
 }
 
-/** Inline props a `from` tween leaves behind, to clear when it ends. */
 function propsSetBy(from: gsap.TweenVars): string {
   const props: string[] = [];
   if (from.opacity !== undefined) props.push("opacity");
@@ -124,9 +119,8 @@ function propsSetBy(from: gsap.TweenVars): string {
 }
 
 /**
- * Tween `node` from `from` to its own style, then clear what the tween set.
- * A leftover inline transform/filter keeps the node on its own compositing
- * layer (a long walkthrough then runs WKWebView out of layer budget and tiles
+ * Clears what the tween set when it ends. A leftover inline transform/filter
+ * keeps the node on its own compositing layer (a long walkthrough then runs WKWebView out of layer budget and tiles
  * flicker), and a transform makes it a containing block for its
  * `position: fixed` descendants.
  */
@@ -188,7 +182,6 @@ export const enterOnce: Action<HTMLElement, EnterParams | undefined> = (node, pa
 export interface MountEnterParams {
   /** Rise from this many px below (negative: drop from above). */
   readonly y?: number;
-  /** Start from this scale. */
   readonly scale?: number;
   /** Start blurred by this many px. */
   readonly blur?: number;
@@ -200,12 +193,7 @@ export interface MountEnterParams {
   readonly delay?: number;
 }
 
-/**
- * A one-shot entrance, played when the element mounts: from the given offset,
- * scale, blur and transparency to the element's own style, on
- * `--ease-out-expo`. Later parameter changes don't replay it. Under reduced
- * motion the element simply appears.
- */
+/** Plays once on mount; later parameter changes don't replay it. */
 export const gsapEnter: Action<HTMLElement, MountEnterParams | undefined> = (node, params = {}) => {
   if (prefersReducedMotion()) return;
   const { y, scale, blur, fade = true, duration = tokens.ceremonialMedium, delay = 0 } = params;

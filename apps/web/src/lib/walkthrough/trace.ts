@@ -1,12 +1,6 @@
-// Diagnostic-only walkthrough trace logger.
-//
-// Off by default to keep the DevTools console quiet. Enable in any browser
-// session by running `localStorage.setItem("revv:wt-trace", "1")` and
-// reloading; disable with `localStorage.removeItem("revv:wt-trace")`.
-//
-// Pairs with `debug("wt-trace", ...)` calls on the server side. When
-// investigating, also enable `REVV_DEBUG=1` on the server so the matched
-// `[wt-trace]` lines surface in both vantage points.
+// Off by default. Enable with `localStorage.setItem("revv:wt-trace", "1")` and
+// a reload. Pairs with the server's `debug("wt-trace", ...)` lines, which need
+// `REVV_DEBUG=1`.
 
 const ENABLED: boolean = (() => {
   if (typeof window === "undefined") return false;

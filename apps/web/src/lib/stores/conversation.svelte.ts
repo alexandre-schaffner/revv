@@ -1,5 +1,3 @@
-// ── Conversation ────────────────────────────────────────────────────────────
-//
 // The Conversation tab's data: the PR's GitHub conversation (description,
 // reviewers, assignees, labels, timeline) and the head commit's CI checks.
 // GitHub is the source of truth, so this store only ever mirrors it:
@@ -80,7 +78,6 @@ const FRESH_FOR_MS = 30_000;
 
 let entries = $state(new Map<string, ConversationEntry>());
 
-/** Schedules reads; what they read lands in `entries`, where writes patch it. */
 const reads = createResource<void, true>({
   fetch: (prId) => fetchConversation(prId),
   freshForMs: FRESH_FOR_MS,
@@ -126,13 +123,11 @@ export function getAbilities(prId: string): ConversationAbilities {
   };
 }
 
-/** The loaded conversation, or null while it isn't. */
 function dataOf(prId: string): PrConversation | null {
   const request = getConversation(prId).request;
   return request.status === "ok" ? request.data : null;
 }
 
-/** Rewrite the loaded conversation in place; a no-op while there's none. */
 function updateData(prId: string, updater: (conversation: PrConversation) => PrConversation): void {
   updateEntry(prId, (entry) =>
     entry.request.status === "ok"
@@ -164,8 +159,6 @@ function describeFailure(error: { status: number; value?: unknown }): string {
   );
 }
 
-// ── Reads ───────────────────────────────────────────────────────────────────
-
 /**
  * Load the conversation. A fresh read of GitHub younger than
  * {@link FRESH_FOR_MS} is enough unless `force`; concurrent calls share one fetch.
@@ -194,7 +187,6 @@ async function fetchConversation(prId: string): Promise<Answer<true>> {
   const generation = writeGeneration.get(prId) ?? 0;
   if (dataOf(prId) === null) {
     updateEntry(prId, (entry) => ({ ...entry, request: RequestState.loading() }));
-    // First paint from the server's snapshot while GitHub answers.
     await loadSnapshot(prId);
   }
 
@@ -239,7 +231,6 @@ async function refreshChecks(prId: string): Promise<{ rollup: CiRollup | null } 
   }
 }
 
-/** True once a check's output can't change any more. */
 function isFinal(details: RequestState<CheckDetails> | undefined): boolean {
   return details?.status === "ok" && details.data.completed;
 }
@@ -279,8 +270,6 @@ function refreshSettledDetails(prId: string, rollup: CiRollup | null): void {
   }
 }
 
-// ── Pickers ─────────────────────────────────────────────────────────────────
-
 export async function loadReviewerOptions(prId: string, q: string): Promise<ReviewerOptions> {
   const { data, error } = await api.api.prs({ id: prId })["reviewer-options"].get({ query: { q } });
   if (error) throw new Error(apiErrorMessage(error, "Reviewer options failed"));
@@ -299,8 +288,6 @@ export async function loadLabelOptions(prId: string): Promise<PrLabel[]> {
   return data;
 }
 
-// ── On screen: CI polling and foreground reads ──────────────────────────────
-
 const POLL_FIRST_MS = 20_000;
 /** GitHub registers a re-run within seconds; the first look comes sooner. */
 const POLL_AFTER_RERUN_MS = 5_000;
@@ -308,7 +295,6 @@ const POLL_MAX_MS = 60_000;
 /** Polls with nothing pending before a re-run is taken to have been a no-op. */
 const RERUN_GRACE_POLLS = 3;
 
-/** The PR whose conversation is on screen. */
 let watched: string | null = null;
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let pollPrId: string | null = null;
@@ -334,7 +320,6 @@ export function onWindowForeground(): void {
   if (watched) void loadConversation(watched);
 }
 
-/** Start polling the watched PR's CI when it has something pending. */
 function syncChecksPoll(): void {
   const prId = watched;
   if (prId === null || pollPrId === prId) return;
@@ -343,11 +328,6 @@ function syncChecksPoll(): void {
   pollChecks(prId);
 }
 
-/**
- * Poll the PR's CI, backing off from 20s to 60s, pausing while the window is
- * hidden, and stopping once nothing is pending (or a re-run's grace polls
- * ran out). A failed poll backs off and tries again.
- */
 function pollChecks(prId: string): void {
   stopChecksPoll();
   pollPrId = prId;
@@ -400,8 +380,6 @@ function stopChecksPoll(): void {
   pollTimer = null;
   pollPrId = null;
 }
-
-// ── Writes ──────────────────────────────────────────────────────────────────
 
 function capabilityOf(write: ConversationWrite): DeniedCapability {
   return write.kind === "rerun_failed" || write.kind === "rerun_job" ? "rerun" : "edit";
@@ -562,8 +540,6 @@ export async function rerunFailedRuns(prId: string, runIds: readonly number[]): 
 export async function rerunJob(prId: string, jobId: number): Promise<void> {
   await applyWrite(prId, { kind: "rerun_job", jobId });
 }
-
-// ── SSE ─────────────────────────────────────────────────────────────────────
 
 export function onPrConversationUpdated(data: { prId: string; fetchedAt: string | null }): void {
   if (!entries.has(data.prId)) return;

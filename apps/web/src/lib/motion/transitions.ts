@@ -1,7 +1,4 @@
 /**
- * Svelte custom transitions. Token-aware defaults; reduced-motion collapses
- * duration to zero.
- *
  * Svelte's transition contract requires a JS `easing` function (it can't
  * accept GSAP's `CustomEase` strings), so the cubic-bezier curves from
  * `app.css` are mirrored here as JS approximations. Keep these in shape
@@ -21,7 +18,7 @@ const easeSoft = (t: number): number => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) 
 interface FadeParams {
   duration?: number;
   delay?: number;
-  /** Initial y-offset in px; element settles to y:0. Default 0 (no translate). */
+  /** Initial y-offset in px. */
   y?: number;
 }
 
@@ -75,11 +72,7 @@ export function gsapPop(
   };
 }
 
-/**
- * Grow up from the element's bottom edge, for bars that rise out of a
- * baseline (the first-pass scan ribbon). Transform-only, so a row of them
- * animating at once never touches layout.
- */
+/** Transform-only, so a row of them animating at once never touches layout. */
 export function gsapRise(
   node: Element,
   params: { duration?: number; delay?: number } = {},
@@ -98,11 +91,7 @@ export function gsapRise(
   };
 }
 
-/**
- * Height/width-collapsing slide (drop-in for svelte/transition's `slide`).
- * Lives apart from `transform` because it measures and animates layout
- * dimensions, not just opacity + transform.
- */
+/** Drop-in for svelte/transition's `slide`. */
 export function gsapSlide(
   node: Element,
   params: { duration?: number; delay?: number; axis?: "y" | "x" } = {},
@@ -126,10 +115,8 @@ export function gsapSlide(
     delay: (params.delay ?? 0) * 1000,
     easing: easeSoft,
     tick: (t) => {
-      // Entry done: drop the inline styles so the element resumes natural
-      // sizing. Without this, the measured `height: …px` set on the final
-      // tick stays locked, and any later layout change inside the element
-      // (e.g. an inner bits-ui Collapsible closing) leaves a phantom gap.
+      // A measured `height: …px` left on the element would leave a phantom gap
+      // when its content later shrinks (e.g. an inner Collapsible closing).
       if (t >= 1) {
         el.style.overflow = "";
         el.style.opacity = "";

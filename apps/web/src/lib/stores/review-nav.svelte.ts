@@ -117,7 +117,6 @@ export function scrollToAnchor(
   requestAnimationFrame(attempt);
 }
 
-/** Open the walkthrough on one of its blocks. */
 export function jumpToWalkthroughBlock(blockId: string): void {
   setActiveTab("walkthrough");
   scrollToAnchor("walkthrough", `step-${blockId}`, { highlight: true });

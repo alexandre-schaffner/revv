@@ -1,7 +1,3 @@
-// The chat timeline of each PR: the rows the panel renders, the turn in flight
-// and the session's interaction mode. Two writers fill it — the persisted
-// timeline (GET /api/chat/:prId/messages) and the live turn writer.
-
 import type { ActivityKind, ChatAttachmentMetadata, ChatTask, InteractionMode } from "@revv/shared";
 import { SvelteMap } from "svelte/reactivity";
 import { createResource } from "$lib/stores/resource";
@@ -51,7 +47,6 @@ export type PlanStatus = Extract<ChatItem, { kind: "plan" }>["status"];
 
 interface TimelineEntry {
   readonly items: readonly ChatItem[];
-  /** The turn in flight; null when the agent is idle. */
   readonly turnId: string | null;
   readonly interactionMode: InteractionMode;
 }
@@ -86,8 +81,6 @@ const history = createResource<string, null>({
   },
 });
 
-// ── Reads ──────────────────────────────────────────────────────────────────
-
 export function getChatItems(prId: string): readonly ChatItem[] {
   return entry(prId).items;
 }
@@ -102,7 +95,6 @@ export function isChatStreaming(prId: string): boolean {
 
 const NO_TASKS: ReadonlyArray<ChatTask> = [];
 
-/** The agent's latest task list; it shows in the queue dock. */
 export function getActiveTasks(prId: string): ReadonlyArray<ChatTask> {
   const list = entry(prId).items.findLast((i) => i.kind === "task-list");
   return list?.kind === "task-list" ? list.tasks : NO_TASKS;
@@ -111,8 +103,6 @@ export function getActiveTasks(prId: string): ReadonlyArray<ChatTask> {
 export function getInteractionMode(prId: string): InteractionMode {
   return entry(prId).interactionMode;
 }
-
-// ── History ────────────────────────────────────────────────────────────────
 
 /** Read the persisted timeline once per PR (again after `reloadChatHistory`). */
 export function loadChatHistory(prId: string): void {
@@ -180,8 +170,6 @@ function entryToChatItem(entry: PersistedChatEntry): ChatItem {
   }
 }
 
-// ── Writes ─────────────────────────────────────────────────────────────────
-
 export function appendItem(prId: string, item: ChatItem): void {
   setItems(prId, (items) => [...items, item]);
 }
@@ -194,7 +182,6 @@ function removeItem(prId: string, id: string): void {
   setItems(prId, (items) => items.filter((i) => i.id !== id));
 }
 
-/** Mark a turn as in flight (or none). */
 export function setActiveTurn(prId: string, turnId: string | null): void {
   if (entry(prId).turnId === turnId) return;
   updateEntry(prId, (e) => ({ ...e, turnId }));

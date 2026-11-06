@@ -1,16 +1,7 @@
-// ── Clickable file references in chat markdown ──────────────────────────────
-//
-// The chat agent writes file paths as inline code (`apps/web/src/foo.ts`,
-// `user.service.ts`, `src/bar.ts:42`). This action walks rendered markdown
-// after each `{@html}` update, and for every inline `<code>` whose text
-// resolves to a file in the current review, turns it into a clickable
-// reference that opens the file in the diff tab (scrolling to the line when the
-// token carries one).
-//
-// Resolution is intentionally conservative: a token only becomes a link when it
-// unambiguously matches a changed file. A bare basename that several changed
-// files share stays inert rather than guessing the wrong target. This keeps the
-// common "symbol in backticks" (`checkAccessBatch`) from masquerading as a file.
+// The chat agent writes file paths as inline code (`user.service.ts`,
+// `src/bar.ts:42`). A token becomes a link to the diff only when it
+// unambiguously matches a changed file: a basename several changed files share
+// stays inert, and so does a symbol in backticks (`checkAccessBatch`).
 
 import { decorationAction } from "$lib/markdown/decorate";
 import type { ReviewFile } from "$lib/stores/diff-files.svelte";
@@ -23,7 +14,6 @@ const REF_LINE_ATTR = "data-file-ref-line";
 const REF_CLASS = "file-ref";
 const ICON_CLASS = "file-ref-icon";
 
-/** Prepend the per-extension file-type glyph into a resolved reference once. */
 function ensureIcon(code: HTMLElement, path: string): void {
   if (code.querySelector(`.${ICON_CLASS}`)) return;
   code.prepend(createFileGlyph(path, ICON_CLASS));
@@ -35,9 +25,7 @@ interface ResolvedRef {
 }
 
 interface FileLookup {
-  /** Exact path / oldPath membership. */
   paths: Set<string>;
-  /** Basename → set of full paths ending in that basename (ambiguity guard). */
   byBasename: Map<string, Set<string>>;
 }
 
@@ -74,23 +62,17 @@ function splitToken(raw: string): { candidate: string; line: number | null } {
   return { candidate: trimmed, line: null };
 }
 
-/** Resolve a code token to a changed file, or null when no unambiguous match. */
 function resolveRef(raw: string, lookup: FileLookup): ResolvedRef | null {
   const { candidate, line } = splitToken(raw);
   if (!candidate) return null;
 
-  // Exact full-path match wins outright.
   if (lookup.paths.has(candidate)) return { path: candidate, line };
 
-  // Otherwise fall back to a unique basename match so a bare `foo.ts` resolves
-  // to `src/foo.ts` — but only when exactly one changed file owns that name.
   const base = basename(candidate);
   const owners = lookup.byBasename.get(base);
   if (owners?.size !== 1) return null;
   const [only] = owners;
   if (!only) return null;
-  // A path-bearing candidate (`a/foo.ts`) must be a suffix of the real path to
-  // count — guards against `b/foo.ts` linking to `a/foo.ts`.
   if (candidate === base || only.endsWith(`/${candidate}`)) return { path: only, line };
   return null;
 }
@@ -113,7 +95,6 @@ function decorate(node: HTMLElement, files: ReadonlyArray<ReviewFile> | null): v
   const lookup = buildLookup(files);
   const codes = node.querySelectorAll<HTMLElement>("code");
   for (const code of codes) {
-    // Inline code only — skip fenced/highlighted blocks (`<pre><code>`).
     if (code.closest("pre")) continue;
     const ref = resolveRef(code.textContent ?? "", lookup);
     if (ref) {
@@ -126,7 +107,6 @@ function decorate(node: HTMLElement, files: ReadonlyArray<ReviewFile> | null): v
       code.setAttribute("title", `Open ${ref.path} in diff`);
       ensureIcon(code, ref.path);
     } else if (code.classList.contains(REF_CLASS)) {
-      // A prior render matched but the file set changed — strip the affordance.
       undecorate(code);
     }
   }

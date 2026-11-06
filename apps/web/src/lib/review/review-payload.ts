@@ -1,5 +1,3 @@
-// The body of a GitHub review: the walkthrough issues the reviewer picked.
-
 import type { IssueSeverity, WalkthroughIssue } from "@revv/shared";
 
 // Plain-text tags: the posted markdown stays icon-free.

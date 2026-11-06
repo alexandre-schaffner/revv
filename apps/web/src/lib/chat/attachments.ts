@@ -1,8 +1,4 @@
-// Picked files become chat attachments in two steps: `admitAttachments` decides,
-// when a file is added to the composer, whether it may be sent at all (type,
-// per-file size, total size, count), and `encodeAttachments` turns what was
-// admitted into the wire shape on submit. The caps and their messages come from
-// `@revv/shared`, which the server enforces too.
+// The caps and their messages come from `@revv/shared`; the server enforces the same caps.
 
 import {
   attachmentsTotalTooLargeMessage,
@@ -36,7 +32,6 @@ export interface Admission {
   readonly rejections: string[];
 }
 
-/** Which of `incoming` may join the attachments already in the composer. */
 export function admitAttachments(
   current: readonly PendingAttachment[],
   incoming: readonly File[],

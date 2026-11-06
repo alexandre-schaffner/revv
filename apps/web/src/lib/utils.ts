@@ -72,9 +72,7 @@ export type WithElementRef<T, E extends Element = HTMLElement> = T & {
   ref?: E | null;
 };
 
-// Utility types used by shadcn-svelte components.
-// We keep children accessible internally (components use {@render children?.()})
-// but make it optional so consumers aren't required to pass it.
+// Utility types the shadcn-svelte components import.
 export type WithoutChild<T> = Omit<T, "children"> & { children?: Snippet };
 
 export type WithoutChildrenOrChild<T> = Omit<T, "children"> & { children?: Snippet };

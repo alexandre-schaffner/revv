@@ -19,11 +19,6 @@ export interface ConversationPatch {
   readonly undo: (conversation: PrConversation) => PrConversation;
 }
 
-/**
- * A patch over one keyed list. `change` rewrites the list; the undo puts each
- * key in `keys` back the way it read before: restored in place, re-inserted
- * at its old position, or dropped if it didn't exist.
- */
 function keyedPatch<T>(
   read: (c: PrConversation) => readonly T[],
   write: (c: PrConversation, list: T[]) => PrConversation,
@@ -60,18 +55,13 @@ function keyedPatch<T>(
   };
 }
 
-// ── Actors ──────────────────────────────────────────────────────────────────
-
 function bareActor(login: string): ConversationActor {
   return { login, name: null, avatarContent: null, kind: "user" };
 }
 
-/** The viewer as the conversation knows them, avatar included when it has one. */
 function viewerOf(c: PrConversation): ConversationActor {
   return c.participants.find((p) => p.login === c.viewerLogin) ?? bareActor(c.viewerLogin);
 }
-
-// ── Timeline ────────────────────────────────────────────────────────────────
 
 const timelineOf = (c: PrConversation) => c.timeline;
 const withTimeline = (c: PrConversation, timeline: TimelineItem[]) => ({ ...c, timeline });
@@ -123,8 +113,6 @@ export function editBodyPatch(body: string): ConversationPatch {
     undo: (c) => ({ ...c, body: before }),
   };
 }
-
-// ── Reviewers ───────────────────────────────────────────────────────────────
 
 export interface ReviewerChange {
   readonly users: readonly string[];
@@ -183,8 +171,6 @@ export function removeReviewersPatch(change: ReviewerChange): ConversationPatch 
     }),
   );
 }
-
-// ── Assignees and labels ────────────────────────────────────────────────────
 
 const assigneesOf = (c: PrConversation) => c.assignees;
 const withAssignees = (c: PrConversation, assignees: ConversationActor[]) => ({ ...c, assignees });

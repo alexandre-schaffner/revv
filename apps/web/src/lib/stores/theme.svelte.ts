@@ -14,8 +14,6 @@ export type DiffThemePreference = (typeof DIFF_THEME_PREFERENCES)[number];
 const themeCodec = oneOfCodec(THEME_PREFERENCES);
 const diffThemeCodec = oneOfCodec(DIFF_THEME_PREFERENCES);
 
-// ── State ────────────────────────────────────────────────────────────────────
-
 let preference = $state<ThemePreference>(readStored(STORAGE_KEYS.theme, themeCodec, "system"));
 let diffPreference = $state<DiffThemePreference>(
   readStored(STORAGE_KEYS.diffTheme, diffThemeCodec, "sync"),
@@ -29,13 +27,8 @@ function resolve(pref: ThemePreference): ResolvedTheme {
   return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-// ── DOM ──────────────────────────────────────────────────────────────────────
-
-/** Class held on <html> only for the instant of the swap. See `apply()`. */
 const SWAP_CLASS = "theme-switching";
 
-/** Pending handle for dropping {@link SWAP_CLASS}, so rapid toggling doesn't
- *  strand it on (each swap re-arms rather than stacking add/remove pairs). */
 let swapRelease: number | null = null;
 
 function applyAnimated(pref: ThemePreference): void {
@@ -45,22 +38,12 @@ function applyAnimated(pref: ThemePreference): void {
   });
 }
 
-/** Toggle .dark on <html> and set colorScheme. Synchronous — the browser
- *  batches both writes into a single style recalc, so there is no flash.
+/** Synchronous: the browser batches the class and colorScheme writes into a
+ *  single style recalc, so there is no flash. The swap is wrapped in
+ *  `.theme-switching`, which zeroes every transition in the document; app.css
+ *  says why.
  *
- *  The swap is wrapped in `.theme-switching`, which zeroes every transition
- *  duration and delay in the document (see app.css). Without it a theme change
- *  isn't one repaint, it's a staggered crossfade: ~450 elements on a typical
- *  route transition `color` / `background` / `border-color`, at four different
- *  token durations plus Tailwind's own 150ms `transition-colors` — while
- *  untransitioned elements flip immediately. The app arrives in five waves over
- *  220ms, which reads as parts of the UI switching before others.
- *
- *  Suppression, not a shared duration. Giving every component the same
- *  transition was tried and rejected — see the app.css block for why it is
- *  uniform on paper but not smooth in practice.
- *
- *  Note also: do NOT drive the *native* window theme from here
+ *  Do NOT drive the *native* window theme from here
  *  (`getCurrentWindow().setTheme(...)`). It looks like the missing piece — the
  *  window's own appearance governs the traffic-light overlay region and the
  *  background the compositor paints during a live resize, and Tauri leaves it
@@ -112,8 +95,6 @@ function applyDiffTheme(pref: DiffThemePreference): void {
     document.documentElement.dataset.diffTheme = pref;
   }
 }
-
-// ── Public API ───────────────────────────────────────────────────────────────
 
 /** Call once from root layout. Returns cleanup. Untracked — must never re-run. */
 export function initTheme(): () => void {

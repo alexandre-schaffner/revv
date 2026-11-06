@@ -5,7 +5,6 @@ import { api } from "$lib/api/client";
 import { RequestState } from "$lib/stores/_types";
 import { preloadOwnerHues } from "./avatar-palette";
 
-/** A repository the account can add. */
 export interface AvailableRepo {
   readonly fullName: string;
   readonly owner: string;
@@ -80,7 +79,6 @@ async function fetchAvailablePrCounts(fullNames: string[]): Promise<void> {
   }
 }
 
-/** Ask the server's default clone base once; later calls keep the cached answer. */
 export async function fetchDefaultCloneBaseDir(): Promise<void> {
   if (defaultCloneBaseDir !== null) return;
   try {

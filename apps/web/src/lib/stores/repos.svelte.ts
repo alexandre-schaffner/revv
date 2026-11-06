@@ -18,7 +18,6 @@ export function getRepositories(): Repository[] {
   return repositories;
 }
 
-/** Whether {@link getRepositories} is answering from real data yet. */
 export function getReposFetchAttempted(): boolean {
   return reposFetchAttempted;
 }

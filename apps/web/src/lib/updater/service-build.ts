@@ -1,7 +1,3 @@
-/**
- * How the server's build compares to the app's. The app bundles and starts
- * its own server, so a mismatch means another server is answering on its port.
- */
 export type ServiceBuild =
   | { kind: "match" }
   | { kind: "unknown" }

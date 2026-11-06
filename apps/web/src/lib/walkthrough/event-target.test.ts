@@ -47,10 +47,7 @@ describe("addressesActiveWalkthrough", () => {
     expect(addressesActiveWalkthrough(seed, A, "summary")).toBe(true);
   });
 
-  // `liveGeneration` is the second half of the "we asked for this" signal, and
-  // was previously untested on its own: only `isStreaming` was exercised, so a
-  // regression that dropped the `liveGeneration` term from the guard would have
-  // gone unnoticed.
+  // `liveGeneration` alone, without `isStreaming`, must still mark the generation as ours.
   it("rejects a stale terminal envelope for a live generation that isn't streaming yet", () => {
     const requested = entry({ walkthroughId: null, isStreaming: false, liveGeneration: true });
     expect(addressesActiveWalkthrough(requested, A, "lifecycle:superseded")).toBe(false);

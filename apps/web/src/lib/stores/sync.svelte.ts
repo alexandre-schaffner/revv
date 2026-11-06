@@ -11,11 +11,8 @@ import { api } from "$lib/api/client";
 // "Synced Xm ago" reflects the currently selected PR's entry, not a global.
 let lastSyncAtByPr = $state<Map<string, string>>(new Map());
 
-// Per-PR in-flight threads sync (set after the user clicks sync, cleared on
-// `threads:synced`).
 let threadsSyncingByPr = $state<Set<string>>(new Set());
 
-// Per-PR last error message. Reserved for request-level sync failures.
 let syncErrorByPr = $state<Map<string, string>>(new Map());
 
 // Separate flag for the global PR-list metadata poll (`prs:sync-started` →
@@ -187,8 +184,6 @@ export function refreshPrHead(prId: string): void {
     .prs({ id: prId })
     .refresh.post()
     .catch(() => {
-      // Allow an immediate retry on the next trigger rather than holding the
-      // debounce open for a request that never landed.
       lastHeadRefreshAt.delete(prId);
     });
 }
@@ -228,8 +223,6 @@ function markThreadsSyncing(prId: string): void {
   const next = new Set(threadsSyncingByPr);
   next.add(prId);
   threadsSyncingByPr = next;
-  // Clear any stale error from a previous attempt so the UI doesn't flash
-  // "Sync failed" next to a spinner.
   if (syncErrorByPr.has(prId)) {
     const nextErr = new Map(syncErrorByPr);
     nextErr.delete(prId);

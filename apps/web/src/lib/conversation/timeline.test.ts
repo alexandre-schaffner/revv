@@ -121,7 +121,6 @@ describe("groupTimeline", () => {
   });
 });
 
-/** The sentence as it reads on screen, label chips by name. */
 function sentence(phrases: readonly Phrase[]): string {
   return phrases
     .map((p) => (p.kind === "labels" ? p.labels.map((l) => `[${l.name}]`).join(" ") : p.text))

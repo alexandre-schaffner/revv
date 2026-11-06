@@ -1,10 +1,9 @@
 import { fullWindow, type RecapPeriod, startOfUtcIsoWeek, windowIsCurrent } from "@revv/shared";
 
 /**
- * Pure UTC date arithmetic and labels for the recap calendar and the "is this
- * recap stale?" checks, over day keys. Which window is open and what a closed
- * one spans come from `@revv/shared` (`recap-period.ts`), which the server
- * uses too. Unit-tested in isolation: no Svelte, stores or network here.
+ * UTC date arithmetic and labels for the recap calendar and staleness checks.
+ * Which window is open and what a closed one spans come from `@revv/shared`
+ * (`recap-period.ts`), which the server uses too.
  *
  * Two traps this module exists to contain:
  *
@@ -17,17 +16,13 @@ import { fullWindow, type RecapPeriod, startOfUtcIsoWeek, windowIsCurrent } from
  *     previous month, month 12 = January of the next year). Hand-rolled
  *     modulo arithmetic on month numbers is how you ship a Dec→Jan bug.
  *
- * Everything here is a UTC *day key* — `"YYYY-MM-DD"` — or a *month key* —
- * `"YYYY-MM"`. Both sort lexicographically in chronological order, which is
- * what lets the comparisons below be plain string comparisons.
+ * Everything here is a UTC *day key* (`"YYYY-MM-DD"`) or *month key*
+ * (`"YYYY-MM"`); both sort chronologically as plain strings.
  */
 
 /**
- * Minimal shape needed to reason about a recap's time window. Dates arrive as
- * ISO strings over SSE and as `Date` after an Eden fetch, so both are accepted.
- * Every helper that takes one keeps the union and funnels through
- * {@link utcDayKey} — a raw `Date < string` comparison type-checks and
- * silently misbehaves.
+ * Compare through {@link utcDayKey}: a raw `Date < string` comparison
+ * type-checks and silently misbehaves.
  */
 export interface RecapWindow {
   period: RecapPeriod;
@@ -38,26 +33,20 @@ export interface RecapWindow {
 export const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEK_MS = 7 * DAY_MS;
 
-/** UTC day key of an ISO string or Date, whichever the wire handed us. */
 export function utcDayKey(value: string | Date): string {
   const s = typeof value === "string" ? value : value.toISOString();
   return s.slice(0, 10);
 }
 
-/** UTC day key of a Date. */
 export function utcDateKey(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** Day key of the Monday on-or-before the given Date (ISO weeks start Monday). */
 function utcMondayKey(d: Date): string {
   return utcDateKey(startOfUtcIsoWeek(d));
 }
 
-/**
- * UTC midnight for a day key. The one safe way to turn `"2026-06-03"` into a
- * Date — see trap 1 in the module doc.
- */
+/** The safe way to turn a day key into a Date: see trap 1 in the module doc. */
 export function dayKeyToUtcDate(key: string): Date {
   const year = Number(key.slice(0, 4));
   const month = Number(key.slice(5, 7));
@@ -65,18 +54,15 @@ export function dayKeyToUtcDate(key: string): Date {
   return new Date(Date.UTC(year, month - 1, day));
 }
 
-/** Day key `n` days after `key` (negative `n` goes backwards). */
 export function addUtcDays(key: string, n: number): string {
   const d = dayKeyToUtcDate(key);
   return utcDateKey(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + n)));
 }
 
-/** Month key (`"2026-06"`) of a day key, ISO instant or Date. */
 export function monthKeyOf(value: string | Date): string {
   return utcDayKey(value).slice(0, 7);
 }
 
-/** Month key `delta` months after `monthKey`. Rolls across years. */
 export function shiftMonth(monthKey: string, delta: number): string {
   const year = Number(monthKey.slice(0, 4));
   const month = Number(monthKey.slice(5, 7));
@@ -84,18 +70,14 @@ export function shiftMonth(monthKey: string, delta: number): string {
   return utcDateKey(d).slice(0, 7);
 }
 
-/** String-in/string-out sibling of {@link utcMondayKey}. */
 export function mondayKeyOf(dayKey: string): string {
   return utcMondayKey(dayKeyToUtcDate(dayKey));
 }
 
 /**
- * 6×7 Monday-first day keys starting from the Monday on-or-before the 1st of
- * `monthKey`. Always six rows, even when five would cover the month, so the
- * grid never changes height between months.
- *
- * `fromKey` / `toKeyExclusive` bound the whole grid, not the calendar month —
- * the leading and trailing days belong to the neighbouring months.
+ * Always six rows, even when five would cover the month, so the calendar
+ * never changes height between months. `fromKey` / `toKeyExclusive` bound the
+ * whole grid, including the neighbouring months' leading and trailing days.
  */
 export function monthGrid(monthKey: string): {
   weeks: string[][];
@@ -116,10 +98,8 @@ export function monthGrid(monthKey: string): {
 }
 
 /**
- * ISO instants bounding the list query for a month's grid. Spans the *grid*,
- * not the calendar month, so a weekly row whose Monday sits in the previous
- * month is included — otherwise the first row of the grid would render as
- * empty in weekly mode even when a recap exists for it.
+ * Spans the grid, not the calendar month, so a weekly recap whose Monday sits
+ * in the previous month still fills the grid's first row.
  */
 export function monthGridRange(monthKey: string): { from: string; to: string } {
   const { fromKey, toKeyExclusive } = monthGrid(monthKey);
@@ -129,17 +109,14 @@ export function monthGridRange(monthKey: string): { from: string; to: string } {
   };
 }
 
-/** Calendar slot a recap occupies: `"daily:2026-06-03"` / `"weekly:2026-06-01"`. */
 export function recapSlotKey(r: RecapWindow): string {
   return `${r.period}:${utcDayKey(r.periodStart)}`;
 }
 
-/** Slot key for a cell. `anchorDayKey` is the cell's own day; weekly snaps to its Monday. */
 export function slotKeyFor(period: RecapPeriod, anchorDayKey: string): string {
   return period === "daily" ? `daily:${anchorDayKey}` : `weekly:${mondayKeyOf(anchorDayKey)}`;
 }
 
-/** True when `dayKey` falls in the period that is still open right now — today, or this ISO week. */
 export function isCurrentPeriod(
   period: RecapPeriod,
   dayKey: string,
@@ -149,17 +126,11 @@ export function isCurrentPeriod(
 }
 
 /**
- * Boundaries to send with a generate request for the slot anchored at
- * `dayKey`, or `null` for the *current* period.
- *
- * `null` is the signal to omit `periodStart`/`periodEnd` entirely and let the
- * server roll its own window. That branch is not cosmetic: a past window is
- * closed and immutable, so pinning it is right and re-clicking should return
- * the existing recap; today's window moves every second, so pinning it would
- * freeze the recap at its first generation and make regeneration a silent
- * no-op.
- *
- * A closed window is the whole day or week, as the server canonicalises it.
+ * Boundaries to send with a generate request, or `null` for the current
+ * period: omit `periodStart`/`periodEnd` and let the server roll its own
+ * window. A past window is closed and immutable, so re-clicking returns the
+ * existing recap; pinning today's moving window would freeze the recap at its
+ * first generation and make regeneration a silent no-op.
  */
 export function selectionBoundaries(
   period: RecapPeriod,
@@ -170,7 +141,6 @@ export function selectionBoundaries(
   return fullWindow(period, dayKeyToUtcDate(dayKey));
 }
 
-/** A recap whose window spans a whole closed day/week rather than "so far". */
 function isClosedFullPeriod(r: RecapWindow): boolean {
   const start = new Date(r.periodStart).getTime();
   const end = new Date(r.periodEnd).getTime();
@@ -179,8 +149,6 @@ function isClosedFullPeriod(r: RecapWindow): boolean {
 }
 
 /**
- * True when the recap doesn't cover the current UTC day/week — either because
- * it's a closed full period, or because its start is in an earlier window.
  * Status-independent on purpose: a stopped or errored recap from last week is
  * just as stale as a completed one, and both deserve a fresh-period CTA.
  */
@@ -190,13 +158,9 @@ export function recapWindowIsStale(r: RecapWindow): boolean {
 }
 
 /**
- * The recap covering the latest *window*, not the latest generation.
- *
- * `generatedAt DESC` — the order the store keeps the list in — is the wrong
- * pick for a hero: generate a recap for three weeks ago today and it becomes
- * the newest row, hijacking the "Daily recap" hero and the repo home card.
- * Max by `periodStart`, tie-broken by `generatedAt` DESC so a regenerate of
- * the same window still wins.
+ * The recap covering the latest *window*, not the latest generation: a recap
+ * generated today for three weeks ago must not hijack the "Daily recap" hero
+ * and the repo home card. A regenerate of the same window still wins.
  */
 export function pickLatestByWindow<T extends RecapWindow & { status: string; generatedAt: string }>(
   recaps: readonly T[],
@@ -230,14 +194,13 @@ const DAY_MONTH_FMT = new Intl.DateTimeFormat("en-GB", {
   timeZone: "UTC",
 });
 
-/** The UTC days a recap label names: one day, or a week's first and last. */
 export interface RecapSpan {
   readonly period: RecapPeriod;
   readonly first: Date;
   readonly last: Date;
 }
 
-/** A recap's window. Its last day is the one before the exclusive end. */
+/** `periodEnd` is exclusive. */
 export function recapSpan(r: RecapWindow): RecapSpan {
   return {
     period: r.period,
@@ -246,7 +209,6 @@ export function recapSpan(r: RecapWindow): RecapSpan {
   };
 }
 
-/** A calendar slot: the day, or its Monday-to-Sunday week. */
 export function slotSpan(period: RecapPeriod, dayKey: string): RecapSpan {
   if (period === "daily") {
     const day = dayKeyToUtcDate(dayKey);
@@ -260,7 +222,6 @@ export function slotSpan(period: RecapPeriod, dayKey: string): RecapSpan {
   };
 }
 
-/** The open window so far: today, or this week up to today. */
 export function openSpan(period: RecapPeriod, now: Date = new Date()): RecapSpan {
   return { period, first: period === "daily" ? now : startOfUtcIsoWeek(now), last: now };
 }
@@ -278,10 +239,8 @@ export function formatRecapRange(span: RecapSpan): string {
 }
 
 /**
- * Route for a calendar slot, whether or not a recap exists for it yet. The
- * empty case is a real page — landing on "no recap for this day, generate
- * one?" is what makes every cell in the grid clickable rather than only the
- * filled ones.
+ * Route for a calendar slot, whether or not a recap exists for it yet: the
+ * empty "generate one?" page is what makes every grid cell clickable.
  */
 export function windowPath(repoId: string, period: RecapPeriod, dayKey: string): string {
   const anchor = period === "daily" ? dayKey : mondayKeyOf(dayKey);

@@ -6,7 +6,6 @@ import { getSettings, isSettingsLoaded, updateSettings } from "$lib/stores/setti
 
 const diffWrap = persisted(STORAGE_KEYS.diffWrap, flagCodec, false);
 
-/** Whether long diff lines soft-wrap instead of scrolling horizontally. */
 export function getDiffWrap(): boolean {
   return diffWrap.current;
 }

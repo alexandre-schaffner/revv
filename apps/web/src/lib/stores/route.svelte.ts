@@ -7,8 +7,7 @@ import { page } from "$app/state";
 import { getPrById } from "./prs.svelte";
 import { getRepositories } from "./repos.svelte";
 
-// Deriveds, so readers re-run only when the value changes, not on every
-// navigation. The decoded route param, never `page.url.pathname`: PR ids are
+// The decoded route param, never `page.url.pathname`: PR ids are
 // `<repoId>:<number>`, and a URL carrying the colon as `%3A` matches no PR.
 const selectedPrId = $derived(
   page.route.id === "/review/[prId]" ? (page.params.prId ?? null) : null,
@@ -24,7 +23,6 @@ export function getSelectedPr(): PullRequest | null {
   return selectedPr;
 }
 
-/** The repository the page is about: a `/repo/[repoId]` page's, or the open PR's. */
 const selectedRepoId = $derived(page.params.repoId ?? selectedPr?.repositoryId ?? null);
 
 export function getSelectedRepoId(): string | null {

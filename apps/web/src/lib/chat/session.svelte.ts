@@ -1,7 +1,3 @@
-// What the composer knows about the agent session of each PR: its slash
-// commands and repo file list (for `/` and `@` completion), and whether the
-// selected agent offers plan mode.
-
 import type { ChatSessionContext } from "@revv/shared";
 import { untrack } from "svelte";
 import { createResource } from "$lib/stores/resource";
@@ -60,10 +56,6 @@ export function warmChatSessionContext(prId: string): void {
   void contexts.refresh(prId, prId);
 }
 
-/**
- * `@`-mention candidates: the PR's changed files first, then the rest of the
- * repo tree.
- */
 export function getChatMentionPaths(
   prId: string | null,
   changedPaths: readonly string[],

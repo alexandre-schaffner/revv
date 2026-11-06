@@ -22,11 +22,9 @@ function createParser(trust: MarkdownTrust): Marked {
     breaks: true,
     gfm: true,
     hooks: {
-      // Wrap every rendered table in a scroll container so wide tables don't
-      // blow out narrow panels. Styled globally via `.prose-table` in
-      // prose.css. `not-prose` keeps @tailwindcss/typography from layering its
-      // own table defaults onto the inner `<table>`. Safe because the code
-      // renderer escapes `<`: real `<table>` tags only come from GFM tables.
+      // `not-prose` keeps @tailwindcss/typography's table defaults off the
+      // inner `<table>`. A regex is enough because the code renderer escapes
+      // `<`, so no `<table>` inside a code block reaches this.
       postprocess(html: string): string {
         return html
           .replace(/<table([\s>])/g, '<div class="prose-table not-prose" tabindex="0"><table$1')
@@ -110,8 +108,6 @@ function render(normalized: string, trust: MarkdownTrust): string {
   return sanitize(parsers[trust].parse(normalized, { async: false }), trust);
 }
 
-// Rendered HTML per top-level block, keyed on trust and the block's source.
-// Insertion-ordered, so the oldest entry is evicted first once full.
 const blockHtmlCache = new Map<string, string>();
 const BLOCK_CACHE_LIMIT = 2000;
 
@@ -120,7 +116,6 @@ function renderBlock(raw: string, trust: MarkdownTrust): string {
   const cached = blockHtmlCache.get(key);
   if (cached !== undefined) return cached;
   const html = render(raw, trust);
-  // A block rendered before Shiki loaded holds plain `<pre>`; don't pin it.
   if (isHighlighterReady()) {
     if (blockHtmlCache.size >= BLOCK_CACHE_LIMIT) {
       const oldest = blockHtmlCache.keys().next().value;
@@ -154,7 +149,6 @@ export function renderMarkdownBlocks(source: string, trust: MarkdownTrust): stri
     .map((token) => renderBlock(token.raw, trust));
 }
 
-/** The top-level blocks of agent markdown, as source. */
 export function splitAgentMarkdown(source: string): string[] {
   return parsers.agent
     .lexer(normalize(source, "agent"))
@@ -165,10 +159,10 @@ export function splitAgentMarkdown(source: string): string[] {
 const FADE_SKIP_TAGS = new Set(["code", "pre", "script", "style"]);
 
 /**
- * Per-character stagger and cap. Matches Luxe's `TextGenerativeEffect`
- * (https://animation-svelte.vercel.app/luxe/text-generate-effect):
- * `delay: index * 0.015` seconds. The cap keeps a large new tail
- * (e.g. snapshot replay on reconnect) from staggering for many seconds.
+ * The stagger matches Luxe's `TextGenerativeEffect`
+ * (https://animation-svelte.vercel.app/luxe/text-generate-effect). The cap
+ * keeps a large new tail (e.g. snapshot replay on reconnect) from staggering
+ * for many seconds.
  */
 const FADE_CHAR_STAGGER_MS = 15;
 const FADE_CHAR_MAX_DELAY_MS = 900;
@@ -179,11 +173,6 @@ interface FadeWalk {
   newCharIndex: number;
 }
 
-/**
- * Count plain-text characters in document order and wrap each one past
- * `prev` in a `.sd-char-new` span. Text inside `<code>`/`<pre>` is counted
- * but never wrapped, so highlighted tokens aren't split.
- */
 function wrapNewChars(node: Node, walk: FadeWalk): void {
   for (const child of Array.from(node.childNodes)) {
     if (child.nodeType === Node.TEXT_NODE) {

@@ -1,10 +1,3 @@
-// ── Walkthrough store ───────────────────────────────────────────────────────
-//
-// One entry per PR, folded from the global SSE bus (`onWalkthroughEvent`, routed
-// by events.svelte.ts) and from REST snapshots (`hydrateFromCache`). The
-// folding itself is pure and lives in walkthrough-reducer.ts; the user's verbs
-// (generate, regenerate, resume, stop) live in walkthrough-actions.ts.
-//
 // SSE delivery is best-effort (invariant 8): whatever a reconnect or a stall
 // may have missed is re-read from `/current`, which is authoritative.
 
@@ -46,8 +39,6 @@ import {
 } from "./reducer";
 import { wtTrace } from "./trace";
 
-// ── State ───────────────────────────────────────────────────────────────────
-
 // SvelteMap writes notify only when the stored reference changes: an entry is
 // replaced, never mutated and re-set (the reducer and `updateEntryInMap` both
 // hand back a fresh object).
@@ -69,16 +60,12 @@ export type PendingAction = "regenerate" | "resume" | "start";
 /** Keeps the start/regenerate/resume buttons disabled across their round trip. */
 const pendingActions = new SvelteMap<string, PendingAction>();
 
-/** PRs whose page is reading their first snapshot. */
 const hydrating = new SvelteSet<string>();
 
 /** PRs on screen. A completion elsewhere gets a "Walkthrough ready" toast. */
 const watched = new Set<string>();
 
-/** When the last envelope for a PR was applied; the stall watchdog reads it. */
 const lastEventAtByPr = new Map<string, number>();
-
-// ── Writes (this module and walkthrough-actions.ts) ─────────────────────────
 
 export function setEntry(prId: string, entry: WalkthroughEntry): void {
   entries.set(prId, entry);
@@ -106,8 +93,6 @@ export function setPendingAction(prId: string, action: PendingAction): void {
 export function clearPendingAction(prId: string): void {
   pendingActions.delete(prId);
 }
-
-// ── Reads ───────────────────────────────────────────────────────────────────
 
 export function getWalkthroughEntry(prId: string): WalkthroughEntry | undefined {
   return entries.get(prId);
@@ -158,7 +143,6 @@ export function getRiskLevel(prId: string): RiskLevel | null {
   return entries.get(prId)?.riskLevel ?? null;
 }
 
-/** Model the PR's latest walkthrough launched with, if any has. */
 export function getWalkthroughModelUsed(prId: string): string | null {
   return entries.get(prId)?.modelUsed ?? null;
 }
@@ -212,8 +196,6 @@ export function getLastWalkthroughEventAt(prId: string): number | null {
   return lastEventAtByPr.get(prId) ?? null;
 }
 
-// ── Review rounds ───────────────────────────────────────────────────────────
-
 const reviewRounds = createResource<string, WalkthroughReviewRoundsResponse>({
   fetch: async (_key, prId) => {
     const { data, error } = await api.api.reviews({ id: prId }).walkthrough.rounds.get();
@@ -244,8 +226,6 @@ export function onPrsUpdated(prs: readonly PullRequest[]): void {
     }
   }
 }
-
-// ── Snapshots ───────────────────────────────────────────────────────────────
 
 interface HydrateOptions {
   /** Start from the snapshot alone, dropping what the entry holds. */
@@ -383,8 +363,6 @@ export function markIssuesAsSubmitted(
     entry.issues = entry.issues.map((i) => (idSet.has(i.id) ? { ...i, submittedAt } : i));
   });
 }
-
-// ── Global SSE ──────────────────────────────────────────────────────────────
 
 function toastReady(prId: string): void {
   if (watched.has(prId)) return;
