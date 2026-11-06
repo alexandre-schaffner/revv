@@ -219,7 +219,7 @@ export function commentGist(body: string, max = 90): string {
   const raw = heading ?? lines[0] ?? "";
   const text = raw
     .replace(/^#{1,6}\s+/, "")
-    .replace(/<[^>]+>/g, "")
+    .replace(/[<>]/g, "")
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
     .replace(/[*_`~>|]/g, "")
