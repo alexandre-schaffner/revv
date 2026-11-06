@@ -57,7 +57,6 @@ const TOKEN_BY_ROLE: Record<keyof Palette, string | null> = {
   shadow: null,
 };
 
-/** Colour attributes PR Lens writes directly onto elements. */
 const COLOUR_ATTRIBUTES = ["fill", "stroke", "stop-color"] as const;
 
 export type ColourMap = ReadonlyMap<string, string>;
@@ -80,7 +79,6 @@ export function buildColourMap(palette: Palette): ColourMap {
   return map;
 }
 
-/** Ancestor every rule in the SVG's own stylesheet is confined to. */
 const SCOPE = ".prlens-diagram";
 
 /**
@@ -124,7 +122,6 @@ function scopeSelectors(css: string): string {
 export function themeStyleBlock(svg: string, colours: ColourMap): string {
   return svg.replace(/<style>([\s\S]*?)<\/style>/, (_match, css: string) => {
     let themed = css;
-    // Longest first: no literal may be rewritten inside another's replacement.
     for (const literal of [...colours.keys()].sort((a, b) => b.length - a.length)) {
       themed = themed.split(literal).join(colours.get(literal) ?? literal);
     }
@@ -132,11 +129,6 @@ export function themeStyleBlock(svg: string, colours: ColourMap): string {
   });
 }
 
-/**
- * Move colour-bearing presentation attributes onto the element's inline style,
- * where a custom property actually resolves. Anything we have no token for —
- * `url(#dots)`, `none`, `currentColor` — is left exactly as it was.
- */
 export function applyColourAttributes(root: ParentNode, colours: ColourMap): void {
   for (const element of root.querySelectorAll<SVGElement>("[fill], [stroke], [stop-color]")) {
     for (const attribute of COLOUR_ATTRIBUTES) {

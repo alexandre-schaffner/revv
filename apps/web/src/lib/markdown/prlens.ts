@@ -16,20 +16,16 @@ let modules: PrLensModules | null = null;
 let loadPromise: Promise<PrLensModules> | null = null;
 
 /**
- * Rendered SVGs, keyed on everything that changes the output.
- *
- * Bounded, and evicted oldest-first. This is a desktop app whose window is
- * never reloaded, so an unbounded module-level cache retains every diagram
- * rendered in the session — and each entry holds a full SVG string. The cap is
- * generous next to how many diagrams a walkthrough actually contains; it exists
- * to make the ceiling finite, not to be tight.
+ * Bounded because the desktop window is never reloaded: an unbounded cache
+ * would hold every diagram's SVG string rendered in the session. The cap is
+ * generous next to a walkthrough's diagram count; it only makes the ceiling
+ * finite.
  */
 const SVG_CACHE_LIMIT = 64;
 const svgCache = new Map<string, Rendered>();
 
 function cacheRendered(key: string, rendered: Rendered): void {
   if (svgCache.size >= SVG_CACHE_LIMIT) {
-    // Map iterates in insertion order, so the first key is the oldest.
     const oldest = svgCache.keys().next();
     if (!oldest.done) svgCache.delete(oldest.value);
   }
@@ -85,7 +81,6 @@ function stripAnimation(svg: string): string {
   );
 }
 
-/** Trim a failure down to something that fits in a diagram-sized fallback box. */
 function truncate(message: string, limit = 400): string {
   return message.length <= limit ? message : `${message.slice(0, limit - 1)}…`;
 }
@@ -93,9 +88,7 @@ function truncate(message: string, limit = 400): string {
 /**
  * Render one `prlens` fence to a self-contained SVG.
  *
- * The source is the JSON body of a graph document. Rendering is deterministic
- * for a given body, theme and motion preference, so results are cached on all
- * three — `animate` belongs in the key because it changes the emitted markup.
+ * The source is the JSON body of a graph document.
  *
  * Never rejects: every failure — bad JSON, a rejected document, a chunk that
  * would not load, a renderer throw — comes back as `{ error }` for the caller
@@ -140,8 +133,7 @@ export async function renderPrLens(
 
     const { svg, width, animated } = renderer.render(parsed.value, { lens, theme });
     const colours = buildColourMap(renderer.paletteFor(theme));
-    // `animated` is the renderer's own answer for whether it emitted any SMIL,
-    // so a still diagram skips the strip entirely.
+    // `animated` is the renderer's own answer for whether it emitted any SMIL.
     const themed = themeStyleBlock(animated && !animate ? stripAnimation(svg) : svg, colours);
     const rendered = { svg: themed, width, colours };
     cacheRendered(cacheKey, rendered);

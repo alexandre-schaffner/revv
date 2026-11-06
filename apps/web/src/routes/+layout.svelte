@@ -25,17 +25,10 @@ import { warnIfServiceOutOfDate } from "$lib/updater/service-build-warning";
 
 let { children } = $props();
 
-// Keep the sidebar view in lockstep with the URL in both directions.
-// Sidebar and palette clicks go through `openPr`, which pairs selectPr() with
-// setSidebarView('files') so the click-driven path is in sync. This
-// effect covers every URL-driven path that doesn't go through those
-// handlers — deep link, browser back/forward, refresh, SSE-driven nav,
-// settings-link round-trip — and was previously one-sided (only reset
-// to 'prs' when the route left a PR), which let the header (OrgSwitcher)
-// and the body (file tree, because selectedPrId was set) desync.
-// Re-runs only when selectedPrId changes, so a manual swipe-back to the
-// PR list while staying on /review/[prId] (Esc / 'h' / breadcrumb) is
-// not clobbered.
+// Covers the URL-driven paths (deep link, back/forward, refresh, SSE-driven
+// nav); clicks go through `openPr`, which sets the view itself. Re-runs only
+// when selectedPrId changes, so swiping back to the PR list while staying on
+// /review/[prId] (Esc / 'h' / breadcrumb) is not clobbered.
 $effect(() => {
   setSidebarView(getSelectedPrId() ? "files" : "prs");
 });
@@ -48,13 +41,10 @@ $effect(() => {
   if (userId) untrack(() => startSession(userId));
 });
 
-// Runs once, on mount. Deliberately `onMount` and not `$effect`: several of
-// these helpers read reactive state synchronously (`restoreSession()` and
-// `fetchAllModels()` both touch the auth token before their first `await`), so
-// an effect would subscribe to it. A token change — better-auth handing back a
-// refreshed `set-auth-token` on sign-in — then tore the whole thing down and
-// re-ran it: the updater re-armed and fired a second immediate check,
-// producing a duplicate "Update available" toast.
+// `onMount`, not `$effect`: `restoreSession()` and `fetchAllModels()` read the
+// auth token before their first `await`, so an effect would re-run on every
+// token change (better-auth hands back a refreshed `set-auth-token` on
+// sign-in), re-arming the updater into a duplicate "Update available" toast.
 onMount(() => {
   initGsap();
   const cleanupTheme = initTheme();
@@ -86,13 +76,10 @@ onMount(() => {
     });
 
   restoreSession();
-  // Fetch settings before arming the updater check loop.
-  // Model prefetch doesn't block anything, so it starts in parallel.
   void fetchAllModels();
   void fetchSettings().then(() => {
-    // 5s delay so the first update check doesn't compete with
-    // initial PR sync for network. After that the service runs on
-    // its own hourly timer. Tauri-only — the service no-ops in dev.
+    // So the first update check doesn't compete with the initial PR sync
+    // for network.
     setTimeout(() => {
       startUpdater();
     }, 5000);
@@ -108,13 +95,11 @@ onMount(() => {
 });
 </script>
 
-<!-- Iconography defaults (phosphor-svelte). One place decides how every icon
-	 in the app renders, so call sites only state what differs.
+<!-- Iconography defaults (phosphor-svelte); call sites only state what differs.
 
-	   weight "regular" — the outlined default. `weight="fill"` is reserved for
-	     *state*: the on/active/selected half of a toggle, and severity markers
-	     where solidity itself is the signal. Fill as decoration is what let the
-	     same glyph read solid in one row and hairline in the next.
+	   weight "regular" — `weight="fill"` is reserved for *state*: the
+	     on/active/selected half of a toggle, and severity markers where
+	     solidity itself is the signal.
 	   aria-hidden — phosphor stamps `role="img"` on every <svg>, and a role=img
 	     with no accessible name is an unlabelled image (WCAG 1.1.1). Icons here
 	     are decorative; the adjacent label or the button's own aria-label

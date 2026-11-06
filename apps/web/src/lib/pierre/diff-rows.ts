@@ -74,7 +74,6 @@ export function diffRowRange(
   return { side: end.side, startLine, endLine: end.lineNumber };
 }
 
-/** How many rows the diff renders. */
 export function diffRowCount(diff: FileDiffMetadata): number {
   return diff.hunks.reduce((total, hunk) => total + hunk.unifiedLineCount, 0);
 }

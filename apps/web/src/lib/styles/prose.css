@@ -1,16 +1,6 @@
-/* ──────────────────────────────────────────────────────────
-   Markdown prose — @tailwindcss/typography themed to the Revv
-   design tokens. Every `--tw-prose-*` slot maps to a `--color-*`
-   token (which already swaps under `:root.dark`), so prose renders
-   correctly in both themes with no `prose-invert`. This is the
-   app-wide markdown foundation: chat, walkthrough, recap, review
-   comments, annotations, and rating rationales all render through
-   `.prose`. Density-sensitive panels layer thin overrides on top.
-
-   Extracted from app.css and `@import`ed there, matching the
-   dotmatrix-loader / glass-pill partial precedent — markdown styling
-   is a self-contained subsystem and this is its single home.
-   ────────────────────────────────────────────────────────── */
+/* Every `--tw-prose-*` slot maps to a `--color-*` token (which swaps under
+   `:root.dark`), so prose needs no `prose-invert`. All app markdown renders
+   through `.prose`; density-sensitive panels layer thin overrides on top. */
 :where(.prose) {
   --tw-prose-body: var(--color-text-secondary);
   --tw-prose-headings: var(--color-text-primary);
@@ -35,29 +25,23 @@
   max-width: none;
 }
 
-/* Font sizing is authoritative here — NOT the typography plugin's base
-   `.prose { font-size: 1rem }` (16px). The plugin's base and our density
-   modifiers (`prose-sm`, `prose-dense`) all match at (0,1,0) specificity, so
-   the winner was decided by stylesheet injection order — markdown
-   intermittently ballooned to the 16px plugin base. The `:root` prefix lifts
-   these to (0,2,0) so the intended reading size is deterministic regardless of
-   load order. Sizes come from the `--text-prose*` theme presets (app.css). */
+/* The typography plugin's base `.prose { font-size: 1rem }` and our density
+   modifiers (`prose-sm`, `prose-dense`) all match at (0,1,0), so stylesheet
+   injection order would pick the winner. The `:root` prefix lifts these to
+   (0,2,0). */
 :root .prose {
   font-size: var(--text-prose);
   line-height: var(--text-prose--line-height);
 }
 
-/* Compact density for dense side panels (review comments, annotation threads,
-   rating rationales, section summaries). Layered after the base via the same
-   `:root` bump so `prose-dense` wins over `prose`/`prose-sm` on source order. */
+/* Same `:root` bump, and after the base, so `prose-dense` wins over
+   `prose`/`prose-sm` on source order. */
 :root .prose-dense {
   font-size: var(--text-prose-dense);
   line-height: var(--text-prose-dense--line-height);
 }
 
-/* Drop the plugin's `` `code` `` backtick pseudo-elements and give inline code
-   a subtle chip instead, matching the rest of the UI. (Code inside fenced
-   blocks / Shiki output is left to its own block styling.) */
+/* The typography plugin wraps inline code in backtick pseudo-elements. */
 .prose :where(code):not(:where(pre code, .shiki code))::before,
 .prose :where(code):not(:where(pre code, .shiki code))::after {
   content: none;
@@ -86,17 +70,9 @@
   background: color-mix(in oklch, var(--color-user-bubble-chip) 50%, transparent);
 }
 
-/* ──────────────────────────────────────────────────────────
-   Prose tables — global styling for GFM tables rendered by
-   marked. The `.prose-table` wrapper is added by the postprocess
-   hook in src/lib/markdown/render.ts and provides horizontal
-   scroll for tables wider than their container.
-
-   Lives globally (not in per-component prose styles) because all
-   markdown-rendering surfaces should treat tables identically;
-   keeping it out of each component's `:global(...)` block avoids
-   duplication and drift.
-   ────────────────────────────────────────────────────────── */
+/* The `.prose-table` wrapper comes from the postprocess hook in
+   src/lib/markdown/render.ts. Global so every markdown surface treats tables
+   identically. */
 .prose-table {
   width: 100%;
   overflow-x: auto;
@@ -104,9 +80,6 @@
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-card);
   background: var(--color-bg-primary);
-  /* Allow keyboard users to focus and scroll the region. The default browser
-     outline is suppressed only on focus (not focus-visible), so keyboard
-     focus still shows the accent ring; mouse-focus stays clean. */
   outline: none;
   transition: box-shadow var(--duration-quick) var(--ease-out-expo);
 }
@@ -125,8 +98,6 @@
   border-collapse: collapse;
   font-size: 13px;
   line-height: 1.5;
-  /* Keep cells from collapsing to single-character columns; long words
-       still wrap thanks to the wrapper's overflow-x. */
   min-width: max-content;
 }
 
@@ -173,9 +144,8 @@
   text-align: right;
 }
 
-/* Inline code inside tables — slightly tighter than the free-flowing prose
-   code chip so cells don't bloat. The table wrapper is `not-prose`, so the
-   plugin's own code styling is suppressed here and this rule owns cell code. */
+/* The table wrapper is `not-prose`, so the plugin's code styling doesn't
+   reach cells. */
 .prose-table code {
   font-family: var(--font-mono);
   font-size: 0.9em;
@@ -185,8 +155,7 @@
   white-space: nowrap;
 }
 
-/* Links inside table cells — the `not-prose` wrapper suppresses the plugin's
-   `.prose a` styling, so restore accent + underline explicitly here. */
+/* The `not-prose` wrapper also suppresses `.prose a`. */
 .prose-table a {
   color: var(--color-accent);
   text-decoration: underline;
@@ -197,10 +166,6 @@
   margin: 0;
 }
 
-/* ──────────────────────────────────────────────────────────
-   PR Lens diagrams — placeholders are emitted by the markdown renderer and
-   replaced client-side after the lazy PR Lens bundle renders SVG.
-   ────────────────────────────────────────────────────────── */
 .prlens-diagram {
   /* Starting size only. A diagram's natural width is set by its lane or
      participant count and routinely dwarfs the reading column, so the action
@@ -245,9 +210,6 @@
   color: var(--color-danger);
 }
 
-/* The rejected document, folded away. Open it to see which diagram broke;
-   closed, a failure costs one line of the reading column instead of the
-   hundreds a graph document runs to. */
 .prlens-fallback {
   margin-top: var(--spacing-island);
 }
@@ -278,12 +240,8 @@
   color: var(--color-text-primary);
 }
 
-/* ──────────────────────────────────────────────────────────
-   Prose link styles — the single authority for link appearance
-   across every markdown-rendering surface (recap, walkthrough,
-   chat, review). Components no longer declare their own
-   `:global(a)` rules; this rule owns prose links everywhere.
-   ────────────────────────────────────────────────────────── */
+/* The single authority for prose link appearance: components don't declare
+   their own `:global(a)` rules. */
 .prose a {
   color: var(--color-accent);
   text-decoration-line: underline;

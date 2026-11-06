@@ -1,20 +1,8 @@
 <script lang="ts">
 /*
- * `/` — the repos feed.
- *
- * Landing here used to mean an empty stage with two keyboard hints, which
- * made the rail a mandatory stop: the reader had to pick a project before the
- * app told them anything. So once at least one repo is synced, this route
- * stacks every repo's homepage — hero, the queue of PRs involving the reader,
- * latest recap — into one scrollable feed. Same body as `/repo/[repoId]`
- * (RepoHomeSection), so the two can't drift.
- *
  * Feed order is the rail's order, deliberately: sorting by activity would
- * reshuffle the stack under the reader on every `prs:updated` tick, and the
- * whole point is that scanning down here matches scanning down the rail.
- *
- * The keyboard-hint hero survives as the zero-repo state, which is the only
- * case where it was ever the right thing to show.
+ * reshuffle the stack under the reader on every `prs:updated` tick, and
+ * scanning down here should match scanning down the rail.
  */
 
 import RepoHomeSection from "$lib/components/repo/RepoHomeSection.svelte";
@@ -65,10 +53,7 @@ const resolved = $derived(getReposFetchAttempted());
 	}
 
 	/* The gap between two repos is bigger than any gap inside one, so the
-	   stack reads as separate homepages rather than one long page. The
-	   hairline does the same job the whitespace does, for readers who scan
-	   edges instead of rhythm. Margin (not `gap`) so the rule can be a
-	   border on the section itself and only appear between siblings. */
+	   stack reads as separate homepages rather than one long page. */
 	.feed > :global(section + section) {
 		margin-top: 56px;
 		padding-top: 56px;

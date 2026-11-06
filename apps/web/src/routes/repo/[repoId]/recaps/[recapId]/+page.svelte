@@ -19,8 +19,8 @@ const controller = new RecapController(
 );
 const recap = $derived(controller.recap);
 
-// Hydrate the repo's recap list for the archive popover. Cached after the
-// first load — SSE reducers in recaps.svelte.ts keep it fresh.
+// For the archive popover. After the first load, the recap SSE handlers in
+// `$lib/recaps/store.svelte` keep the list fresh.
 $effect(() => {
   const id = repoId;
   if (id) {

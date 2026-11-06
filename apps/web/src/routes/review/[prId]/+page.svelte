@@ -36,12 +36,11 @@ const isLoading = $derived(getIsLoadingFiles());
 const loadError = $derived(getFilesError());
 const activeTab = $derived(getActiveTab());
 const routePrIdOrEmpty = $derived(page.params.prId ?? "");
-// The tier a generated walkthrough carries. Null until one exists.
 const generatedRiskLevel = $derived(getWalkthroughRiskLevel(routePrIdOrEmpty));
 
-// …and the same tier resolved from the diff before generation, so opening a
-// PR shows attention needed without a review. Same cached answer either way,
-// so the badge value doesn't change when generation starts.
+// The tier is resolved from the diff before generation, so opening a PR shows
+// the attention it needs without a review. Same cached answer either way, so
+// the badge value doesn't change when generation starts.
 const sizing = $derived(getWalkthroughSizing(pr?.id ?? null, pr?.headSha ?? null));
 
 const stackPlace = $derived(activeTab === "walkthrough" && pr ? readStackPlace(pr.id) : null);
@@ -49,7 +48,6 @@ const stackPlace = $derived(activeTab === "walkthrough" && pr ? readStackPlace(p
 const walkthroughRiskLevel = $derived(
   generatedRiskLevel ?? (sizing?.status === "ready" ? sizing.riskLevel : null),
 );
-// Pre-review, the tier describes the change, not a verdict — say so on hover.
 const riskTitle = $derived(
   generatedRiskLevel !== null
     ? "How much attention this pull request needs. It set the depth of the review below."
@@ -64,7 +62,6 @@ const riskClasses: Record<string, string> = {
 
 const scrollRootPane = $derived(activeTab === "diff" ? null : activeTab);
 
-// ⌘1/2/3 → the review tabs, in the order the tab bar shows them.
 useCommands(
   REVIEW_TABS.map((tab, index) => ({
     id: `review:tab-${tab}`,
@@ -112,8 +109,7 @@ useShellChrome(() => ({
 		{/if}
 	{/if}
 
-	<!-- Scroll root for walkthrough and conversation tabs. Kept mounted
-	     across diff-tab switches so the walkthrough never unmounts. -->
+	<!-- Kept mounted across diff-tab switches so the walkthrough never unmounts. -->
 	<div
 		class="review-content"
 		class:review-content--hidden={activeTab === 'diff'}
@@ -140,8 +136,8 @@ useShellChrome(() => ({
 			{/if}
 		</div>
 
-		<!-- Walkthrough: always mounted to avoid re-render freeze on tab switch.
-		     Heavy blocks (PierreFile, FileDiff, markdown) stay alive in DOM. -->
+		<!-- Always mounted: re-rendering its heavy blocks (Pierre, markdown) froze
+		     tab switches. -->
 		<div class="tab-wrapper" class:tab-wrapper--hidden={activeTab !== 'walkthrough'}>
 			<GuidedWalkthrough prId={routePrIdOrEmpty} />
 		</div>
@@ -170,18 +166,13 @@ useShellChrome(() => ({
 		position: relative;
 	}
 
-	/* ── Scroll container for walkthrough / conversation ───────────── */
-
 	.review-content {
 		flex: 1;
 		min-height: 0;
-		/* Always show the scrollbar track so the gutter is permanently reserved
-		   on the right. This prevents the layout shift between tabs (walkthrough
-		   has enough content to scroll; conversation may not) — the right-side
-		   column width stays constant regardless of overflow state. On macOS
-		   WebKit, `overflow-y: scroll` with a non-overflowing tab renders an
-		   inactive-but-present scrollbar, which is the same width as an active
-		   one, so the grid never reflows. */
+		/* Reserves the scrollbar gutter so switching between a tab that scrolls
+		   and one that doesn't never reflows the grid. On macOS WebKit,
+		   `overflow-y: scroll` without overflow renders an inactive scrollbar of
+		   the same width. */
 		overflow-y: scroll;
 		scrollbar-gutter: stable;
 		/* The review-columns grid of both tabs sizes against this pane. */
@@ -192,8 +183,6 @@ useShellChrome(() => ({
 		display: none;
 	}
 
-	/* Tab wrappers: display:contents when active so children participate in
-	   the parent's layout directly; display:none when inactive. */
 	.tab-wrapper {
 		display: contents;
 	}
@@ -201,8 +190,6 @@ useShellChrome(() => ({
 	.tab-wrapper--hidden {
 		display: none;
 	}
-
-	/* ── Title section (scrolls away naturally with content) ─────────── */
 
 	.page-title-section {
 		row-gap: 4px;
@@ -268,8 +255,6 @@ useShellChrome(() => ({
 		line-height: 1.4;
 	}
 
-	/* ── Risk badge (walkthrough) ─────────────────────────────────────── */
-
 	:global(.risk-badge) {
 		display: inline-flex;
 		font-size: 10px;
@@ -282,14 +267,8 @@ useShellChrome(() => ({
 		margin-top: 6px;
 	}
 
-	/* Risk-level color modifiers. The Badge is rendered with
-	   `variant="outline"` which sets `border-color: var(--color-border)` and
-	   `color: var(--color-foreground)`. These modifier rules override both
-	   so medium/high/low are visually distinct. Uses `color-mix` to produce
-	   a translucent tinted background that works on both light and dark
-	   themes without hardcoding a specific shade. !important is needed
-	   because Badge's Tailwind border/text classes have equal specificity
-	   and are authored later in the cascade. */
+	/* !important: the outline Badge's Tailwind border/text classes have equal
+	   specificity and come later in the cascade. */
 	:global(.risk-badge--low) {
 		background: color-mix(in srgb, var(--color-success) 12%, transparent) !important;
 		color: var(--color-success) !important;

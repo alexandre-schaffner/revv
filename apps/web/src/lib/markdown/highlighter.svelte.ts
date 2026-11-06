@@ -53,8 +53,8 @@ export function isHighlighterReady(): boolean {
 
 function load(): void {
   if (loading) return;
-  // Deep-clone frozen Pierre theme objects so Shiki's mutable ThemeInput
-  // type accepts them (removes Readonly<> wrappers at every level).
+  // Pierre's theme objects are deeply Readonly; Shiki's ThemeInput type wants
+  // them mutable.
   loading = createHighlighter({
     themes: [JSON.parse(JSON.stringify(pierreDark)), JSON.parse(JSON.stringify(pierreLight))],
     langs: PRELOAD_LANGS,

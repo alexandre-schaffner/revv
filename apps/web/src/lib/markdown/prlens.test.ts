@@ -1,8 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { renderPrLens } from "./prlens";
 
-// ── Rendered-SVG guarantees ──────────────────────────────────────────────────
-//
 // `stripAnimation` and `themeStyleBlock` are regex transforms over the
 // renderer's output, so they are tested against a real render of a real
 // document rather than a handcrafted SVG string — the shape they depend on
@@ -90,7 +88,6 @@ describe("renderPrLens", () => {
     if (!("svg" in result)) return;
     expect(result.svg).not.toContain("<animate");
     expect(result.svg).not.toContain("repeatCount");
-    // The structure the dots travelled over must survive.
     expect(result.svg).toContain("<path");
   });
 
