@@ -10,12 +10,11 @@ import { onDestroy, onMount } from "svelte";
 import { acpAgentIcon } from "$lib/components/icons/acpAgentIcon";
 import Dotmatrix from "$lib/components/ui/dotmatrix/Dotmatrix.svelte";
 import {
-  cascadeChatAgentChange,
+  agentChange,
   fetchAgentStatus,
   fetchModels,
   getAgentStatus,
   getSettings,
-  resolveChatAgentId,
   updateSettings,
 } from "$lib/stores/settings.svelte";
 import {
@@ -54,7 +53,7 @@ let installAbort: AbortController | null = null;
 
 // Picker selection: pre-select the current chat agent, falling back to opencode
 // if the settings haven't loaded or the saved agent isn't installed.
-let selected = $state<AcpAgentId>(resolveChatAgentId(getSettings()));
+let selected = $state<AcpAgentId>(getSettings().aiAgent);
 
 // ── Derived ──────────────────────────────────────────────────────────────
 const selectedInstalled = $derived(status?.agents[selected]?.installed ?? false);
@@ -107,7 +106,7 @@ onMount(async () => {
   if (installed.length > 0) {
     // If the saved agent isn't installed, nudge the selection to the first
     // installed agent (registry order) so Continue doesn't pick a missing CLI.
-    const saved = resolveChatAgentId(getSettings());
+    const saved = getSettings().aiAgent;
     selected = data.agents[saved]?.installed ? saved : (installed[0]?.id ?? selected);
   } else {
     // Nothing installed — advertise opencode as the out-of-the-box option.
@@ -126,7 +125,7 @@ async function handleContinue(): Promise<void> {
     // opencode's catalog is dynamic — kick off a fetch so the cascade can pick a
     // real default model. Other agents have static catalogs in the registry.
     if (selected === OPENCODE) void fetchModels("opencode");
-    await updateSettings(cascadeChatAgentChange(selected));
+    await updateSettings(agentChange(selected));
     onContinue();
   } finally {
     isSaving = false;

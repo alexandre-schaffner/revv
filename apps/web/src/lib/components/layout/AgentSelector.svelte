@@ -9,12 +9,11 @@ import {
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
 import {
-  cascadeChatAgentChange,
+  agentChange,
   fetchAgentStatus,
   fetchModels,
   getAgentStatus,
   getSettings,
-  resolveChatAgentId,
   updateSettings,
 } from "$lib/stores/settings.svelte";
 import SelectTrigger from "./SelectTrigger.svelte";
@@ -22,7 +21,7 @@ import SelectTrigger from "./SelectTrigger.svelte";
 let open = $state(false);
 
 // The selected agent (single `aiAgent`) so the trigger reflects what runs.
-let currentId = $derived(resolveChatAgentId(getSettings()));
+let currentId = $derived(getSettings().aiAgent);
 let current = $derived(ACP_AGENTS.find((a) => a.id === currentId));
 let currentLabel = $derived(current?.label ?? "Agent");
 let CurrentIcon = $derived(acpAgentIcon(current?.icon ?? "generic"));
@@ -63,7 +62,7 @@ function select(id: AcpAgentId) {
   // opencode's catalog is dynamic — kick off a fetch so the cascade can pick a
   // real default model (and the model selector renders without a round-trip).
   if (id === "opencode") void fetchModels("opencode");
-  void updateSettings(cascadeChatAgentChange(id));
+  void updateSettings(agentChange(id));
   open = false;
 }
 </script>

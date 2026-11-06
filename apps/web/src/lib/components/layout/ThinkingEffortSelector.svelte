@@ -18,7 +18,6 @@ import {
   getSettings,
   getThinkingEffortOptions,
   isAutoEffortOffered,
-  resolveChatAgentId,
   updateSettings,
 } from "$lib/stores/settings.svelte";
 import { sizingForSelectedPr } from "$lib/stores/walkthrough-sizing.svelte";
@@ -26,13 +25,13 @@ import SelectTrigger from "./SelectTrigger.svelte";
 
 let open = $state(false);
 // Thinking-effort options follow the selected chat agent's capabilities.
-let currentId = $derived(resolveChatAgentId(getSettings()));
+let currentId = $derived(getSettings().aiAgent);
 let options = $derived(getThinkingEffortOptions(currentId));
 let visible = $derived(options.length > 0);
-let stored = $derived(getSettings()?.aiThinkingEffort ?? "medium");
+let stored = $derived(getSettings().aiThinkingEffort);
 let isAuto = $derived(isAutoSentinel(stored));
 let currentEffort = $derived(
-  isAuto ? null : clampThinkingEffort(currentId, stored as ThinkingEffort, getSettings()?.aiModel),
+  isAuto ? null : clampThinkingEffort(currentId, stored as ThinkingEffort, getSettings().aiModel),
 );
 
 let autoOffered = $derived(isAutoEffortOffered());

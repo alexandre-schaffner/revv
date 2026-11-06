@@ -49,7 +49,7 @@ const sourceBranch = $derived(pr?.sourceBranch ?? "this branch");
 // A stacked layer conflicts with the layer below; "Rebase stack" in the
 // sidebar is the fix for that, and a merge commit would bend the stack.
 const applies = $derived(pr?.status === "open" && pr.stack === null);
-const strategy = $derived<BaseConflictStrategy>(getSettings()?.baseConflictStrategy ?? "merge");
+const strategy = $derived<BaseConflictStrategy>(getSettings().baseConflictStrategy);
 
 const question = $derived(applies ? mergeQuestionFor(prId, headSha, conversation) : null);
 $effect(() => {

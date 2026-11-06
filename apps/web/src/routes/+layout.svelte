@@ -187,9 +187,7 @@ async function hydrate() {
   const token = getToken();
   if (!token) return;
 
-  const s = getSettings();
-  const interval = s?.autoFetchInterval ?? 5;
-  startPolling(interval, token);
+  startPolling(getSettings().autoFetchInterval, token);
 }
 </script>
 

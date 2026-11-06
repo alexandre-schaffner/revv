@@ -1,3 +1,21 @@
+<script module lang="ts">
+import FolderSimple from "phosphor-svelte/lib/FolderSimple";
+import { defineSettingsPane } from "../settings-panes";
+
+export const pane = defineSettingsPane({
+  id: "repositories",
+  title: "Repositories",
+  description: "The repositories whose pull requests Revv syncs.",
+  icon: FolderSimple,
+  rows: {
+    list: {
+      label: "Tracked repositories",
+      keywords: ["repos", "remove", "delete", "add", "track"],
+    },
+  },
+});
+</script>
+
 <script lang="ts">
 import type { Repository } from "@revv/shared";
 import Plus from "phosphor-svelte/lib/Plus";
@@ -12,7 +30,6 @@ import { openAddRepoDialog } from "$lib/stores/sidebar.svelte";
 import SettingsGroup from "../primitives/SettingsGroup.svelte";
 import SettingsPane from "../primitives/SettingsPane.svelte";
 import SettingsRow from "../primitives/SettingsRow.svelte";
-import { SETTINGS_PANES } from "../settings-index";
 
 const repositories = $derived(getRepositories());
 
@@ -46,7 +63,7 @@ function repoHint(repo: Repository): string | undefined {
 }
 </script>
 
-<SettingsPane {...SETTINGS_PANES.repositories}>
+<SettingsPane {pane}>
 	<SettingsGroup heading="Tracked repositories">
 		{#snippet actions()}
 			<span class="repo-count" aria-label="{repositories.length} repositories">{repositories.length}</span>
@@ -58,13 +75,17 @@ function repoHint(repo: Repository): string | undefined {
 
 		{#if repositories.length === 0}
 			<SettingsRow
-				id="repositories-list"
+				row={pane.rows.list}
 				label="No repositories yet"
 				hint="Add a repository to start syncing its pull requests."
 			/>
 		{:else}
-			{#each repositories as repo (repo.id)}
-				<SettingsRow id="repo-{repo.id}" label={repo.fullName} hint={repoHint(repo)}>
+			{#each repositories as repo, i (repo.id)}
+				<SettingsRow
+					row={i === 0 ? pane.rows.list : undefined}
+					label={repo.fullName}
+					hint={repoHint(repo)}
+				>
 					{#snippet leading()}
 						<RepoGradientAvatar fullName={repo.fullName} ownerAvatarUrl={repo.avatarUrl} size={22} radius={6} />
 					{/snippet}

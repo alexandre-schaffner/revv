@@ -6,8 +6,8 @@
 //
 // Caching policy:
 //   • One fetch per PR id per session unless the user changes the
-//     suggestions model / agent, in which case `invalidateSuggestions()` is
-//     called from the settings store and the next right-panel open re-fetches.
+//     suggestions model / agent, which drops every entry so the next
+//     right-panel open re-fetches.
 //   • In-flight requests dedupe so a fast PR switch back-and-forth doesn't
 //     hit the endpoint twice.
 //   • The server has its own (prId, headSha, model)-keyed cache — the client
@@ -19,6 +19,7 @@
 // pre-fetch render.
 
 import { api } from "$lib/api/client";
+import { onSettingsUpdate } from "$lib/stores/settings.svelte";
 
 export const FALLBACK_PROMPTS: readonly string[] = [
   "What's the riskiest change here?",
@@ -75,22 +76,11 @@ export async function fetchSuggestions(prId: string): Promise<void> {
   return promise;
 }
 
-/**
- * Drop cached suggestions. With no argument, clears every entry — used when
- * the user changes `aiSuggestionsModel` or `aiAgent` and the previously-
- * fetched prompts no longer reflect the selected model. With a `prId`,
- * clears just that PR (e.g. on commit / head-SHA change in the future).
- */
-export function invalidateSuggestions(prId?: string): void {
-  if (prId) {
-    const { [prId]: _, ...rest } = suggestionsByPr;
-    suggestionsByPr = rest;
-    const { [prId]: __, ...restLoading } = loadingByPr;
-    loadingByPr = restLoading;
-    inFlight.delete(prId);
-    return;
-  }
+// The server keys its cache on `(prId, headSha, model)`, so a re-fetch after a
+// model change lands on a fresh row.
+onSettingsUpdate((patch) => {
+  if (!("aiSuggestionsModel" in patch) && !("aiAgent" in patch)) return;
   suggestionsByPr = {};
   loadingByPr = {};
   inFlight.clear();
-}
+});

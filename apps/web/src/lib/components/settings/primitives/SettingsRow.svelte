@@ -8,14 +8,13 @@
  *   bounded integer          → Stepper
  *   free text                → CommitInput (commits on blur / Enter, Esc reverts)
  *   action                   → trailing `outline` / `secondary` Button, `size="sm"`
- *
- * `id` is the search anchor: it must match an entry in `settings-index.ts`, so
- * a search hit can scroll to this row and flash it.
  */
 import type { Snippet } from "svelte";
+import type { SettingsRowRef } from "../settings-panes";
 
 interface Props {
-  id: string;
+  /** The pane's searchable row this renders, so a search hit can scroll here and flash it. */
+  row?: SettingsRowRef | undefined;
   label: string;
   /** Plain text, or a snippet when the hint needs a link or inline code. */
   hint?: string | Snippet | undefined;
@@ -32,7 +31,7 @@ interface Props {
 }
 
 let {
-  id,
+  row,
   label,
   hint,
   labelFor,
@@ -48,7 +47,7 @@ let {
 	class="row"
 	class:row--stacked={layout === 'stacked'}
 	class:row--disabled={disabled}
-	data-setting-id={id}
+	data-setting-id={row?.anchor}
 	aria-disabled={disabled || undefined}
 >
 	<div class="row-main">

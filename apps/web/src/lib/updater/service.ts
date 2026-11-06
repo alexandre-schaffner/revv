@@ -151,7 +151,7 @@ async function check(options: { manual?: boolean }): Promise<void> {
 function shouldNotify(update: UpdateInfo, manual: boolean): boolean {
   if (manual) return true;
   if (getIsMaintainer()) return true;
-  if (getSettings()?.updateChannel === "nightly") return true;
+  if (getSettings().updateChannel === "nightly") return true;
   if (!update.publishedAt) {
     // No pub_date in the manifest — fail open and notify. Better to nag a
     // little early than to indefinitely suppress an update because the CI

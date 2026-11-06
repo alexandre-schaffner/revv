@@ -8,6 +8,7 @@
 import type { WalkthroughSizing } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { getPrById, getSelectedPrId } from "$lib/stores/prs.svelte";
+import { onSettingsUpdate } from "$lib/stores/settings.svelte";
 import { authHeaders } from "$lib/utils/session-token";
 import { createPendingPoll } from "./pending-poll";
 
@@ -102,8 +103,8 @@ export function fetchWalkthroughSizing(prId: string, headSha: string): Promise<v
 }
 
 /**
- * Drop everything. Called on model/agent setting change: routing depends on
- * both, but the server still has the sizing cached, so this re-routes rather
+ * Drop everything: the answer is routed against agent and model and gated on
+ * TypeSafe. The server still has the sizing cached, so this re-routes rather
  * than re-paying.
  */
 export function resetWalkthroughSizings(): void {
@@ -111,3 +112,14 @@ export function resetWalkthroughSizings(): void {
   failed = {};
   poll.reset();
 }
+
+onSettingsUpdate((patch) => {
+  if (
+    "aiModel" in patch ||
+    "aiThinkingEffort" in patch ||
+    "aiAgent" in patch ||
+    patch.jev?.enabled !== undefined
+  ) {
+    resetWalkthroughSizings();
+  }
+});

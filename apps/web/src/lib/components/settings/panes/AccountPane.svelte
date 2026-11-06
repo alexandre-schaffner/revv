@@ -1,7 +1,29 @@
+<script module lang="ts">
+import User from "phosphor-svelte/lib/User";
+import { defineSettingsPane } from "../settings-panes";
+
+export const pane = defineSettingsPane({
+  id: "account",
+  title: "Account",
+  description: "The GitHub identity Revv signs in with.",
+  icon: User,
+  rows: {
+    identity: {
+      label: "Signed-in account",
+      keywords: ["github", "sign out", "logout", "email", "user"],
+    },
+    revoke: {
+      label: "Revoke access on GitHub",
+      keywords: ["authorized applications", "oauth", "token", "permissions"],
+    },
+    remove: { label: "Remove account", keywords: ["delete", "danger", "erase", "local data"] },
+  },
+});
+</script>
+
 <script lang="ts">
 import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import Spinner from "phosphor-svelte/lib/Spinner";
-import User from "phosphor-svelte/lib/User";
 import Warning from "phosphor-svelte/lib/Warning";
 import SignInButton from "$lib/components/auth/SignInButton.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
@@ -11,7 +33,6 @@ import { closeSettings } from "$lib/stores/settingsModal.svelte";
 import SettingsGroup from "../primitives/SettingsGroup.svelte";
 import SettingsPane from "../primitives/SettingsPane.svelte";
 import SettingsRow from "../primitives/SettingsRow.svelte";
-import { SETTINGS_PANES } from "../settings-index";
 
 const user = $derived(getUser());
 const host = $derived(getGithubHost() ?? "github.com");
@@ -41,10 +62,10 @@ async function handleRemoveAccount(): Promise<void> {
 }
 </script>
 
-<SettingsPane {...SETTINGS_PANES.account}>
+<SettingsPane {pane}>
 	{#if user}
 		<SettingsGroup>
-			<SettingsRow id="account-identity" label={user.name}>
+			<SettingsRow row={pane.rows.identity} label={user.name}>
 				{#snippet leading()}
 					{#if user.image && !avatarFailed}
 						<img
@@ -76,7 +97,7 @@ async function handleRemoveAccount(): Promise<void> {
 				{/snippet}
 			</SettingsRow>
 			<SettingsRow
-				id="account-revoke"
+				row={pane.rows.revoke}
 				label="Revoke access on GitHub"
 				hint="Signing out clears Revv's local copy of your token. To revoke Revv's access on GitHub's side, remove it from your authorized applications."
 			>
@@ -97,7 +118,7 @@ async function handleRemoveAccount(): Promise<void> {
 
 		<SettingsGroup heading="Remove account" tone="danger">
 			<SettingsRow
-				id="account-remove"
+				row={pane.rows.remove}
 				label="Remove this account"
 				hint="Permanently deletes the account and all of its local data. This cannot be undone."
 			>
@@ -134,7 +155,7 @@ async function handleRemoveAccount(): Promise<void> {
 	{:else}
 		<SettingsGroup>
 			<SettingsRow
-				id="account-identity"
+				row={pane.rows.identity}
 				label="Not signed in"
 				hint="Sign in with GitHub to sync your repositories and pull requests."
 			>

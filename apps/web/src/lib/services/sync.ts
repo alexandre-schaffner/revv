@@ -79,6 +79,6 @@ export async function withSyncSuspended<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } finally {
-    resumeSyncTimer(getSettings()?.autoFetchInterval ?? 5);
+    resumeSyncTimer(getSettings().autoFetchInterval);
   }
 }

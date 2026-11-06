@@ -3,7 +3,7 @@ import { onMount } from "svelte";
 import type { DotmatrixVariant } from "$lib/components/ui/dotmatrix";
 import { getIsAuthenticated, loadUser } from "$lib/stores/auth.svelte";
 import { fetchRepos } from "$lib/stores/prs.svelte";
-import { fetchSettings, getGithubHost, getSettings } from "$lib/stores/settings.svelte";
+import { fetchSettings, getGithubHost, isSettingsLoaded } from "$lib/stores/settings.svelte";
 import OnboardingShell from "./OnboardingShell.svelte";
 import StepAgent from "./StepAgent.svelte";
 import StepDone from "./StepDone.svelte";
@@ -50,7 +50,7 @@ onMount(async () => {
   try {
     // Make sure we have a settings snapshot before resolving the resume
     // point — getGithubHost() returns null until the store has data.
-    if (!getSettings()) {
+    if (!isSettingsLoaded()) {
       await fetchSettings();
     }
 

@@ -20,19 +20,22 @@ import {
 } from "$lib/stores/agent-setup.svelte";
 import { fetchAgentStatus } from "$lib/stores/settings.svelte";
 import StatusDot from "../primitives/StatusDot.svelte";
+import type { SettingsRowRef } from "../settings-panes";
 
 // One radio row per registry agent, each carrying its own live status. The
 // selected row expands in place to whatever it still needs: install, sign-in,
 // a terminal command, or a reconnect.
 
 interface Props {
+  /** The search anchor for the whole list. */
+  row: SettingsRowRef;
   selected: AcpAgentId;
   status: AgentStatusReport | null;
   loading: boolean;
   onSelect: (agent: AcpAgentId) => void;
 }
 
-let { selected, status, loading, onSelect }: Props = $props();
+let { row, selected, status, loading, onSelect }: Props = $props();
 
 const install = $derived(getAgentInstall());
 const signingInAgent = $derived(getSigningInAgent());
@@ -65,7 +68,7 @@ async function onLoginDone(): Promise<void> {
 	loop
 	aria-label="Agent"
 	class="provider-list"
-	data-setting-id="ai-provider"
+	data-setting-id={row.anchor}
 >
 	{#each ACP_AGENTS as agent (agent.id)}
 		{@const s = status?.agents[agent.id] ?? null}

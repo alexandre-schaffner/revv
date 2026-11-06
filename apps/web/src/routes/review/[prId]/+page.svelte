@@ -104,7 +104,7 @@ $effect(() => {
 // Untracked: the store's rows change on every `hunk-scan:hunk`, and reading
 // them here would re-ask the server for each one.
 const loadedHeadSha = $derived(getLoadedHeadSha(page.params.prId ?? ""));
-const jevEnabled = $derived(getSettings()?.jev.enabled ?? false);
+const jevEnabled = $derived(getSettings().jev.enabled);
 $effect(() => {
   const prId = page.params.prId;
   const headSha = loadedHeadSha;

@@ -16,7 +16,7 @@ import { invalidateChatHistory } from "$lib/stores/chat.svelte";
 import { enterSidebarMode } from "$lib/stores/focus-mode.svelte";
 import { jsonCodec, readStored, STORAGE_KEYS, writeStored } from "$lib/stores/persisted.svelte";
 import { getPrById, getReviewModeForPr } from "$lib/stores/prs.svelte";
-import { getSettings, updateSettings } from "$lib/stores/settings.svelte";
+import { getSettings, isSettingsLoaded, updateSettings } from "$lib/stores/settings.svelte";
 import { invalidateForPull, regenerate } from "$lib/stores/walkthrough.svelte";
 import type { ReviewFile } from "$lib/types/review";
 
@@ -702,11 +702,11 @@ type DiffMode = "unified" | "split";
 let diffModeOverride = $state<DiffMode | null>(null);
 
 export function getDiffMode(): DiffMode {
-  return diffModeOverride ?? getSettings()?.diffViewMode ?? "unified";
+  return diffModeOverride ?? getSettings().diffViewMode;
 }
 
 export function setDiffMode(mode: DiffMode): void {
-  diffModeOverride = getSettings() ? null : mode;
+  diffModeOverride = isSettingsLoaded() ? null : mode;
   void updateSettings({ diffViewMode: mode });
 }
 
