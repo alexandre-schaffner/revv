@@ -56,7 +56,7 @@ export function regenerateWalkthroughHandler(prId: string) {
  *
  *   • `status='error'`     — generation failed (e.g. MAX_AUTO_CONTINUATIONS
  *     exhausted before Phase D, or `resumeAttempts` exceeded
- *     `WALKTHROUGH_MAX_RESUME_ATTEMPTS`), or the user clicked Stop — a
+ *     `MAX_RESUME_ATTEMPTS`), or the user clicked Stop — a
  *     deliberate cancel is terminal, never resume-on-boot fodder. We REVIVE
  *     the row first via the
  *     orchestrator: transition status back to 'generating' AND reset

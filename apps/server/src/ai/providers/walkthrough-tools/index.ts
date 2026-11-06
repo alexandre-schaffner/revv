@@ -25,25 +25,18 @@ import type {
 import { and, eq } from "drizzle-orm";
 import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
-import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
+import { walkthroughCompletionBlockers } from "../../../services/walkthrough/completion";
 import type { ToolSpecBundle } from "../mcp-tool-gateway";
 import { withContentWriteMetrics } from "../walkthrough-metrics";
 import {
   blockIdFor,
   errorResult,
-  findIssuesMissingInlineComment,
-  isJourneyChapterText,
   loadWalkthroughRow,
   okResult,
-  renderMissingInlineCommentError,
   unwrapJsonWrappedString,
 } from "./helpers";
-import {
-  findUnresolvedLeads,
-  renderUnresolvedLeadsError,
-  resolveLeadHandler,
-} from "./lead-handler";
+import { resolveLeadHandler } from "./lead-handler";
 import {
   addDiffStepHandler,
   addIssueCommentHandler,
@@ -88,7 +81,6 @@ export {
   findIssuesMissingInlineComment,
   unwrapJsonWrappedString,
 } from "./helpers";
-export type { WalkthroughToolJudgments } from "./spec";
 export { computeAnchorThreadId, computeIssueId } from "./spec";
 
 // ── Handler: set_overview (Phase A) ──────────────────────────────────────────
@@ -376,11 +368,9 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
 
 // ── Handler: complete_walkthrough (validation gate) ──────────────────────────
 //
-// Phase precondition: last_completed_phase === 'D' AND all 9 axes rated AND
-// sentiment non-empty AND ≥1 diff step AND every first-pass lead resolved. The actual `status='complete'`
-// transition is performed by WalkthroughJobs in response to the `done` event —
-// this handler only validates, then emits `done`. Doctrine invariant #11:
-// status transitions are orchestrator-only.
+// Validates only, on the same journal check the orchestrator completes a run
+// by (services/walkthrough/completion.ts); the status transition is the
+// orchestrator's (invariant 11).
 
 export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthroughInput> = async (
   ctx,
@@ -388,137 +378,10 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthro
   // Drain every scheduled relevance judgment before validating, so the gate
   // never checks an issue set that's about to change. Bounded; see ai/jev/pending.ts.
   await ctx.jev.awaitIssueJudgments();
-  const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
-  if (!row) {
-    return errorResult(`Walkthrough ${ctx.walkthroughId} not found.`);
-  }
-  const phase = row.lastCompletedPhase as WalkthroughPipelinePhase;
-  if (phase !== "D") {
-    return errorResult(
-      `Error: complete_walkthrough requires Phase D complete (all 9 axes rated). Current phase: '${phase}'.`,
-    );
-  }
-  if (!row.summary || !row.sentiment) {
-    return errorResult(
-      "Error: complete_walkthrough requires both summary (Phase A) and sentiment (Phase C) to be non-empty.",
-    );
-  }
-
-  const blockRows = ctx.db
-    .select({
-      semanticStepIndex: walkthroughBlocks.semanticStepIndex,
-    })
-    .from(walkthroughBlocks)
-    .where(
-      and(
-        eq(walkthroughBlocks.walkthroughId, ctx.walkthroughId),
-        eq(walkthroughBlocks.phase, "diff_analysis"),
-      ),
-    )
-    .all();
-  if (blockRows.length === 0) {
-    return errorResult("Error: complete_walkthrough requires at least one diff step.");
-  }
-
-  const semanticRows = ctx.db
-    .select({
-      semanticStepIndex: walkthroughSemanticSteps.semanticStepIndex,
-      title: walkthroughSemanticSteps.title,
-      summary: walkthroughSemanticSteps.summary,
-    })
-    .from(walkthroughSemanticSteps)
-    .where(eq(walkthroughSemanticSteps.walkthroughId, ctx.walkthroughId))
-    .all();
-  if (semanticRows.length === 0) {
-    return errorResult(
-      "Error: complete_walkthrough requires at least one semantic step (chapter). Call add_semantic_step before any add_diff_step.",
-    );
-  }
-  if (row.mode !== "author") {
-    // Required journey chapter at semantic_step_index 0. The chapter is the
-    // narrative of how the coder reached the state being reviewed; the user
-    // prompt seeds it with a `### Commit history` section, and the system
-    // prompt instructs the agent to open chapter 0 with a journey-flavored
-    // title. We can't tag chapters structurally (no extra column), so we
-    // validate via title/summary keywords — the prompt and the regex are
-    // intentionally kept in lockstep (see JOURNEY_CHAPTER_PATTERN).
-    const firstChapter = semanticRows.find((r) => r.semanticStepIndex === 0);
-    if (!firstChapter) {
-      return errorResult(
-        "Error: complete_walkthrough requires a journey chapter at semantic_step_index 0. Open it with add_semantic_step({ semantic_step_index: 0, title: 'How we got here', initial_block: { markdown: { content: '...' } } }) — see the prompt's 'How we got here' guidance.",
-      );
-    }
-    if (!isJourneyChapterText(firstChapter.title, firstChapter.summary)) {
-      return errorResult(
-        `Error: the chapter at semantic_step_index 0 is required to be the 'How we got here' journey chapter, but its title ('${firstChapter.title}') and summary do not name the journey. Re-call add_semantic_step with semantic_step_index 0 and a title (or summary) that includes one of: 'journey', 'history', 'got here', 'how we', 'evolution', 'explored', 'attempts', 'origins', 'trajectory', 'path to', 'came to', 'story of', 'trail'. The chapter should narrate the commit-history narrative surfaced in the user prompt's Commit history section — not commit-by-commit, but the shape of the work.`,
-      );
-    }
-  }
-  const knownSections = new Set(semanticRows.map((r) => r.semanticStepIndex));
-  const orphanIndices = Array.from(
-    new Set(
-      blockRows
-        .filter((b) => !knownSections.has(b.semanticStepIndex))
-        .map((b) => b.semanticStepIndex),
-    ),
-  );
-  if (orphanIndices.length > 0) {
-    return errorResult(
-      `Error: blocks reference unknown semantic_step_index values [${orphanIndices.join(", ")}]. Each block must belong to a chapter opened by add_semantic_step.`,
-    );
-  }
-  const blockSections = new Set(blockRows.map((b) => b.semanticStepIndex));
-  const emptySections = semanticRows
-    .map((r) => r.semanticStepIndex)
-    .filter((i) => !blockSections.has(i));
-  if (emptySections.length > 0) {
-    return errorResult(
-      `Error: semantic_step(s) [${emptySections.join(", ")}] have no atomic blocks. Each chapter needs ≥1 add_diff_step call.`,
-    );
-  }
-
-  const ratedAxes = ctx.db
-    .select({ axis: walkthroughRatings.axis })
-    .from(walkthroughRatings)
-    .where(eq(walkthroughRatings.walkthroughId, ctx.walkthroughId))
-    .all();
-  const ratedSet = new Set(ratedAxes.map((r) => r.axis));
-  const missing = RATING_AXES_SPEC.filter((a) => !ratedSet.has(a));
-  if (missing.length > 0) {
-    return errorResult(
-      `Error: missing ratings for [${missing.join(", ")}]. Call rate_axis for each before complete_walkthrough.`,
-    );
-  }
-
-  // Every line-anchored concern needs an inline comment: flag_issue writes
-  // the sidebar card, add_issue_comment writes the inline note; without it
-  // the concern is invisible to the coder. Exempt: PR-wide issues (no anchor).
-  //
-  // Shared with WalkthroughJobs.ts — see findIssuesMissingInlineComment
-  // above. Both gates MUST agree, otherwise the orchestrator can mark
-  // `complete` while the tool surface would still reject.
-  const uncommented = findIssuesMissingInlineComment(ctx.db, ctx.walkthroughId);
-  if (uncommented.length > 0) {
-    return errorResult(renderMissingInlineCommentError(uncommented));
-  }
-
-  // Every first-pass lead owes a verdict. This gate is the tool's alone: the
-  // orchestrator completes a run without one, because a lead is a hint and an
-  // unread hint shouldn't cost the whole review. Refusing here is what makes
-  // the agent finish the job while it still has the context to do it.
-  const unresolved = findUnresolvedLeads(ctx.db, ctx.walkthroughId);
-  if (unresolved.length > 0) {
-    return errorResult(renderUnresolvedLeadsError(unresolved));
-  }
-
-  // Deliberately NO stream emit here. The AI provider's generator end
-  // (stream-guard synthesizes `done` with real token accounting) is the
-  // authoritative completion signal that WalkthroughJobs observes. This
-  // tool just validates invariants and lets the agent know it may stop
-  // calling tools. Doctrine invariant #11: status transitions are
-  // orchestrator-only.
+  const [blocker] = walkthroughCompletionBlockers(ctx.db, ctx.walkthroughId);
+  if (blocker) return errorResult(blocker.message);
   return okResult(
-    "Walkthrough complete. You may stop. The orchestrator will transition status on generator end.",
+    "Walkthrough complete. You may stop. The orchestrator marks it complete when your turn ends.",
   );
 };
 

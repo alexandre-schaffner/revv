@@ -1,14 +1,7 @@
-import type {
-  ChatAttachment,
-  InteractionMode,
-  WalkthroughMode,
-  WalkthroughStreamEvent,
-} from "@revv/shared";
+import type { ChatAttachment, InteractionMode } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
 import { type AgentLaunch, resolveAgentLaunch } from "../ai/acp/agent-launch";
 import { isAgentLaunchable } from "../ai/acp/launch";
-import type { ActivityBeacon } from "../ai/acp/run-turn";
-import type { GenerationLaunchOverride } from "../ai/jev/routing";
 import {
   buildChatSystemPrompt,
   buildChatUserMessage,
@@ -19,16 +12,16 @@ import {
   type ChatWalkthroughContext,
   type ResolveConflictsTask,
 } from "../ai/prompts/chat";
-import type { WalkthroughPromptHints, WalkthroughReviewMode } from "../ai/prompts/walkthrough";
 import { streamChatViaAcp } from "../ai/providers/chat-acp";
 import { CHAT_TOOL_BUNDLE } from "../ai/providers/chat-mcp-tools";
 import type { RawChatStreamFrame } from "../ai/providers/chat-types";
-import { guardWalkthroughStream } from "../ai/providers/stream-guard";
-import { streamWalkthroughViaAcp } from "../ai/providers/walkthrough-acp";
+import {
+  runWalkthroughTurn,
+  type WalkthroughTurnParams,
+  type WalkthroughTurnResult,
+} from "../ai/providers/walkthrough-acp";
 import { type AiError, AiNotConfiguredError } from "../domain/errors";
 import { ChatMcpTokens } from "./ChatMcpTokens";
-import { DbService } from "./Db";
-import type { PrFileMeta } from "./GitHub";
 import { SettingsService } from "./Settings";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -66,33 +59,10 @@ export interface ChatParams {
 export class AiService extends Context.Service<
   AiService,
   {
-    readonly streamWalkthrough: (
-      params: {
-        /** Issued by WalkthroughJobs (`createPartial`) before the agent spawns; every MCP write is scoped to it. */
-        walkthroughId: string;
-        pr: {
-          title: string;
-          body: string | null;
-          sourceBranch: string;
-          targetBranch: string;
-          url: string;
-        };
-        mode: WalkthroughMode;
-        files: PrFileMeta[];
-        worktreePath: string;
-        reviewMode: WalkthroughReviewMode;
-        resumed: boolean;
-        mcpToken: string;
-        activity: ActivityBeacon;
-        abortController: AbortController;
-        /**
-         * Per-job model/effort override, resolved once at job start. Absent
-         * uses configured settings. Goes through `resolveGenerationModel` so
-         * an override naming a model this agent can't run falls back safely.
-         */
-        launchOverride?: GenerationLaunchOverride;
-      } & WalkthroughPromptHints,
-    ) => Effect.Effect<AsyncGenerator<WalkthroughStreamEvent>, AiError>;
+    /** One walkthrough agent turn on its run's launch plan. */
+    readonly walkthroughTurn: (
+      params: WalkthroughTurnParams,
+    ) => Effect.Effect<WalkthroughTurnResult, AiError>;
     /** One right-pane chat turn on `params.launch`, streamed as chat frames. */
     readonly chat: (
       params: ChatParams,
@@ -119,7 +89,6 @@ export const AiServiceLive = Layer.effect(
   AiService,
   Effect.gen(function* () {
     const settingsService = yield* SettingsService;
-    const { db } = yield* DbService;
     const chatMcpTokens = yield* ChatMcpTokens;
     const withSettings = Effect.provideService(SettingsService, settingsService);
 
@@ -127,19 +96,17 @@ export const AiServiceLive = Layer.effect(
       isAgentLaunchable(launch.agent) ? Effect.void : Effect.fail(new AiNotConfiguredError());
 
     return {
-      streamWalkthrough: (params) =>
-        Effect.withSpan("Ai.streamWalkthrough", {
-          attributes: { walkthroughId: params.walkthroughId },
+      walkthroughTurn: (params) =>
+        Effect.withSpan("Ai.walkthroughTurn", {
+          attributes: {
+            walkthroughId: params.walkthroughId,
+            provider: params.launch.agent,
+            model: params.launch.model,
+          },
         })(
           Effect.gen(function* () {
-            const launch = yield* withSettings(
-              resolveAgentLaunch("review", params.launchOverride ?? null),
-            );
-            yield* Effect.annotateCurrentSpan("provider", launch.agent);
-            yield* Effect.annotateCurrentSpan("model", launch.model);
-            yield* requireLaunchable(launch);
-            const raw = streamWalkthroughViaAcp({ ...params, db, launch });
-            return guardWalkthroughStream(raw, { label: "walkthrough-acp" });
+            yield* requireLaunchable(params.launch);
+            return yield* Effect.promise(() => runWalkthroughTurn(params));
           }),
         ),
 

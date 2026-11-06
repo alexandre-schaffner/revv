@@ -379,8 +379,38 @@ export function isDiscardedScore(score: number | null | undefined): boolean {
  */
 export type WalkthroughPipelinePhase = "none" | "A" | "B" | "C" | "D";
 
-/** Job lifecycle status. `WalkthroughJobs.setStatus` is the only writer. */
+/** Job lifecycle status. WalkthroughJobs is the only writer. */
 export type WalkthroughStatus = "generating" | "complete" | "error" | "superseded";
+
+/**
+ * Why a run ended without completing, recorded on the row
+ * (`walkthroughs.end_reason`) and carried by `lifecycle:error`. Null while a
+ * row is generating and once it completed.
+ */
+export const WALKTHROUGH_END_REASONS = [
+  /** The user's Stop. */
+  "cancelled",
+  /** A newer head or a Regenerate replaced the run. */
+  "superseded",
+  /** Auto-continuations ran out, or were judged doomed, before the review was finished. */
+  "budget_exhausted",
+  /** The run crashed more often than its resume budget allows. */
+  "resume_budget",
+  /** The agent needs its user to sign in again. */
+  "agent_auth",
+  /** The agent failed or declined to continue. */
+  "agent_error",
+  /** The agent's turn timed out before anything was written. */
+  "timeout_no_content",
+  /** The agent finished without writing anything. */
+  "no_content",
+  /** The repository clone the run waited on failed or never happened. */
+  "clone_failed",
+  /** The run itself failed before or around the agent (worktree, diff, database). */
+  "crashed",
+] as const;
+
+export type WalkthroughEndReason = (typeof WALKTHROUGH_END_REASONS)[number];
 
 /**
  * How a walkthrough row was produced.
@@ -462,6 +492,8 @@ export interface Walkthrough {
   lastCompletedPhase: WalkthroughPipelinePhase;
   /** Last terminal generation failure, if this row is in `status='error'`. */
   errorMessage?: string | null;
+  /** Why the run ended, when it ended without completing. */
+  endReason?: WalkthroughEndReason | null;
   generatedAt: string;
   modelUsed: string;
   tokenUsage: WalkthroughTokenUsage;
@@ -652,28 +684,39 @@ export type WalkthroughStartTrigger =
  */
 export type StartJobTrigger = Exclude<WalkthroughStartTrigger, "cache-import">;
 
-export type WalkthroughStreamEvent =
-  | { type: "summary"; data: { summary: string; riskLevel: RiskLevel } }
-  | { type: "sentiment"; data: { sentiment: string } }
-  | { type: "semantic-step"; data: WalkthroughSemanticStep }
-  | { type: "block"; data: WalkthroughBlock }
-  | { type: "done"; data: { walkthroughId: string; tokenUsage: WalkthroughTokenUsage } }
+/**
+ * What only matters while a run is live: the agent's reasoning, its own tool
+ * calls, the context gauge and a coarse phase. Broadcast unsequenced on
+ * `walkthrough:live` and never journaled, so a client that misses one has
+ * lost nothing it could re-read.
+ */
+export type WalkthroughLiveEvent =
   | { type: "usage"; data: { tokenUsage: WalkthroughTokenUsage } }
-  | { type: "error"; data: { code: string; message: string; repoId?: string } }
   | { type: "exploration"; data: Activity }
   /**
    * Terminal output of a previously-streamed `exploration` tool call,
-   * correlated by `callId`. Lets the live walkthrough feed attach a clickable
-   * output peek (e.g. a Bash command's stdout) to the matching exploration
-   * pill. Transient — not persisted (walkthrough exploration is live-only).
+   * correlated by `callId`, for the pill's output peek.
    */
   | { type: "exploration-result"; data: ActivityResult }
   /**
    * Late-arriving tool input for a previously-streamed `exploration` pill,
-   * correlated by `callId` — patches its payload so the filename/command and
-   * file peek resolve when the agent only supplies them after the tool-call.
+   * correlated by `callId`, when the agent only supplies it after the call.
    */
   | { type: "exploration-input"; data: { callId: string; payload: unknown } }
+  | { type: "phase"; data: { phase: WalkthroughLifecyclePhase; message: string } }
+  /** Streamed model reasoning text. */
+  | { type: "thought"; data: { text: string } };
+
+/**
+ * Content and lifecycle: every one is committed before it is sent and carries
+ * the walkthrough's durable seq on `walkthrough:event`, so a client that
+ * reconnects reconciles by re-reading the row.
+ */
+export type WalkthroughDurableEvent =
+  | { type: "summary"; data: { summary: string; riskLevel: RiskLevel } }
+  | { type: "sentiment"; data: { sentiment: string } }
+  | { type: "semantic-step"; data: WalkthroughSemanticStep }
+  | { type: "block"; data: WalkthroughBlock }
   | { type: "issue"; data: WalkthroughIssue }
   /**
    * The leads this run's agent was handed, recorded at job start before the
@@ -683,35 +726,11 @@ export type WalkthroughStreamEvent =
   /** A lead's verdict landed (`resolve_lead`). Full state for that lead. */
   | { type: "lead"; data: WalkthroughLead }
   | { type: "rating"; data: WalkthroughRating }
-  | { type: "phase"; data: { phase: WalkthroughLifecyclePhase; message: string } }
   | {
       type: "phase:advanced";
       data: { lastCompletedPhase: WalkthroughPipelinePhase };
     }
-  | { type: "in-progress"; data: { walkthroughId: string } }
-  | { type: "thinking"; data: Record<string, never> }
-  /**
-   * Streamed model reasoning text. Mirrors the recap `thought` event and is
-   * separate from `thinking` (which is the empty stream-guard heartbeat).
-   * Forwarded from agent-side `reasoning-delta` events; not persisted to
-   * SQLite — only meaningful during live generation.
-   */
-  | { type: "thought"; data: { text: string } }
-  // ── Lifecycle events (formerly carried as standalone WS envelopes) ───────
-  //
-  // After the SSE-unification refactor these are folded into the same event
-  // stream as content events so the client has one reducer and one cursor
-  // per walkthrough. The legacy `walkthrough:complete`, `walkthrough:error`,
-  // `walkthrough:cache-hit`, and `walkthrough:edited` WS envelopes are
-  // replaced by `lifecycle:*` variants here.
-  //
-  /**
-   * A new generation job started (or an existing one was claimed for
-   * resumption). Always the first event emitted for a walkthroughId.
-   * `status: "cloning"` indicates the repo is mid-clone — the orchestrator
-   * will re-emit a fresh `lifecycle:started` (with `status` omitted) when
-   * the clone finishes.
-   */
+  /** A run started on this row (fresh, resumed, or waiting on its clone). */
   | {
       type: "lifecycle:started";
       data: {
@@ -719,42 +738,28 @@ export type WalkthroughStreamEvent =
         prHeadSha: string;
         mode?: WalkthroughMode;
         trigger: WalkthroughStartTrigger;
-        status?: "cloning";
-        repoId?: string;
         /**
          * Risk tier, when the orchestrator assigned it before launching the
          * agent — known seconds before the Phase A `summary` event. Absent
-         * when the agent owns the tier; `summary` is then the first place
-         * it appears.
+         * when the agent owns the tier.
          */
         riskLevel?: RiskLevel;
-        /**
-         * The model this run actually launched with, resolved against the
-         * agent's catalog. Lets a UI showing "Auto" name what it picked,
-         * including when routing declined and the configured model stood.
-         */
+        /** The model this run launches with, resolved against the agent's catalog. */
         modelUsed?: string;
       };
     }
-  /**
-   * Generation finished — Phase D validated, `status='complete'`. Replaces
-   * the legacy `done` event and the `walkthrough:complete` WS envelope.
-   */
+  /** The journal passed the completion check and the row is `complete`. */
   | {
       type: "lifecycle:complete";
       data: { walkthroughId: string; tokenUsage: WalkthroughTokenUsage };
     }
-  /**
-   * Terminal failure. `code === "CloneInProgress"` is handled specially —
-   * the orchestrator will re-emit `lifecycle:started` when the repo clone
-   * finishes; no client retry needed.
-   */
-  | { type: "lifecycle:error"; data: { code: string; message: string; repoId?: string } }
+  /** The row is `error`; `reason` says why. */
+  | { type: "lifecycle:error"; data: { reason: WalkthroughEndReason; message: string } }
   /**
    * The walkthrough was imported rather than generated: from the team's
    * remote cache (`remote`), or carried from this PR's previous head because
    * a restack left the layer's own changes byte-identical (`restack`).
-   * Purely cosmetic — clients re-hydrate the imported content via `/current`.
+   * Clients re-hydrate the imported content via `/current`.
    */
   | {
       type: "lifecycle:cache-hit";
@@ -762,25 +767,21 @@ export type WalkthroughStreamEvent =
     }
   /**
    * A chat-driven edit landed on a completed walkthrough (CLAUDE.md
-   * invariant #7 carve-out). Stamps `lastEditedAt` on the entry; the
-   * inner content event that effected the mutation arrives in the
-   * same event stream with a subsequent seq.
+   * invariant #7 carve-out). The content event that effected the mutation
+   * arrives in the same stream with a later seq.
    */
   | { type: "lifecycle:edited"; data: { walkthroughId: string; editedAt: string } }
   /**
-   * This walkthrough was marked `status='superseded'` because a newer
-   * one replaced it (typically a fresh PR commit, or a user-driven
-   * regenerate that targets the same head SHA via the recycle path).
-   * `supersededBy` is the id of the replacement row, when known.
+   * This walkthrough was marked `status='superseded'`: a newer head, a
+   * Regenerate, or a fresh run at the same head replaced it. `supersededBy`
+   * is the replacement's id, when known.
    */
   | {
       type: "lifecycle:superseded";
       data: { walkthroughId: string; supersededBy: string | null };
     }
-  // Chat-edit deletion events (CLAUDE.md invariant #7 carve-out). Emitted
-  // only via the chat-edit MCP tools after a walkthrough has reached
-  // `status='complete'`; never produced by the generation pipeline. Frontend
-  // reducer drops the matching item by id / index.
+  // Deletions: chat-edit tools on a completed walkthrough, and a background
+  // relevance judgment retracting a concern during generation (`issue:deleted`).
   | {
       type: "block:deleted";
       data: { id: string; semanticStepIndex: number; stepIndex: number };
@@ -791,3 +792,21 @@ export type WalkthroughStreamEvent =
       type: "semantic-step:deleted";
       data: { semanticStepIndex: number };
     };
+
+/** Anything a walkthrough announces; `WalkthroughJobs.emitEvent` routes it by kind. */
+export type WalkthroughStreamEvent = WalkthroughDurableEvent | WalkthroughLiveEvent;
+
+const LIVE_EVENT_TYPES: ReadonlySet<WalkthroughStreamEvent["type"]> = new Set([
+  "usage",
+  "exploration",
+  "exploration-result",
+  "exploration-input",
+  "phase",
+  "thought",
+]);
+
+export function isWalkthroughLiveEvent(
+  event: WalkthroughStreamEvent,
+): event is WalkthroughLiveEvent {
+  return LIVE_EVENT_TYPES.has(event.type);
+}

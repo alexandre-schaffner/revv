@@ -8,7 +8,6 @@ import {
   type StartJobError,
   type StartJobParams,
   type StartJobResult,
-  WALKTHROUGH_CANCELLED_MESSAGE,
   WalkthroughJobs,
 } from "./WalkthroughJobs";
 import {
@@ -76,14 +75,14 @@ function insertWalkthrough(
   status: string,
   options: {
     readonly id?: string;
-    readonly errorMessage?: string;
+    readonly endReason?: string;
     readonly generatedAt?: string;
   } = {},
 ): string {
   const id = options.id ?? `walkthrough-${++rowCounter}`;
   db.$client.run(
     `INSERT INTO walkthroughs
-      (id, review_session_id, pull_request_id, status, last_completed_phase, generated_at, model_used, pr_head_sha, error_message)
+      (id, review_session_id, pull_request_id, status, last_completed_phase, generated_at, model_used, pr_head_sha, end_reason)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
@@ -95,7 +94,7 @@ function insertWalkthrough(
       options.generatedAt ?? new Date(Date.now() + rowCounter).toISOString(),
       "test",
       headSha,
-      options.errorMessage ?? null,
+      options.endReason ?? null,
     ],
   );
   return id;
@@ -194,9 +193,7 @@ describe("requestWalkthroughAtHead", () => {
 
   it("never restarts a run the user stopped", async () => {
     const db = seededDb();
-    const stopped = insertWalkthrough(db, NEW_HEAD, "error", {
-      errorMessage: WALKTHROUGH_CANCELLED_MESSAGE,
-    });
+    const stopped = insertWalkthrough(db, NEW_HEAD, "error", { endReason: "cancelled" });
     const { calls, startJob } = recordingStartJob();
 
     const outcome = await Effect.runPromise(request(db, startJob));
@@ -207,7 +204,7 @@ describe("requestWalkthroughAtHead", () => {
 
   it("retries a run that failed on its own", async () => {
     const db = seededDb();
-    insertWalkthrough(db, NEW_HEAD, "error", { errorMessage: "agent crashed" });
+    insertWalkthrough(db, NEW_HEAD, "error", { endReason: "agent_error" });
     const { calls, startJob } = recordingStartJob();
 
     const outcome = await Effect.runPromise(request(db, startJob));
@@ -220,7 +217,7 @@ describe("requestWalkthroughAtHead", () => {
     const db = seededDb();
     for (let run = 0; run < MAX_RUNS_PER_HEAD; run++) {
       insertWalkthrough(db, NEW_HEAD, run === 0 ? "error" : "superseded", {
-        errorMessage: "agent crashed",
+        endReason: "agent_error",
       });
     }
     const { calls, startJob } = recordingStartJob();

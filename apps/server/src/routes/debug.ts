@@ -6,7 +6,6 @@ import { selectCalls } from "../observability/github-ledger/select";
 import { clearSpans, readSpans, summarizeSpans } from "../observability/tracer";
 import { CacheService } from "../services/Cache";
 import { GitHubEtagCache } from "../services/GitHubEtagCache";
-import { WalkthroughJobs } from "../services/WalkthroughJobs";
 import { runRoute, withAuth } from "./middleware";
 
 export const debugRoutes = new Elysia({ prefix: "/api/_debug" })
@@ -23,13 +22,6 @@ export const debugRoutes = new Elysia({ prefix: "/api/_debug" })
         const etagCache = yield* GitHubEtagCache;
         return { kv: yield* cache.stats(), github: etagCache.stats() };
       }),
-    ),
-  )
-  .get("/mcp-token/:walkthroughId", ({ params }) =>
-    runRoute(
-      Effect.flatMap(WalkthroughJobs, (jobs) => jobs.issueSessionToken(params.walkthroughId)).pipe(
-        Effect.map((token) => ({ token })),
-      ),
     ),
   )
   .get("/traces", ({ query }) => {

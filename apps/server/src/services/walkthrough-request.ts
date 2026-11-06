@@ -25,11 +25,7 @@ import { dbTry } from "../effects/db-try";
 import { DbService } from "./Db";
 import { resolveReviewModeForPr } from "./review-mode";
 import { WalkthroughService } from "./Walkthrough";
-import {
-  type StartJobError,
-  WALKTHROUGH_CANCELLED_MESSAGE,
-  WalkthroughJobs,
-} from "./WalkthroughJobs";
+import { type StartJobError, WalkthroughJobs } from "./WalkthroughJobs";
 
 /** Runs (of any status) at one head before `request_walkthrough` stops starting more. */
 export const MAX_RUNS_PER_HEAD = 3;
@@ -92,7 +88,7 @@ export const requestWalkthroughAtHead = (params: {
         .select({
           id: walkthroughs.id,
           status: walkthroughs.status,
-          errorMessage: walkthroughs.errorMessage,
+          endReason: walkthroughs.endReason,
         })
         .from(walkthroughs)
         .where(
@@ -112,7 +108,7 @@ export const requestWalkthroughAtHead = (params: {
     }
 
     const latest = runsAtHead[0];
-    if (latest?.status === "error" && latest.errorMessage === WALKTHROUGH_CANCELLED_MESSAGE) {
+    if (latest?.status === "error" && latest.endReason === "cancelled") {
       return { kind: "stopped_by_user", walkthroughId: latest.id };
     }
 

@@ -115,10 +115,6 @@ const prReviewRoutes = new Elysia({ prefix: "/api/reviews" })
         // `mode` is the walkthrough's perspective, which the user picks. The
         // review session is the identity-derived one; `startJob` owns it.
         const mode = coerceWalkthroughMode((ctx.body as { mode?: unknown } | undefined)?.mode);
-        const existing = yield* jobs.findActiveByPr(ctx.params.id, mode);
-        if (existing !== null) {
-          return { walkthroughId: existing.walkthroughId };
-        }
         return yield* jobs.startJob({
           prId: ctx.params.id,
           userId: ctx.session.user.id,
@@ -223,16 +219,8 @@ const prReviewRoutes = new Elysia({ prefix: "/api/reviews" })
     );
   })
 
-  // Cancel the in-flight walkthrough for this PR (the Stop button). No-op
-  // when no live job is registered (already finished / never started). The
-  // orchestrator's failure handler picks up the `cancelledByUser` flag and
-  // transitions the row to `status='error'` with code `'Cancelled'`, then
-  // broadcasts `lifecycle:error` — that's what the UI consumes to flip out
-  // of the streaming state. (That handler hangs off `Effect.onExit`, not
-  // `catchAllCause`; an interrupted fiber skips the error channel entirely,
-  // so the older wiring left every stopped row stuck at 'generating'.)
-  // We do NOT supersede the row: a partial walkthrough should remain
-  // resumable via the Resume button, which revives the 'error' row.
+  // The Stop button: the row ends `error` with end reason `cancelled`, not
+  // superseded, so Resume can revive it. A no-op when no run is live.
   .post("/:id/walkthrough/abort", (ctx) =>
     runRoute(
       Effect.gen(function* () {

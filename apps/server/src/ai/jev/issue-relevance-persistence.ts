@@ -4,7 +4,6 @@ import type { Db } from "../../db";
 import { commentThreads } from "../../db/schema/comment-threads";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
 import type { IssueCandidate, IssueJudgment, JudgmentSink } from "./contracts";
-import { markRetracted } from "./pending";
 
 /** Apply one judgment atomically, then broadcast the committed result. */
 export function applyJudgment(
@@ -57,7 +56,7 @@ export function applyJudgment(
   });
 
   if (retractedIssue) {
-    markRetracted(walkthroughId, issueId);
+    sink.markRetracted(issueId);
     for (const threadId of retractedThreads) sink.broadcastThread(threadId);
     sink.emit({ type: "issue:deleted", data: { id: issueId } });
   } else if (updated !== null) {
