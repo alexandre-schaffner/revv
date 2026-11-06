@@ -60,6 +60,8 @@ const TokenProviderWithDeps = TokenProviderLive.pipe(
 
 const IdentityWithDeps = IdentityLive.pipe(Layer.provide(TokenProviderWithDeps));
 
+const ReviewServiceWithDeps = ReviewServiceLive.pipe(Layer.provide(RealtimeWithDeps));
+
 // SettingsService now reads/writes via DbService instead of JSON file
 const SettingsServiceWithDeps = SettingsServiceLive.pipe(Layer.provide(DbServiceLive));
 
@@ -95,7 +97,7 @@ const BaseLayers = Layer.mergeAll(
   RealtimeWithDeps,
   RepositoryServiceLive,
   PullRequestServiceLive,
-  ReviewServiceLive,
+  ReviewServiceWithDeps,
   RemoteUserServiceWithDeps,
   SettingsServiceWithDeps,
   JevServiceWithDeps,

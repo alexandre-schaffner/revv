@@ -6,7 +6,6 @@ import { fitAnchorToPatch } from "../../../services/diff-anchors";
 import { GitHubGateway } from "../../../services/GitHub";
 import { PrContextService } from "../../../services/PrContext";
 import { PrConversationService } from "../../../services/PrConversation";
-import { Realtime } from "../../../services/Realtime";
 import { RepositoryService } from "../../../services/Repository";
 import { ReviewService } from "../../../services/Review";
 import { WalkthroughService } from "../../../services/Walkthrough";
@@ -69,7 +68,6 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
     const reviewService = yield* ReviewService;
     const walkthroughService = yield* WalkthroughService;
     const repoService = yield* RepositoryService;
-    const realtime = yield* Realtime;
     const diffCache = yield* DiffCacheService;
     const conversations = yield* PrConversationService;
 
@@ -234,18 +232,14 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
           // comment has none worth keeping) is sacrificed to guarantee no
           // duplicate ever reaches GitHub.
           yield* reviewService
-            .deleteThread(input.threadId)
+            .dropThread(input.threadId)
             .pipe(Effect.orElseSucceed(() => undefined));
-          yield* realtime.toAccount(accountId, {
-            type: "thread:deleted",
-            data: { threadId: input.threadId },
-          });
           continue;
         }
 
         // Set external ID on the thread row
         yield* reviewService
-          .setThreadExternalIds(input.threadId, {
+          .linkThread(input.threadId, {
             externalCommentId: String(match.id),
           })
           .pipe(Effect.orElseSucceed(() => undefined));
@@ -258,7 +252,7 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
         const unsyncedMsg = [...messages].reverse().find(isPublishableDraftComment);
         if (unsyncedMsg) {
           yield* reviewService
-            .setMessageExternalId(unsyncedMsg.id, String(match.id))
+            .linkMessage(unsyncedMsg.id, String(match.id))
             .pipe(Effect.orElseSucceed(() => undefined));
         }
       }

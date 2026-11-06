@@ -155,9 +155,6 @@ function dispatch(msg: ServerEventMessage): void {
     case "threads:sync-error":
       sync.onThreadsSyncError(msg.data);
       break;
-    case "threads:new-reply":
-      review.onThreadsNewReply(msg.data);
-      break;
     case "recap:status-changed":
       onRecapStatusChanged(msg.data);
       break;

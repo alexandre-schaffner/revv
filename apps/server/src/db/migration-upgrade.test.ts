@@ -270,7 +270,6 @@ describe("schema applied outside the journal", () => {
     expect(columnNames(after, "walkthroughs")).toEqual(
       expect.arrayContaining(["mode", "base_head_sha", "generation_mode"]),
     );
-    expect(columnNames(after, "review_sessions")).toContain("mode");
     expect(userTables(after)).toContain("review_rounds");
     after.close();
   });
@@ -321,5 +320,196 @@ describe("schema applied outside the journal", () => {
     expect(sqlite.query("SELECT sql FROM sqlite_master ORDER BY name").all()).toEqual(schemaBefore);
     expect(ledgerWhens(sqlite)).toEqual(allWhens);
     sqlite.close();
+  });
+});
+
+describe("one review session per pull request (0490)", () => {
+  function seedSplitReviews(sqlite: Database): void {
+    const run = (sql: string, ...values: Array<string | number | null>) =>
+      sqlite.prepare(sql).run(...values);
+    const now = "2026-03-01T00:00:00.000Z";
+    run(
+      "INSERT INTO user (id, name, email, email_verified, created_at, updated_at) VALUES (?, ?, ?, 1, 0, 0)",
+      "user-1",
+      "Alex",
+      "alex@example.com",
+    );
+    run(
+      "INSERT INTO account (id, account_id, provider_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 0)",
+      "account-1",
+      "1",
+      "github:github.com",
+      "user-1",
+    );
+    run(
+      "INSERT INTO repositories (id, owner, name, full_name, added_at, account_id) VALUES (?, ?, ?, ?, ?, ?)",
+      "repo-1",
+      "acme",
+      "web",
+      "acme/web",
+      now,
+      "account-1",
+    );
+    for (const pr of ["pr-a", "pr-b"]) {
+      run(
+        `INSERT INTO pull_requests (id, external_id, repository_id, title, author_login, source_branch,
+          target_branch, url, created_at, updated_at, fetched_at)
+         VALUES (?, 1, 'repo-1', 'PR', 'alex', 'feat', 'main', 'https://example.com', ?, ?, ?)`,
+        pr,
+        now,
+        now,
+        now,
+      );
+    }
+    // PR A: a reviewer and an author session, plus an older completed one.
+    for (const [id, pr, mode, startedAt, status] of [
+      ["session-old", "pr-a", "reviewer", "2026-01-01T00:00:00.000Z", "completed"],
+      ["session-reviewer", "pr-a", "reviewer", "2026-02-01T00:00:00.000Z", "active"],
+      ["session-author", "pr-a", "author", "2026-02-02T00:00:00.000Z", "active"],
+      ["session-b", "pr-b", "reviewer", "2026-02-01T00:00:00.000Z", "active"],
+    ] as const) {
+      run(
+        "INSERT INTO review_sessions (id, pull_request_id, mode, started_at, status) VALUES (?, ?, ?, ?, ?)",
+        id,
+        pr,
+        mode,
+        startedAt,
+        status,
+      );
+    }
+    const thread = (
+      id: string,
+      session: string,
+      externalCommentId: string | null,
+      externalThreadId: string | null,
+    ) =>
+      run(
+        `INSERT INTO comment_threads (id, review_session_id, file_path, start_line, end_line, created_at,
+          external_comment_id, external_thread_id)
+         VALUES (?, ?, 'src/a.ts', 1, 1, ?, ?, ?)`,
+        id,
+        session,
+        now,
+        externalCommentId,
+        externalThreadId,
+      );
+    const message = (id: string, threadId: string, externalId: string | null, createdAt: string) =>
+      run(
+        `INSERT INTO thread_messages (id, thread_id, author_name, body, created_at, external_id)
+         VALUES (?, ?, 'someone', ?, ?, ?)`,
+        id,
+        threadId,
+        `body of ${id}`,
+        createdAt,
+        externalId,
+      );
+    // GitHub thread T1: its root landed in the reviewer session, a reply in
+    // the author session, where it became a detached thread of its own.
+    thread("thread-root", "session-reviewer", "100", "T1");
+    message("msg-root", "thread-root", "100", "2026-02-01T10:00:00.000Z");
+    thread("thread-detached", "session-author", "105", "T1");
+    message("msg-reply", "thread-detached", "105", "2026-02-01T11:00:00.000Z");
+    // Drafts written under either lens, and one in the completed session.
+    thread("draft-reviewer", "session-reviewer", null, null);
+    message("msg-draft-reviewer", "draft-reviewer", null, now);
+    thread("draft-author", "session-author", null, null);
+    message("msg-draft-author", "draft-author", null, now);
+    thread("draft-old", "session-old", null, null);
+    message("msg-draft-old", "draft-old", null, now);
+    thread("thread-b", "session-b", "200", "T2");
+    message("msg-b", "thread-b", "200", now);
+
+    run(
+      `INSERT INTO walkthroughs (id, review_session_id, pull_request_id, status, generated_at, model_used, pr_head_sha)
+       VALUES ('walkthrough-a', 'session-author', 'pr-a', 'complete', ?, 'test', 'abc')`,
+      now,
+    );
+    run(
+      `INSERT INTO review_rounds (id, pull_request_id, review_session_id, walkthrough_id, round_number, to_sha, created_at)
+       VALUES ('round-a', 'pr-a', 'session-reviewer', 'walkthrough-a', 1, 'abc', ?)`,
+      now,
+    );
+    for (const [id, session, decision] of [
+      ["hunk-old", "session-old", "accepted"],
+      ["hunk-author", "session-author", "rejected"],
+    ] as const) {
+      run(
+        `INSERT INTO hunk_decisions (id, review_session_id, file_path, hunk_index, decision, decided_at)
+         VALUES (?, ?, 'src/a.ts', 0, ?, ?)`,
+        id,
+        session,
+        decision,
+        now,
+      );
+    }
+  }
+
+  function upgraded(name: string): Database {
+    const before = migratedThrough(name, "0480_recap_stopped_status");
+    seedSplitReviews(before);
+    before.close();
+    return createDb(join(scratch, `${name}.db`)).$client;
+  }
+
+  const pairs = (sqlite: Database, sql: string) =>
+    (sqlite.query(sql).all() as Array<{ a: string; b: string }>).map((r) => [r.a, r.b]);
+
+  it("merges every PR's sessions into its oldest one, carrying what hangs off them", () => {
+    const after = upgraded("split-reviews-merge");
+
+    expect(
+      pairs(after, "SELECT id AS a, pull_request_id AS b FROM review_sessions ORDER BY id"),
+    ).toEqual([
+      ["session-b", "pr-b"],
+      ["session-old", "pr-a"],
+    ]);
+    expect(columnNames(after, "review_sessions")).toEqual(["id", "pull_request_id", "started_at"]);
+    expect(
+      pairs(after, "SELECT id AS a, review_session_id AS b FROM comment_threads ORDER BY id"),
+    ).toEqual([
+      ["draft-author", "session-old"],
+      ["draft-old", "session-old"],
+      ["draft-reviewer", "session-old"],
+      ["thread-b", "session-b"],
+      ["thread-root", "session-old"],
+    ]);
+    expect(pairs(after, "SELECT id AS a, review_session_id AS b FROM walkthroughs")).toEqual([
+      ["walkthrough-a", "session-old"],
+    ]);
+    expect(pairs(after, "SELECT id AS a, review_session_id AS b FROM review_rounds")).toEqual([
+      ["round-a", "session-old"],
+    ]);
+    // The retired hunk decisions were unique per session: the kept session's wins.
+    expect(pairs(after, "SELECT id AS a, review_session_id AS b FROM hunk_decisions")).toEqual([
+      ["hunk-old", "session-old"],
+    ]);
+    after.close();
+  });
+
+  it("joins a GitHub thread split across sessions back into one, losing no message", () => {
+    const after = upgraded("split-reviews-thread");
+
+    expect(
+      pairs(after, "SELECT id AS a, thread_id AS b FROM thread_messages ORDER BY created_at, id"),
+    ).toEqual([
+      ["msg-root", "thread-root"],
+      ["msg-reply", "thread-root"],
+      ["msg-b", "thread-b"],
+      ["msg-draft-author", "draft-author"],
+      ["msg-draft-old", "draft-old"],
+      ["msg-draft-reviewer", "draft-reviewer"],
+    ]);
+    after.close();
+  });
+
+  it("refuses a second session for a pull request", () => {
+    const after = upgraded("split-reviews-unique");
+
+    expect(() =>
+      after.run(
+        "INSERT INTO review_sessions (id, pull_request_id, started_at) VALUES ('again', 'pr-a', 'now')",
+      ),
+    ).toThrow();
+    after.close();
   });
 });

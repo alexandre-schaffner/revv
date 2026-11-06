@@ -52,7 +52,7 @@ export function getCurrentWalkthroughHandler(
     const mode =
       requestedMode ??
       (yield* walkthroughService.getLatestMode(pr.id)) ??
-      (yield* resolveReviewModeForPr(pr.id)).mode;
+      (yield* resolveReviewModeForPr(pr.id));
     const headSha = pr.headSha;
     // No synced head SHA → nothing to match a walkthrough against. The PR
     // row hasn't fully synced yet; the client shows the Generate button and

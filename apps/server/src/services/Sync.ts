@@ -1,22 +1,19 @@
 import { createHash } from "node:crypto";
 import type { ThreadSummary } from "@revv/shared";
 import { isThreadResolved } from "@revv/shared";
-import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import { reviewSessions } from "../db/schema/review-sessions";
 import { SyncError } from "../domain/errors";
 import { keyedSingleFlight } from "../effects/keyed-single-flight";
-import { DbService } from "./Db";
+import type { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
-import { fitAnchorToPatch } from "./diff-anchors";
 import { type GhReviewComment, type GhReviewThread, GitHubGateway } from "./GitHub";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
+import { diffFileFor, toGitHubComment } from "./github-review-comment";
 import { PrContextService } from "./PrContext";
 import { PullRequestService } from "./PullRequest";
 import { Realtime } from "./Realtime";
 import { RemoteUserService } from "./RemoteUser";
 import { ReviewService } from "./Review";
-import { resolveReviewModeForPr } from "./review-mode";
 import type { SettingsService } from "./Settings";
 import { extractGitHubMentions } from "./sync-engine/mentions";
 import { latestUpdatedAt } from "./sync-engine/watermark";
@@ -99,34 +96,15 @@ export const SyncServiceLive = Layer.effect(
     // Background-worker PR context — always uses the 'single-user' token.
     const resolvePrContext = (prId: string) => prContext.resolveBasic(prId, "single-user");
 
-    const resolvePrIdFromSession = (
-      sessionId: string,
-    ): Effect.Effect<string, SyncError, DbService> =>
-      Effect.gen(function* () {
-        const { db } = yield* DbService;
-        const row = db
-          .select({ pullRequestId: reviewSessions.pullRequestId })
-          .from(reviewSessions)
-          .where(eq(reviewSessions.id, sessionId))
-          .get();
-        if (!row) {
-          return yield* Effect.fail(
-            new SyncError({ message: `Review session not found: ${sessionId}` }),
-          );
-        }
-        return row.pullRequestId;
-      });
-
     const pushThread = (
       threadId: string,
       userId = "single-user",
     ): Effect.Effect<void, SyncError, DbService | SettingsService> =>
       Effect.gen(function* () {
-        const thread = yield* reviewService.getThread(threadId);
-        if (thread.externalCommentId) return; // already pushed
+        const { thread, prId } = yield* reviewService.getThread(threadId);
+        if (thread.externalCommentId) return;
 
-        const sessionPrId = yield* resolvePrIdFromSession(thread.reviewSessionId);
-        const { pr, repo, token, apiBase } = yield* prContext.resolveBasic(sessionPrId, userId);
+        const { pr, repo, token, apiBase } = yield* prContext.resolveBasic(prId, userId);
 
         if (!pr.headSha) {
           return yield* Effect.fail(
@@ -142,22 +120,14 @@ export const SyncServiceLive = Layer.effect(
           );
         }
 
-        // Fit the anchor onto the diff. A thread can point outside it — the
-        // walkthrough agent flags ranges it read in the full file, and the
-        // file viewer lets a reviewer comment on any line — and GitHub answers
-        // such a comment with an opaque 422. See `diff-anchors`.
-        const side = thread.diffSide === "old" ? ("LEFT" as const) : ("RIGHT" as const);
-        // Only ever a judgement on a patch we hold — a file the cache doesn't
-        // cover is sent as-is, for the reasons the submit handler spells out.
+        // A file the cached diff doesn't hold is sent as is: the cache trails
+        // the PR by a poll cycle, so its absence proves nothing.
         const cachedFiles = yield* diffCache.getCachedFiles(pr.id);
-        const cachedFile = cachedFiles?.find(
-          (f) => f.path === thread.filePath || f.oldPath === thread.filePath,
+        const fit = toGitHubComment(
+          thread,
+          first.body,
+          diffFileFor(cachedFiles, thread.filePath)?.patch ?? null,
         );
-        const fit = fitAnchorToPatch(cachedFile?.patch ?? null, {
-          startLine: thread.startLine,
-          endLine: thread.endLine,
-          side,
-        });
         if (!fit.ok) {
           return yield* Effect.fail(
             new SyncError({
@@ -166,26 +136,7 @@ export const SyncServiceLive = Layer.effect(
             }),
           );
         }
-
-        const commentPayload: {
-          path: string;
-          body: string;
-          line: number;
-          side: "LEFT" | "RIGHT";
-          commitSha: string;
-          startLine?: number;
-          startSide?: "LEFT" | "RIGHT";
-        } = {
-          path: thread.filePath,
-          body: first.body,
-          line: fit.endLine,
-          side,
-          commitSha: pr.headSha,
-        };
-        if (fit.startLine !== fit.endLine) {
-          commentPayload.startLine = fit.startLine;
-          commentPayload.startSide = side;
-        }
+        const commentPayload = { ...fit.comment, commitSha: pr.headSha };
 
         const posted = yield* github.reviews.createComment(
           repo.fullName,
@@ -196,11 +147,11 @@ export const SyncServiceLive = Layer.effect(
         );
 
         const externalCommentId = String(posted.id);
-        yield* reviewService.setThreadExternalIds(threadId, {
+        yield* reviewService.linkThread(threadId, {
           externalCommentId,
           lastSyncedAt: new Date().toISOString(),
         });
-        yield* reviewService.setMessageExternalId(first.id, externalCommentId);
+        yield* reviewService.linkMessage(first.id, externalCommentId);
 
         const threadsOnGithub = yield* github.reviews.listThreads(
           repo.fullName,
@@ -210,9 +161,7 @@ export const SyncServiceLive = Layer.effect(
         );
         const match = threadsOnGithub.find((t) => t.commentDatabaseIds.includes(posted.id));
         if (match) {
-          yield* reviewService.setThreadExternalIds(threadId, {
-            externalThreadId: match.nodeId,
-          });
+          yield* reviewService.linkThread(threadId, { externalThreadId: match.nodeId });
         }
       }).pipe(Effect.mapError(toSyncError(threadId)));
 
@@ -223,15 +172,15 @@ export const SyncServiceLive = Layer.effect(
         const message = yield* reviewService.getMessage(messageId);
         if (message.externalId) return;
 
-        const thread = yield* reviewService.getThread(message.threadId);
+        const { thread, prId } = yield* reviewService.getThread(message.threadId);
         if (!thread.externalCommentId) {
           yield* pushThread(thread.id);
           const refreshed = yield* reviewService.getMessage(messageId);
           if (refreshed.externalId) return; // this WAS the first message
         }
 
-        const freshThread = yield* reviewService.getThread(thread.id);
-        const parentCommentId = freshThread.externalCommentId;
+        const fresh = yield* reviewService.getThread(thread.id);
+        const parentCommentId = fresh.thread.externalCommentId;
         if (!parentCommentId) {
           return yield* Effect.fail(
             new SyncError({
@@ -241,8 +190,7 @@ export const SyncServiceLive = Layer.effect(
           );
         }
 
-        const sessionPrId = yield* resolvePrIdFromSession(thread.reviewSessionId);
-        const { pr, repo, token, apiBase } = yield* resolvePrContext(sessionPrId);
+        const { pr, repo, token, apiBase } = yield* resolvePrContext(prId);
 
         const posted = yield* github.reviews.replyToComment(
           repo.fullName,
@@ -252,18 +200,17 @@ export const SyncServiceLive = Layer.effect(
           token,
           apiBase,
         );
-        yield* reviewService.setMessageExternalId(message.id, String(posted.id));
+        yield* reviewService.linkMessage(message.id, String(posted.id));
       }).pipe(Effect.mapError(toSyncError()));
 
     const pushThreadStatus = (
       threadId: string,
     ): Effect.Effect<void, SyncError, DbService | SettingsService> =>
       Effect.gen(function* () {
-        const thread = yield* reviewService.getThread(threadId);
+        const { thread, prId } = yield* reviewService.getThread(threadId);
         if (!thread.externalThreadId) return;
 
-        const sessionPrId = yield* resolvePrIdFromSession(thread.reviewSessionId);
-        const { token, apiBase } = yield* resolvePrContext(sessionPrId);
+        const { token, apiBase } = yield* resolvePrContext(prId);
 
         const isResolved = isThreadResolved(thread.status);
         yield* isResolved
@@ -273,8 +220,7 @@ export const SyncServiceLive = Layer.effect(
 
     const getThreadSummary = (prId: string): Effect.Effect<ThreadSummary, SyncError, DbService> =>
       Effect.gen(function* () {
-        const session = yield* reviewService.getOrCreateIdentitySession(prId);
-        const threads = yield* reviewService.getThreadsForSession(session.id);
+        const threads = yield* reviewService.threadsForPr(prId);
 
         const resolved = threads.filter((t) => isThreadResolved(t.status)).length;
         return { total: threads.length, open: threads.length - resolved, resolved };
@@ -285,29 +231,6 @@ export const SyncServiceLive = Layer.effect(
     ): Effect.Effect<PullResult, SyncError, DbService | GitHubEtagCache | SettingsService> =>
       Effect.gen(function* () {
         const { pr, repo, token, apiBase } = yield* resolvePrContext(prId);
-
-        // Pull into the session the user's UI actually reads. Review sessions
-        // are keyed on `(pullRequestId, mode)` and the mode is derived from
-        // identity, so on a self-authored PR the default (`reviewer`) session
-        // is one nothing ever displays — reviewer comments would sync into it
-        // forever and stay invisible. See `resolveReviewModeForPr`.
-        const verdict = yield* resolveReviewModeForPr(pr.id);
-        const session = yield* reviewService.getOrCreateActiveSession(pr.id, verdict.mode);
-
-        // Repair PRs that were synced into the wrong mode's session before the
-        // line above existed: their GitHub threads are deduped by external id,
-        // so re-pulling would never re-create them here.
-        //
-        // Gated on `resolved`, because this moves rows. An unresolved verdict
-        // is "we don't know", and it reports `reviewer` — so running the repair
-        // on it would yank a self-authored PR's threads OUT of the author
-        // session the UI reads, which is the very failure being repaired, in
-        // reverse. When identity is unknown, sync into the default session and
-        // leave existing threads where they are; the next pull with a resolved
-        // identity does the move.
-        const adopted = verdict.resolved
-          ? yield* reviewService.adoptExternalThreads(pr.id, session.id)
-          : 0;
 
         // Incremental poll: ask GitHub only for comments newer than our
         // last successful sync. Null on cold-start pulls everything.
@@ -336,7 +259,7 @@ export const SyncServiceLive = Layer.effect(
         // skipping the GraphQL call there is what keeps quiet PRs free on the
         // background sweep (GraphQL has no conditional-request equivalent, so
         // unlike the REST calls above it is never a free 304).
-        const localThreadsBefore = yield* reviewService.getThreadsForSession(session.id);
+        const localThreadsBefore = yield* reviewService.threadsForPr(pr.id);
         const hasIncomingReplies = comments.some((c) => c.inReplyToId !== null);
         const needsGhThreads = localThreadsBefore.length > 0 || hasIncomingReplies;
         const ghThreads = needsGhThreads
@@ -370,12 +293,7 @@ export const SyncServiceLive = Layer.effect(
               c.updatedAt > (existingMsg.editedAt ?? existingMsg.createdAt) &&
               c.body !== existingMsg.body
             ) {
-              yield* reviewService.updateMessageBody(existingMsg.id, c.body, c.updatedAt);
-              const updatedMsg = yield* reviewService.getMessage(existingMsg.id);
-              yield* realtime.toPr(pr.id, {
-                type: "thread:message",
-                data: { threadId: existingMsg.threadId, message: updatedMsg },
-              });
+              yield* reviewService.applyRemoteEdit(existingMsg.id, c.body, c.updatedAt);
               edits++;
             }
             continue;
@@ -390,12 +308,12 @@ export const SyncServiceLive = Layer.effect(
 
           if (c.inReplyToId !== null) {
             const rootId = rootByCommentId.get(c.id) ?? findRootInBatch(c, byExternalId);
-            const thread = yield* reviewService.getThreadByExternalCommentId(
-              session.id,
+            const thread = yield* reviewService.findThreadByExternalCommentId(
+              pr.id,
               String(rootId),
             );
             if (thread) {
-              const msg = yield* reviewService.addMessage(thread.id, {
+              yield* reviewService.reply(thread.id, {
                 authorRole,
                 authorName: c.authorLogin,
                 authorLogin: c.authorLogin,
@@ -405,13 +323,6 @@ export const SyncServiceLive = Layer.effect(
                 createdAt: c.createdAt,
               });
               newMessages++;
-
-              yield* reviewService.transitionStatus(thread.id, authorRole);
-
-              yield* realtime.toPr(pr.id, {
-                type: "threads:new-reply",
-                data: { prId: pr.id, thread, message: msg },
-              });
               continue;
             }
             // No local thread owns this reply — its root predates our first
@@ -421,33 +332,28 @@ export const SyncServiceLive = Layer.effect(
             // again.
           }
 
-          const thread = yield* reviewService.createThread(session.id, {
-            filePath: c.path,
-            startLine: c.startLine ?? c.line ?? 1,
-            endLine: c.line ?? c.startLine ?? 1,
-            diffSide: c.side === "LEFT" ? "old" : "new",
-            externalCommentId: String(c.id),
-            lastSyncedAt: new Date().toISOString(),
-          });
+          yield* reviewService.startThread(
+            pr.id,
+            {
+              filePath: c.path,
+              startLine: c.startLine ?? c.line ?? 1,
+              endLine: c.line ?? c.startLine ?? 1,
+              diffSide: c.side === "LEFT" ? "old" : "new",
+              externalCommentId: String(c.id),
+              lastSyncedAt: new Date().toISOString(),
+            },
+            {
+              authorRole,
+              authorName: c.authorLogin,
+              authorLogin: c.authorLogin,
+              body: c.body,
+              messageType: "comment",
+              externalId: String(c.id),
+              createdAt: c.createdAt,
+            },
+          );
           newThreads++;
-
-          const msg = yield* reviewService.addMessage(thread.id, {
-            authorRole,
-            authorName: c.authorLogin,
-            authorLogin: c.authorLogin,
-            body: c.body,
-            messageType: "comment",
-            externalId: String(c.id),
-            createdAt: c.createdAt,
-          });
           newMessages++;
-
-          yield* reviewService.transitionStatus(thread.id, authorRole);
-
-          yield* realtime.toPr(pr.id, {
-            type: "threads:new-reply",
-            data: { prId: pr.id, thread, message: msg },
-          });
         }
 
         for (const [login, avatarUrl] of pendingAuthors) {
@@ -470,32 +376,16 @@ export const SyncServiceLive = Layer.effect(
 
         for (const ght of ghThreads) {
           for (const cdbId of ght.commentDatabaseIds) {
-            const local = yield* reviewService.getThreadByExternalCommentId(
-              session.id,
-              String(cdbId),
-            );
+            const local = yield* reviewService.findThreadByExternalCommentId(pr.id, String(cdbId));
             if (!local) continue;
 
             if (!local.externalThreadId) {
-              yield* reviewService.setThreadExternalIds(local.id, {
-                externalThreadId: ght.nodeId,
-              });
+              yield* reviewService.linkThread(local.id, { externalThreadId: ght.nodeId });
             }
 
             const localResolved = isThreadResolved(local.status);
-            if (ght.isResolved && !localResolved) {
-              const updated = yield* reviewService.updateThreadStatus(local.id, "resolved");
-              yield* realtime.toPr(pr.id, {
-                type: "thread:updated",
-                data: { threadId: local.id, status: "resolved", resolvedAt: updated.resolvedAt },
-              });
-              statusChanges++;
-            } else if (!ght.isResolved && localResolved) {
-              yield* reviewService.updateThreadStatus(local.id, "open");
-              yield* realtime.toPr(pr.id, {
-                type: "thread:updated",
-                data: { threadId: local.id, status: "open", resolvedAt: null },
-              });
+            if (ght.isResolved !== localResolved) {
+              yield* reviewService.setStatus(local.id, ght.isResolved ? "resolved" : "open");
               statusChanges++;
             }
             break;
@@ -517,10 +407,7 @@ export const SyncServiceLive = Layer.effect(
         // thread appearing or vanishing) without re-deriving it from the DB.
         // When the GraphQL call was skipped there was nothing to fingerprint,
         // so the row writes are the whole answer.
-        // `adopted` counts threads that moved into this session from another
-        // mode's session — no new content, but the session the UI reads just
-        // gained threads, so it must be told to re-hydrate.
-        let changed = newThreads + newMessages + edits + statusChanges + adopted > 0;
+        let changed = newThreads + newMessages + edits + statusChanges > 0;
         if (needsGhThreads) {
           const fingerprint = fingerprintThreads(ghThreads);
           const previous = yield* prService.getThreadsFingerprint(pr.id);

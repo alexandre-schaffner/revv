@@ -66,7 +66,7 @@ export async function submitReview(
     // session past its freshness window: rows still missing their externalId
     // would be posted again by the next submit.
     await api.api.prs({ id: prId })["sync-threads"].post();
-    await loadSession(prId, undefined, true);
+    await loadSession(prId, true);
 
     toast.success(`${actionLabel(action)} on GitHub`);
     if (failedReplies > 0) {

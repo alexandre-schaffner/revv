@@ -9,7 +9,7 @@ afterEach(() => {
   for (const db of databases.splice(0)) db.$client.close();
 });
 
-/** Two users, each with one repository holding one PR, review session and thread. */
+/** Two users, each with one repository holding one PR with one thread. */
 function seededDb(): Db {
   const db = createDb(":memory:");
   databases.push(db);
@@ -34,8 +34,8 @@ function seededDb(): Db {
       [`pr-${n}`, n, `repo-${n}`, "Fix", "author", "feature", "main", "https://x", now, now, now],
     );
     db.$client.run(
-      "INSERT INTO review_sessions (id, pull_request_id, started_at, status) VALUES (?, ?, ?, ?)",
-      [`session-${n}`, `pr-${n}`, now, "active"],
+      "INSERT INTO review_sessions (id, pull_request_id, started_at) VALUES (?, ?, ?)",
+      [`session-${n}`, `pr-${n}`, now],
     );
     db.$client.run(
       `INSERT INTO comment_threads (id, review_session_id, file_path, start_line, end_line, status, created_at)
@@ -62,17 +62,16 @@ describe("checkOwnership", () => {
     const db = seededDb();
     const exit = await check(
       db,
-      { id: "pull request", sessionId: "review session", threadId: "thread", repoId: "repository" },
-      { params: { id: "pr-1", sessionId: "session-1", threadId: "thread-1", repoId: "repo-1" } },
+      { id: "pull request", threadId: "thread", repoId: "repository" },
+      { params: { id: "pr-1", threadId: "thread-1", repoId: "repo-1" } },
     );
     expect(Exit.isSuccess(exit)).toBe(true);
   });
 
-  it("answers NotFound for another user's pull request, session, thread or repository", async () => {
+  it("answers NotFound for another user's pull request, thread or repository", async () => {
     const db = seededDb();
     for (const [kind, id] of [
       ["pull request", "pr-2"],
-      ["review session", "session-2"],
       ["thread", "thread-2"],
       ["repository", "repo-2"],
     ] as const) {

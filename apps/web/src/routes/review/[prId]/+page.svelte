@@ -26,7 +26,6 @@ import { getToken } from "$lib/session/token.svelte";
 import { useCommands } from "$lib/stores/commands.svelte";
 import { loadConversation } from "$lib/stores/conversation.svelte";
 import {
-  awaitReviewFiles,
   getFilesError,
   getIsLoadingFiles,
   getLoadedHeadSha,
@@ -39,7 +38,6 @@ import {
   REVIEW_TABS,
   setActiveTab,
 } from "$lib/stores/pr-view-state.svelte";
-import { getReviewModeForPr, isReviewModeResolved } from "$lib/stores/prs.svelte";
 import { getSelectedPr } from "$lib/stores/route.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
 import { ensureStackHeadlines } from "$lib/stores/stack-headlines.svelte";
@@ -65,12 +63,6 @@ $effect(() => {
   const id = threadSyncPrId;
   if (id) untrack(() => requestThreadSync(id));
 });
-const reviewMode = $derived(getReviewModeForPr(page.params.prId ?? ""));
-// Read through a `$derived`, never inline in the diff-load effect below:
-// `isReviewModeResolved` walks both PR lists, which every `prs:updated` and
-// list re-read swaps wholesale, so the effect would re-open the same PR on
-// each one. A derived only propagates when the boolean itself changes.
-const reviewModeResolved = $derived(isReviewModeResolved(page.params.prId ?? ""));
 const files = $derived(getReviewFiles());
 const isLoading = $derived(getIsLoadingFiles());
 const loadError = $derived(getFilesError());
@@ -188,22 +180,8 @@ $effect(() => {
 });
 
 $effect(() => {
-  const prId = page.params.prId;
-  const mode = reviewMode;
-  if (!prId) return;
-
-  // Hold until the author-vs-reviewer lens is real. On a cold start (deep
-  // link, or the desktop app reopening on this route) the PR row and the
-  // signed-in user's login are both still in flight, and `reviewMode` reads
-  // "reviewer" for everything — including PRs the user authored. Fetching on
-  // that provisional value means the whole `/files` payload is downloaded
-  // twice, which on a 3 000-file PR is two ~12 MB responses back to back.
-  if (!reviewModeResolved) {
-    untrack(awaitReviewFiles);
-    return;
-  }
-
-  untrack(() => openReview(prId, mode));
+  const prId = routePrId;
+  if (prId && signedIn) untrack(() => openReview(prId));
 });
 
 onDestroy(() => {

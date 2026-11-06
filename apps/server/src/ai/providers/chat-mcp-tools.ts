@@ -13,7 +13,7 @@
 // drives the same TOOL_SPECS with a per-request context.
 
 import { chapterNumbersByIndex } from "@revv/shared";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { commentThreads } from "../../db/schema/comment-threads";
 import { pullRequests } from "../../db/schema/pull-requests";
@@ -222,19 +222,15 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
     if (t.walkthroughIssueId) linkedThreadByIssue.set(t.walkthroughIssueId, t);
   }
 
-  // Standalone reviewer comments — every comment thread on this PR's active
-  // review session that ISN'T linked to a walkthrough issue.
-  const session = db
-    .select()
-    .from(reviewSessions)
-    .where(and(eq(reviewSessions.pullRequestId, prId), eq(reviewSessions.status, "active")))
-    .limit(1)
-    .get();
-
-  const allThreadsForSession = session
-    ? db.select().from(commentThreads).where(eq(commentThreads.reviewSessionId, session.id)).all()
-    : [];
-  const standaloneThreads = allThreadsForSession.filter((t) => t.walkthroughIssueId == null);
+  // Standalone reviewer comments: every comment thread on this PR that isn't
+  // linked to a walkthrough issue.
+  const standaloneThreads = db
+    .select({ thread: commentThreads })
+    .from(commentThreads)
+    .innerJoin(reviewSessions, eq(reviewSessions.id, commentThreads.reviewSessionId))
+    .where(and(eq(reviewSessions.pullRequestId, prId), isNull(commentThreads.walkthroughIssueId)))
+    .all()
+    .map((r) => r.thread);
   const standaloneIds = standaloneThreads.map((t) => t.id);
   const standaloneMessages =
     standaloneIds.length > 0
