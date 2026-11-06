@@ -13,6 +13,9 @@ import { reset as resetPulls } from "$lib/review/pull-latest";
 import {
   clearIdentity,
   deleteAccount,
+  dismissAccountPicker,
+  fetchLocalAccounts,
+  getError,
   getIsSwitching,
   getUser,
   loadUser,
@@ -44,7 +47,7 @@ import { reset as resetStacks } from "$lib/stores/stacks.svelte";
 import { reset as resetSync } from "$lib/stores/sync.svelte";
 import { reset as resetWalkthrough } from "$lib/stores/walkthrough.svelte";
 import { reset as resetWalkthroughSizings } from "$lib/stores/walkthrough-sizing.svelte";
-import { setToken } from "./token.svelte";
+import { getToken, heldToken, releaseSession, setToken } from "./token.svelte";
 
 /** The user whose session is running; null between sessions. */
 let sessionUserId: string | null = null;
@@ -87,9 +90,12 @@ function resetAccountStores(): void {
   resetBaseConflicts();
 }
 
-/** First step on launch: restore the stored session. */
+/**
+ * First step on launch: restore the stored session, or, signed out, list the
+ * held sessions the account picker offers.
+ */
 export function restoreSession(): void {
-  void loadUser();
+  void (getToken() ? loadUser() : fetchLocalAccounts());
 }
 
 /**
@@ -127,13 +133,16 @@ export function detachSession(): void {
 }
 
 /**
- * Switch to another local account. Persists `host` as the active GitHub host
- * before the new account's settings are read. Resolves `false` when the
- * switch failed; the reason is the auth store's sign-in error.
+ * Switch to another local account. Signed in, the server mints its session;
+ * signed out, the session this machine holds for it is presented. Persists
+ * `host` as the active GitHub host before the new account's settings are
+ * read. Resolves `false` when the switch failed; the reason is the auth
+ * store's sign-in error.
  */
 export function switchSession(userId: string, host?: string): Promise<boolean> {
   return runAccountSwitch(async () => {
-    const token = await requestAccountSwitch(userId);
+    const token = getToken() ? await requestAccountSwitch(userId) : heldToken(userId);
+    if (token === null) throw new Error("This account is signed out. Sign in again.");
     stopSession();
     setToken(token);
     sessionHost = host;
@@ -149,12 +158,18 @@ export function switchSession(userId: string, host?: string): Promise<boolean> {
       loadUser(),
     ]);
     const user = getUser();
-    if (user) beginSession(user.id);
+    if (!user) {
+      throw new Error(getError() ?? "This account's session has ended. Sign in again.");
+    }
+    beginSession(user.id);
     if (hostWrite.status === "rejected") throw hostWrite.reason;
   });
 }
 
-/** End the session locally: stream, account data, identity and token. */
+/**
+ * End the session locally: stream, account data, identity and token. The
+ * session stays held, so the account picker offers it again.
+ */
 export function endSession(): void {
   stopSession();
   clearIdentity();
@@ -162,7 +177,7 @@ export function endSession(): void {
 
 /**
  * Sign this window out. The server session stays: other signed-in users on the
- * machine can still switch to this one.
+ * machine can still switch to this one, and this window can switch back.
  */
 export async function signOut(): Promise<void> {
   endSession();
@@ -171,7 +186,10 @@ export async function signOut(): Promise<void> {
 
 /** Delete the signed-in account on the server, then end its session. Throws when the server refuses. */
 export async function removeAccount(): Promise<void> {
+  const userId = getUser()?.id;
   await deleteAccount();
+  if (userId) releaseSession({ userId });
+  dismissAccountPicker();
   endSession();
   await goto("/");
 }

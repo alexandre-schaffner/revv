@@ -8,16 +8,21 @@ import { gsapFade, tokens } from "$lib/motion";
 import { endSession } from "$lib/session/lifecycle.svelte";
 import { getToken } from "$lib/session/token.svelte";
 import {
+  dismissAccountPicker,
+  getAccountPickerDismissed,
   getAuthRestoreError,
   getAuthRestoreExhausted,
   getAuthRestoreMaxRetries,
   getAuthRestoreRetryAttempts,
   getIsAuthenticated,
   getIsOnboarded,
+  getLocalAccounts,
+  getLocalAccountsLoaded,
   getUser,
   retryAuthRestore,
 } from "$lib/stores/auth.svelte";
 import ReauthModal from "../auth/ReauthModal.svelte";
+import AccountPicker from "./AccountPicker.svelte";
 import OnboardingFlow from "./OnboardingFlow.svelte";
 import RevvBrand from "./RevvBrand.svelte";
 
@@ -28,10 +33,11 @@ interface Props {
 let { children }: Props = $props();
 
 /**
- * Gate decides which root renders: the app shell ({@render children()}) once
- * authenticated and onboarded, else OnboardingFlow (which signs in). There is
- * no signed-out account picker: only a signed-in user may switch to another
- * local account.
+ * Gate decides which of three roots renders:
+ *   - The app shell ({@render children()}) once authenticated and onboarded
+ *   - AccountPicker when signed out but this machine holds another live
+ *     session (lock screen)
+ *   - OnboardingFlow for first-time sign-in or when the picker is dismissed
  *
  * "Onboarded" is the durable signal: a user can be authenticated
  * (i.e. has a session token) but never finished picking a repo if they
@@ -40,6 +46,7 @@ let { children }: Props = $props();
 const authed = $derived(getIsAuthenticated());
 const onboarded = $derived(getIsOnboarded());
 const hasUser = $derived(getUser() !== null);
+const hasLocalConnectedAccount = $derived(getLocalAccounts().some((la) => la.accounts.length > 0));
 const restoringSession = $derived(getToken() !== null && !hasUser);
 const restoreError = $derived(getAuthRestoreError());
 const restoreExhausted = $derived(getAuthRestoreExhausted());
@@ -48,10 +55,13 @@ const restoreMaxRetries = $derived(getAuthRestoreMaxRetries());
 
 // With a stored token but no user payload yet, `onboarded` is still false.
 // Showing onboarding in that window would flash the welcome screen for an
-// already-onboarded user, so hold the decision until the user payload lands.
-const ready = $derived(getToken() === null || hasUser);
+// already-onboarded user, so hold the decision until the user payload lands
+// or, signed out, until the held sessions are checked, so a returning user
+// goes straight to the picker.
+const ready = $derived(getToken() === null ? getLocalAccountsLoaded() : hasUser);
 
 let showApp = $derived(authed && onboarded);
+let showPicker = $derived(!authed && hasLocalConnectedAccount && !getAccountPickerDismissed());
 
 function handleFinish() {
   // StepDone has already kicked the local `onboardedAt` flip
@@ -163,6 +173,8 @@ function errorMessage(error: unknown): string {
 		<!-- Blocking re-auth gate: overlays the app (kept mounted) when the
 		     active account's GitHub token expired and couldn't be refreshed. -->
 		<ReauthModal />
+	{:else if showPicker}
+		<AccountPicker onNewAccount={dismissAccountPicker} />
 	{:else}
 		<div out:gsapFade={{ duration: tokens.smooth }}>
 			<OnboardingFlow onFinish={handleFinish} />

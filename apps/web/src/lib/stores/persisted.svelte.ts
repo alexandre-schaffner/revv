@@ -4,6 +4,9 @@
 // survive; new keys use the `revv:` prefix.
 
 export const STORAGE_KEYS = {
+  sessionToken: "rev_session_token",
+  /** Every account this machine's windows signed in to, with its session token. */
+  heldSessions: "revv:held-sessions",
   /** Also read by the pre-paint script in `app.html`, which can't import this. */
   theme: "revv-theme",
   diffTheme: "revv-diff-theme",
