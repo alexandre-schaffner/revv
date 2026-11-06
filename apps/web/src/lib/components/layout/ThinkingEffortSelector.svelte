@@ -21,7 +21,7 @@ import {
   resolveChatAgentId,
   updateSettings,
 } from "$lib/stores/settings.svelte";
-import { sizingForSelectedPr } from "$lib/stores/walkthrough-sizing.svelte";
+import { ensureSelectedPrSizing, getSelectedPrSizing } from "$lib/stores/walkthrough-sizing.svelte";
 import SelectTrigger from "./SelectTrigger.svelte";
 
 let open = $state(false);
@@ -38,7 +38,10 @@ let currentEffort = $derived(
 let autoOffered = $derived(isAutoEffortOffered());
 
 // What Auto resolves to for this PR at its current head; tracking the SHA re-sizes on pull.
-const selectedSizing = sizingForSelectedPr(() => isAuto && autoOffered);
+const selectedSizing = $derived(getSelectedPrSizing(isAuto && autoOffered));
+$effect(() => {
+  if (isAuto && autoOffered) ensureSelectedPrSizing();
+});
 let sizing = $derived(selectedSizing.sizing);
 
 let autoEffort = $derived(

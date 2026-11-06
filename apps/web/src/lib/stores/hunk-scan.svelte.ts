@@ -18,35 +18,26 @@ import type {
   HunkScanStatus,
 } from "@revv/shared";
 import { api } from "$lib/api/client";
-import { RequestState } from "./_types";
+import { getSelectedPrId } from "$lib/stores/prs.svelte";
+import { getLoadedHeadSha } from "$lib/stores/review.svelte";
 import {
   type EventsSinceAsked,
   mergeHydratedHunkScan,
   reduceHunkScanEvent,
 } from "./hunk-scan-reducers";
-import { createPendingPoll } from "./pending-poll";
+import { type Answer, createResource } from "./resource";
 
 /** What a settled ask learned: TypeSafe is off, or the scan came back. */
 type EnsureOutcome = Exclude<HunkScanEnsureResult["status"], "pending">;
 
-export interface HunkScanEntry {
+interface HunkScanEntry {
   /** One per hunk. Empty until the scan starts, and after it fails. */
   readonly rows: HunkScanRow[];
   /** The persisted lifecycle; null when it never ran. */
   readonly status: HunkScanStatus | null;
-  /**
-   * The last `ensureHunkScan` for this head: `loading` while the diff isn't
-   * cached yet, `ok` with whether TypeSafe is on, `error` when the server
-   * refused (auth, unknown PR) or the diff never cached.
-   */
-  readonly request: RequestState<EnsureOutcome>;
 }
 
-const EMPTY: HunkScanEntry = Object.freeze({
-  rows: [],
-  status: null,
-  request: RequestState.idle<EnsureOutcome>(),
-});
+const EMPTY: HunkScanEntry = Object.freeze({ rows: [], status: null });
 
 let entries = $state(new Map<string, HunkScanEntry>());
 
@@ -56,14 +47,6 @@ let entries = $state(new Map<string, HunkScanEntry>());
  */
 const eventsSeen = new Map<string, number>();
 const startsSeen = new Map<string, number>();
-
-const poll = createPendingPoll({
-  onGiveUp: (key) =>
-    updateEntry(key, (entry) => ({
-      ...entry,
-      request: RequestState.error("The PR's diff never reached the cache."),
-    })),
-});
 
 function entryKey(prId: string, headSha: string): string {
   return `${prId}@${headSha}`;
@@ -104,61 +87,57 @@ export function getHunkScanForFile(
 }
 
 /**
- * Ask the server for the scan of the PR's current head. It decides what that
- * means — start it, retry a `partial` or `failed` one, rebuild one seeded from
- * an older diff, or just return it — so the client always asks rather than
- * skipping a scan it holds as ended. Also the reconcile path after a dropped
- * stream. `pending` (diff not cached yet) is asked again on a timer; an HTTP
- * error is recorded and not retried.
+ * The server decides what an ask means — start the scan, retry a `partial` or
+ * `failed` one, rebuild one seeded from an older diff, or just return it — so
+ * the client always asks rather than skipping a scan it holds as ended.
+ * `pending` (the diff isn't cached yet; the fill has no client-visible event)
+ * is asked again on a timer. The answer's rows merge into `entries`.
  */
-export function ensureHunkScan(prId: string, headSha: string): Promise<void> {
-  const key = entryKey(prId, headSha);
-  return poll.pollWhilePending(key, async () => {
-    updateEntry(key, (entry) => ({ ...entry, request: RequestState.loading() }));
+const asks = createResource<{ prId: string }, EnsureOutcome>({
+  retryDelaysMs: [2_500, 2_500, 2_500, 2_500, 2_500],
+  gaveUpError: "The PR's diff never reached the cache.",
+  fetch: async (key, { prId }): Promise<Answer<EnsureOutcome>> => {
     const since = markEvents(key);
-    try {
-      const {
-        data: result,
-        error,
-        status,
-      } = await api.api.reviews({ id: prId })["hunk-scan"].post();
-      if (error || !result || "error" in result) {
-        updateEntry(key, (entry) => ({
-          ...entry,
-          request: RequestState.error(`First pass request failed (${status})`),
-        }));
-        return "done";
-      }
-      if (result.status === "pending") return "pending";
-      if (result.status === "off") {
-        updateEntry(key, (entry) => ({ ...entry, request: RequestState.ok("off") }));
-        return "done";
-      }
-      // The server answers for the head it holds, which a pull may have moved.
-      const { scan } = result;
-      const scanKey = entryKey(prId, scan.headSha);
-      const ok = RequestState.ok<EnsureOutcome>("ready");
-      updateEntry(scanKey, (entry) => ({
-        ...mergeHydratedHunkScan(entry, scan, scanKey === key ? since() : "deltas"),
-        request: ok,
-      }));
-      if (scanKey !== key) updateEntry(key, (entry) => ({ ...entry, request: ok }));
-      return "done";
-    } catch (e) {
-      updateEntry(key, (entry) => ({
-        ...entry,
-        request: RequestState.error(e instanceof Error ? e.message : String(e)),
-      }));
-      return "done";
+    const { data: result, error, status } = await api.api.reviews({ id: prId })["hunk-scan"].post();
+    if (error || !result || "error" in result) {
+      return { status: "error", error: `First pass request failed (${status})` };
     }
-  });
+    if (result.status === "pending") return { status: "pending" };
+    if (result.status === "off") return { status: "ok", data: "off" };
+    // The server answers for the head it holds, which a pull may have moved.
+    const { scan } = result;
+    const scanKey = entryKey(prId, scan.headSha);
+    updateEntry(scanKey, (entry) =>
+      mergeHydratedHunkScan(entry, scan, scanKey === key ? since() : "deltas"),
+    );
+    return { status: "ok", data: "ready" };
+  },
+});
+
+/** Ask the server for the scan of the PR's head on screen. */
+export function ensureHunkScan(prId: string, headSha: string): Promise<void> {
+  return asks.load(entryKey(prId, headSha), { prId }).then(() => undefined);
+}
+
+/** Rows that streamed during a dropped connection are gone; re-ask for the PR on screen. */
+export function onEventsReconnected(): void {
+  const prId = getSelectedPrId();
+  const headSha = prId ? getLoadedHeadSha(prId) : null;
+  if (prId && headSha) void ensureHunkScan(prId, headSha);
+}
+
+export function reset(): void {
+  asks.reset();
+  entries = new Map();
+  eventsSeen.clear();
+  startsSeen.clear();
 }
 
 function applyEvent(event: HunkScanEventMessage): void {
   const key = entryKey(event.data.prId, event.data.headSha);
   eventsSeen.set(key, (eventsSeen.get(key) ?? 0) + 1);
   if (event.type === "hunk-scan:started") startsSeen.set(key, (startsSeen.get(key) ?? 0) + 1);
-  updateEntry(key, (entry) => ({ ...entry, ...reduceHunkScanEvent(entry, event) }));
+  updateEntry(key, (entry) => reduceHunkScanEvent(entry, event));
 }
 
 export function onHunkScanStarted(data: HunkScanStartedEnvelope["data"]): void {
