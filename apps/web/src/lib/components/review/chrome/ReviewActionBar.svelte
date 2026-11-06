@@ -28,8 +28,8 @@ import { closePr, convertPrToDraft, markPrReadyForReview, mergePr } from "$lib/s
 import { getSelectedPr } from "$lib/stores/route.svelte";
 import { openStackMergeSheet } from "$lib/stores/stack-merge.svelte";
 import { getLayer, getStack, getStackRequest } from "$lib/stores/stacks.svelte";
-import { type MergeGate, mergeGate } from "$lib/utils/merge-blocker";
 import MergeConfirmDialog from "./MergeConfirmDialog.svelte";
+import { type MergeGate, mergeGate } from "./merge-blocker";
 
 interface Props {
   submitting: "approve" | "request_changes" | "comment" | null;

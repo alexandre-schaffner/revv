@@ -7,7 +7,7 @@ import type { Snippet } from "svelte";
 import ThoughtsReveal from "$lib/components/agent-activity/ThoughtsReveal.svelte";
 import { Button } from "$lib/components/ui/button";
 import { heroMorph } from "$lib/motion";
-import type { RecapStreamEntry } from "$lib/stores/recap-stream.svelte";
+import type { RecapStreamEntry } from "$lib/recaps/stream.svelte";
 import DotMatrixLoader from "./DotMatrixLoader.svelte";
 import RecapBody from "./RecapBody.svelte";
 import RecapHeroBig from "./RecapHeroBig.svelte";

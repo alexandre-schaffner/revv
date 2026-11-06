@@ -9,9 +9,9 @@ import {
   getThreadsSyncing,
   requestFullSync,
 } from "$lib/stores/sync.svelte";
-import { getTokenUsage } from "$lib/stores/walkthrough.svelte";
 import { now } from "$lib/utils/clock.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
+import { getTokenUsage } from "$lib/walkthrough/store.svelte";
 import AgentSelector from "./AgentSelector.svelte";
 import CommitsDropdown from "./CommitsDropdown.svelte";
 import ModelSelector from "./ModelSelector.svelte";

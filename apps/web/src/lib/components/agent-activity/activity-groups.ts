@@ -1,6 +1,7 @@
 import type { ActivityKind } from "@revv/shared";
 import { TOOL_PATH_INPUT_KEYS } from "@revv/shared";
 import { basename } from "$lib/utils/path";
+import { plural } from "$lib/utils/plural";
 
 export interface GroupableActivity {
   readonly id: string;
@@ -99,8 +100,7 @@ export function activityLabel(item: {
 }
 
 function countLabel(count: number, one: string, other: string): string | null {
-  if (count <= 0) return null;
-  return `${count} ${count === 1 ? one : other}`;
+  return count > 0 ? plural(count, one, other) : null;
 }
 
 // ── Tool-call detail extraction (for the verbose, clickable card) ────────────

@@ -1,7 +1,7 @@
 <script lang="ts">
 import IssueCard from "$lib/components/walkthrough/IssueCard.svelte";
 import IssueGroups from "$lib/components/walkthrough/IssueGroups.svelte";
-import { getIssueSignal } from "$lib/stores/walkthrough.svelte";
+import { getIssueSignal } from "$lib/walkthrough/store.svelte";
 
 interface Props {
   prId: string;

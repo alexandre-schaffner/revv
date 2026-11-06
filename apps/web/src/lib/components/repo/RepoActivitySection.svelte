@@ -5,12 +5,12 @@ import ArrowDownRight from "phosphor-svelte/lib/ArrowDownRight";
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import { untrack } from "svelte";
 import RepoActivityChart from "$lib/components/repo/RepoActivityChart.svelte";
+import type { OwnerPalette } from "$lib/repos/avatar-palette";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { getTaggedPrs } from "$lib/stores/prs.svelte";
 import { getRepoActivity, loadRepoActivity } from "$lib/stores/repo-activity.svelte";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
-import type { OwnerPalette } from "$lib/utils/avatarPalette";
-import { repoInkRamp } from "$lib/utils/repo-ink";
+import { repoInkRamp } from "./repo-ink";
 
 interface Props {
   repoId: string;

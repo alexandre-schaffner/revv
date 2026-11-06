@@ -12,14 +12,16 @@
 
 import type { ServerEventMessage } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
+import * as hunkScan from "$lib/hunk-scan/store.svelte";
+import { onRecapAdded, onRecapStatusChanged } from "$lib/recaps/store.svelte";
 import { getToken } from "$lib/session/token.svelte";
+import * as walkthroughSizing from "$lib/walkthrough/sizing.svelte";
+import * as walkthrough from "$lib/walkthrough/store.svelte";
 import * as auth from "./auth.svelte";
 import * as conversation from "./conversation.svelte";
 import { setError } from "./errors.svelte";
-import * as hunkScan from "./hunk-scan.svelte";
 import * as mergeEligibility from "./merge-eligibility.svelte";
 import * as prs from "./prs.svelte";
-import { onRecapAdded, onRecapStatusChanged } from "./recaps.svelte";
 import * as repoActivity from "./repo-activity.svelte";
 import * as repos from "./repos.svelte";
 import * as review from "./review.svelte";
@@ -28,8 +30,6 @@ import * as stackHeadlines from "./stack-headlines.svelte";
 import { onStackMergeProgress } from "./stack-merge.svelte";
 import * as stacks from "./stacks.svelte";
 import * as sync from "./sync.svelte";
-import * as walkthrough from "./walkthrough.svelte";
-import * as walkthroughSizing from "./walkthrough-sizing.svelte";
 
 /** Every (re)connect, the first included. */
 const ON_OPEN: ReadonlyArray<() => void> = [walkthrough.onEventsOpened, sync.onEventsOpened];

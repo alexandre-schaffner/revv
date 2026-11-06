@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test";
+import { ZERO_TOKEN_USAGE } from "@revv/shared";
 import {
   accumulateTokenUsage,
   addThroughput,
   mergeContextOccupancy,
-  ZERO_TOKEN_USAGE,
 } from "./walkthrough-token-usage";
 
 describe("token-usage accumulation algebra", () => {

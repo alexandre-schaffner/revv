@@ -24,7 +24,7 @@ import { Button } from "$lib/components/ui/button/index.js";
 import { Input } from "$lib/components/ui/input";
 import { Switch } from "$lib/components/ui/switch";
 import { fetchSettings, getSettings, updateSettings } from "$lib/stores/settings.svelte";
-import { reset as resetWalkthroughSizings } from "$lib/stores/walkthrough-sizing.svelte";
+import { reset as resetWalkthroughSizings } from "$lib/walkthrough/sizing.svelte";
 import SettingsGroup from "../primitives/SettingsGroup.svelte";
 import SettingsPane from "../primitives/SettingsPane.svelte";
 import SettingsRow from "../primitives/SettingsRow.svelte";

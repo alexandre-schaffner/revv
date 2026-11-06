@@ -6,9 +6,9 @@ import Avatar from "$lib/components/shared/Avatar.svelte";
 import ThemeIcon from "$lib/components/shared/ThemeIcon.svelte";
 import { cycleThemePreference, themePreferenceLabel } from "$lib/components/shared/theme-cycle";
 import { gsapFade, tokens } from "$lib/motion";
+import { githubHostLabel } from "$lib/session/github-host";
 import { switchSession } from "$lib/session/lifecycle.svelte";
 import { getError, getIsSwitching, getLocalAccounts } from "$lib/stores/auth.svelte";
-import { githubHostLabel } from "$lib/utils/github-host";
 
 interface Props {
   /** Called when user chooses "Sign in with a different account" */

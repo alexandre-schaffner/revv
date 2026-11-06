@@ -5,15 +5,15 @@
 import { attachmentByteSize, type ChatAttachment, type InteractionMode } from "@revv/shared";
 import { untrack } from "svelte";
 import { toast } from "svelte-sonner";
+import { openSettings } from "$lib/stores/settingsModal.svelte";
+import { agentAuthRecoveryDescription } from "$lib/utils/agent-auth-recovery";
 import {
   approvePlan,
   clearChat,
   rejectPlan,
   setInteractionMode as setInteractionModeApi,
   streamChatMessage,
-} from "$lib/api/chat";
-import { openSettings } from "$lib/stores/settingsModal.svelte";
-import { AGENT_AUTH_REQUIRED, agentAuthRecoveryDescription } from "$lib/utils/agent-auth-recovery";
+} from "./api";
 import {
   type BlockedCommit,
   clearProposed,
@@ -179,7 +179,7 @@ function toastTurnError(err: { code: string; message: string }): void {
     });
   } else if (err.code === "GITHUB_RATE_LIMITED") {
     toast.error("GitHub rate limit reached", { description: err.message, duration: 15000 });
-  } else if (err.code === AGENT_AUTH_REQUIRED) {
+  } else if (err.code === "AGENT_AUTH_REQUIRED") {
     toast.error("AI agent authentication required", {
       description: agentAuthRecoveryDescription(err.message),
       action: openAiSettings,

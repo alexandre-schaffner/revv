@@ -10,7 +10,7 @@ import Square from "phosphor-svelte/lib/Square";
 import Warning from "phosphor-svelte/lib/Warning";
 import WarningOctagon from "phosphor-svelte/lib/WarningOctagon";
 import LowSignalDisclosure from "$lib/components/walkthrough/LowSignalDisclosure.svelte";
-import { countBySeverity, sortBySeverity } from "$lib/utils/walkthrough-issues";
+import { countBySeverity, sortBySeverity } from "$lib/walkthrough/issues";
 import { createExpandState } from "./expand-state.svelte";
 import IssueRow from "./IssueRow.svelte";
 import { createRowKeys } from "./row-keys";

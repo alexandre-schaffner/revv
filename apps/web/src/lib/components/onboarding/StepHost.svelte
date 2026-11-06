@@ -4,10 +4,10 @@ import CaretDown from "phosphor-svelte/lib/CaretDown";
 import CaretLeft from "phosphor-svelte/lib/CaretLeft";
 import GithubLogo from "phosphor-svelte/lib/GithubLogo";
 import { gsapEnter, tokens } from "$lib/motion";
+import { normalizeGithubHost } from "$lib/session/github-host";
 import { endSession } from "$lib/session/lifecycle.svelte";
 import { cancelSignIn, dismissAccountPicker, getIsAuthenticated } from "$lib/stores/auth.svelte";
 import { getGithubClientId, getGithubHost, setGithubConfig } from "$lib/stores/settings.svelte";
-import { normalizeGithubHost } from "$lib/utils/github-host";
 import ContinueArrow from "./ContinueArrow.svelte";
 import { ACTIONS_IN, MARK_POP, OPTION_IN } from "./motion";
 

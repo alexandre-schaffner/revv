@@ -4,9 +4,9 @@
 
 import type { ChatSessionContext } from "@revv/shared";
 import { untrack } from "svelte";
-import { fetchAvailableAgents, fetchSessionContext } from "$lib/api/chat";
 import { createResource } from "$lib/stores/resource";
 import { getSettings } from "$lib/stores/settings.svelte";
+import { fetchAvailableAgents, fetchSessionContext } from "./api";
 
 // A warm read acquires the worktree and starts the agent so slash commands
 // exist before the first message. It is heavier than a plain read, so it runs

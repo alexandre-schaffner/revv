@@ -13,7 +13,7 @@ import {
 } from "$lib/stores/pr-view-state.svelte";
 import { getSelectedPr } from "$lib/stores/route.svelte";
 import { getCmdHeld } from "$lib/stores/shortcuts.svelte";
-import { getPrWalkthroughStatus } from "$lib/stores/walkthrough.svelte";
+import { getPrWalkthroughStatus } from "$lib/walkthrough/store.svelte";
 
 const pr = $derived(getSelectedPr());
 const activeTab = $derived(getActiveTab());

@@ -22,7 +22,7 @@ import Check from "phosphor-svelte/lib/Check";
 import Copy from "phosphor-svelte/lib/Copy";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import { fetchRuntimeHealth } from "$lib/api/runtime";
-import { compareServiceBuild } from "$lib/api/service-build";
+import { compareServiceBuild } from "$lib/updater/service-build";
 import { Button } from "$lib/components/ui/button/index.js";
 import { SegmentedControl, type SegmentedOption } from "$lib/components/ui/segmented-control";
 import { gsapPop } from "$lib/motion";

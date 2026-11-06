@@ -6,7 +6,7 @@ import Circle from "phosphor-svelte/lib/Circle";
 import PaperPlaneTilt from "phosphor-svelte/lib/PaperPlaneTilt";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import X from "phosphor-svelte/lib/X";
-import type { ProposedChanges } from "$lib/api/chat";
+import type { ProposedChanges } from "$lib/chat/api";
 import { getQueuedMessages, removeQueuedMessage } from "$lib/chat/queue.svelte";
 import { getActiveTasks } from "$lib/chat/timeline.svelte";
 import { gsapFadeY, gsapSlide, tokens } from "$lib/motion";

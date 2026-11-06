@@ -19,7 +19,7 @@ import Trash from "phosphor-svelte/lib/Trash";
 import X from "phosphor-svelte/lib/X";
 import { onDestroy, onMount, tick, untrack } from "svelte";
 import { SvelteMap } from "svelte/reactivity";
-import type { ProposedDiffFile } from "$lib/api/chat";
+import type { ProposedDiffFile } from "$lib/chat/api";
 import {
   addProposedComment,
   cherryPickProposedCommitAction,
@@ -36,9 +36,9 @@ import { sendProposedFeedback } from "$lib/chat/turn.svelte";
 import AnnotationCommentInput from "$lib/components/review/AnnotationCommentInput.svelte";
 import * as Dialog from "$lib/components/ui/dialog/index.js";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
+import { AnnotationMounts } from "$lib/pierre/annotation-mount";
+import { workerManager } from "$lib/pierre/worker-pool";
 import { getDiffMode, getDiffWrap, setDiffMode } from "$lib/stores/diff-prefs.svelte";
-import { AnnotationMounts } from "$lib/utils/annotation-mount";
-import { workerManager } from "$lib/utils/worker-pool";
 import ProposedCommentChip from "./ProposedCommentChip.svelte";
 
 interface Props {

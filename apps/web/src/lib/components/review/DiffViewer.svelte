@@ -1,6 +1,6 @@
 <script lang="ts">
+import type { ReviewFile } from "$lib/stores/diff-files.svelte";
 import { getDiffMode, getDiffWrap } from "$lib/stores/diff-prefs.svelte";
-import type { ReviewFile } from "$lib/types/review";
 import DiffViewerInner from "./DiffViewerInner.svelte";
 import type { CommentRowsTrigger } from "./pierre-diff-adapter";
 import { ThreadAnnotations } from "./thread-annotations.svelte";

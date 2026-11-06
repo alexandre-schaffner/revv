@@ -13,14 +13,14 @@ import { api } from "$lib/api/client";
 import type { EdenData } from "$lib/api/wire";
 import { setActiveTab } from "$lib/stores/pr-view-state.svelte";
 import { refreshPrHead } from "$lib/stores/sync.svelte";
+import { formatRelativeTime } from "$lib/utils/format-relative-time";
+import { WALKTHROUGH_PERSPECTIVES } from "$lib/walkthrough/perspective";
 import {
   getDisplayedWalkthroughId,
   getReviewRounds,
   loadReviewRounds,
   selectWalkthroughReport,
-} from "$lib/stores/walkthrough.svelte";
-import { formatRelativeTime } from "$lib/utils/format-relative-time";
-import { WALKTHROUGH_PERSPECTIVES } from "$lib/utils/walkthrough-perspective";
+} from "$lib/walkthrough/store.svelte";
 
 let { pr }: { pr: PullRequest } = $props();
 

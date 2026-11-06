@@ -7,6 +7,12 @@ import {
 } from "@revv/shared";
 import CaretLeft from "phosphor-svelte/lib/CaretLeft";
 import { onDestroy, onMount } from "svelte";
+import {
+  type AgentInstallState,
+  agentInstallLog,
+  appendAgentInstallLog,
+  runAgentInstall,
+} from "$lib/agent-setup/install";
 import { acpAgentIcon } from "$lib/components/icons/acpAgentIcon";
 import Dotmatrix from "$lib/components/ui/dotmatrix/Dotmatrix.svelte";
 import { gsapEnter } from "$lib/motion";
@@ -18,12 +24,6 @@ import {
   getSettings,
   updateSettings,
 } from "$lib/stores/settings.svelte";
-import {
-  type AgentInstallState,
-  agentInstallLog,
-  appendAgentInstallLog,
-  runAgentInstall,
-} from "$lib/utils/agent-install";
 import AgentLoginTerminal from "./AgentLoginTerminal.svelte";
 import ContinueArrow from "./ContinueArrow.svelte";
 import { ACTIONS_IN, MARK_POP, OPTION_IN } from "./motion";

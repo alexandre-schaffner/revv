@@ -1,10 +1,12 @@
 import { describe, expect, it } from "bun:test";
+import { ZERO_TOKEN_USAGE } from "@revv/shared";
 import { createDb, type Db } from "../../db/index";
 import { commentThreads, threadMessages, walkthroughBlocks } from "../../db/schema";
 import {
   anchorThreadId,
   blockId,
   blockOrder,
+  decodeTokenUsage,
   type FindingIdentity,
   isJourneyChapterText,
   isSameResolvedFinding,
@@ -154,5 +156,40 @@ describe("normalizeProviderConfig", () => {
     expect(normalizeProviderConfig({ ...legacy, provider: "cursor" }, "m")?.provider).toBe(
       "cursor",
     );
+  });
+});
+
+describe("decodeTokenUsage", () => {
+  it("fills a row from before occupancy tracking with its throughput sum", () => {
+    const legacy = JSON.stringify({
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadInputTokens: 5,
+      cacheCreationInputTokens: 1,
+    });
+    expect(decodeTokenUsage(legacy)).toEqual({
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadInputTokens: 5,
+      cacheCreationInputTokens: 1,
+      contextTokens: 126,
+    });
+  });
+
+  it("keeps a recorded occupancy and a known window, and drops an unknown one", () => {
+    const recorded = { ...ZERO_TOKEN_USAGE, inputTokens: 9, contextTokens: 3 };
+    expect(decodeTokenUsage(JSON.stringify({ ...recorded, contextWindowTokens: 200 }))).toEqual({
+      ...recorded,
+      contextWindowTokens: 200,
+    });
+    expect(decodeTokenUsage(JSON.stringify({ ...recorded, contextWindowTokens: 0 }))).toEqual(
+      recorded,
+    );
+  });
+
+  it("reads a missing, corrupt or non-object column as zero", () => {
+    for (const raw of [null, "", "{", "[1,2]", "42"]) {
+      expect(decodeTokenUsage(raw)).toEqual(ZERO_TOKEN_USAGE);
+    }
   });
 });

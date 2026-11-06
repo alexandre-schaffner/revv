@@ -1,0 +1,217 @@
+import type {
+  Activity,
+  ProjectRecap,
+  RecapPrEntry,
+  RecapStreamEvent,
+  RecapStreamPhase,
+  RecapThemeSummary,
+} from "@revv/shared";
+import { streamSse } from "$lib/api/sse-stream";
+
+// ── Entry shape ─────────────────────────────────────────────────────────────
+
+export interface RecapStreamEntry {
+  lede: string;
+  /**
+   * Per-PR structured entries indexed by prId so re-emits / reconnects merge
+   * cleanly. Render order is `position`, ascending.
+   */
+  entries: Map<string, RecapPrEntry>;
+  /**
+   * Per-theme summary paragraphs indexed by theme label. Idempotent on the
+   * server side too — `set_theme_summary` upserts on (recapId, theme).
+   */
+  themeSummaries: Map<string, RecapThemeSummary>;
+  thoughts: string;
+  phase: RecapStreamPhase;
+  phaseMessage: string;
+  activities: Array<Activity & { id: string }>;
+  isStreaming: boolean;
+  doneReceived: boolean;
+  /** The server reported the run stopped by the user. */
+  stopped: boolean;
+  streamError: string | null;
+}
+
+/** The stream reached an end the server announced: done, stopped, or failed. */
+export function recapStreamEnded(entry: RecapStreamEntry | undefined): boolean {
+  return !!entry && (entry.doneReceived || entry.stopped || entry.streamError !== null);
+}
+
+/**
+ * The recap as the reader should see it mid-run: what the stream has written
+ * since the row was read wins, entries in `position` order.
+ */
+export function mergeRecapStream(
+  recap: ProjectRecap,
+  stream: RecapStreamEntry | undefined,
+): ProjectRecap {
+  if (!stream) return recap;
+  const entries = new Map(recap.entries.map((e) => [e.prId, e]));
+  for (const [prId, entry] of stream.entries) entries.set(prId, entry);
+  const summaries = new Map(recap.themeSummaries.map((s) => [s.theme, s]));
+  for (const [theme, summary] of stream.themeSummaries) summaries.set(theme, summary);
+  return {
+    ...recap,
+    lede: stream.lede || recap.lede,
+    entries: [...entries.values()].sort((a, b) => a.position - b.position),
+    themeSummaries: [...summaries.values()],
+  };
+}
+
+function freshEntry(): RecapStreamEntry {
+  return {
+    lede: "",
+    entries: new Map(),
+    themeSummaries: new Map(),
+    thoughts: "",
+    phase: "analyzing",
+    phaseMessage: "Analyzing pull requests…",
+    activities: [],
+    isStreaming: false,
+    doneReceived: false,
+    stopped: false,
+    streamError: null,
+  };
+}
+
+// ── Reactive state ────────────────────────────────────────────────────────────
+
+let entries = $state<Map<string, RecapStreamEntry>>(new Map());
+
+// Abort controllers keyed by recapId.
+const controllers = new Map<string, AbortController>();
+
+// ── Getters ───────────────────────────────────────────────────────────────────
+
+export function getRecapStreamEntry(recapId: string): RecapStreamEntry | undefined {
+  return entries.get(recapId);
+}
+
+// ── Mutations ─────────────────────────────────────────────────────────────────
+
+function setEntry(recapId: string, entry: RecapStreamEntry): void {
+  const next = new Map(entries);
+  next.set(recapId, entry);
+  entries = next;
+}
+
+function deleteEntry(recapId: string): void {
+  if (!entries.has(recapId)) return;
+  const next = new Map(entries);
+  next.delete(recapId);
+  entries = next;
+}
+
+// ── Event reducer ───────────────────────────────────────────────────────────
+
+function applyEvents(recapId: string, evs: RecapStreamEvent[]): void {
+  const current = entries.get(recapId);
+  const entry: RecapStreamEntry = current
+    ? {
+        ...current,
+        entries: new Map(current.entries),
+        themeSummaries: new Map(current.themeSummaries),
+      }
+    : freshEntry();
+
+  for (const event of evs) {
+    switch (event.type) {
+      case "lede":
+        entry.lede = event.data.lede;
+        break;
+      case "entry":
+        entry.entries.set(event.data.entry.prId, event.data.entry);
+        break;
+      case "theme_summary":
+        entry.themeSummaries.set(event.data.summary.theme, event.data.summary);
+        break;
+      case "thought":
+        entry.thoughts += event.data.text;
+        break;
+      case "phase":
+        entry.phase = event.data.phase;
+        entry.phaseMessage = event.data.message;
+        break;
+      case "activity":
+        entry.activities = [...entry.activities, { ...event.data, id: crypto.randomUUID() }];
+        break;
+      case "done":
+        entry.doneReceived = true;
+        entry.isStreaming = false;
+        break;
+      case "stopped":
+        entry.stopped = true;
+        entry.isStreaming = false;
+        break;
+      case "error":
+        entry.streamError = event.data.message;
+        entry.isStreaming = false;
+        break;
+    }
+  }
+
+  setEntry(recapId, entry);
+}
+
+// ── Stream lifecycle ─────────────────────────────────────────────────────────
+
+export async function streamRecap(recapId: string): Promise<void> {
+  // Already streaming?
+  const existing = entries.get(recapId);
+  if (existing?.isStreaming) return;
+
+  abortRecapStream(recapId);
+
+  // Reuse the existing entry only when it's in a clean "could resume"
+  // state. The server's `lede` and `entry` snapshot events on connect
+  // will overwrite stale data with the canonical DB state.
+  const base = existing && !recapStreamEnded(existing) ? existing : freshEntry();
+  setEntry(recapId, { ...base, isStreaming: true });
+
+  const abortCtrl = new AbortController();
+  controllers.set(recapId, abortCtrl);
+
+  try {
+    await streamSse<RecapStreamEvent>({
+      path: `/api/recaps/${recapId}/stream`,
+      signal: abortCtrl.signal,
+      onEvent: (event) => applyEvents(recapId, [event]),
+    });
+  } catch (e) {
+    const current = entries.get(recapId);
+    if (!current) return;
+    if ((e as Error).name !== "AbortError") {
+      setEntry(recapId, {
+        ...current,
+        isStreaming: false,
+        streamError: e instanceof Error ? e.message : "Recap stream failed",
+      });
+    }
+  } finally {
+    const current = entries.get(recapId);
+    if (current && !recapStreamEnded(current)) {
+      setEntry(recapId, { ...current, isStreaming: false });
+    }
+    controllers.delete(recapId);
+  }
+}
+
+export function abortRecapStream(recapId: string): void {
+  const ctrl = controllers.get(recapId);
+  if (ctrl) {
+    ctrl.abort();
+    controllers.delete(recapId);
+  }
+}
+
+export function resetRecapStream(recapId: string): void {
+  abortRecapStream(recapId);
+  deleteEntry(recapId);
+}
+
+export function reset(): void {
+  for (const ctrl of controllers.values()) ctrl.abort();
+  controllers.clear();
+  entries = new Map();
+}

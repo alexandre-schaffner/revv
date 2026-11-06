@@ -4,8 +4,8 @@
 
 import type { ActivityKind, ChatAttachmentMetadata, ChatTask, InteractionMode } from "@revv/shared";
 import { SvelteMap } from "svelte/reactivity";
-import { fetchChatMessages, type PersistedChatEntry } from "$lib/api/chat";
 import { createResource } from "$lib/stores/resource";
+import { fetchChatMessages, type PersistedChatEntry } from "./api";
 
 export type ChatItem =
   | {

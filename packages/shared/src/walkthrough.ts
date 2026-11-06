@@ -257,6 +257,41 @@ export interface WalkthroughTokenUsage {
   contextWindowTokens?: number;
 }
 
+/** Throughput and occupancy both at zero — the identity for accumulation. */
+export const ZERO_TOKEN_USAGE: WalkthroughTokenUsage = Object.freeze({
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadInputTokens: 0,
+  cacheCreationInputTokens: 0,
+  contextTokens: 0,
+});
+
+/** A token usage as any version of Revv recorded it; missing or non-numeric fields read as 0. */
+export function normalizeTokenUsage(value: unknown): WalkthroughTokenUsage {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return ZERO_TOKEN_USAGE;
+  const r = value as Record<string, unknown>;
+  const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  const inputTokens = num(r.inputTokens);
+  const outputTokens = num(r.outputTokens);
+  const cacheReadInputTokens = num(r.cacheReadInputTokens);
+  const cacheCreationInputTokens = num(r.cacheCreationInputTokens);
+  const contextWindowTokens = num(r.contextWindowTokens);
+  // Walkthroughs from before context occupancy was tracked carry no
+  // `contextTokens`; the throughput sum keeps their gauge populated.
+  const contextTokens =
+    typeof r.contextTokens === "number" && Number.isFinite(r.contextTokens)
+      ? r.contextTokens
+      : inputTokens + outputTokens + cacheReadInputTokens + cacheCreationInputTokens;
+  return {
+    inputTokens,
+    outputTokens,
+    cacheReadInputTokens,
+    cacheCreationInputTokens,
+    contextTokens,
+    ...(contextWindowTokens > 0 ? { contextWindowTokens } : {}),
+  };
+}
+
 // ── Per-axis scorecard ──────────────────────────────────────────────────────
 
 /**

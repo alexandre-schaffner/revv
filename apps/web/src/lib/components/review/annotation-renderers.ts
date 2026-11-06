@@ -1,7 +1,7 @@
 // The hosts a diff's `renderAnnotation` returns: a comment thread, or the
 // new-comment input.
 
-import type { AnnotationMounts } from "$lib/utils/annotation-mount";
+import type { AnnotationMounts } from "$lib/pierre/annotation-mount";
 import AnnotationCommentInput from "./AnnotationCommentInput.svelte";
 import AnnotationThread from "./AnnotationThread.svelte";
 import type { ThreadMeta } from "./pierre-diff-adapter";

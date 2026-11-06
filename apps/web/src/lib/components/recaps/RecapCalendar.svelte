@@ -8,7 +8,6 @@ import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import { untrack } from "svelte";
 import { goto } from "$app/navigation";
 import { gsapFade, gsapPress } from "$lib/motion";
-import { fetchRecapsForMonth, getMonthRecapsLoading } from "$lib/stores/recaps.svelte";
 import {
   addUtcDays,
   dayKeyToUtcDate,
@@ -23,7 +22,8 @@ import {
   utcDateKey,
   utcDayKey,
   windowPath,
-} from "./period-window";
+} from "$lib/recaps/period-window";
+import { fetchRecapsForMonth, getMonthRecapsLoading } from "$lib/recaps/store.svelte";
 import RecapButton from "./RecapButton.svelte";
 
 /**

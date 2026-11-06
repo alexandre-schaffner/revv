@@ -25,8 +25,8 @@ import { getFilesError, getIsLoadingFiles, getReviewFiles } from "$lib/stores/di
 import { getActiveTab, REVIEW_TABS, setActiveTab } from "$lib/stores/pr-view-state.svelte";
 import { scrollPane } from "$lib/stores/review-nav.svelte";
 import { getSelectedPr } from "$lib/stores/route.svelte";
-import { getRiskLevel as getWalkthroughRiskLevel } from "$lib/stores/walkthrough.svelte";
-import { getWalkthroughSizing } from "$lib/stores/walkthrough-sizing.svelte";
+import { getRiskLevel as getWalkthroughRiskLevel } from "$lib/walkthrough/store.svelte";
+import { getWalkthroughSizing } from "$lib/walkthrough/sizing.svelte";
 
 useOpenReview(() => page.params.prId ?? null);
 

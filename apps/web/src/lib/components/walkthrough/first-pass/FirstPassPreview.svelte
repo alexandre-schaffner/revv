@@ -1,6 +1,6 @@
 <script lang="ts">
 import { Dotmatrix, type DotmatrixVariant } from "$lib/components/ui/dotmatrix/index.js";
-import type { FirstPassView } from "$lib/utils/hunk-scan";
+import type { FirstPassView } from "$lib/hunk-scan/first-pass";
 import FirstPassLeads from "./FirstPassLeads.svelte";
 import FirstPassRibbon from "./FirstPassRibbon.svelte";
 

@@ -1,14 +1,7 @@
 import type { ProjectRecap, RecapPeriod } from "@revv/shared";
 import { untrack } from "svelte";
 import type { GenActionState } from "$lib/components/shared/GenActionBar.svelte";
-import {
-  abortRecapStream,
-  getRecapStreamEntry,
-  mergeRecapStream,
-  recapStreamEnded,
-  resetRecapStream,
-  streamRecap,
-} from "$lib/stores/recap-stream.svelte";
+import { recapWindowIsStale } from "$lib/recaps/period-window";
 import {
   generateRecap,
   getRecapDetail,
@@ -17,8 +10,15 @@ import {
   loadRecap,
   regenerateRecap,
   stopRecap,
-} from "$lib/stores/recaps.svelte";
-import { recapWindowIsStale } from "./period-window";
+} from "$lib/recaps/store.svelte";
+import {
+  abortRecapStream,
+  getRecapStreamEntry,
+  mergeRecapStream,
+  recapStreamEnded,
+  resetRecapStream,
+  streamRecap,
+} from "$lib/recaps/stream.svelte";
 
 /**
  * Everything a page showing one recap does with it: load the row, follow its

@@ -9,7 +9,6 @@ import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import { Button } from "$lib/components/ui/button";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { Shimmer } from "$lib/components/ui/shimmer";
-import { fetchRecapsForRepo, generateRecap, getRecapsForRepo } from "$lib/stores/recaps.svelte";
 import {
   formatRecapTitle,
   isCurrentPeriod,
@@ -17,7 +16,8 @@ import {
   selectionBoundaries,
   slotKeyFor,
   slotSpan,
-} from "./period-window";
+} from "$lib/recaps/period-window";
+import { fetchRecapsForRepo, generateRecap, getRecapsForRepo } from "$lib/recaps/store.svelte";
 import RecapArchivePopover from "./RecapArchivePopover.svelte";
 
 /**

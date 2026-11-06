@@ -4,13 +4,9 @@ import CalendarDots from "phosphor-svelte/lib/CalendarDots";
 import CaretRight from "phosphor-svelte/lib/CaretRight";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
-import {
-  formatRecapRange,
-  pickLatestByWindow,
-  recapSpan,
-} from "$lib/components/recaps/period-window";
 import RecapStats from "$lib/components/recaps/RecapStats.svelte";
 import { sanitizeLedeHtml } from "$lib/components/recaps/themes";
+import { formatRecapRange, pickLatestByWindow, recapSpan } from "$lib/recaps/period-window";
 import {
   fetchRecapsForRepo,
   getRecapDetail,
@@ -18,7 +14,7 @@ import {
   getRecapLoading,
   getRecapsForRepo,
   loadRecap,
-} from "$lib/stores/recaps.svelte";
+} from "$lib/recaps/store.svelte";
 
 interface Props {
   repoId: string;

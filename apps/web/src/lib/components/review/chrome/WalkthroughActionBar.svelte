@@ -9,23 +9,23 @@ import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import { getIsPullingCommit, reviewLatestCommit } from "$lib/review/pull-latest";
 import { getScrollRoot, scrollToAnchor } from "$lib/stores/review-nav.svelte";
 import {
-  getHasUnreviewedCommits,
-  getSelectedMode,
-  getPendingAction as getWalkthroughPendingAction,
-  getRatings as getWalkthroughRatings,
-  getWalkthroughUiState,
-} from "$lib/stores/walkthrough.svelte";
-import {
   abort as abortWalkthrough,
   generateWalkthrough,
   regenerate as regenerateWalkthrough,
   regenerateFromScratch as regenerateWalkthroughFromScratch,
   resume as resumeWalkthrough,
-} from "$lib/stores/walkthrough-actions";
+} from "$lib/walkthrough/actions";
 import {
   WALKTHROUGH_PERSPECTIVE_OPTIONS,
   WALKTHROUGH_PERSPECTIVES,
-} from "$lib/utils/walkthrough-perspective";
+} from "$lib/walkthrough/perspective";
+import {
+  getHasUnreviewedCommits,
+  getSelectedMode,
+  getPendingAction as getWalkthroughPendingAction,
+  getRatings as getWalkthroughRatings,
+  getWalkthroughUiState,
+} from "$lib/walkthrough/store.svelte";
 
 interface Props {
   prId: string;

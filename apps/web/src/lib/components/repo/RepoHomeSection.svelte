@@ -21,7 +21,7 @@ import RepoActivitySection from "$lib/components/repo/RepoActivitySection.svelte
 import RepoHero from "$lib/components/repo/RepoHero.svelte";
 import RepoRecapCard from "$lib/components/repo/RepoRecapCard.svelte";
 import RepoTaggedPrs from "$lib/components/repo/RepoTaggedPrs.svelte";
-import { ownerPalette } from "$lib/utils/owner-palette.svelte";
+import { ownerPalette } from "$lib/repos/owner-palette.svelte";
 
 interface Props {
   repo: Repository;

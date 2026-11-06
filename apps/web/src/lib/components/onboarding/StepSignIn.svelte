@@ -5,6 +5,7 @@ import Copy from "phosphor-svelte/lib/Copy";
 import { onMount } from "svelte";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import { gsapEnter } from "$lib/motion";
+import { githubHostLabel } from "$lib/session/github-host";
 import {
   cancelSignIn,
   clearError,
@@ -14,7 +15,6 @@ import {
   signIn,
 } from "$lib/stores/auth.svelte";
 import { copyFeedback } from "$lib/utils/copy-feedback.svelte";
-import { githubHostLabel } from "$lib/utils/github-host";
 import ContinueArrow from "./ContinueArrow.svelte";
 
 interface Props {

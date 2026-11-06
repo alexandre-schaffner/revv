@@ -13,10 +13,10 @@
 // common "symbol in backticks" (`checkAccessBatch`) from masquerading as a file.
 
 import { decorationAction } from "$lib/markdown/decorate";
+import type { ReviewFile } from "$lib/stores/diff-files.svelte";
 import { openFileInDiff } from "$lib/stores/review-nav.svelte";
-import type { ReviewFile } from "$lib/types/review";
-import { createFileGlyph } from "$lib/utils/file-glyph";
 import { basename } from "$lib/utils/path";
+import { createFileGlyph } from "./file-glyph";
 
 const REF_PATH_ATTR = "data-file-ref-path";
 const REF_LINE_ATTR = "data-file-ref-line";

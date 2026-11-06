@@ -1,4 +1,3 @@
-import { RAIL_WIDTH } from "$lib/constants";
 import {
   clampedIntCodec,
   flagCodec,
@@ -7,6 +6,8 @@ import {
   STORAGE_KEYS,
   writeStored,
 } from "$lib/stores/persisted.svelte";
+
+export const RAIL_WIDTH = 64;
 
 const SIDEBAR_WIDTH_DEFAULT = 280;
 const SIDEBAR_WIDTH_MIN = 180;

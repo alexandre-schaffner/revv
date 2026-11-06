@@ -6,9 +6,9 @@
 import type { CommentThread, ThreadMessage } from "@revv/shared";
 import Chat from "phosphor-svelte/lib/Chat";
 import Circle from "phosphor-svelte/lib/Circle";
-import { groupThreadsByFile } from "$lib/utils/group-threads";
 import CommentRow from "./CommentRow.svelte";
 import { createExpandState } from "./expand-state.svelte";
+import { groupThreadsByFile } from "./group-threads";
 import { createRowKeys } from "./row-keys";
 import SpecCount from "./SpecCount.svelte";
 import SpecEmpty from "./SpecEmpty.svelte";

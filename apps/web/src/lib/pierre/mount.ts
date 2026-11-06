@@ -11,7 +11,7 @@ import {
 } from "@pierre/diffs";
 import { PIERRE_THEME } from "@revv/shared";
 import type { ActionReturn } from "svelte/action";
-import { workerManager } from "$lib/utils/worker-pool";
+import { workerManager } from "./worker-pool";
 
 /**
  * The shadow host Pierre's `render` creates itself; `hydrate` needs one made

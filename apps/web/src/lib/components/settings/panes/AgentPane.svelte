@@ -55,8 +55,7 @@ import Spinner from "phosphor-svelte/lib/Spinner";
 import { Button } from "$lib/components/ui/button/index.js";
 import { SegmentedControl, type SegmentedOption } from "$lib/components/ui/segmented-control";
 import * as Select from "$lib/components/ui/select";
-import type { ModelOption } from "$lib/constants/models";
-import { resetAgentSetup } from "$lib/stores/agent-setup.svelte";
+import { resetAgentSetup } from "$lib/agent-setup/store.svelte";
 import {
   agentChange,
   fetchModels,
@@ -65,6 +64,7 @@ import {
   getThinkingEffortOptions,
   isAutoEffortOffered,
   isAutoModelOffered,
+  type ModelOption,
   runAgentCheck,
   updateSettings,
 } from "$lib/stores/settings.svelte";
