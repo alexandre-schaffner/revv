@@ -4,11 +4,11 @@ import {
   type CommentThread,
   guessImageContentType,
   PR_DIFF_RENDER_OPTIONS,
-  resolveThinkingEffort,
 } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
+import { resolveAgentLaunch } from "../ai/acp/agent-launch";
 import {
   FALLBACK_PROMPTS,
   generateSuggestions,
@@ -39,7 +39,6 @@ import { Realtime } from "../services/Realtime";
 import { RepoCloneService } from "../services/RepoClone";
 import { RepositoryService } from "../services/Repository";
 import { ReviewService } from "../services/Review";
-import { SettingsService } from "../services/Settings";
 import { WalkthroughService } from "../services/Walkthrough";
 import { runRoute, withAccount } from "./middleware";
 import { ownedBy } from "./ownership";
@@ -688,23 +687,18 @@ function writeSuggestionsCache(key: string, suggestions: string[]): void {
 
 function resolveSuggestionsForPr(prId: string, accountId: string) {
   return Effect.gen(function* () {
-    const settingsSvc = yield* SettingsService;
     const prService = yield* PullRequestService;
     const walkthroughSvc = yield* WalkthroughService;
     const diffCache = yield* DiffCacheService;
 
-    const settings = yield* settingsSvc.getSettings();
-    const agent = yield* settingsSvc.resolveAgent();
-    const model = settings.aiSuggestionsModel;
-    if (!model || model.length === 0) {
-      return [...FALLBACK_PROMPTS];
-    }
+    const launch = yield* resolveAgentLaunch("suggestions");
+    if (!launch) return [...FALLBACK_PROMPTS];
 
     const pr = yield* prService.getPr(prId, accountId);
     const headSha = pr.headSha ?? "no-head";
 
     // Cache check before any DB / model work.
-    const key = suggestionsCacheKey(prId, headSha, agent, model);
+    const key = suggestionsCacheKey(prId, headSha, launch.agent, launch.model);
     const cached = readSuggestionsCache(key);
     if (cached !== null) return cached;
 
@@ -736,12 +730,6 @@ function resolveSuggestionsForPr(prId: string, accountId: string) {
     const cachedFiles = yield* diffCache.getCachedFiles(prId);
     const changedFiles = (cachedFiles ?? []).map((f) => f.path);
 
-    // Suggestions run on the ACP transport. The resolved agent is already a
-    // registry id; the connection is pooled under the server cwd (no tools run,
-    // so the directory is irrelevant — and a shared cwd keeps one warm agent
-    // process serving suggestions across every repo).
-    const acpAgentId = agent;
-
     const suggestions = yield* Effect.tryPromise({
       try: () =>
         generateSuggestions({
@@ -751,10 +739,7 @@ function resolveSuggestionsForPr(prId: string, accountId: string) {
           additions: pr.additions,
           deletions: pr.deletions,
           walkthrough: walkthroughContext,
-          acpAgentId,
-          cwd: process.cwd(),
-          model,
-          thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
+          launch,
         }),
       // Provider has its own internal fallback; this catch is
       // belt-and-suspenders for the rare case where the Promise

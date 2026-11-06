@@ -14,9 +14,9 @@ describe("agentAuthRecoveryDescription", () => {
     expect(description).not.toContain("subscription login");
   });
 
-  it("shows the raw error for non-keychain auth failures", () => {
+  it("shows the raw error", () => {
     expect(agentAuthRecoveryDescription("401 unauthorized")).toBe(
-      "Reconnect the agent in Settings, then retry. Agent error: 401 unauthorized",
+      "Reconnect the agent in Settings. If it is already connected, run the agent test there to see what fails. Agent error: 401 unauthorized",
     );
   });
 

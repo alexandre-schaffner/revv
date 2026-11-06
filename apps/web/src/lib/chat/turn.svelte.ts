@@ -13,10 +13,7 @@ import {
   streamChatMessage,
 } from "$lib/api/chat";
 import { openSettings } from "$lib/stores/settingsModal.svelte";
-import {
-  agentAuthRecoveryDescription,
-  isAgentAuthRecoveryError,
-} from "$lib/utils/agent-auth-recovery";
+import { AGENT_AUTH_REQUIRED, agentAuthRecoveryDescription } from "$lib/utils/agent-auth-recovery";
 import {
   type BlockedCommit,
   clearProposed,
@@ -182,7 +179,7 @@ function toastTurnError(err: { code: string; message: string }): void {
     });
   } else if (err.code === "GITHUB_RATE_LIMITED") {
     toast.error("GitHub rate limit reached", { description: err.message, duration: 15000 });
-  } else if (isAgentAuthRecoveryError(err.message)) {
+  } else if (err.code === AGENT_AUTH_REQUIRED) {
     toast.error("AI agent authentication required", {
       description: agentAuthRecoveryDescription(err.message),
       action: openAiSettings,

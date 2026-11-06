@@ -1,6 +1,6 @@
-import type { AcpAgentId, ThinkingEffort } from "@revv/shared";
 import { debug, logError } from "../../logger";
-import { promptOnce } from "./prompt-once";
+import type { AgentLaunch } from "../acp/agent-launch";
+import { promptOnce } from "../acp/run-turn";
 
 const HEADLINE_TIMEOUT_MS = 30_000;
 const MAX_HEADLINE_LENGTH = 48;
@@ -14,10 +14,7 @@ export interface StackHeadlineInput {
     readonly title: string;
     readonly body: string | null;
   }>;
-  readonly acpAgentId: AcpAgentId;
-  readonly cwd: string;
-  readonly model: string;
-  readonly thinkingEffort?: ThinkingEffort | undefined;
+  readonly launch: AgentLaunch;
 }
 
 export interface GeneratedStackHeadline {
@@ -76,13 +73,10 @@ export function parseStackHeadline(raw: string): GeneratedStackHeadline | null {
 
 async function generateViaAcp(input: StackHeadlineInput): Promise<GeneratedStackHeadline> {
   const collected = await promptOnce({
-    cwd: input.cwd,
-    agent: input.acpAgentId,
-    model: input.model,
-    effort: input.thinkingEffort,
-    timeoutMs: HEADLINE_TIMEOUT_MS,
+    label: "stack-headline-acp",
+    launch: input.launch,
+    ceilingMs: HEADLINE_TIMEOUT_MS,
     text: `${SYSTEM_PROMPT}\n\n---\n\n${buildUserMessage(input)}`,
-    debugLabel: "stack-headline-acp",
   });
   const parsed = parseStackHeadline(collected);
   if (!parsed) throw new Error(`unparseable output (len=${collected.length})`);
@@ -96,7 +90,7 @@ export async function generateStackHeadline(
     const result = await generateViaAcp(input);
     debug(
       "stack-headline",
-      `named a ${input.layersBaseFirst.length}-layer stack via ${input.model}`,
+      `named a ${input.layersBaseFirst.length}-layer stack via ${input.launch.model}`,
     );
     return result;
   } catch (err) {

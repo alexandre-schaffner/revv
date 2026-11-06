@@ -3,7 +3,8 @@
 
 import type { RecapStreamEvent } from "@revv/shared";
 import type { NormalizedAgentEvent } from "../agent-stream/normalized-events";
-import { buildRecapActivity, normalizeRecapToolName } from "./recap-activity";
+import { isAgentBuiltinTool } from "../agent-stream/tool-activity";
+import { buildRecapActivity } from "./recap-activity";
 
 /** Minimum gap between `phase: "analyzing"` heartbeats emitted from
  *  reasoning-delta bursts. Keeps the UI from spamming "Model is thinking…"
@@ -21,8 +22,8 @@ export function createRecapDispatchState(): RecapDispatchState {
 
 /**
  * Translate one normalized agent event into zero or more recap SSE envelopes.
- * Both transports call this for every event off the wire. Visible text is
- * discarded — content flows through tool args under the structured pipeline.
+ * Visible text is discarded: content flows through tool args. MCP tool calls
+ * are reported by the `/mcp/recap` route, which knows their names.
  */
 export function dispatchRecapStreamEvent(
   ev: NormalizedAgentEvent,
@@ -47,9 +48,8 @@ export function dispatchRecapStreamEvent(
     }
     return;
   }
-  if (ev.kind === "tool-call") {
-    const toolName = normalizeRecapToolName(ev.toolName);
-    emit({ type: "activity", data: buildRecapActivity(toolName, ev.input) });
+  if (ev.kind === "tool-call" && isAgentBuiltinTool(ev.toolName)) {
+    emit({ type: "activity", data: buildRecapActivity(ev.toolName, ev.input) });
     return;
   }
   // Everything else (tool results, task lists, usage) is ignored by recap.

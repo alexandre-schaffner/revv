@@ -6,7 +6,7 @@ import type {
 } from "@revv/shared";
 import { resolveThinkingEffort } from "@revv/shared";
 import { eq } from "drizzle-orm";
-import { resolveGenerationModel } from "../ai/acp/presets";
+import { resolveGenerationModel } from "../ai/acp/agent-launch";
 import type { Db } from "../db";
 import { account } from "../db/schema/auth";
 import { remoteUsers } from "../db/schema/remote-users";
@@ -45,9 +45,10 @@ export function resolveWalkthroughLaunch(input: {
   readonly routedEffort: ThinkingEffort | null | undefined;
   readonly maxTurns: number;
 }): { readonly modelUsed: string; readonly providerConfig: GenerationProviderConfig } {
-  const freshModel =
-    resolveGenerationModel(input.agent, input.routedModel ?? input.configuredModel) ??
-    (input.agent === "opencode" ? "opencode" : "claude-sonnet-4-20250514");
+  const freshModel = resolveGenerationModel(
+    input.agent,
+    input.routedModel ?? input.configuredModel,
+  );
   const modelUsed =
     input.trigger !== "resume" && input.priorModel && input.priorModel !== "unknown"
       ? input.priorModel

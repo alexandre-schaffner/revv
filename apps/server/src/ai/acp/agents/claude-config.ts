@@ -7,8 +7,8 @@
 // claude-code ACP agent in showed up, uninvited, in the user's Source Control
 // view, with no way to close it back out.
 //
-// Pointing `CLAUDE_CONFIG_DIR` at a Revv-private directory (injected in
-// `presets.ts`, configured in `config.ts`) keeps Revv's sessions out of
+// Pointing `CLAUDE_CONFIG_DIR` at a Revv-private directory (injected by the
+// claude-code adapter, configured in `config.ts`) keeps Revv's sessions out of
 // `~/.claude` entirely. Conductor uses the same trick for its own worktrees
 // (`~/.conductor`).
 //
@@ -51,9 +51,8 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { AcpAgentId } from "@revv/shared";
-import { serverEnv } from "../../config";
-import { logError } from "../../logger";
+import { serverEnv } from "../../../config";
+import { logError } from "../../../logger";
 
 const GLOBAL_CLAUDE_DIR = join(homedir(), ".claude");
 
@@ -86,20 +85,14 @@ const LINKED_ENTRIES = [
 ] as const;
 
 /**
- * The isolated `CLAUDE_CONFIG_DIR` to use for a given ACP agent, or
- * `undefined` when isolation doesn't apply — any agent other than
- * `claude-code`, or `REVV_CLAUDE_CONFIG_ISOLATION=false`.
- *
- * This is the ONE resolution shared by every place that touches claude-code's
- * config dir: `acp-connection.ts` (spawns the agent), `cli-agent.ts` (probes
- * whether subscription auth is verified), and `AgentLogin.ts` (drives the
- * interactive login PTY). They must all agree — see the module header above
- * for why a mismatch surfaces as a false "Authentication required".
+ * The isolated `CLAUDE_CONFIG_DIR`, or `undefined` with
+ * `REVV_CLAUDE_CONFIG_ISOLATION=false`. The agent spawn, the subscription-auth
+ * probe and the login PTY all take it from here (through the claude-code
+ * adapter's `processEnv`): see the module header for why a mismatch surfaces
+ * as a false "Authentication required".
  */
-export function resolveClaudeConfigDir(agent: AcpAgentId): string | undefined {
-  return agent === "claude-code" && serverEnv.claudeConfigIsolation
-    ? serverEnv.claudeConfigDir
-    : undefined;
+export function resolveClaudeConfigDir(): string | undefined {
+  return serverEnv.claudeConfigIsolation ? serverEnv.claudeConfigDir : undefined;
 }
 
 /**

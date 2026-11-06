@@ -19,10 +19,7 @@ import {
   watchWalkthrough,
 } from "$lib/stores/walkthrough.svelte";
 import { startWalkthrough, startWhenCloned, stopClonePoll } from "$lib/stores/walkthrough-actions";
-import {
-  agentAuthRecoveryDescription,
-  isAgentAuthRecoveryError,
-} from "$lib/utils/agent-auth-recovery";
+import { AGENT_AUTH_REQUIRED, agentAuthRecoveryDescription } from "$lib/utils/agent-auth-recovery";
 
 /**
  * The report a PR's page should show when the one on screen isn't a visible
@@ -151,7 +148,7 @@ export function useWalkthroughWatch(getPrId: () => string, getIsShown: () => boo
     const key = `${prId}:${streamError}`;
     if (lastStreamErrorToast === key) return;
     lastStreamErrorToast = key;
-    const authRecovery = isAgentAuthRecoveryError(streamError);
+    const authRecovery = entry?.streamErrorCode === AGENT_AUTH_REQUIRED;
     toast.error("Walkthrough failed", {
       id: `walkthrough-error-${prId}`,
       description: authRecovery ? agentAuthRecoveryDescription(streamError) : streamError,

@@ -6,27 +6,8 @@ import {
   createSessionSelections,
   type SessionSelectionConnection,
   sanitizeMcpServerName,
-  selectAcpAuthMethod,
 } from "./acp-connection";
-import { looksLikeAuthFailure } from "./agent-keychain";
-
-describe("selectAcpAuthMethod", () => {
-  it("prefers the ChatGPT session over an API key for Codex", () => {
-    expect(
-      selectAcpAuthMethod("codex", [
-        { id: "api-key" },
-        { id: "chat-gpt" },
-        { id: "chat-gpt-device-code" },
-      ]),
-    ).toBe("chat-gpt");
-  });
-
-  it("keeps the agent's advertised default for other providers", () => {
-    expect(selectAcpAuthMethod("claude-code", [{ id: "api-key" }, { id: "oauth" }])).toBe(
-      "api-key",
-    );
-  });
-});
+import { looksLikeAuthFailure } from "./agent-failure";
 
 describe("acpErrorMessage", () => {
   it("names the cause the SDK tucks into data.details", () => {

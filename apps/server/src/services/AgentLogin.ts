@@ -1,12 +1,11 @@
 import type { AcpAgentId, LoginEvent } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
-import { ensureClaudeConfigDir, resolveClaudeConfigDir } from "../ai/acp/claude-config";
 import {
+  agentLoginCommand,
+  agentProcessEnv,
   detectAgentAuth,
-  invalidateCliAgentCache,
-  resolveAgentLoginCommand,
-  resolveUserPath,
-} from "../ai/providers/cli-agent";
+  invalidateAgentProbes,
+} from "../ai/acp/agents";
 import { debug, logError } from "../logger";
 import { EventJobRegistry, type Job, type JobSubscription } from "./jobs/EventJobRegistry";
 
@@ -14,7 +13,7 @@ import { EventJobRegistry, type Job, type JobSubscription } from "./jobs/EventJo
 //
 // Drives an agent's interactive CLI login *inside Revv* rather than sending the
 // user out to a separate terminal. Each login runs the agent's official login
-// command (see `ACP_LOGIN_COMMAND` in cli-agent.ts) in a spawned
+// command (the registry entry's `cli.loginArgs`) in a spawned
 // pseudo-terminal (PTY); the raw terminal bytes stream to the onboarding UI's
 // xterm instance over SSE, and the user's keystrokes flow back via `writeInput`.
 //
@@ -49,25 +48,6 @@ interface LoginMeta {
 }
 
 type LoginJob = Job<LoginEvent, LoginMeta>;
-
-/**
- * Env for the interactive login PTY: the inherited env, widened to the user's
- * login-shell PATH, plus `CLAUDE_CONFIG_DIR` when `claudeConfigDir` is set —
- * the SAME resolution the agent spawn and the auth probe use (see
- * `resolveClaudeConfigDir`), so this one-time login lands in the dir the
- * agent will actually look for it in.
- */
-export function buildLoginEnv(
-  baseEnv: Readonly<Record<string, string | undefined>>,
-  path: string,
-  claudeConfigDir: string | undefined,
-): Record<string, string | undefined> {
-  return {
-    ...baseEnv,
-    PATH: path,
-    ...(claudeConfigDir ? { CLAUDE_CONFIG_DIR: claudeConfigDir } : {}),
-  };
-}
 
 export class AgentLoginService extends Context.Service<
   AgentLoginService,
@@ -125,7 +105,7 @@ export const AgentLoginServiceLive = Layer.effect(
     };
 
     const spawnLogin = (job: LoginJob, broadcast: (event: LoginEvent) => void): void => {
-      const argv = resolveAgentLoginCommand(job.agentId);
+      const argv = agentLoginCommand(job.agentId);
       if (!argv) {
         // No login needed (opencode) — succeed immediately and idempotently.
         broadcast({ type: "done", success: true });
@@ -134,22 +114,16 @@ export const AgentLoginServiceLive = Layer.effect(
 
       debug("agent-login", `spawning login (${job.agentId}): ${argv.join(" ")}`);
 
-      // Isolated `CLAUDE_CONFIG_DIR` for claude-code — the SAME resolution the
-      // agent spawn (`acp-connection.ts`) and the auth probe (`cli-agent.ts`)
-      // use. This login PTY MUST run in that same dir: Claude Code's
-      // Keychain-backed OAuth item is scoped per config dir, so a login
-      // completed under the default `~/.claude` would authenticate the wrong
-      // (unscoped) Keychain item and leave the isolated agent still logged out.
-      const claudeConfigDir = resolveClaudeConfigDir(job.agentId);
-      if (claudeConfigDir) ensureClaudeConfigDir(claudeConfigDir);
+      // The adapter's login env matches its spawn and auth probe: Claude's
+      // Keychain item is scoped per config dir, so a login under another dir
+      // would leave the agent logged out.
+      const env = agentProcessEnv(job.agentId, "login");
 
       const decoder = new TextDecoder();
       let proc: ReturnType<typeof Bun.spawn>;
       try {
         proc = Bun.spawn([...argv], {
-          // Resolve against the user's login-shell PATH so a freshly-installed
-          // CLI (e.g. `cursor-agent`) is found without a server restart.
-          env: buildLoginEnv(process.env, resolveUserPath(), claudeConfigDir),
+          env,
           terminal: {
             cols: PTY_COLS,
             rows: PTY_ROWS,
@@ -174,7 +148,7 @@ export const AgentLoginServiceLive = Layer.effect(
         const code = await proc.exited;
         // The CLI just wrote credentials to disk — drop the cached PATH/auth
         // probe so the re-check sees them.
-        invalidateCliAgentCache();
+        invalidateAgentProbes();
         const success = detectAgentAuth(job.agentId);
         if (success) {
           broadcast({ type: "done", success: true });

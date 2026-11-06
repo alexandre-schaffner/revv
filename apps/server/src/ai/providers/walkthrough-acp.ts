@@ -1,5 +1,4 @@
-// ACP (Agent Client Protocol) driver for walkthrough generation, over the
-// stdio JSON-RPC connection pooled per worktree (`ai/acp/acp-connection.ts`).
+// Walkthrough generation over the turn runner (`ai/acp/run-turn.ts`).
 //
 // All walkthrough content is written by the MCP tool handlers behind
 // `/mcp/walkthrough` and broadcast by WalkthroughJobs; it never passes through
@@ -9,37 +8,28 @@
 // no throughput tokens), a coarse connecting → exploring phase with a periodic
 // heartbeat, and the terminal `done` / `error`.
 
-import type { McpServer } from "@agentclientprotocol/sdk";
 import type {
-  AcpAgentId,
   WalkthroughLifecyclePhase,
   WalkthroughMode,
   WalkthroughStreamEvent,
   WalkthroughTokenUsage,
 } from "@revv/shared";
 import { eq } from "drizzle-orm";
-import { serverEnv } from "../../config";
 import type { Db } from "../../db";
 import { walkthroughs as walkthroughsTable } from "../../db/schema/walkthroughs";
 import { debug, logError } from "../../logger";
-import { graftedSpan, publishTraceAnchor } from "../../observability/span-graft";
+import { graftedSpan } from "../../observability/span-graft";
 import type { PrFileMeta } from "../../services/GitHub";
-import { type AcpConnectionHandle, getAcpConnection } from "../acp/acp-connection";
-import { withAgentKeychainHint } from "../acp/agent-keychain";
-import type { AcpLaunchConfig } from "../acp/presets";
+import { AgentTurnError } from "../acp/agent-failure";
+import type { AgentLaunch } from "../acp/agent-launch";
+import { type ActivityBeacon, JOB_TURN, runAcpTurn } from "../acp/run-turn";
+import { decodeAcpSessionUpdate, makeAcpDecodeState } from "../agent-stream/acp-decoders";
+import type { NormalizedAgentEvent } from "../agent-stream/normalized-events";
 import {
-  type ActivityBeacon,
-  AGENT_IDLE_TIMEOUT_MS,
   buildActivity,
-  CLI_WALKTHROUGH_TIMEOUT_MS,
-  decodeAcpSessionUpdate,
-  makeAcpDecodeState,
-  mergeContextOccupancy,
-  type NormalizedAgentEvent,
+  isAgentBuiltinTool,
   relativizeToolInput,
-  withAgentTurn,
-  ZERO_TOKEN_USAGE,
-} from "../agent-stream";
+} from "../agent-stream/tool-activity";
 import {
   buildWalkthroughPrompt,
   buildWalkthroughSystemPrompt,
@@ -47,6 +37,7 @@ import {
   type WalkthroughReviewMode,
 } from "../prompts/walkthrough";
 import { recordWalkthroughToken, startWalkthroughPrompt } from "./walkthrough-metrics";
+import { mergeContextOccupancy, ZERO_TOKEN_USAGE } from "./walkthrough-token-usage";
 
 /** Cadence at which each provider pushes a `phase` heartbeat into its event queue
  *  while the prompt is in flight. Keeps the stream guard's inactivity timer reset
@@ -60,14 +51,6 @@ function trimTrailingPeriod(message: string): string {
 }
 
 const WALKTHROUGH_MCP_SERVER = "revv-walkthrough";
-const ACP_CANCEL_GRACE_MS = 1_500;
-
-// Built-in exploration tools the agent runs natively (NOT via our MCP route).
-// ACP tags these with a `kind` the decoder maps onto canonical names, so they
-// arrive here with a real name. MCP content tools arrive with `kind=undefined`
-// (→ human title) and are surfaced by the HTTP route instead, so anything not
-// in this set is ignored here.
-const EXPLORATION_TOOLS = new Set(["Read", "Grep", "Glob", "Bash", "Write", "Edit", "WebFetch"]);
 
 export interface AcpWalkthroughStreamParams extends WalkthroughPromptHints {
   walkthroughId: string;
@@ -89,27 +72,21 @@ export interface AcpWalkthroughStreamParams extends WalkthroughPromptHints {
   mcpToken: string;
   /**
    * The job's liveness beacon. WalkthroughJobs notes every MCP call the agent
-   * authenticates; this driver notes every ACP session update.
+   * authenticates; the runner notes every ACP session update.
    */
   activity: ActivityBeacon;
-  /**
-   * Caller-owned abort signal (user cancel, scope finalizer, shutdown). Routed
-   * to `handle.cancel(sessionId)` so the ACP agent stops producing output. The
-   * idle deadline and the absolute ceiling layer on top inside `withAgentTurn`.
-   */
+  /** User cancel, scope finalizer, shutdown: cancels the agent's session. */
   abortController: AbortController;
-  acpAgentId: AcpAgentId;
+  launch: AgentLaunch;
 }
 
 /**
- * Stream a walkthrough through the configured ACP agent. The ACP connection is
- * pooled per worktree by `getAcpConnection`; this driver opens a fresh session,
- * hands the agent the `/mcp/walkthrough` HTTP endpoint, prompts, and maps the
- * normalized session updates onto `WalkthroughStreamEvent`s.
+ * Stream a walkthrough through the configured ACP agent: a fresh session with
+ * the `/mcp/walkthrough` endpoint, its session updates mapped onto
+ * `WalkthroughStreamEvent`s.
  */
 export function streamWalkthroughViaAcp(
   params: AcpWalkthroughStreamParams,
-  launch: AcpLaunchConfig,
 ): AsyncGenerator<WalkthroughStreamEvent> {
   const events: WalkthroughStreamEvent[] = [];
   let waiter: { resolve: () => void } | null = null;
@@ -126,14 +103,14 @@ export function streamWalkthroughViaAcp(
   let errorEmitted = false;
   // Silences the heartbeat once the turn was cancelled or timed out.
   let cancelled = false;
-  // Distinguishes a timeout from a user cancel in the catch below: a timeout
-  // keeps whatever was already committed and defers to auto-continuation.
+  // A timeout, unlike a user cancel, keeps whatever was already committed and
+  // defers to auto-continuation.
   let timedOut = false;
-  // The harness' timeout message, kept so the zero-content path can say WHY the
+  // The runner's timeout message, kept so the zero-content path can say WHY the
   // run produced nothing instead of blaming the PR's complexity.
   let timeoutReason: string | null = null;
-  /** Message from a non-abort mid-turn failure; surfaced only when the run committed nothing. */
-  let failureReason: string | null = null;
+  /** A mid-turn failure; surfaced only when the run committed nothing. */
+  const failed: { error: AgentTurnError | null } = { error: null };
   const activity = params.activity;
   // Running context-occupancy gauge. Throughput fields stay zero — ACP doesn't
   // report them.
@@ -200,7 +177,7 @@ export function streamWalkthroughViaAcp(
     }
 
     if (ev.kind === "tool-call") {
-      if (EXPLORATION_TOOLS.has(ev.toolName)) {
+      if (isAgentBuiltinTool(ev.toolName)) {
         enterExploring("Reading files and understanding changes...");
         if (ev.callId) {
           surfacedExplorationCallIds.add(ev.callId);
@@ -258,214 +235,85 @@ export function streamWalkthroughViaAcp(
   const userMessage = `${systemPrompt}\n\n---\n\n${buildWalkthroughPrompt(params)}`;
 
   const queryTask = (async (): Promise<WalkthroughTokenUsage> => {
-    let sessionId: string | null = null;
-    let handle: AcpConnectionHandle | null = null;
-
-    // Periodic phase heartbeat — guarantees the stream guard (and the client's
-    // stall watchdog) sees an event every WALKTHROUGH_HEARTBEAT_MS while the
-    // prompt is in flight, including long extended-thinking gaps. Synthetic, so
-    // it never notes `activity`.
+    // Keeps the stream guard and the client's stall watchdog fed during long
+    // thinking gaps. Synthetic, so it never notes `activity`.
     const heartbeatInterval = setInterval(() => {
       if (queryDone || errorEmitted || cancelled) return;
       push({ type: "phase", data: { phase: currentPhase, message: lastPhaseMessage } });
     }, WALKTHROUGH_HEARTBEAT_MS);
+    const decodeState = makeAcpDecodeState();
 
     try {
-      // Acquire the connection BEFORE `withAgentTurn` so `jobStarted`/`jobEnded`
-      // /`abortSession` close over a live handle (the chat-acp ordering).
-      // Cold-start cost of the agent subprocess. Pooled per worktree, so this
-      // is ~0 on a warm handle and seconds on a cold one — a difference worth
-      // seeing rather than guessing at.
-      const connectSpan = graftedSpan(params.walkthroughId, "Acp.connect", {
-        attributes: { walkthrough_id: params.walkthroughId, acp_agent: params.acpAgentId },
-      });
-      try {
-        handle = await getAcpConnection(params.worktreePath, params.acpAgentId, launch);
-      } catch (err) {
-        connectSpan.fail(err);
-        throw err;
-      } finally {
-        connectSpan.end();
-      }
-      const h = handle;
-      if (!h.httpMcpSupported) {
-        // HTTP MCP is MANDATORY here (all content flows through it), unlike chat
-        // where it degrades. Fail loudly.
-        throw new Error(
-          `ACP agent '${params.acpAgentId}' does not advertise HTTP MCP support; walkthrough generation requires it`,
-        );
-      }
-
-      return await withAgentTurn({
-        externalAbort: params.abortController,
-        hardTimeoutMs: CLI_WALKTHROUGH_TIMEOUT_MS,
-        idleTimeoutMs: AGENT_IDLE_TIMEOUT_MS,
+      const { end } = await runAcpTurn({
+        label: "walkthrough-acp",
+        launch: params.launch,
+        cwd: params.worktreePath,
+        // Required: all content flows through it. Every run, auto-continuations
+        // included, is a fresh session that reads its state back over MCP
+        // (invariant #6), never session memory.
+        mcp: {
+          route: "/mcp/walkthrough",
+          name: `${WALKTHROUGH_MCP_SERVER}-${params.walkthroughId}`,
+          token: params.mcpToken,
+          required: true,
+        },
+        deadlines: JOB_TURN,
         activity,
-        jobStarted: async () => {
-          h.jobStarted();
-        },
-        jobEnded: async () => {
-          h.jobEnded();
-        },
-        debugLabel: "walkthrough-acp",
-        onCancel: () => {
-          cancelled = true;
-        },
-        onTimeout: () => {
-          cancelled = true;
-          timedOut = true;
-        },
-        abortSession: async () => {
-          if (sessionId) {
-            await Promise.race([
-              h.cancel(sessionId),
-              new Promise<void>((resolve) => setTimeout(resolve, ACP_CANCEL_GRACE_MS)),
-            ]);
-          }
-          h.stop();
-        },
-        run: async (ctx) => {
-          // ── 1. Hand the agent our HTTP MCP endpoint ──
-          const mcpUrl = `http://127.0.0.1:${serverEnv.port}/mcp/walkthrough`;
-          const mcpServers: McpServer[] = [
-            {
-              type: "http",
-              name: `${WALKTHROUGH_MCP_SERVER}-${params.walkthroughId}`,
-              url: mcpUrl,
-              headers: [{ name: "Authorization", value: `Bearer ${params.mcpToken}` }],
-            },
-          ];
-          debug("walkthrough-acp", `registering MCP ${WALKTHROUGH_MCP_SERVER} → ${mcpUrl}`);
-
-          // ── 2. Open a FRESH session (never loadSession) ──────────────────
-          // Auto-continuations rely on `get_walkthrough_state` (invariant #6),
-          // not session memory, so every run is a clean session.
-          // Session creation includes the agent's own MCP handshake against
-          // `/mcp/walkthrough` (initialize + tools/list), which is a real
-          // round-trip through our own HTTP server, not a local no-op.
-          const sessionSpan = graftedSpan(params.walkthroughId, "Acp.newSession", {
-            attributes: { walkthrough_id: params.walkthroughId, acp_agent: params.acpAgentId },
-          });
-          let created: Awaited<ReturnType<typeof h.newSession>>;
-          try {
-            created = await h.newSession(mcpServers);
-          } catch (err) {
-            sessionSpan.fail(err);
-            throw err;
-          } finally {
-            sessionSpan.end();
-          }
-          sessionId = created.sessionId;
-          debug("walkthrough-acp", "created session:", sessionId);
-
-          // Push a phase event immediately so the stream guard's first-event
-          // timer resets — the model may take minutes to produce its first
-          // tool call (extended thinking), but the session is alive.
+        signal: params.abortController.signal,
+        traceKey: params.walkthroughId,
+        onSessionOpened: () => {
+          // The model may take minutes to its first tool call; the session is alive.
           lastPhaseMessage = "Waiting for model response...";
           push({ type: "phase", data: { phase: "connecting", message: lastPhaseMessage } });
-
-          // ── 3. Stream session updates into the normalized pipeline ───────
-          const decodeState = makeAcpDecodeState();
-          h.setListener(sessionId, (update) => {
-            // Note liveness off the RAW update: some updates decode to zero
-            // normalized events (MCP tool calls carry no machine name) yet
-            // still prove the agent is alive.
-            activity.note();
-            for (const ev of decodeAcpSessionUpdate(update, decodeState)) handleAgentEvent(ev);
-          });
-
-          // ── 4. Prompt and await the turn ─────────────────────────────────
-          debug(
-            "walkthrough-acp",
-            `prompting session ${sessionId}`,
-            "model:",
-            launch.model ?? "(default)",
-          );
-          // The agent turn itself. Re-anchored so everything the turn provokes
-          // — the agent's own tool calls above, and the MCP content writes
-          // arriving over HTTP — nests inside this span rather than beside it.
-          // Whatever wall clock this span does NOT account for through a child
-          // is model inference; the dashboard reports that residue directly.
-          const promptSpan = graftedSpan(params.walkthroughId, "Acp.prompt", {
-            attributes: {
-              walkthrough_id: params.walkthroughId,
-              acp_agent: params.acpAgentId,
-              prompt_chars: userMessage.length,
-              "gen_ai.operation.name": "invoke_agent",
-              "gen_ai.agent.name": params.acpAgentId,
-              "gen_ai.conversation.id": sessionId,
-              ...(launch.model
-                ? { model: launch.model, "gen_ai.request.model": launch.model }
-                : {}),
-            },
-          });
-          const restoreAnchor = publishTraceAnchor(params.walkthroughId, promptSpan.anchor);
-          let stopReason: Awaited<ReturnType<typeof h.prompt>>;
-          try {
-            startWalkthroughPrompt(params.walkthroughId);
-            stopReason = await h.prompt(sessionId, [{ type: "text", text: userMessage }]);
-            promptSpan.setAttributes({ stop_reason: String(stopReason) });
-          } catch (err) {
-            promptSpan.fail(err);
-            throw err;
-          } finally {
-            restoreAnchor();
-            promptSpan.end();
-          }
-
-          if (ctx.wasCancelled() || ctx.wasTimeout()) {
-            cancelled = true;
-          } else if (stopReason === "refusal" && !errorEmitted) {
-            errorEmitted = true;
-            push({
-              type: "error",
-              data: { code: "AiGenerationError", message: "The agent declined to continue." },
-            });
-          }
-          return tokenUsage;
+          startWalkthroughPrompt(params.walkthroughId);
+        },
+        prompt: () => [{ type: "text", text: userMessage }],
+        onUpdate: (update) => {
+          for (const ev of decodeAcpSessionUpdate(update, decodeState)) handleAgentEvent(ev);
         },
       });
-    } catch (err) {
-      const message = withAgentKeychainHint(
-        params.acpAgentId,
-        err instanceof Error ? err.message : String(err),
-      );
-      if (timedOut) {
-        // A timeout is not a failure. Everything the agent already wrote is
-        // committed (invariant #1), so end the stream WITHOUT an error event:
-        // the tail below yields `done` and `WalkthroughJobs` resumes from the
-        // DB out of its auto-continuation budget instead of burning the run and
-        // showing the user a red chip over a half-written walkthrough.
-        debug("walkthrough-acp", "turn timed out — deferring to auto-continuation:", message);
-        timeoutReason = message;
-        return tokenUsage;
-      }
-      logError("walkthrough-acp", "queryTask error:", message);
 
-      // Same reasoning as the timeout above: a mid-turn failure here is the
-      // transport's fault, not a verdict on the review, and everything
-      // committed is already durable (invariant #1). Record the reason and
-      // let the tail read the DB — content persisted falls into
-      // auto-continuation, nothing written surfaces this as a terminal
-      // error. Abort is excluded: WalkthroughJobs.handleFailure already
-      // classifies deliberate cancel/supersede.
-      if (params.abortController?.signal.aborted !== true) {
-        failureReason = message;
+      if (end.kind === "timeout") {
+        // Not a failure: everything the agent wrote is committed (invariant
+        // #1), so the stream ends without an error event, the tail yields
+        // `done` off the DB, and WalkthroughJobs resumes from its
+        // auto-continuation budget instead of a red chip over a half-written
+        // walkthrough.
+        debug("walkthrough-acp", "turn timed out — deferring to auto-continuation:", end.reason);
+        cancelled = true;
+        timedOut = true;
+        timeoutReason = end.reason;
         return tokenUsage;
       }
-      if (!errorEmitted) {
-        errorEmitted = true;
-        push({ type: "error", data: { code: "AiGenerationError", message } });
+      if (end.kind === "cancelled") {
+        cancelled = true;
+        if (!errorEmitted) {
+          errorEmitted = true;
+          push({ type: "error", data: { code: "AiGenerationError", message: end.reason } });
+        }
+        return ZERO_TOKEN_USAGE;
       }
-      return ZERO_TOKEN_USAGE;
+      if (end.stopReason === "refusal" && !errorEmitted) {
+        errorEmitted = true;
+        push({
+          type: "error",
+          data: { code: "AiGenerationError", message: "The agent declined to continue." },
+        });
+      }
+      return tokenUsage;
+    } catch (err) {
+      // The transport's fault, not a verdict on the review, and everything
+      // committed is durable: the tail reads the DB, so persisted content
+      // falls into auto-continuation and only an empty run surfaces this.
+      failed.error = err instanceof AgentTurnError ? err : new AgentTurnError(String(err), "other");
+      logError("walkthrough-acp", "turn failed:", failed.error.message);
+      return tokenUsage;
     } finally {
       clearInterval(heartbeatInterval);
-      // A cancelled or timed-out turn can leave a tool call without its result.
-      // End those spans rather than leaking them — an unended span never
-      // reaches the exporter, so the timeline would silently lose the call.
+      // A cancelled or timed-out turn can leave a tool call without its result;
+      // an unended span never reaches the exporter.
       for (const span of openToolSpans.values()) span.end();
       openToolSpans.clear();
-      if (handle && sessionId) handle.setListener(sessionId, null);
     }
   })();
 
@@ -505,7 +353,8 @@ export function streamWalkthroughViaAcp(
     // cancelled; a timeout still consults the DB — its whole point is to hand
     // the committed partial to auto-continuation.
     let summaryPersisted = false;
-    if (!cancelled || timedOut || failureReason !== null) {
+    const failure = failed.error;
+    if (!cancelled || timedOut || failure !== null) {
       try {
         const row = params.db
           .select({ summary: walkthroughsTable.summary })
@@ -539,10 +388,10 @@ export function streamWalkthroughViaAcp(
               code: "AgentTimeout",
               message: `${timeoutReason}, and nothing had been written yet. Try regenerating.`,
             }
-          : failureReason
+          : failure
             ? {
-                code: "AiGenerationError",
-                message: `${trimTrailingPeriod(failureReason)}. Nothing had been written yet. Try regenerating.`,
+                code: failure.kind === "auth" ? "AGENT_AUTH_REQUIRED" : "AiGenerationError",
+                message: `${trimTrailingPeriod(failure.message)}. Nothing had been written yet. Try regenerating.`,
               }
             : {
                 code: "NoSummaryGenerated",

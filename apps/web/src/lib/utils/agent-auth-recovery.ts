@@ -1,17 +1,13 @@
-const AUTH_RECOVERY_PATTERN =
-  /AI CLI agent not configured|agent isn't logged in|authentication is required|unauthor|invalid api key|oauth|ACP connection closed|can't authenticate|Keychain/i;
-
-const KEYCHAIN_PATTERN = /Keychain|can't authenticate|ACP connection closed/i;
+import type { StreamErrorCode } from "@revv/shared";
 
 const MAX_AGENT_ERROR_CHARS = 200;
 
-export function isAgentAuthRecoveryError(message: string | null | undefined): boolean {
-  return AUTH_RECOVERY_PATTERN.test(message ?? "");
-}
+/** The server's code for an agent that isn't signed in, or whose login Revv can't read. */
+export const AGENT_AUTH_REQUIRED: StreamErrorCode = "AGENT_AUTH_REQUIRED";
 
 /**
  * The agent's own error, without the guidance the server appends after it
- * (`withAgentKeychainHint` separates the two with a blank line).
+ * (separated by a blank line).
  */
 function agentErrorHead(message: string): string {
   const head = message.split(/\n\s*\n/)[0]?.trim() ?? "";
@@ -21,9 +17,8 @@ function agentErrorHead(message: string): string {
 }
 
 export function agentAuthRecoveryDescription(message: string): string {
-  const hint = KEYCHAIN_PATTERN.test(message)
-    ? "Reconnect the agent in Settings. If it is already connected, run the agent test there to see what fails."
-    : "Reconnect the agent in Settings, then retry.";
+  const hint =
+    "Reconnect the agent in Settings. If it is already connected, run the agent test there to see what fails.";
   // Keep the raw error visible: the same advice covers several unrelated
   // failures, and without it a report can't tell which one happened.
   const head = agentErrorHead(message);

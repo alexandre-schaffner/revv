@@ -63,7 +63,7 @@ let triggerTitle = $derived(
 
 // If the selected effort isn't valid for the current agent (e.g. a Claude-only
 // tier after switching to codex, or any tier after switching to an agent with
-// no thinking-effort knob), the launch path clamps it (see presets.ts). The
+// no thinking-effort knob), the launch path clamps it (see the server agent adapters). The
 // persisted preference is intentionally left untouched here — switching back
 // to the original agent should restore the original tier, not a clamped one.
 

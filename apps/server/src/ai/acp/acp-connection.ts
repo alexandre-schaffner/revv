@@ -5,16 +5,15 @@
 // cold-start on every message. Talks JSON-RPC over the subprocess stdio via the
 // official `@agentclientprotocol/sdk` `ClientSideConnection`.
 //
-// This is the single transport that replaces the bespoke claude/opencode/codex
-// chat drivers: the only per-agent difference is the launch command (see
-// presets.ts). The Revv side stays the same — we initialize, open a session
-// (handing the agent our HTTP MCP endpoint), prompt, and stream `session/update`
-// notifications back out through a per-session listener.
+// Only the turn runner (`run-turn.ts`) uses this pool: per-agent launch
+// details come from the adapters (`agents/`, through `launch.ts`).
 //
-// Lifecycle: lazily spawned per cwd, kept warm while turns are in flight, and
-// idle-stopped after `IDLE_STOP_MS`. On subprocess exit every session id we
-// recorded becomes invalid, so callers must reconcile (the chat route persists
-// a fresh id on the next `session/new`).
+// Lifecycle: lazily spawned per (cwd, agent, model, effort), kept warm while
+// turns hold a reference, and idle-stopped `IDLE_STOP_MS` after the last one
+// ends. A connection whose agent ignored a cancel is retired: no new turn gets
+// it, and it is stopped once the turns still on it end. On subprocess exit
+// every session id it issued is gone; the runner falls back to a fresh session
+// when a resume id no longer loads.
 
 import {
   type Agent,
@@ -34,10 +33,10 @@ import {
 } from "@agentclientprotocol/sdk";
 import { type AcpAgentId, getAcpAgent } from "@revv/shared";
 import { debug, logError } from "../../logger";
-import { resolveUserPath } from "../providers/cli-agent";
-import { ensureClaudeConfigDir, resolveClaudeConfigDir } from "./claude-config";
+import type { AgentLaunch } from "./agent-launch";
+import { agentAdapter } from "./agents";
+import { resolveAgentProcess } from "./launch";
 import { ensurePackageRunnerDir } from "./package-runner-dir";
-import { type AcpLaunchConfig, resolveAcpProcessLaunchById } from "./presets";
 import {
   planModelSelection,
   resolveSessionModes,
@@ -49,6 +48,12 @@ const STDERR_TAIL_CHARS = 2000;
 const ERROR_DATA_CHARS = 500;
 const STARTUP_EXIT_GRACE_MS = 1000;
 const STARTUP_STDERR_LINES = 6;
+/**
+ * Bound on spawn → `initialize` → `authenticate`. Covers a cold package-runner
+ * install of the adapter; a spawn stuck past it is killed so the pool doesn't
+ * hand the same hung promise to every later turn.
+ */
+const CONNECT_TIMEOUT_MS = 3 * 60 * 1000;
 
 /**
  * A JSON-RPC error's message with its `details` folded in. An agent that throws
@@ -99,23 +104,6 @@ export function agentStartupFailureMessage(
     .slice(-STARTUP_STDERR_LINES);
   const head = `The ${getAcpAgent(agent).label} agent exited before it started (exit code ${exitCode}).`;
   return lines.length > 0 ? `${head}\n\n${lines.join("\n")}` : head;
-}
-
-/**
- * Select the authentication method to request from an ACP agent. Codex's ACP
- * adapter advertises API-key auth first, but a ChatGPT subscription session is
- * the correct default when it is available. Requesting `api-key` first makes a
- * signed-in desktop Codex installation fail before it can inspect that session.
- */
-export function selectAcpAuthMethod(
-  agent: AcpAgentId,
-  methods: readonly { readonly id: string }[],
-): string | undefined {
-  if (agent === "codex") {
-    const chatGpt = methods.find((method) => method.id === "chat-gpt");
-    if (chatGpt) return chatGpt.id;
-  }
-  return methods[0]?.id;
 }
 
 /**
@@ -185,8 +173,11 @@ export interface AcpConnectionHandle {
   readonly setMode: (sessionId: string, modeId: string) => Promise<void>;
   readonly prompt: (sessionId: string, prompt: ContentBlock[]) => Promise<StopReason>;
   readonly cancel: (sessionId: string) => Promise<void>;
-  /** Force-stop this pooled ACP subprocess. Next use will spawn a fresh connection. */
-  readonly stop: () => void;
+  /**
+   * Take this connection out of the pool: later turns spawn a fresh one, and
+   * this one stops as soon as no turn holds it.
+   */
+  readonly retire: () => void;
   /** Register (or clear, with null) the update listener for a session. */
   readonly setListener: (sessionId: string, listener: AcpUpdateListener | null) => void;
   /** Flag a session as plan-mode so the permission handler refuses mode switches. */
@@ -198,8 +189,9 @@ export interface AcpConnectionHandle {
 
 interface ConnectionEntry {
   readonly key: string;
+  /** Identifies this spawn's pool slot, so a retired entry never evicts its successor. */
+  readonly slot: symbol;
   readonly agent: AcpAgentId;
-  readonly config: AcpLaunchConfig;
   readonly cwd: string;
   readonly proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
   readonly connection: ClientSideConnection;
@@ -221,16 +213,24 @@ interface ConnectionEntry {
   refcount: number;
   idleTimer: ReturnType<typeof setTimeout> | null;
   alive: boolean;
+  retired: boolean;
 }
 
 // Keyed by agent + model + thinking-effort + cwd. A change to any of them must
 // not reuse an older ACP subprocess launched under a different model/effort:
 // both ride in its launch env (opencode 1 reads the model only from there, even
 // though opencode 2 takes it per session), so they all participate in the key.
-const pool = new Map<string, Promise<ConnectionEntry>>();
+const pool = new Map<string, { readonly slot: symbol; readonly ready: Promise<ConnectionEntry> }>();
 
-function poolKey(cwd: string, agent: AcpAgentId, config: AcpLaunchConfig): string {
-  return [agent, config.model ?? "", config.thinkingEffort ?? "", cwd].join("\0");
+/** Every spawned subprocess, pooled or retired, until it exits. */
+const live = new Set<ConnectionEntry>();
+
+function forget(entry: ConnectionEntry): void {
+  if (pool.get(entry.key)?.slot === entry.slot) pool.delete(entry.key);
+}
+
+function poolKey(cwd: string, launch: AgentLaunch): string {
+  return [launch.agent, launch.model, launch.thinkingEffort ?? "", cwd].join("\0");
 }
 
 function buildClient(entry: () => ConnectionEntry): Client {
@@ -275,25 +275,12 @@ function buildClient(entry: () => ConnectionEntry): Client {
 
 async function spawnConnection(
   cwd: string,
-  agent: AcpAgentId,
-  config: AcpLaunchConfig,
+  launch: AgentLaunch,
   key: string,
+  slot: symbol,
 ): Promise<ConnectionEntry> {
-  // Isolated `CLAUDE_CONFIG_DIR` for claude-code (see `claude-config.ts`) —
-  // the SAME resolution the subscription-auth probe (`cli-agent.ts`) and the
-  // login PTY (`AgentLogin.ts`) use, since Claude Code's Keychain-backed OAuth
-  // storage is scoped per config dir. Seed the directory before the agent
-  // process can touch it; a no-op once it's already seeded from a prior spawn.
-  const claudeConfigDir = resolveClaudeConfigDir(agent);
-  if (claudeConfigDir) ensureClaudeConfigDir(claudeConfigDir);
-
-  const { command, args, env, sessionModel, viaPackageRunner } = resolveAcpProcessLaunchById(
-    agent,
-    config,
-    process.env,
-    resolveUserPath(),
-    { claudeConfigDir },
-  );
+  const { agent } = launch;
+  const { command, args, env, sessionModel, viaPackageRunner } = resolveAgentProcess(agent, launch);
   const proc = Bun.spawn([command, ...args], {
     // A package runner must not run inside the reviewed repo: npm reads that
     // repo's `package.json` and exits on one it can't parse (see
@@ -303,10 +290,6 @@ async function spawnConnection(
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
-    // Per-adapter model/effort/context env (Claude Code) layered over the
-    // inherited environment. PATH is widened to the user's login-shell PATH so
-    // `npx`/`opencode` resolve even when the server inherited a sanitized PATH
-    // (launchd / GUI launch) — matching how availability is detected.
     env,
   });
 
@@ -331,8 +314,8 @@ async function spawnConnection(
 
   const entry: ConnectionEntry = {
     key,
+    slot,
     agent,
-    config,
     cwd,
     proc,
     connection,
@@ -348,8 +331,10 @@ async function spawnConnection(
     refcount: 0,
     idleTimer: null,
     alive: true,
+    retired: false,
   };
   entryRef = entry;
+  live.add(entry);
 
   // Drain stderr to the debug log so agent crashes are diagnosable, keeping a
   // short tail for the startup-failure message below.
@@ -374,11 +359,36 @@ async function spawnConnection(
   // the next turn spawns fresh.
   void proc.exited.then((code) => {
     entry.alive = false;
-    pool.delete(entry.key);
+    live.delete(entry);
+    forget(entry);
     clearSessionState(entry);
     debug("acp-connection", `${entry.agent} agent for ${cwd} exited (code=${code ?? "?"})`);
   });
 
+  let connectTimer: ReturnType<typeof setTimeout> | undefined;
+  const connectDeadline = new Promise<never>((_, reject) => {
+    connectTimer = setTimeout(() => {
+      proc.kill();
+      reject(
+        new Error(
+          `The ${getAcpAgent(agent).label} agent didn't start within ${CONNECT_TIMEOUT_MS / 60_000} minutes.`,
+        ),
+      );
+    }, CONNECT_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([handshake(entry, stderrDrained, () => stderrTail), connectDeadline]);
+  } finally {
+    clearTimeout(connectTimer);
+  }
+}
+
+async function handshake(
+  entry: ConnectionEntry,
+  stderrDrained: Promise<void>,
+  stderrTail: () => string,
+): Promise<ConnectionEntry> {
+  const { connection, proc, agent } = entry;
   let initialize: Awaited<ReturnType<typeof connection.initialize>>;
   try {
     initialize = await connection.initialize({
@@ -406,7 +416,7 @@ async function spawnConnection(
       throw err;
     }
     await stderrDrained;
-    throw new Error(agentStartupFailureMessage(agent, exitCode, stderrTail));
+    throw new Error(agentStartupFailureMessage(agent, exitCode, stderrTail()));
   }
 
   entry.loadSessionSupported = initialize.agentCapabilities?.loadSession === true;
@@ -417,8 +427,7 @@ async function spawnConnection(
 
   // Authenticate only if the agent advertises auth methods (claude-agent-acp
   // typically inherits local CLI credentials and needs none).
-  const authMethods = initialize.authMethods ?? [];
-  const methodId = selectAcpAuthMethod(agent, authMethods);
+  const methodId = agentAdapter(agent).authMethod(initialize.authMethods ?? []);
   if (methodId) {
     await connection.authenticate({ methodId });
   }
@@ -443,7 +452,7 @@ function scheduleIdleStop(entry: ConnectionEntry): void {
   entry.idleTimer = setTimeout(() => {
     if (entry.refcount > 0 || !entry.alive) return;
     debug("acp-connection", `idle-stopping ${entry.agent} agent for ${entry.cwd}`);
-    pool.delete(entry.key);
+    forget(entry);
     try {
       entry.proc.kill();
     } catch {
@@ -452,10 +461,18 @@ function scheduleIdleStop(entry: ConnectionEntry): void {
   }, IDLE_STOP_MS);
 }
 
+function retireEntry(entry: ConnectionEntry): void {
+  if (entry.retired || !entry.alive) return;
+  entry.retired = true;
+  forget(entry);
+  debug("acp-connection", `retiring ${entry.agent} agent for ${entry.cwd}`);
+  if (entry.refcount === 0) stopEntry(entry);
+}
+
 function stopEntry(entry: ConnectionEntry): void {
   if (!entry.alive) return;
   entry.alive = false;
-  pool.delete(entry.key);
+  forget(entry);
   if (entry.idleTimer) {
     clearTimeout(entry.idleTimer);
     entry.idleTimer = null;
@@ -643,10 +660,7 @@ function makeHandle(entry: ConnectionEntry): AcpConnectionHandle {
         debug("acp-connection", "cancel failed:", err instanceof Error ? err.message : String(err));
       }
     },
-    stop: () => {
-      debug("acp-connection", `force-stopping ${entry.agent} agent for ${entry.cwd}`);
-      stopEntry(entry);
-    },
+    retire: () => retireEntry(entry),
     setListener: (sessionId, listener) => {
       if (listener) entry.listeners.set(sessionId, listener);
       else entry.listeners.delete(sessionId);
@@ -664,34 +678,40 @@ function makeHandle(entry: ConnectionEntry): AcpConnectionHandle {
     },
     jobEnded: () => {
       entry.refcount = Math.max(0, entry.refcount - 1);
-      if (entry.refcount === 0) scheduleIdleStop(entry);
+      if (entry.refcount > 0) return;
+      if (entry.retired) stopEntry(entry);
+      else scheduleIdleStop(entry);
     },
   };
 }
 
+function pooledOrSpawned(cwd: string, launch: AgentLaunch): Promise<ConnectionEntry> {
+  const key = poolKey(cwd, launch);
+  const pooled = pool.get(key);
+  if (pooled) return pooled.ready;
+  const slot = Symbol(key);
+  const ready = spawnConnection(cwd, launch, key, slot).catch((err) => {
+    if (pool.get(key)?.slot === slot) pool.delete(key);
+    throw err;
+  });
+  pool.set(key, { slot, ready });
+  return ready;
+}
+
 /**
- * Get (or lazily spawn) the ACP agent connection for a working directory.
- * Concurrent callers for the same cwd share one subprocess.
+ * Get (or lazily spawn) the ACP agent connection for a working directory and
+ * launch. Concurrent callers for the same key share one subprocess.
  */
 export async function getAcpConnection(
   cwd: string,
-  agent: AcpAgentId,
-  config: AcpLaunchConfig = {},
+  launch: AgentLaunch,
 ): Promise<AcpConnectionHandle> {
-  const key = poolKey(cwd, agent, config);
-  let pending = pool.get(key);
-  if (!pending) {
-    pending = spawnConnection(cwd, agent, config, key).catch((err) => {
-      pool.delete(key);
-      throw err;
-    });
-    pool.set(key, pending);
-  }
-  const entry = await pending;
+  let entry = await pooledOrSpawned(cwd, launch);
   if (!entry.alive) {
-    // Raced with an exit between resolve and use — retry once with a fresh spawn.
-    pool.delete(key);
-    return getAcpConnection(cwd, agent, config);
+    // It exited between spawn and use: one fresh spawn, whose failure is final.
+    forget(entry);
+    entry = await pooledOrSpawned(cwd, launch);
+    if (!entry.alive) throw new Error(`The ${getAcpAgent(launch.agent).label} agent exited.`);
   }
   return makeHandle(entry);
 }
@@ -705,14 +725,13 @@ export async function getAcpConnection(
  */
 export async function peekAcpConnection(
   cwd: string,
-  agent: AcpAgentId,
-  config: AcpLaunchConfig = {},
+  launch: AgentLaunch,
 ): Promise<AcpConnectionHandle | null> {
-  const pending = pool.get(poolKey(cwd, agent, config));
-  if (!pending) return null;
+  const pooled = pool.get(poolKey(cwd, launch));
+  if (!pooled) return null;
   let entry: ConnectionEntry;
   try {
-    entry = await pending;
+    entry = await pooled.ready;
   } catch {
     // The pooled spawn rejected — treat as no warm connection.
     return null;
@@ -721,16 +740,13 @@ export async function peekAcpConnection(
   return makeHandle(entry);
 }
 
-/** Best-effort teardown of all pooled agents (process shutdown). */
+/** Best-effort teardown of every agent subprocess (process shutdown). */
 export function stopAllAcpConnections(): void {
-  for (const [cwd, pending] of pool) {
-    pool.delete(cwd);
-    void pending
-      .then((entry) => {
-        stopEntry(entry);
-      })
-      .catch(() => {
-        /* never spawned */
-      });
+  for (const [key, pooled] of pool) {
+    pool.delete(key);
+    void pooled.ready.then(stopEntry).catch(() => {
+      /* never spawned */
+    });
   }
+  for (const entry of live) stopEntry(entry);
 }

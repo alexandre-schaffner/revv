@@ -2,7 +2,7 @@ import { type InstallEvent, isAcpAgentId, type LoginEvent } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
-import { invalidateCliAgentCache } from "../ai/providers/cli-agent";
+import { invalidateAgentProbes } from "../ai/acp/agents";
 import { user } from "../db/schema";
 import { ValidationError } from "../domain/errors";
 import { tryDb } from "../effects/db-try";
@@ -102,7 +102,7 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
    * adaptive Install / Sign-in / Continue CTA.
    */
   .get("/agent-status", async (ctx) => {
-    if (ctx.query?.refresh === "1") invalidateCliAgentCache();
+    if (ctx.query?.refresh === "1") invalidateAgentProbes();
     return runRoute(Effect.flatMap(OnboardingService, (s) => s.detectAgentStatus()));
   })
   /**

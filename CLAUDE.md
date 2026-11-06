@@ -312,22 +312,31 @@ agent tomorrow). Any change that violates them is wrong by construction — push
 13. **Agent parity.** ACP is the only agent transport, and every ACP agent must exhibit
     identical externally-observable behavior during a review. Divergence in the model's
     reasoning style is allowed; divergence in events, lifecycle, phase transitions, retry, or
-    resume semantics is a bug. Per-agent differences live only in the launch preset
-    (`ai/acp/presets.ts`: command, env, model/effort routing) and capability flags (e.g. plan
-    mode, HTTP MCP support); the drivers never branch on which agent is running.
+    resume semantics is a bug. Per-agent facts live only in the registry entry
+    (`ACP_AGENTS` in `@revv/shared`: launch argv, CLI, catalog, capabilities) and the agent's
+    server adapter (`ai/acp/agents/<id>.ts`: env, model/effort routing, auth probe), keyed by
+    `AcpAgentId`; the drivers never branch on which agent is running. Every turn runs through
+    one runner (`ai/acp/run-turn.ts`), so connect, session, deadline and cancel behaviour is
+    the same code for every feature and every agent.
 14. **ACP connection lifecycle.** Agent subprocesses live in an in-memory pool
-    (`ai/acp/acp-connection.ts`) keyed on (working directory, agent, model, effort): one
-    subprocess per key, shared by every caller with that key. A subprocess is spawned lazily
-    on first use (the chat panel's session-context warm-up counts as a use), held warm by a
-    refcount of in-flight turns (`jobStarted` / `jobEnded`), and killed `IDLE_STOP_MS`
-    (5 min) after the last turn ends. A turn that is cancelled or times out may force-stop
-    its subprocess. When a subprocess exits for any reason it leaves the pool and the next
-    use spawns a fresh one, with none of the old one's per-session state (listeners, mode and
-    model selections). Nothing correctness-bearing may depend on an ACP session surviving:
-    walkthrough, recap and stack-brief runs always open a fresh session and rebuild context
-    from the DB (invariant 6); chat resumes via `session/load` only where the agent supports
-    it. Every pooled subprocess is stopped on process exit. The pool and the per-run MCP
-    bearer tokens are ephemeral and never persisted (invariant 1).
+    (`ai/acp/acp-connection.ts`, reached only through the turn runner) keyed on (working
+    directory, agent, model, effort) — the `AgentLaunch` that `resolveAgentLaunch` returns,
+    which also keys the chat session row: one subprocess per key, shared by every caller
+    with that key. A subprocess is spawned lazily on first use (the chat panel's
+    session-context warm-up counts as a use), must finish its handshake within 3 minutes,
+    is held warm by a refcount of in-flight turns, and is killed `IDLE_STOP_MS` (5 min)
+    after the last turn ends. A turn that is cancelled or hits a deadline cancels its own
+    session (`session/cancel`), never the shared subprocess; if the agent ignores the cancel
+    the subprocess is retired: later turns get a fresh one, and it is killed once the turns
+    still on it end. When a subprocess exits for any reason it leaves the pool and the next
+    use spawns a fresh one, with none of the old one's per-session state (listeners, mode
+    and model selections). Nothing correctness-bearing may depend on an ACP session
+    surviving: walkthrough, recap and stack-brief runs always open a fresh session and
+    rebuild context from the DB (invariant 6); chat resumes via `session/load` where the
+    agent supports it, and a session that can't be reloaded becomes a fresh one that gets
+    the system prompt and the conversation again. Every subprocess is stopped on process
+    exit. The pool and the per-run MCP bearer tokens (one TTL'd store,
+    `session-token-store.ts`) are ephemeral and never persisted (invariant 1).
 
 ### Stack briefs
 

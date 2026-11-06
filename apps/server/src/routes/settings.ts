@@ -16,8 +16,8 @@ import {
 } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, type TSchema, t } from "elysia";
+import { listAgentModels } from "../ai/acp/agents";
 import { hasJevApiKey } from "../ai/jev/api-key";
-import { listCliModels } from "../ai/providers/cli-models";
 import { BlobStore } from "../services/blob/BlobStore";
 import { SshSigner } from "../services/cache-signing/index";
 import { SettingsService } from "../services/Settings";
@@ -207,7 +207,7 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
             agentParam && isAcpAgentId(agentParam)
               ? agentParam
               : yield* Effect.flatMap(SettingsService, (s) => s.resolveAgent());
-          const models = yield* Effect.promise(() => listCliModels(agent));
+          const models = yield* Effect.promise(() => listAgentModels(agent));
           return { models, agent };
         }),
       ),

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { getAgentKeychainAuth } from "@revv/shared";
+import { AgentTurnError } from "../acp/agent-failure";
 import { checkAgent } from "./agent-check";
 
-const input = { agent: "claude-code", model: "claude-sonnet-5-5", cwd: "/tmp" } as const;
+const input = { agent: "claude-code", model: "claude-sonnet-5-5", thinkingEffort: "low" } as const;
 
 describe("checkAgent", () => {
   it("passes when the turn completes", async () => {
@@ -32,8 +33,10 @@ describe("checkAgent", () => {
     expect(result.guidance).toContain(getAgentKeychainAuth("claude-code")?.remediation ?? " ");
   });
 
-  it("fails a turn that never answers", async () => {
-    const result = await checkAgent(input, () => new Promise(() => {}), 10);
-    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("didn't answer") });
+  it("splits a runner failure into the agent's error and its guidance", async () => {
+    const result = await checkAgent(input, async () => {
+      throw new AgentTurnError("401 Unauthorized", "auth", "Sign in again.");
+    });
+    expect(result).toEqual({ ok: false, error: "401 Unauthorized", guidance: "Sign in again." });
   });
 });

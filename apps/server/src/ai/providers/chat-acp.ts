@@ -1,82 +1,42 @@
-// ── chat-acp ───────────────────────────────────────────────────────────────
-//
-// ACP (Agent Client Protocol) driver for the right-pane chat. This is the
-// unified transport meant to replace the bespoke claude/opencode/codex chat
-// drivers: it talks to whichever ACP agent is configured (see ai/acp/presets.ts)
-// over a stdio JSON-RPC connection pooled per worktree (ai/acp/acp-connection.ts).
-//
-// Like the other drivers it returns a `ReadableStream<RawChatStreamFrame>` and
-// maps the normalized agent events onto chat frames — so nothing downstream
-// (persistence, SSE encoder, the web chat panel) changes.
+// The right-pane chat (and the merge-conflict agent) over the turn runner:
+// maps the agent's session updates onto chat frames and builds the prompt.
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk";
-import {
-  type AcpAgentId,
-  type ChatAttachment,
-  extractMentionTokens,
-  type InteractionMode,
-  type ThinkingEffort,
-} from "@revv/shared";
-import { serverEnv } from "../../config";
+import type { ContentBlock } from "@agentclientprotocol/sdk";
+import { type ChatAttachment, extractMentionTokens, type InteractionMode } from "@revv/shared";
 import { AiGenerationError } from "../../domain/errors";
-import { debug, logError } from "../../logger";
-import { type AcpSessionState, getAcpConnection } from "../acp/acp-connection";
-import { withAgentKeychainHint } from "../acp/agent-keychain";
-import { findPlanModeId, modeToExitPlan } from "../acp/session-config";
-import {
-  buildActivity,
-  CHAT_IDLE_TIMEOUT_MS,
-  CLI_CHAT_TURN_TIMEOUT_MS,
-  decodeAcpSessionUpdate,
-  fluidEmit,
-  makeAcpDecodeState,
-  makeActivityBeacon,
-  type NormalizedAgentEvent,
-  relativizeToolInput,
-  withAgentTurn,
-} from "../agent-stream";
+import { logError } from "../../logger";
+import { AgentTurnError } from "../acp/agent-failure";
+import type { AgentLaunch } from "../acp/agent-launch";
+import { CHAT_TURN, runAcpTurn, type TurnMcpServer } from "../acp/run-turn";
+import { decodeAcpSessionUpdate, makeAcpDecodeState } from "../agent-stream/acp-decoders";
+import { fluidEmit } from "../agent-stream/fluid-chunker";
+import type { NormalizedAgentEvent } from "../agent-stream/normalized-events";
+import { buildActivity, relativizeToolInput } from "../agent-stream/tool-activity";
 import type { RawChatStreamFrame } from "./chat-types";
 
-export interface AcpChatDeps {
-  /**
-   * Mint a bearer token bound to the current PR/user/interaction mode for the
-   * chat-context HTTP MCP route, which filters edit tools out of `tools/list`
-   * in plan mode.
-   */
-  readonly issueChatMcpToken: (args: {
-    prId: string;
-    userId: string;
-    interactionMode: InteractionMode;
-  }) => Promise<string>;
-  /** Revoke the token once the turn ends. */
-  readonly clearChatMcpToken: (token: string) => Promise<void>;
-}
-
 export interface StreamChatViaAcpOptions {
-  readonly message: string;
-  readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
-  readonly systemPrompt: string;
-  readonly resumeSessionId?: string | undefined;
+  readonly launch: AgentLaunch;
   readonly cwd: string;
+  /** The raw user message: `@`-mentions are read from it. */
+  readonly message: string;
+  /**
+   * The prompt text. A fresh session has neither the system prompt nor the
+   * conversation, so it gets them; a reloaded one already has both.
+   */
+  readonly promptText: (freshSession: boolean) => string;
+  readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
+  readonly resumeSessionId?: string | null | undefined;
+  /** Reports a fresh agent session id, awaited before the prompt is sent. */
   readonly onSessionId?: ((id: string) => Promise<void> | void) | undefined;
-  readonly abortController?: AbortController | undefined;
-  /** Selected Revv model. Propagated into the adapter at launch where supported (presets.ts). */
-  readonly model?: string | undefined;
-  /** Selected thinking-effort tier. Propagated to Claude Code / Codex at launch. */
-  readonly thinkingEffort?: ThinkingEffort | undefined;
-  readonly acpAgentId: AcpAgentId;
-  readonly deps: AcpChatDeps;
-  readonly prId: string;
-  readonly userId: string;
+  readonly mcp?: TurnMcpServer | undefined;
   readonly interactionMode?: InteractionMode | undefined;
-  /** When `false`, the chat-context MCP server is not handed to the agent. */
-  readonly enableReviewContextMcp?: boolean | undefined;
+  readonly abortController?: AbortController | undefined;
+  /** Runs once the turn is over, however it ended. */
+  readonly onFinished?: (() => void) | undefined;
 }
-
-const CHAT_CONTEXT_MCP_SERVER = "revv-chat-context";
 
 function attachmentUri(name: string): string {
   return `attachment://${encodeURIComponent(name)}`;
@@ -151,204 +111,114 @@ function buildPromptBlocks(opts: {
   return [{ type: "text", text }, ...extractFileReferences(opts.message, opts.cwd), ...blocks];
 }
 
+function toAiError(err: unknown): AiGenerationError {
+  return err instanceof AgentTurnError
+    ? new AiGenerationError({ cause: err, message: err.message, kind: err.kind })
+    : new AiGenerationError({
+        cause: err,
+        message: err instanceof Error ? err.message : String(err),
+      });
+}
+
 export function streamChatViaAcp(
   opts: StreamChatViaAcpOptions,
 ): ReadableStream<RawChatStreamFrame> {
   return new ReadableStream<RawChatStreamFrame>({
     async start(controller) {
-      let chatMcpToken: string | null = null;
-      let sessionId: string | null = opts.resumeSessionId ?? null;
-      let handle: Awaited<ReturnType<typeof getAcpConnection>> | null = null;
       const planMode = opts.interactionMode === "plan";
+      let hasEmittedText = false;
+      let lastWasNonText = false;
+      const planTextBuffer: string[] = [];
+      // Paragraph break between text and whatever non-text came before it.
+      const emit = (ev: NormalizedAgentEvent): void => {
+        if (ev.kind === "text-delta") {
+          if (planMode) planTextBuffer.push(ev.data);
+          const needsSeparator = hasEmittedText && lastWasNonText && !ev.data.startsWith("\n");
+          controller.enqueue({ kind: "text", data: needsSeparator ? `\n\n${ev.data}` : ev.data });
+          hasEmittedText = true;
+          lastWasNonText = false;
+          return;
+        }
+        if (ev.kind === "reasoning-delta") {
+          controller.enqueue({ kind: "reasoning", data: ev.data });
+        } else if (ev.kind === "tool-call") {
+          controller.enqueue({
+            kind: "activity",
+            ...buildActivity(ev.toolName, ev.input, opts.cwd, ev.callId),
+          });
+        } else if (ev.kind === "tool-result") {
+          controller.enqueue({
+            kind: "activity-result",
+            callId: ev.callId,
+            output: ev.output,
+            isError: ev.isError,
+          });
+        } else if (ev.kind === "tool-call-update") {
+          controller.enqueue({
+            kind: "activity-input",
+            callId: ev.callId,
+            payload: relativizeToolInput(ev.input, opts.cwd),
+          });
+        } else if (ev.kind === "task-list-update") {
+          controller.enqueue({ kind: "task-list", tasks: ev.tasks });
+        } else {
+          return;
+        }
+        lastWasNonText = true;
+      };
+      const fluid = fluidEmit(emit);
+      const decodeState = makeAcpDecodeState();
 
       try {
-        const h = await getAcpConnection(opts.cwd, opts.acpAgentId, {
-          model: opts.model,
-          thinkingEffort: opts.thinkingEffort,
-        });
-        handle = h;
-
-        // Hand the agent our chat-context HTTP MCP endpoint (review context +
-        // walkthrough-edit tools), unless disabled (merge-conflict path). Token
-        // is revoked in `finally`. Degrade loudly but non-fatally if the agent
-        // doesn't support HTTP MCP — it still has its own Read/Edit/Bash tools.
-        const enableMcp = opts.enableReviewContextMcp ?? true;
-        const mcpServers: McpServer[] = [];
-        if (enableMcp) {
-          if (!h.httpMcpSupported) {
-            debug("chat-acp", "agent does not advertise HTTP MCP — skipping chat-context tools");
-          } else {
-            chatMcpToken = await opts.deps.issueChatMcpToken({
-              prId: opts.prId,
-              userId: opts.userId,
-              interactionMode: opts.interactionMode ?? "default",
-            });
-            mcpServers.push({
-              type: "http",
-              name: `${CHAT_CONTEXT_MCP_SERVER}-${opts.prId}`,
-              url: `http://127.0.0.1:${serverEnv.port}/mcp/chat-context`,
-              headers: [{ name: "Authorization", value: `Bearer ${chatMcpToken}` }],
-            });
-          }
-        }
-
-        // Resolve the session: resume via session/load when supported, else a
-        // fresh session/new whose id we report so the route can persist it.
-        let session: AcpSessionState;
-        if (sessionId && h.loadSessionSupported) {
-          session = await h.loadSession(sessionId, mcpServers);
-        } else {
-          const created = await h.newSession(mcpServers);
-          sessionId = created.sessionId;
-          session = created;
-          if (opts.onSessionId) await opts.onSessionId(sessionId);
-        }
-        const turnSessionId = sessionId;
-        const { modes } = session;
-
-        // The saved model is missing from the agent's catalog, so this turn runs
-        // on the agent's default. Say so, or the reply silently comes from a
-        // model other than the one the picker shows.
-        if (session.unavailableModel) {
-          controller.enqueue({
-            kind: "text",
-            data: `_Model "${session.unavailableModel}" isn't available, so this reply uses the agent's default model. Pick another model to change it._\n\n`,
-          });
-        }
-
-        // Plan mode: switch the agent into its read-only mode.
-        if (planMode) {
-          const planModeId = findPlanModeId(modes);
-          if (!planModeId) {
-            throw new Error("This agent has no plan mode. Turn plan mode off to send the message.");
-          }
-          await h.setMode(turnSessionId, planModeId);
-          h.setPlanMode(turnSessionId, true);
-        } else {
-          const exitModeId = modeToExitPlan(modes);
-          if (exitModeId) await h.setMode(turnSessionId, exitModeId);
-        }
-
-        // Map normalized events → ChatStreamFrame. Same shape as the opencode
-        // driver: paragraph-break insertion between text and non-text events,
-        // plan-mode text buffering for a synthesized `plan-presented`.
-        let hasEmittedText = false;
-        let lastWasNonText = false;
-        const planTextBuffer: string[] = [];
-        const emit = (ev: NormalizedAgentEvent): void => {
-          if (ev.kind === "text-delta") {
-            if (planMode) planTextBuffer.push(ev.data);
-            const needsSeparator = hasEmittedText && lastWasNonText && !ev.data.startsWith("\n");
-            const data = needsSeparator ? `\n\n${ev.data}` : ev.data;
-            controller.enqueue({ kind: "text", data });
-            hasEmittedText = true;
-            lastWasNonText = false;
-          } else if (ev.kind === "reasoning-delta") {
-            controller.enqueue({ kind: "reasoning", data: ev.data });
-            lastWasNonText = true;
-          } else if (ev.kind === "tool-call") {
-            const activity = buildActivity(ev.toolName, ev.input, opts.cwd, ev.callId);
-            controller.enqueue({ kind: "activity", ...activity });
-            lastWasNonText = true;
-          } else if (ev.kind === "tool-result") {
-            controller.enqueue({
-              kind: "activity-result",
-              callId: ev.callId,
-              output: ev.output,
-              isError: ev.isError,
-            });
-            lastWasNonText = true;
-          } else if (ev.kind === "tool-call-update") {
-            controller.enqueue({
-              kind: "activity-input",
-              callId: ev.callId,
-              payload: relativizeToolInput(ev.input, opts.cwd),
-            });
-            lastWasNonText = true;
-          } else if (ev.kind === "task-list-update") {
-            controller.enqueue({ kind: "task-list", tasks: ev.tasks });
-            lastWasNonText = true;
-          }
-        };
-        const wrappedEmit = fluidEmit(emit);
-        const decodeState = makeAcpDecodeState();
-        // Liveness for the harness' idle deadline. Noted off the RAW update
-        // (not `emit`) because `fluidEmit` delays delivery and some updates
-        // decode to zero normalized events while still proving the agent is
-        // alive.
-        const activity = makeActivityBeacon();
-        h.setListener(turnSessionId, (update) => {
-          activity.note();
-          for (const ev of decodeAcpSessionUpdate(update, decodeState)) wrappedEmit(ev);
-        });
-
-        // ACP has no separate system-prompt channel; prepend it on a fresh
-        // session (codex-style). On resume the agent already has it in context.
-        const promptText = opts.resumeSessionId
-          ? opts.message
-          : `${opts.systemPrompt}\n\n---\n\n${opts.message}`;
-        const promptBlocks = buildPromptBlocks({
-          promptText,
-          message: opts.message,
+        const { end } = await runAcpTurn({
+          label: "chat-acp",
+          launch: opts.launch,
           cwd: opts.cwd,
-          attachments: opts.attachments ?? [],
-          promptImage: h.promptImage,
-          embeddedContext: h.embeddedContext,
-        });
-
-        await withAgentTurn({
-          externalAbort: opts.abortController,
-          hardTimeoutMs: CLI_CHAT_TURN_TIMEOUT_MS,
-          idleTimeoutMs: CHAT_IDLE_TIMEOUT_MS,
-          activity,
-          jobStarted: async () => {
-            h.jobStarted();
-          },
-          jobEnded: async () => {
-            h.jobEnded();
-          },
-          debugLabel: "chat-acp",
-          abortSession: async () => {
-            await h.cancel(turnSessionId);
-          },
-          run: async () => {
-            const stopReason = await h.prompt(turnSessionId, promptBlocks);
-            if (stopReason === "refusal") {
-              controller.enqueue({ kind: "text", data: "\n\n_The agent declined to continue._" });
+          ...(opts.mcp ? { mcp: opts.mcp } : {}),
+          resumeSessionId: opts.resumeSessionId ?? null,
+          mode: planMode ? "plan" : "default",
+          deadlines: CHAT_TURN,
+          ...(opts.abortController ? { signal: opts.abortController.signal } : {}),
+          onSessionOpened: async (session) => {
+            if (session.fresh && opts.onSessionId) await opts.onSessionId(session.sessionId);
+            // Otherwise the reply silently comes from a model other than the picker's.
+            if (session.unavailableModel) {
+              controller.enqueue({
+                kind: "text",
+                data: `_Model "${session.unavailableModel}" isn't available, so this reply uses the agent's default model. Pick another model to change it._\n\n`,
+              });
             }
           },
+          prompt: (session) =>
+            buildPromptBlocks({
+              promptText: opts.promptText(session.fresh),
+              message: opts.message,
+              cwd: opts.cwd,
+              attachments: opts.attachments ?? [],
+              promptImage: session.promptImage,
+              embeddedContext: session.embeddedContext,
+            }),
+          onUpdate: (update) => {
+            for (const ev of decodeAcpSessionUpdate(update, decodeState)) fluid(ev);
+          },
         });
 
-        // Plan-mode synthesis: the buffered assistant turn IS the plan.
-        if (planMode) {
-          const planMarkdown = planTextBuffer.join("").trim();
-          if (planMarkdown.length > 0) {
-            controller.enqueue({ kind: "plan-presented", markdown: planMarkdown });
-          }
+        if (end.kind !== "stopped") throw new Error(end.reason);
+        if (end.stopReason === "refusal") {
+          controller.enqueue({ kind: "text", data: "\n\n_The agent declined to continue._" });
         }
-
+        // In plan mode the buffered assistant turn is the plan.
+        const planMarkdown = planMode ? planTextBuffer.join("").trim() : "";
+        if (planMarkdown.length > 0) {
+          controller.enqueue({ kind: "plan-presented", markdown: planMarkdown });
+        }
         controller.close();
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logError("chat-acp", "queryTask error:", msg);
-        controller.error(
-          new AiGenerationError({
-            cause: err,
-            message: withAgentKeychainHint(opts.acpAgentId, msg),
-          }),
-        );
+        const error = toAiError(err);
+        logError("chat-acp", "turn failed:", error.message ?? String(err));
+        controller.error(error);
       } finally {
-        if (handle && sessionId) {
-          handle.setListener(sessionId, null);
-          handle.setPlanMode(sessionId, false);
-        }
-        if (chatMcpToken) {
-          try {
-            await opts.deps.clearChatMcpToken(chatMcpToken);
-          } catch {
-            /* ignore */
-          }
-        }
+        opts.onFinished?.();
       }
     },
   });

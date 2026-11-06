@@ -21,12 +21,12 @@ import type {
   WalkthroughToolJudgments,
 } from "../../ai/providers/walkthrough-tools";
 import { WALKTHROUGH_TOOL_BUNDLE } from "../../ai/providers/walkthrough-tools";
+import type { Db } from "../../db";
 import { logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
-import { DbService } from "../../services/Db";
 import { WalkthroughJobs } from "../../services/WalkthroughJobs";
 import { fireAndForgetThreadEventBroadcast } from "./broadcast-thread-event";
-import { bindHttp, type ContextResolution, extractBearer } from "./utils";
+import { bindTokenMcpRoute } from "./utils";
 
 interface WalkthroughRouteMeta {
   readonly walkthroughId: string;
@@ -34,25 +34,10 @@ interface WalkthroughRouteMeta {
 
 // ── Token-scoped context builder ─────────────────────────────────────────────
 
-async function resolveContext(
-  req: Request,
-): Promise<ContextResolution<WalkthroughToolContext, WalkthroughRouteMeta>> {
-  const token = extractBearer(req);
-  if (!token) {
-    return { ok: false, status: 401, message: "Missing bearer token" };
-  }
-  const db = await AppRuntime.runPromise(Effect.flatMap(DbService, (s) => Effect.succeed(s.db)));
-  const resolved = await AppRuntime.runPromise(
-    Effect.flatMap(WalkthroughJobs, (jobs) => jobs.resolveSessionToken(token)),
-  );
-  if (!resolved) {
-    return {
-      ok: false,
-      status: 403,
-      message: "Session token not recognized or job no longer running",
-    };
-  }
-
+function toContext(
+  resolved: { readonly walkthroughId: string; readonly prId: string; readonly accountId: string },
+  db: Db,
+): { ctx: WalkthroughToolContext; meta: WalkthroughRouteMeta } {
   const walkthroughId = resolved.walkthroughId;
   const emit = (event: WalkthroughStreamEvent): void => {
     try {
@@ -127,7 +112,6 @@ async function resolveContext(
   };
 
   return {
-    ok: true,
     ctx: { db, walkthroughId, emit, broadcastThreadEvent, jev },
     meta: { walkthroughId },
   };
@@ -171,11 +155,14 @@ const PHASE_TOOL_META: Record<string, PhaseToolMeta> = {
   },
 };
 
-export const mcpWalkthroughRoute = bindHttp({
+export const mcpWalkthroughRoute = bindTokenMcpRoute({
   path: "/walkthrough",
   logScope: "mcp-walkthrough-route",
   bundle: WALKTHROUGH_TOOL_BUNDLE,
-  resolveContext,
+  resolveToken: (token) =>
+    Effect.flatMap(WalkthroughJobs, (jobs) => jobs.resolveSessionToken(token)),
+  rejected: "Session token not recognized or job no longer running",
+  toContext,
   logInbound: true,
   // File each content write inside the generation's trace — the agent calls us
   // from its own subprocess, so without this every write is an orphan trace.

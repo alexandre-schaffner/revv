@@ -25,12 +25,13 @@ import type {
   RecapStreamEvent,
   RecapWindowBounds,
 } from "@revv/shared";
-import { resolveThinkingEffort, rollingWindow, windowIsCurrent } from "@revv/shared";
+import { rollingWindow, windowIsCurrent } from "@revv/shared";
 import { SPAN } from "@revv/shared/telemetry";
 import { sql } from "drizzle-orm";
 import { Cause, Context, Effect, type Fiber, Layer, Ref, Semaphore } from "effect";
-import { isAcpAgentAvailable, resolveGenerationModel } from "../ai/acp/presets";
-import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../ai/agent-stream";
+import { resolveAgentLaunch } from "../ai/acp/agent-launch";
+import { isAgentLaunchable } from "../ai/acp/launch";
+import { JOB_TURN } from "../ai/acp/run-turn";
 import { runRecapAgentViaAcp } from "../ai/providers/recap-acp";
 import {
   type RecapSourcePrDiff,
@@ -78,11 +79,10 @@ export const MAX_CONCURRENT_RECAP_JOBS = 2;
 export const RECAP_MAX_RESUME_ATTEMPTS = 3;
 
 /**
- * TTL for HTTP-MCP session tokens. Derived from the turn ceiling so a token
- * never expires mid-run (the recap driver passes CLI_WALKTHROUGH_TIMEOUT_MS as
- * its `hardTimeoutMs`), plus slack for setup and teardown.
+ * TTL for HTTP-MCP session tokens: the turn ceiling, so a token never expires
+ * mid-run, plus slack for setup and teardown.
  */
-const RECAP_SESSION_TOKEN_TTL_MS = CLI_WALKTHROUGH_TIMEOUT_MS + 5 * 60_000;
+const RECAP_SESSION_TOKEN_TTL_MS = JOB_TURN.ceilingMs + 5 * 60_000;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -774,15 +774,11 @@ export const ProjectRecapJobsLive = Layer.effect(
           recapService.getLatestForRepo(job.repoId, { limit: 5 }),
         ).pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<ProjectRecap>)));
 
-        const settings = yield* settingsService.getSettings();
-        const effectiveAgent = yield* settingsService.resolveRecapAgent();
-
-        // Recap generation runs exclusively on the ACP transport now. The shared
-        // MCP tool handlers behind `/mcp/recap` are the same code every agent
-        // reaches (CLAUDE.md invariant #13 — agent-path parity).
-        const acpAgentId = effectiveAgent;
-        if (!isAcpAgentAvailable(acpAgentId)) {
-          const msg = `The configured recap agent ('${acpAgentId}') is not available on this machine.`;
+        const launch = yield* resolveAgentLaunch("recap").pipe(
+          Effect.provideService(SettingsService, settingsService),
+        );
+        if (!isAgentLaunchable(launch.agent)) {
+          const msg = `The configured recap agent ('${launch.agent}') is not available on this machine.`;
           logError("recap-jobs", `recap ${job.recapId}: ${msg}`);
           emit({ type: "error", data: { code: "RecapGenerationError", message: msg } });
           yield* setStatus(
@@ -793,8 +789,7 @@ export const ProjectRecapJobsLive = Layer.effect(
           return;
         }
 
-        const modelUsed =
-          resolveGenerationModel(effectiveAgent, settings.aiModel) ?? "claude-opus-4-5";
+        const modelUsed = launch.model;
         let calledAnyTool = false;
         const ctx: RecapToolContext = {
           db,
@@ -825,9 +820,7 @@ export const ProjectRecapJobsLive = Layer.effect(
               runRecapAgentViaAcp({
                 ctx,
                 sessionToken,
-                acpAgentId,
-                modelUsed,
-                thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
+                launch,
                 workingDir: repo.clonePath ?? process.cwd(),
                 abortController: job.abortController,
                 calledAnyTool: () => calledAnyTool,

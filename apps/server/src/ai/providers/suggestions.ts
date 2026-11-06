@@ -1,10 +1,8 @@
 // ── suggestions ────────────────────────────────────────────────────────────
 //
 // One-shot, no-tools provider for PR-aware chat starter prompts (rendered in
-// the right-panel empty-state). Runs over the same ACP transport as chat /
-// walkthrough / recap (see ai/acp/presets.ts) — the single transport that
-// replaced the bespoke claude / opencode / codex drivers — but deliberately
-// bypasses the chat pipeline:
+// the right-panel empty-state). A `promptOnce` turn, deliberately outside the
+// chat pipeline:
 //
 //   • No MCP tools — the agent gets a fresh ACP session with NO MCP servers
 //     attached, so it has only its built-in tools (which the prompt tells it
@@ -12,8 +10,7 @@
 //   • Ephemeral — the session id is never surfaced, persisted, or resumed into,
 //     so these throwaway turns can't appear in any history the user can resume.
 //     (The ACP agent may still spool a session file to its own store; that
-//     orphan is unreachable from Revv — an accepted change vs. the SDK path's
-//     `persistSession:false`.)
+//     orphan is unreachable from Revv.)
 //   • Single turn, capped output — we issue one prompt, collect the agent's
 //     text deltas, and parse the first JSON object out of them.
 //
@@ -23,9 +20,9 @@
 // historically hardcoded — keeping it server-side means the client doesn't
 // need to know about the fallback policy.
 
-import type { AcpAgentId, ThinkingEffort } from "@revv/shared";
 import { debug, logError } from "../../logger";
-import { promptOnce } from "./prompt-once";
+import type { AgentLaunch } from "../acp/agent-launch";
+import { promptOnce } from "../acp/run-turn";
 
 export const FALLBACK_PROMPTS: readonly string[] = [
   "What's the riskiest change here?",
@@ -63,12 +60,7 @@ export interface GenerateSuggestionsInput {
   readonly additions: number;
   readonly deletions: number;
   readonly walkthrough: SuggestionsWalkthroughContext | null;
-  /** Resolved ACP registry agent id that produces the suggestions. */
-  readonly acpAgentId: AcpAgentId;
-  /** Working directory the ACP connection is pooled under (server cwd is fine — no tools run). */
-  readonly cwd: string;
-  readonly model: string;
-  readonly thinkingEffort?: ThinkingEffort | undefined;
+  readonly launch: AgentLaunch;
 }
 
 const SYSTEM_PROMPT = `You are helping a code reviewer skim a pull request. \
@@ -203,31 +195,14 @@ function sanitizePrompts(values: unknown[]): string[] {
   return out;
 }
 
-async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      reject(new Error(`${label} timed out after ${ms}ms`));
-    }, ms);
-  });
-  try {
-    return await Promise.race([promise, timeout]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
 // ── ACP one-shot ─────────────────────────────────────────────────────────────
 
 async function generateViaAcp(input: GenerateSuggestionsInput): Promise<string[]> {
   const collected = await promptOnce({
-    cwd: input.cwd,
-    agent: input.acpAgentId,
-    model: input.model,
-    effort: input.thinkingEffort,
-    timeoutMs: SUGGESTIONS_TIMEOUT_MS,
+    label: "suggestions-acp",
+    launch: input.launch,
+    ceilingMs: SUGGESTIONS_TIMEOUT_MS,
     text: `${SYSTEM_PROMPT}\n\n---\n\n${buildUserMessage(input)}`,
-    debugLabel: "suggestions-acp",
   });
   const parsed = parsePrompts(collected);
   if (!parsed) {
@@ -240,14 +215,10 @@ async function generateViaAcp(input: GenerateSuggestionsInput): Promise<string[]
 
 export async function generateSuggestions(input: GenerateSuggestionsInput): Promise<string[]> {
   try {
-    const result = await withTimeout(
-      generateViaAcp(input),
-      SUGGESTIONS_TIMEOUT_MS,
-      `suggestions:${input.acpAgentId}`,
-    );
+    const result = await generateViaAcp(input);
     debug(
       "suggestions",
-      `generated ${result.length} prompts via ${input.acpAgentId}/${input.model}`,
+      `generated ${result.length} prompts via ${input.launch.agent}/${input.launch.model}`,
     );
     return result;
   } catch (err) {

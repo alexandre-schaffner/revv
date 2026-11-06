@@ -1,4 +1,8 @@
-// ── Agent keychain access guidance (Solution B: guide, don't store) ──────────
+// ── Agent failures: classification and sign-in / Keychain guidance ───────────
+//
+// Every agent turn failure leaves the runner as an `AgentTurnError` whose
+// `kind` says whether it is an auth problem, so callers (and the web) branch
+// on the kind instead of re-reading the message.
 //
 // Some ACP agents store their login in the macOS login Keychain (Claude Code
 // today; declared per-agent via `keychainAuth` in the shared ACP registry).
@@ -27,12 +31,19 @@
 // "already signed in?" hint (agent reports not logged in, so ACL is only a
 // fallback guess — the status check itself could be what's ACL-blocked).
 
+import { RequestError } from "@agentclientprotocol/sdk";
 import { type AcpAgentId, getAcpAgent, getAgentKeychainAuth } from "@revv/shared";
-import { detectAgentAuth } from "../providers/cli-agent";
+import type { AgentFailureKind } from "../../domain/errors";
+import { detectAgentAuth } from "./agents";
+
+/** ACP's `auth_required` error code (`RequestError.authRequired`). */
+const ACP_AUTH_REQUIRED = -32000;
 
 /**
- * Whether a raw ACP error looks like an auth/keychain block (401, unauthorized,
- * expired token, or the subprocess exiting → "connection closed").
+ * Whether a raw agent error looks like an auth/keychain block (401,
+ * unauthorized, expired token, or the subprocess exiting → "connection
+ * closed"). Agents mostly report auth failures as free text, so this is the
+ * fallback behind ACP's structured `auth_required`.
  */
 export function looksLikeAuthFailure(message: string): boolean {
   return /401|unauthor|authenticat|invalid api key|oauth|connection closed/i.test(message);
@@ -89,4 +100,38 @@ export function withAgentKeychainHint(
 ): string {
   const guidance = agentFailureGuidance(agent, rawMessage, isLoggedIn);
   return guidance ? `${rawMessage}\n\n${guidance}` : rawMessage;
+}
+
+/**
+ * A failed agent turn. `message` is the agent's error with any guidance after
+ * a blank line; `agentMessage` and `guidance` keep the two apart.
+ */
+export class AgentTurnError extends Error {
+  readonly kind: AgentFailureKind;
+  readonly agentMessage: string;
+  readonly guidance: string | null;
+
+  constructor(
+    agentMessage: string,
+    kind: AgentFailureKind,
+    guidance: string | null = null,
+    options?: { readonly cause?: unknown },
+  ) {
+    super(guidance ? `${agentMessage}\n\n${guidance}` : agentMessage, options);
+    this.name = "AgentTurnError";
+    this.kind = kind;
+    this.agentMessage = agentMessage;
+    this.guidance = guidance;
+  }
+}
+
+/** Classify a raw failure from an agent and attach the guidance for it. */
+export function toAgentTurnError(agent: AcpAgentId, err: unknown): AgentTurnError {
+  if (err instanceof AgentTurnError) return err;
+  const raw = err instanceof Error ? err.message : String(err);
+  const auth =
+    (err instanceof RequestError && err.code === ACP_AUTH_REQUIRED) || looksLikeAuthFailure(raw);
+  return new AgentTurnError(raw, auth ? "auth" : "other", agentFailureGuidance(agent, raw), {
+    cause: err,
+  });
 }

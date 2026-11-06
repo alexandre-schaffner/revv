@@ -30,6 +30,9 @@ export type ApiErrorCode =
   | "REF_EXISTS"
   | "PUSH_REJECTED"
   | "GENERATION_ERROR"
+  // The agent isn't signed in, or Revv can't read its login (Keychain). Also
+  // the code of a walkthrough's `error` / `lifecycle:error` event for it.
+  | "AGENT_AUTH_REQUIRED"
   | "INTERNAL_ERROR";
 
 /** The JSON body of a refused REST request. */

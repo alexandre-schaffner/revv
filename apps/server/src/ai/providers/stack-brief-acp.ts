@@ -1,5 +1,5 @@
-import type { AcpAgentId, ThinkingEffort } from "@revv/shared";
 import type { StackBriefSnapshot } from "../../db/schema/stack-briefs";
+import type { AgentLaunch } from "../acp/agent-launch";
 import { buildStackBriefUserMessage, STACK_BRIEF_SYSTEM_PROMPT } from "../prompts/stack-brief";
 import { type McpAgentAcpResult, runMcpAgentViaAcp } from "./mcp-agent-acp";
 import type { StackBriefToolContext } from "./stack-brief-tools";
@@ -9,9 +9,7 @@ export interface RunStackBriefAcpParams {
   readonly ctx: StackBriefToolContext;
   readonly snapshot: StackBriefSnapshot;
   readonly sessionToken: string;
-  readonly acpAgentId: AcpAgentId;
-  readonly modelUsed: string;
-  readonly thinkingEffort?: ThinkingEffort | undefined;
+  readonly launch: AgentLaunch;
   readonly workingDir: string;
   readonly abortController: AbortController;
   readonly calledAnyTool: () => boolean;
@@ -22,9 +20,7 @@ export function runStackBriefAgentViaAcp(
   params: RunStackBriefAcpParams,
 ): Promise<McpAgentAcpResult> {
   return runMcpAgentViaAcp({
-    acpAgentId: params.acpAgentId,
-    modelUsed: params.modelUsed,
-    thinkingEffort: params.thinkingEffort,
+    launch: params.launch,
     workingDir: params.workingDir,
     abortController: params.abortController,
     route: "/mcp/stack-brief",
@@ -33,7 +29,6 @@ export function runStackBriefAgentViaAcp(
     prompt: `${STACK_BRIEF_SYSTEM_PROMPT}\n\n---\n\n${buildStackBriefUserMessage(params.snapshot)}`,
     calledAnyTool: params.calledAnyTool,
     isValidated: params.isValidated,
-    purpose: "the stack brief",
     debugLabel: "stack-brief-acp",
   });
 }

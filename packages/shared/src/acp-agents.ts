@@ -6,15 +6,14 @@
 // (to render the provider list + the model/effort/context selectors) consume the
 // same list.
 //
-// Adding a new ACP-compatible agent = ONE entry below. Its id automatically
-// becomes part of `AcpAgentId`, appears in the provider list, and is launchable
-// — no other code changes beyond the server-only launch concerns in
-// apps/server/src/ai/acp/presets.ts (overrides, availability, per-adapter model/
-// effort/context injection), keyed by these same ids.
+// Adding a new ACP-compatible agent = ONE entry below plus its server adapter
+// (`apps/server/src/ai/acp/agents/<id>.ts`, the behaviour: how model and effort
+// reach it, its auth probe, its environment). Both tables are keyed by
+// `AcpAgentId`, so a missing adapter is a compile error.
 
 /**
  * Revv's thinking-effort tiers. `extra-high` is Revv's key for the providers'
- * `xhigh` level (see `presets.ts` for the per-agent mapping). `ultrathink` is
+ * `xhigh` level (see the server agent adapters for the per-agent mapping). `ultrathink` is
  * retained only so persisted `user_settings.ai_thinking_effort` rows written
  * before the tier was retired still parse — no agent offers it, and both the
  * selector and `applyAgentDefaults` coerce it away on next render.
@@ -84,6 +83,21 @@ export interface AcpAgentKeychainAuth {
   readonly remediation: string;
 }
 
+/** The agent vendor's own CLI: what onboarding installs and signs in with. */
+export interface AcpAgentCli {
+  /** Binary name the installer puts on PATH, and argv[0] of the login command. */
+  readonly bin: string;
+  /** The vendor's one-line installer. */
+  readonly install: readonly string[];
+  /** Home-relative directories the installer writes `bin` to. */
+  readonly installBinDirs: readonly string[];
+  /**
+   * Args after `bin` of the interactive login: a dedicated subcommand that
+   * exits once auth completes. `null` when the agent needs no login.
+   */
+  readonly loginArgs: readonly string[] | null;
+}
+
 export interface AcpAgentDescriptor {
   /** Stable id — persisted as the chat-agent setting and the connection-pool key. */
   readonly id: string;
@@ -99,6 +113,7 @@ export interface AcpAgentDescriptor {
   readonly args: readonly string[];
   /** Model / context-window / thinking-effort surface Revv exposes for this agent. */
   readonly capabilities: AcpAgentCapabilities;
+  readonly cli: AcpAgentCli;
   /**
    * The mode Revv puts every session in when it opens or reloads it, so the
    * agent asks Revv for permissions rather than deciding them itself. Absent
@@ -137,6 +152,14 @@ export const ACP_AGENTS = [
     // Code's classifier approves tools instead of Revv: a model call per tool,
     // and the plan-mode guard in `acp-connection.ts` never runs.
     sessionMode: "default",
+    cli: {
+      bin: "claude",
+      install: ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"],
+      installBinDirs: [".local/bin"],
+      // `/login` is the in-REPL slash command, not a subcommand. `--claudeai`
+      // signs in with the subscription; `--console` would be API billing.
+      loginArgs: ["auth", "login", "--claudeai"],
+    },
     capabilities: {
       defaultModel: "claude-sonnet-5-5",
       suggestionsModel: "claude-haiku-4-5-20251001",
@@ -174,6 +197,13 @@ export const ACP_AGENTS = [
     icon: "opencode",
     command: "opencode",
     args: ["acp"],
+    cli: {
+      bin: "opencode",
+      install: ["bash", "-c", "curl -fsSL https://opencode.ai/install | bash"],
+      installBinDirs: [".opencode/bin", ".local/bin"],
+      // A local engine: nothing to sign in to.
+      loginArgs: null,
+    },
     capabilities: {
       defaultModel: "opencode/big-pickle",
       suggestionsModel: "opencode/big-pickle",
@@ -194,6 +224,12 @@ export const ACP_AGENTS = [
     icon: "openai",
     command: "npx",
     args: ["-y", "@agentclientprotocol/codex-acp"],
+    cli: {
+      bin: "codex",
+      install: ["bash", "-c", "curl -fsSL https://chatgpt.com/codex/install.sh | sh"],
+      installBinDirs: [".local/bin"],
+      loginArgs: ["login"],
+    },
     capabilities: {
       defaultModel: "gpt-6.1-sol",
       suggestionsModel: "gpt-6-luna",
@@ -228,6 +264,13 @@ export const ACP_AGENTS = [
     icon: "cursor",
     command: "npx",
     args: ["-y", "cursor-agent-acp"],
+    cli: {
+      // Cursor's docs alias the binary as `agent`; the installed one is `cursor-agent`.
+      bin: "cursor-agent",
+      install: ["bash", "-c", "curl https://cursor.com/install -fsS | bash"],
+      installBinDirs: [".local/bin"],
+      loginArgs: ["login"],
+    },
     capabilities: {
       defaultModel: "auto",
       suggestionsModel: "auto",

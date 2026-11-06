@@ -380,8 +380,6 @@ export const BaseConflictsServiceLive = Layer.effect(
               cwd: op.scratchPath,
               task,
               conflictFiles,
-              prId: pr.id,
-              userId: params.userId,
             });
             yield* pumpAgentFrames(agentStream, offer);
           }

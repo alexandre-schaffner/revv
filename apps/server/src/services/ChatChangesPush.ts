@@ -47,7 +47,7 @@
 
 import { ACP_AGENT_IDS, type AgentProgressFrame } from "@revv/shared";
 import { Context, Effect, Layer, Queue } from "effect";
-import { CHAT_IDLE_TIMEOUT_MS } from "../ai/agent-stream";
+import { CHAT_TURN } from "../ai/acp/run-turn";
 import {
   type AiError,
   ChatStreamingConflictError,
@@ -257,7 +257,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
     // own chat idle deadline, deliberately the same constant the chat stream
     // guard arms itself with: past it the turn has already been killed
     // upstream, so treating the lease as live could only ever be wrong.
-    const chatStreams = createChatStreamLeases(CHAT_IDLE_TIMEOUT_MS);
+    const chatStreams = createChatStreamLeases(CHAT_TURN.idleMs);
 
     /**
      * Clear an abandoned merge out of the session's worktree. Returns whether
@@ -1089,8 +1089,6 @@ export const ChatChangesPushServiceLive = Layer.effect(
               sourceBranch: ctx.pr.sourceBranch,
             },
             conflictFiles,
-            prId: ctx.pr.id,
-            userId: params.userId,
           })
           .pipe(
             Effect.tapError(() =>

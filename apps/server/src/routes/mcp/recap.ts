@@ -6,35 +6,19 @@
 
 import type { RecapStreamEvent } from "@revv/shared";
 import { Effect } from "effect";
+import { buildRecapActivity } from "../../ai/providers/recap-activity";
 import type { RecapToolContext } from "../../ai/providers/recap-tools";
 import { RECAP_TOOL_BUNDLE } from "../../ai/providers/recap-tools";
 import { logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
 import { ProjectRecapJobs } from "../../services/ProjectRecapJobs";
-import { bindHttp, type ContextResolution, extractBearer } from "./utils";
+import { bindTokenMcpRoute } from "./utils";
 
 interface RecapRouteMeta {
   readonly recapId: string;
 }
 
-async function resolveContext(
-  req: Request,
-): Promise<ContextResolution<RecapToolContext, RecapRouteMeta>> {
-  const token = extractBearer(req);
-  if (!token) {
-    return { ok: false, status: 401, message: "Missing bearer token" };
-  }
-  const baseCtx = await AppRuntime.runPromise(
-    Effect.flatMap(ProjectRecapJobs, (jobs) => jobs.resolveSessionToken(token)),
-  );
-  if (!baseCtx) {
-    return {
-      ok: false,
-      status: 403,
-      message: "Session token not recognized, expired, or job no longer running",
-    };
-  }
-
+function toContext(baseCtx: RecapToolContext): { ctx: RecapToolContext; meta: RecapRouteMeta } {
   const emit = (event: RecapStreamEvent): void => {
     try {
       AppRuntime.runSync(
@@ -48,22 +32,25 @@ async function resolveContext(
       );
     }
   };
-
-  return {
-    ok: true,
-    ctx: { ...baseCtx, emit },
-    meta: { recapId: baseCtx.recapId },
-  };
+  return { ctx: { ...baseCtx, emit }, meta: { recapId: baseCtx.recapId } };
 }
 
-export const mcpRecapRoute = bindHttp({
+export const mcpRecapRoute = bindTokenMcpRoute({
   path: "/recap",
   logScope: "mcp-recap-route",
   bundle: RECAP_TOOL_BUNDLE,
-  resolveContext,
+  resolveToken: (token) =>
+    Effect.flatMap(ProjectRecapJobs, (jobs) => jobs.resolveSessionToken(token)),
+  rejected: "Session token not recognized, expired, or job no longer running",
+  toContext,
   logInbound: true,
   traceAnchorKey: (meta) => meta.recapId,
-  beforeToolCall: ({ toolName, ctx }) => ctx.onToolCall(toolName),
+  // The agent's stream names an MCP tool call only by a human title; this is
+  // the one place that knows which recap tool ran.
+  beforeToolCall: ({ toolName, input, ctx }) => {
+    ctx.onToolCall(toolName);
+    ctx.emit({ type: "activity", data: buildRecapActivity(toolName, input) });
+  },
   servedMessage: (requests, _ctx, meta) =>
     `served ${requests.length} request(s), recapId=${meta.recapId}`,
 });

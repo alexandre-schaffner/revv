@@ -54,6 +54,8 @@ export interface WalkthroughEntry {
   lastCompletedPhase: WalkthroughPipelinePhase;
   isStreaming: boolean;
   streamError: string | null;
+  /** The server's code for `streamError`, when a live error event carried one. */
+  streamErrorCode: string | null;
   walkthroughId: string | null;
   doneReceived: boolean;
   superseded: boolean;
@@ -136,6 +138,7 @@ export function startingEntry(
     lastCompletedPhase: "none",
     isStreaming: true,
     streamError: null,
+    streamErrorCode: null,
     walkthroughId: null,
     doneReceived: false,
     superseded: false,
@@ -239,11 +242,13 @@ function fail(
     if (entry.cloneRepoId === null) {
       entry.streamError =
         "Walkthrough could not start: the repository is cloning, but the server did not report which one. Retry to try again.";
+      entry.streamErrorCode = null;
     }
     return;
   }
   // A user-initiated stop: the entry falls through to resumable or idle.
   entry.streamError = failure.code === "Cancelled" ? null : failure.message;
+  entry.streamErrorCode = failure.code === "Cancelled" ? null : failure.code;
 }
 
 /** Fold streamed events into `entry`. Returns a new entry; `entry` is untouched. */
@@ -508,6 +513,7 @@ export function mergeSnapshot(
     isError && !isHistorical
       ? (wt.errorMessage ?? "Walkthrough generation failed. Resume or regenerate to retry.")
       : null;
+  entry.streamErrorCode = null;
   // A generating row is never shown as outdated: `stale` compares head SHAs
   // that can disagree while a sync is in flight. A really stale row gets
   // superseded server-side, with `lifecycle:superseded` for this id.

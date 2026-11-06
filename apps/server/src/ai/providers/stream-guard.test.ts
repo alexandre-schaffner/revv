@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { WalkthroughStreamEvent } from "@revv/shared";
-import { ZERO_TOKEN_USAGE } from "../agent-stream";
 import { guardWalkthroughStream } from "./stream-guard";
+import { ZERO_TOKEN_USAGE } from "./walkthrough-token-usage";
 
 async function* delayedEvents(
   events: readonly WalkthroughStreamEvent[],

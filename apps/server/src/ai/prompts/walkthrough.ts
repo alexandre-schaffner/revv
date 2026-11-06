@@ -1,5 +1,4 @@
 /// <reference path="../../assets.d.ts" />
-import { isAbsolute, relative } from "node:path";
 import {
   HUNK_SMELL_META,
   hunkNewEnd,
@@ -78,58 +77,6 @@ export function buildWalkthroughSystemPrompt(mode: WalkthroughMode = REVIEW_MODE
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-/**
- * Render a tool's path argument relative to the agent's working directory
- * (the per-job git worktree). Agents are handed absolute worktree paths, so
- * the raw `file_path` is a long `/Users/…/worktree/apps/server/…` string that
- * clips in the narrow exploration feed. Relativizing against `cwd` yields the
- * familiar repo-relative form (`apps/server/…`). Falls back to the original
- * path when no `cwd` is supplied, the path isn't absolute (already relative,
- * e.g. Grep's `.`), or it resolves outside the worktree (so we never surface a
- * confusing `../../` escape).
- */
-export function toRepoRelative(p: string, cwd?: string): string {
-  if (!p || !cwd || !isAbsolute(p)) return p;
-  const rel = relative(cwd, p);
-  if (!rel || rel.startsWith("..")) return p;
-  return rel;
-}
-
-export function buildExplorationDescription(
-  toolName: string,
-  input: unknown,
-  cwd?: string,
-): string {
-  const inp = input as Record<string, unknown> | null | undefined;
-  const str = (k: string): string => (typeof inp?.[k] === "string" ? (inp[k] as string) : "");
-  const path = (k: string): string => toRepoRelative(str(k), cwd);
-  switch (toolName) {
-    case "Read":
-      return `Reading ${path("file_path") || "file"}`;
-    case "Grep":
-      return `Searching for '${str("pattern")}' in ${path("path") || "codebase"}`;
-    case "Glob":
-      return `Finding files matching ${str("pattern") || "*"}`;
-    case "LS":
-      return `Listing ${path("path") || "."}`;
-    case "Write":
-      return `Wrote ${path("file_path") || "file"}`;
-    case "Edit":
-      return `Edited ${path("file_path") || "file"}`;
-    case "Bash": {
-      // Single-line, truncated. The first line of the command is enough
-      // signal for the chat panel; full command is in the agent transcript.
-      const cmd = str("command");
-      if (!cmd) return "Running shell command";
-      const firstLine = cmd.split("\n")[0] ?? cmd;
-      const truncated = firstLine.length > 80 ? `${firstLine.slice(0, 77)}…` : firstLine;
-      return `$ ${truncated}`;
-    }
-    default:
-      return `Using ${toolName}`;
-  }
-}
 
 /** Human-readable attention tier, for the ranked list and the file headers. */
 function tierLabel(tier: number | null): string {

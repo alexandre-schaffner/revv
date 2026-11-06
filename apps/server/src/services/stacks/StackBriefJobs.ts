@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { isOpenLayer, resolveThinkingEffort, type StackBriefStatus } from "@revv/shared";
+import { isOpenLayer, type StackBriefStatus } from "@revv/shared";
 import { and, eq, inArray, ne } from "drizzle-orm";
 import { Cause, Context, Effect, type Fiber, Layer, Ref, Semaphore } from "effect";
-import { isAcpAgentAvailable } from "../../ai/acp/presets";
-import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../../ai/agent-stream";
+import { resolveAgentLaunch } from "../../ai/acp/agent-launch";
+import { isAgentLaunchable } from "../../ai/acp/launch";
+import { JOB_TURN } from "../../ai/acp/run-turn";
 import { runStackBriefAgentViaAcp } from "../../ai/providers/stack-brief-acp";
 import {
   type StackBriefToolContext,
@@ -22,7 +23,6 @@ import { PrContextService } from "../PrContext";
 import { Realtime } from "../Realtime";
 import { SettingsService } from "../Settings";
 import { makeSessionTokenStore } from "../session-token-store";
-import { resolveWalkthroughLaunch } from "../walkthrough-job-context";
 import { stackSignature } from "./fingerprint";
 import type { GitHubStack } from "./map";
 import { type StackError, StackService } from "./StackService";
@@ -31,7 +31,7 @@ const MAX_CONCURRENT_BRIEF_JOBS = 1;
 
 export const STACK_BRIEF_MAX_RESUME_ATTEMPTS = 3;
 
-const SESSION_TOKEN_TTL_MS = CLI_WALKTHROUGH_TIMEOUT_MS + 5 * 60_000;
+const SESSION_TOKEN_TTL_MS = JOB_TURN.ceilingMs + 5 * 60_000;
 
 const BODY_EXCERPT_CHARS = 1200;
 
@@ -173,24 +173,16 @@ export const StackBriefJobsLive = Layer.effect(
           return;
         }
 
-        const settings = yield* settingsService.getSettings();
-        const agent = yield* settingsService.resolveAgent();
-        if (!isAcpAgentAvailable(agent)) {
+        const launch = yield* resolveAgentLaunch("brief").pipe(
+          Effect.provideService(SettingsService, settingsService),
+        );
+        if (!isAgentLaunchable(launch.agent)) {
           yield* finish(job.briefId, "error", {
-            errorMessage: `The configured agent ('${agent}') is not available on this machine.`,
+            errorMessage: `The configured agent ('${launch.agent}') is not available on this machine.`,
           });
           return;
         }
-        const { modelUsed } = resolveWalkthroughLaunch({
-          agent,
-          trigger: "user",
-          configuredModel: settings.aiModel,
-          routedModel: null,
-          priorModel: null,
-          configuredEffort: settings.aiThinkingEffort,
-          routedEffort: null,
-          maxTurns: settings.aiMaxTurns,
-        });
+        const modelUsed = launch.model;
         const repo = yield* withDb(db, prCtx.getRepo(row.repositoryId)).pipe(
           Effect.orElseSucceed(() => null),
         );
@@ -218,9 +210,7 @@ export const StackBriefJobsLive = Layer.effect(
                 ctx,
                 snapshot,
                 sessionToken,
-                acpAgentId: agent,
-                modelUsed,
-                thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
+                launch,
                 workingDir: repo?.clonePath ?? process.cwd(),
                 abortController: job.abortController,
                 calledAnyTool: () => calledAnyTool,
