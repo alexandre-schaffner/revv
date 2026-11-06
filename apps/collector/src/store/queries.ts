@@ -6,6 +6,7 @@
 // as plain numbers (no timestamp objects to normalize on the client).
 
 import type { DuckDBConnection } from "@duckdb/node-api";
+import { SPAN, SPAN_ATTR } from "@revv/shared/telemetry";
 import type {
   GenerationRun,
   Kpis,
@@ -25,8 +26,8 @@ type Row = Record<string, unknown>;
 // Categorise spans into the buckets that matter for a code-review tool, and
 // flag low-insight bookkeeping spans as "noise" so the per-operation views can
 // surface real work by default. Kept as SQL so every query classifies
-// identically. Coupled to span names by design (same spirit as the
-// `WalkthroughJobs.generate` KPI) — the names are the contract.
+// identically. Exact names come from the shared telemetry contract; the
+// prefixes are the server's span namespaces.
 const CATEGORY_SQL = `CASE
   WHEN service_name = 'revv-web' THEN 'rum'
   WHEN name LIKE 'GitHub.%' THEN 'github'
@@ -35,12 +36,12 @@ const CATEGORY_SQL = `CASE
   -- them together is what made "the agent is slow" unactionable.
   WHEN name LIKE 'Agent.%' OR name LIKE 'claude_code.tool%' THEN 'agent-tools'
   WHEN name LIKE 'Mcp.%' THEN 'mcp'
-  WHEN name = 'WalkthroughJobs.generate' OR name LIKE 'Ai.%' OR name LIKE 'Chat.%'
+  WHEN name = '${SPAN.walkthroughGenerate}' OR name LIKE 'Ai.%' OR name LIKE 'Chat.%'
        OR name LIKE 'Acp.%' OR name LIKE 'Walkthrough.%' OR name LIKE 'claude_code.%'
        OR name LIKE 'ProjectRecapJobs.%' OR service_name = 'revv-opencode' THEN 'agent'
   WHEN name LIKE 'RepoClone.%' THEN 'git'
   WHEN name LIKE '%Scheduler.%' OR name LIKE 'PollScheduler%' THEN 'sync'
-  WHEN name = 'http.request' THEN 'http'
+  WHEN name = '${SPAN.httpRequest}' THEN 'http'
   ELSE 'internal'
 END`;
 
@@ -48,7 +49,7 @@ END`;
 // but near-zero-duration / high-volume, so they bury real operations in the
 // summary table. Excluded by default; the dashboard can opt them back in.
 const NOISE_SQL = `name IN (
-  'WalkthroughJobs.emitEvent', 'WalkthroughJobs.setStatus', 'WalkthroughJobs.job',
+  '${SPAN.walkthroughEmitEvent}', '${SPAN.walkthroughSetStatus}', '${SPAN.walkthroughJob}',
   'OpencodeSupervisor.jobStarted', 'OpencodeSupervisor.jobEnded', 'OpencodeSupervisor.stopNow'
 )`;
 
@@ -371,7 +372,7 @@ export async function generations(
     FROM spans g
     LEFT JOIN counts c ON c.trace_id = g.trace_id
     WHERE g.start_ms >= $1 AND g.start_ms <= $2
-      AND g.name IN ('WalkthroughJobs.generate', 'ProjectRecapJobs.generate')${service}
+      AND g.name IN ('${SPAN.walkthroughGenerate}', '${SPAN.recapGenerate}')${service}
     ORDER BY g.start_ms DESC
     LIMIT ${Math.max(1, Math.round(opts.limit))}`;
   const rows = await read(conn, sql, params);
@@ -416,20 +417,20 @@ export async function kpis(
       count(*) FILTER (WHERE status_code = 2) AS error_count,
       -- walkthrough generation: the dedicated generation span wraps the full
       -- run, so its duration is the real end-to-end generation time (the
-      -- 'WalkthroughJobs.job' span forks and returns in ~0ms — excluded here).
+      -- job span forks and returns in ~0ms — excluded here).
       quantile_cont(duration_ms, 0.5) FILTER (
-        WHERE name = 'WalkthroughJobs.generate'
+        WHERE name = '${SPAN.walkthroughGenerate}'
       ) AS wt_median,
       avg(tool_call_count) FILTER (WHERE tool_call_count IS NOT NULL) AS avg_tool_calls,
       avg(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)) FILTER (
         WHERE input_tokens IS NOT NULL OR output_tokens IS NOT NULL
       ) AS avg_tokens,
       quantile_cont(duration_ms, 0.95) FILTER (
-        WHERE name ILIKE 'github%' OR http_method IS NOT NULL
+        WHERE name ILIKE 'github%' OR (http_method IS NOT NULL AND name <> '${SPAN.httpRequest}')
       ) AS github_p95,
       -- median time-to-first-token across the generation spans that carry it
-      median(TRY_CAST(attributes->>'ttft_ms' AS DOUBLE)) FILTER (
-        WHERE attributes->>'ttft_ms' IS NOT NULL
+      median(TRY_CAST(attributes->>'${SPAN_ATTR.ttftMs}' AS DOUBLE)) FILTER (
+        WHERE attributes->>'${SPAN_ATTR.ttftMs}' IS NOT NULL
       ) AS ttft_median
     FROM spans
     WHERE start_ms >= $1 AND start_ms <= $2${svc}`;

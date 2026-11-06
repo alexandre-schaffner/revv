@@ -1,3 +1,4 @@
+import { SPAN_ATTR } from "@revv/shared/telemetry";
 import { Effect } from "effect";
 
 interface Metrics {
@@ -55,7 +56,9 @@ export const withWalkthroughMetrics =
       (metrics) =>
         Effect.gen(function* () {
           if (active.get(id) === metrics) active.delete(id);
-          yield* Effect.annotateCurrentSpan("tool_call_count", metrics.contentWrites);
-          if (metrics.ttftMs !== null) yield* Effect.annotateCurrentSpan("ttft_ms", metrics.ttftMs);
+          yield* Effect.annotateCurrentSpan(SPAN_ATTR.toolCallCount, metrics.contentWrites);
+          if (metrics.ttftMs !== null) {
+            yield* Effect.annotateCurrentSpan(SPAN_ATTR.ttftMs, metrics.ttftMs);
+          }
         }),
     );

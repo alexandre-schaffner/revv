@@ -18,6 +18,7 @@
 
 import type { ProjectRecap, RecapPeriod, RecapStreamEvent } from "@revv/shared";
 import { resolveThinkingEffort } from "@revv/shared";
+import { SPAN } from "@revv/shared/telemetry";
 import { sql } from "drizzle-orm";
 import { Cause, Context, Effect, type Fiber, Layer, Ref, Semaphore } from "effect";
 import { isAcpAgentAvailable, resolveGenerationModel } from "../ai/acp/presets";
@@ -967,7 +968,7 @@ export const ProjectRecapJobsLive = Layer.effect(
             // forked body so its duration is the real recap-generation time and
             // it can carry the ttft_ms annotation ('ProjectRecapJobs.job' forks
             // and returns in ~0ms).
-            Effect.withSpan("ProjectRecapJobs.generate", {
+            Effect.withSpan(SPAN.recapGenerate, {
               attributes: { recapId: job.recapId, period: job.period },
             }),
           );

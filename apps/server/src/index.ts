@@ -1,4 +1,5 @@
 import { cors } from "@elysiajs/cors";
+import { SPAN, SPAN_ATTR } from "@revv/shared/telemetry";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
 import { stopAllAcpConnections } from "./ai/acp/acp-connection";
@@ -73,6 +74,14 @@ if (ledgerPath !== null) {
   });
 }
 
+function requestAttrs(request: Request, status: unknown): Record<string, unknown> {
+  return {
+    [SPAN_ATTR.httpMethod]: request.method,
+    [SPAN_ATTR.urlPath]: new URL(request.url).pathname,
+    [SPAN_ATTR.httpStatus]: Number(status),
+  };
+}
+
 const roughRoute = (pathname: string) => pathname.replace(/\/[^/]*(?:\d|:)[^/]*/g, "/:id");
 
 const app = new Elysia()
@@ -108,28 +117,21 @@ const app = new Elysia()
   .onAfterHandle(({ request, store, set }) => {
     const startMs = (store as { _revvStartMs?: number })._revvStartMs;
     if (startMs == null) return;
-    const url = new URL(request.url);
-    recordSpan("http.request", startMs, performance.now() - startMs, {
-      method: request.method,
-      path: url.pathname,
-      status: set.status,
-      statusClass: `${Math.floor(Number(set.status) / 100)}xx`,
-    });
+    recordSpan(
+      SPAN.httpRequest,
+      startMs,
+      performance.now() - startMs,
+      requestAttrs(request, set.status),
+    );
   })
   .onError(({ request, store, set, error: err }) => {
     const startMs = (store as { _revvStartMs?: number })._revvStartMs;
     if (startMs == null) return;
-    const url = new URL(request.url);
     recordSpan(
-      "http.request",
+      SPAN.httpRequest,
       startMs,
       performance.now() - startMs,
-      {
-        method: request.method,
-        path: url.pathname,
-        status: set.status ?? 500,
-        statusClass: `${Math.floor(Number(set.status ?? 500) / 100)}xx`,
-      },
+      requestAttrs(request, set.status ?? 500),
       err instanceof Error
         ? { name: err.name, message: err.message }
         : { name: "Error", message: String(err) },

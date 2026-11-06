@@ -39,6 +39,7 @@ import {
   type WalkthroughStreamEvent,
   type WalkthroughTokenUsage,
 } from "@revv/shared";
+import { SPAN } from "@revv/shared/telemetry";
 import { eq } from "drizzle-orm";
 import {
   Cause,
@@ -493,7 +494,7 @@ export const WalkthroughJobsLive = Layer.effect(
       status: WalkthroughStatus,
       options?: { tokenUsage?: WalkthroughTokenUsage; errorMessage?: string },
     ) =>
-      Effect.withSpan("WalkthroughJobs.setStatus", {
+      Effect.withSpan(SPAN.walkthroughSetStatus, {
         attributes: { walkthroughId, status },
       })(
         provideDb(
@@ -1148,7 +1149,7 @@ export const WalkthroughJobsLive = Layer.effect(
       });
 
     const launchJob = (job: ActiveJob, ctx: ResolvedContext, trigger: StartJobTrigger) =>
-      Effect.withSpan("WalkthroughJobs.job")(
+      Effect.withSpan(SPAN.walkthroughJob)(
         Effect.gen(function* () {
           yield* Effect.annotateCurrentSpan("walkthroughId", job.walkthroughId);
           yield* Effect.annotateCurrentSpan("prId", job.prId);
@@ -1310,7 +1311,7 @@ export const WalkthroughJobsLive = Layer.effect(
             // walkthrough-gen-duration KPI. KPI attributes (`input_tokens`,
             // `output_tokens`, `tool_call_count`) are annotated from inside
             // `buildJobBody` on completion.
-            Effect.withSpan("WalkthroughJobs.generate", {
+            Effect.withSpan(SPAN.walkthroughGenerate, {
               attributes: {
                 walkthroughId: job.walkthroughId,
                 prId: job.prId,
@@ -1894,7 +1895,7 @@ export const WalkthroughJobsLive = Layer.effect(
       walkthroughId: string,
       event: WalkthroughStreamEvent,
     ): Effect.Effect<EmitResult> =>
-      Effect.withSpan("WalkthroughJobs.emitEvent", {
+      Effect.withSpan(SPAN.walkthroughEmitEvent, {
         attributes: { walkthroughId, eventType: event.type },
       })(
         Effect.gen(function* () {
