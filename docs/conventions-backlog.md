@@ -10,8 +10,8 @@ default sort.
 |---|---|---|
 | Server (Effect) | 0 | — |
 | Web stores | 1 | low |
-| UI / motion | 14 | all fixed |
-| **Total** | **1** | |
+| UI / motion | 2 | low |
+| **Total** | **3** | |
 
 ---
 
@@ -42,6 +42,49 @@ rollback that itself is rare." Not actively biting in production. Tracked becaus
 implicitly endorses the shape.
 
 **Sizing:** ~30 lines. One PR. Worth pairing with any other touch to the repo-delete flow.
+
+<a id="m-029"></a>
+### M-029 — Hand-rolled entrance and pulse `@keyframes` outside `$lib/motion`
+
+**Rule violated:** CLAUDE.md "Motion: GSAP via `$lib/motion`" ("instead of … hand-rolled
+`@keyframes`"), and the reduced-motion contract ([§5](./conventions.md#motion-tokens)): each
+of these carries its own `@media (prefers-reduced-motion)` block instead of reading
+`prefersReducedMotion()`.
+
+**Where** (component-scoped keyframes not on the "Surviving CSS animations" list in
+`apps/web/src/lib/motion/README.md`):
+
+- `components/walkthrough/GuidedWalkthrough.svelte` (`block-pulse`, `fadeIn`, `content-enter`,
+  `block-slide-up`), `WalkthroughSection.svelte` (`block-slide-up`), `IssueCard.svelte`
+  (`issue-card-enter`), `ratings-panel/RatingGridCell.svelte` (`icon-in`, `cell-pulse`,
+  `cell-resolve`), `ratings-panel/RatingSummaryFooter.svelte` (`footer-bounce`).
+- `components/review/shared/SpecRow.svelte` (`spec-row-pulse-gutter`, `spec-row-gutter-flash`,
+  `spec-row-resolve`), `issues-panel/IssueTestRow.svelte` (`issue-row-enter`),
+  `comments-panel/CommentTestRow.svelte` (`comment-row-enter`), `chrome/ReviewTabs.svelte`
+  (`status-dot-pulse`).
+- `components/ai/tool/ToolActivityGroup.svelte` (`tool-activity-group-in`),
+  `components/layout/RightPanel.svelte` (`push-pill-pulse`, and a second copy of the global
+  `motion-essential-spin`).
+
+**Fix shape.** Entrances go through `gsapEnter` (`motion/enter.ts`); the walkthrough's
+replay-once ledger needs a keyed variant (W2-F2). Pulses and flashes that are status
+indicators either join the surviving list with a reason or move to a GSAP preset.
+
+**Severity:** Low — every one uses canonical tokens and has a reduced-motion fallback.
+
+<a id="m-030"></a>
+### M-030 — `weight="bold"` on an 18px dialog-title glyph
+
+**Rule violated:** [§5.3 — Iconography](./conventions.md#motion-icon-only) (`bold` is for
+glyphs at 15px or less, or an outline mark in a set of `fill` marks).
+
+**Where:** `apps/web/src/lib/components/stack/StackMergeSheet.svelte` — the `GitMerge size={18}`
+in the sheet's title.
+
+**Fix shape.** `regular`, or a size the rule covers. A visible change; check it against the
+other dialog titles first.
+
+**Severity:** Low.
 
 ---
 
@@ -84,3 +127,4 @@ implicitly endorses the shape.
 - M-026 — app.css: `ease-out` → `var(--ease-out-expo)`; `1.5s ease-in-out` → `var(--duration-pulse) var(--ease-soft)`; `300ms cubic-bezier(...)` → `var(--duration-ceremonial-quick) var(--ease-soft)`
 - M-027 — dotmatrix-loader: `cubic-bezier(0.42, 0, 0.58, 1)` → `var(--ease-soft)`; `ease-in-out` (×3) → `var(--ease-soft)`; `180ms cubic-bezier(...)` → `var(--duration-quick) var(--ease-soft)`
 - M-028 — Added `--duration-pulse: 1400ms` to app.css `@theme` block
+- M-031 — Onboarding (`OnboardingShell`, `OnboardingFlow`, every `Step*`) entrances moved from component `@keyframes` to `gsapEnter`; `ProjectRail`'s folder unfold to `bitsAnim` + `collapsibleOpen/Close`; `Dotmatrix` and recaps' `scrollToTheme` read `prefersReducedMotion()` instead of their own `matchMedia`; `RepoAvatarButton`'s `clone-pulse` uses `--duration-pulse` and is on the surviving list

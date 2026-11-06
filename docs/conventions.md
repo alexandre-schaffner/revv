@@ -568,8 +568,7 @@ correctly under `prefers-reduced-motion` (see CLAUDE.md).
 duration and the easing are literals. The easing is byte-identical to `--ease-standard`; the
 duration has no canonical equivalent.
 
-**Backlog.** [`M-001`](./conventions-backlog.md#m-001) through
-[`M-007`](./conventions-backlog.md#m-007).
+**Backlog.** [`M-029`](./conventions-backlog.md#m-029) (hand-rolled `@keyframes`).
 
 <a id="motion-ceremonial"></a>
 ### 5.2 Ceremonial motion has its own tier — but in the main scale
@@ -642,7 +641,18 @@ Call sites state only what differs. Props beat context, so both stay overridable
      glyphs in an `{#if}`.
   2. **Severity** — a status marker where solidity itself is the signal.
 
-  `bold`, `thin`, `light`, and `duotone` are not used.
+  `weight="bold"` holds a stroke glyph's weight where `regular` thins out, in
+  one of two places:
+  1. **Small chrome** — a glyph drawn at 15px or less: disclosure carets
+     (`components/shared/DisclosureCaret.svelte`), a close ×, an inline action
+     icon beside its label.
+  2. **An outline mark in a set of `fill` marks** — a status glyph with no
+     filled form that sits beside filled ones, so every mark in the set reads
+     equally heavy: the pending `CircleDashed` beside filled pass/fail circles
+     (`CiGlyph`), `GitDiff` beside a filled approval (`VerdictGlyph`), `GitMerge`
+     beside filled layer states (`StackLayerGlyph`).
+
+  `thin`, `light`, and `duotone` are not used.
 
 **The severity ramp.** Solidity descends with severity, so the most severe mark is
 always the heaviest on screen. Applies to the issues panel, the ratings panel, the
@@ -663,7 +673,7 @@ next to phosphor's 256-grid set reads as two different icon sets. Imperative DOM
 callers that can't mount a component use `utils/phosphor-markup.ts`, which carries
 phosphor's own path data.
 
-**Backlog.** None.
+**Backlog.** [`M-030`](./conventions-backlog.md#m-030).
 
 ### 5.4 Rendered markdown goes through `.prose`
 
