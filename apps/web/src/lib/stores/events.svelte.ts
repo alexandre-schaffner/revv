@@ -18,7 +18,6 @@ import type { ServerEventMessage, SyncChange } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { applyUserUpdate, clearReauthRequired, setReauthRequired } from "./auth.svelte";
-import { onChatQuestionResolved } from "./chat.svelte";
 import { onPrConversationUpdated } from "./conversation.svelte";
 import { setError } from "./errors.svelte";
 import {
@@ -369,16 +368,6 @@ function dispatch(msg: ServerEventMessage): void {
       break;
     case "prs:sync-summary":
       notifySyncChanges(msg.data);
-      break;
-    case "chat:question-resolved":
-      onChatQuestionResolved(
-        msg.data.prId,
-        msg.data.questionId,
-        msg.data.status,
-        msg.data.answers,
-        msg.data.customAnswers,
-        msg.data.supersededPlanId,
-      );
       break;
     case "recap:status-changed":
       onRecapStatusChanged(msg.data);

@@ -227,7 +227,7 @@ so the frontend can reuse the walkthrough reducer code path — this is consiste
 **Rule.** Message type strings use colon-separated namespace and action segments. Segments are
 lowercase ASCII letters with hyphens between words. The namespace is the entity (`prs`, `thread`,
 `threads`, `walkthrough`, `repos`, `user`, `chat`, `recap`, `auth`, `new-pr-session`, `error`);
-the action is the verb (`updated`, `created`, `sync-started`, `clone-status`, `question-resolved`).
+the action is the verb (`updated`, `created`, `sync-started`, `clone-status`, `status-changed`).
 
 **Why.** Easy to grep, easy to scan, no Ambiguity-About-Casing arguments. Bonus: `:` is illegal
 in most identifiers, so message types can never accidentally collide with frontend variable
@@ -410,7 +410,7 @@ possible combinations; only ~4 are legal.
 **Rule.** Functions exported from a store for the SSE dispatcher
 (`apps/web/src/lib/stores/events.svelte.ts`) to call follow the form `on<EventName>` where
 `<EventName>` is the event message `type` with the colon dropped and segments PascalCased
-(`thread:created` → `onThreadCreated`; `chat:question-resolved` → `onChatQuestionResolved`).
+(`thread:created` → `onThreadCreated`; `recap:status-changed` → `onRecapStatusChanged`).
 One handler per event message arm.
 
 **Why.** Reading the dispatcher should make it obvious which store owns which message. The
@@ -419,10 +419,9 @@ inconsistently (`updateThreadStatusFromWs` vs the event type `thread:updated`).
 
 **Canonical example.** `apps/web/src/lib/stores/review.svelte.ts:559` (`onThreadUpdated`),
 `:576` (`onThreadCreated`), `:699` (`onThreadMessageEdited`);
-`apps/web/src/lib/stores/walkthrough.svelte.ts:609` (`onWalkthroughEvent`); and
-`apps/web/src/lib/stores/chat.svelte.ts:1555` (`onChatQuestionResolved`) match the event
-message types `thread:updated`, `thread:created`, `thread:message:edited`, `walkthrough:event`,
-and `chat:question-resolved`. The `events.svelte.ts:184` dispatch reads as a flat list of these
+and `apps/web/src/lib/stores/walkthrough.svelte.ts:609` (`onWalkthroughEvent`) match the event
+message types `thread:updated`, `thread:created`, `thread:message:edited` and
+`walkthrough:event`. The `events.svelte.ts:184` dispatch reads as a flat list of these
 `on*` calls.
 
 **Anti-pattern.** The retired `*FromWs` suffix style — `updateThreadStatusFromWs`,

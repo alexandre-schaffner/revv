@@ -251,8 +251,6 @@ export function decodeAcpSessionUpdate(
           toolName,
           input,
           callId: update.toolCallId,
-          source: "builtin",
-          bareName: toolName,
         },
       ];
     }
@@ -264,7 +262,7 @@ export function decodeAcpSessionUpdate(
         status: normalizeTaskStatus(entry.status),
         priority: normalizeTaskPriority(entry.priority),
       }));
-      return [{ kind: "task-list-update", tasks, source: "acp" }];
+      return [{ kind: "task-list-update", tasks }];
     }
     case "tool_call_update": {
       const events: NormalizedAgentEvent[] = [];

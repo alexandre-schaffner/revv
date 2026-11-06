@@ -1,11 +1,5 @@
-// ─── Shared recap stream-event dispatcher ───────────────────────────────────
-//
-// CLAUDE.md invariant #13 demands byte-identical externally-observable
-// behavior between the Claude SDK and opencode recap transports. Both
-// transports decode their native frames into the same `NormalizedAgentEvent`
-// union; this module is the single place that translates those normalized
-// events into recap SSE envelopes. Adding a new emission policy (throttling,
-// extra phase heartbeats, discard rules) only has to happen once.
+// Translates the recap agent's normalized ACP events into recap SSE envelopes:
+// the one place that decides throttling, phase heartbeats and discard rules.
 
 import type { RecapStreamEvent } from "@revv/shared";
 import type { NormalizedAgentEvent } from "../agent-stream/normalized-events";
@@ -54,10 +48,9 @@ export function dispatchRecapStreamEvent(
     return;
   }
   if (ev.kind === "tool-call") {
-    const toolName = normalizeRecapToolName(ev.bareName);
+    const toolName = normalizeRecapToolName(ev.toolName);
     emit({ type: "activity", data: buildRecapActivity(toolName, ev.input) });
     return;
   }
-  // task-list-update / subagent-* / user-question / plan-presented / error
-  // → ignored by recap.
+  // Everything else (tool results, task lists, usage) is ignored by recap.
 }

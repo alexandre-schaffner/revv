@@ -60,28 +60,17 @@ export interface ChatParams {
   readonly branchName: string;
   readonly resumeSessionId: string | null;
   /**
-   * Reports the agent-side session id back to the chat route so it can
-   * persist `(prId, agent, prHeadSha) → sessionId` in `chat_sessions`.
-   * Drivers MUST await this before streaming user-visible content
-   * (opencode path, where the id is known up front) or before closing
-   * their stream (claude path, where the id arrives after the first SDK
-   * iteration). Awaiting closes the race where a follow-up turn arrives
-   * before the upsert commits and creates a fresh agent session.
+   * Reports a fresh ACP session id back to the chat route so it can persist it
+   * in `chat_sessions`. The driver awaits it before prompting, which closes the
+   * race where a follow-up turn arrives before the write commits and opens a
+   * second agent session.
    */
   readonly onSessionId: (id: string) => Promise<void> | void;
   readonly prId: string;
-  /**
-   * Authenticated user id from the chat session. Stamped on
-   * `walkthroughs.lastEditedBy` when an edit tool fires; also carried in
-   * the opencode MCP token registry.
-   */
+  /** Authenticated user id from the chat session, carried in the chat MCP token. */
   readonly userId: string;
   readonly abortController?: AbortController;
-  /**
-   * Session-level interaction toggle. Both drivers honor this: Claude flips
-   * to `permissionMode: 'plan'`; opencode routes through its named `plan`
-   * agent. Defaults to `'default'`.
-   */
+  /** Session-level interaction toggle; `plan` switches the agent into its plan mode. Defaults to `'default'`. */
   readonly interactionMode?: InteractionMode;
 }
 
@@ -120,12 +109,11 @@ export class AiService extends Context.Service<
     /**
      * Stream a single chat turn for the right-pane chat. Resolves the
      * configured agent, builds the system prompt + user message, and hands
-     * off to the provider. The returned stream emits both text deltas and
+     * off to the ACP driver. The returned stream emits both text deltas and
      * tool-use lines so the UI can render the agent's actions inline.
      *
-     * Session lifecycle (claude `resume:` / opencode session id) is owned
-     * by the caller (the chat route) — this method just wires the
-     * `resumeSessionId` and `onSessionId` callback through.
+     * The ACP session lifecycle is owned by the caller (the chat route) —
+     * this method just wires `resumeSessionId` and `onSessionId` through.
      */
     readonly chat: (
       params: ChatParams,
@@ -144,18 +132,7 @@ export class AiService extends Context.Service<
       readonly task: ResolveConflictsTask;
       readonly conflictFiles: ReadonlyArray<string>;
       readonly abortController?: AbortController | undefined;
-      /**
-       * Optional PR id used by the opencode chat MCP server to scope its
-       * tools. Conflict resolution doesn't actually need review context
-       * but the opencode driver requires the param to mint its bearer
-       * token. Pass an empty string for paths where it doesn't matter.
-       */
       readonly prId: string;
-      /**
-       * User id from the calling session. Threaded through to the MCP
-       * server even though the conflict-resolve agent never calls the
-       * edit tools (its allowed-tools list doesn't include them).
-       */
       readonly userId: string;
     }) => Effect.Effect<ReadableStream<RawChatStreamFrame>, AiError>;
     readonly isConfigured: () => Effect.Effect<boolean>;
@@ -236,8 +213,6 @@ export const AiServiceLive = Layer.effect(
         Effect.withSpan("Ai.chat")(
           Effect.gen(function* () {
             const settings = yield* getSettings();
-            // Chat runs exclusively on the ACP transport — the selected registry
-            // agent drives it.
             const acpAgentId = applyAcpAgentOverride(settings.aiAgent);
             yield* Effect.annotateCurrentSpan("prId", params.prId);
             yield* Effect.annotateCurrentSpan("provider", "acp");
@@ -276,12 +251,7 @@ export const AiServiceLive = Layer.effect(
               thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
               acpAgentId,
               deps: {
-                issueChatMcpToken: (args: {
-                  prId: string;
-                  userId: string;
-                  actor: "chat:acp";
-                  interactionMode: InteractionMode;
-                }) => Effect.runPromise(chatMcpTokens.issue(args)),
+                issueChatMcpToken: (args) => Effect.runPromise(chatMcpTokens.issue(args)),
                 clearChatMcpToken: (token: string) => Effect.runPromise(chatMcpTokens.clear(token)),
               },
               prId: params.prId,
@@ -317,12 +287,7 @@ export const AiServiceLive = Layer.effect(
             thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
             acpAgentId,
             deps: {
-              issueChatMcpToken: (args: {
-                prId: string;
-                userId: string;
-                actor: "chat:acp";
-                interactionMode: InteractionMode;
-              }) => Effect.runPromise(chatMcpTokens.issue(args)),
+              issueChatMcpToken: (args) => Effect.runPromise(chatMcpTokens.issue(args)),
               clearChatMcpToken: (token: string) => Effect.runPromise(chatMcpTokens.clear(token)),
             },
             prId: params.prId,

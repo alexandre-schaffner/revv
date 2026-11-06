@@ -17,14 +17,13 @@ import type {
   ChatStreamFrame,
   ChatTask,
   InteractionMode,
-  NormalizedQuestion,
 } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { authHeaders } from "$lib/utils/session-token";
 import { parseSSEBuffer } from "$lib/utils/sse-parser";
 
 // Re-export activity types used by stores and components.
-export type { Activity, ChatTask, InteractionMode, NormalizedQuestion };
+export type { Activity, ChatTask, InteractionMode };
 
 export interface ChatRequestParams {
   prId: string;
@@ -36,29 +35,11 @@ export interface ChatRequestParams {
 
 export interface ChatCallbacks {
   onText: (chunk: string) => void;
-  onActivity: (activity: Activity & { subagentInvocationId?: string }) => void;
+  onActivity: (activity: Activity) => void;
   onActivityResult: (params: { callId: string; output: string; isError: boolean }) => void;
   onActivityInput: (params: { callId: string; payload: unknown }) => void;
   onTaskList: (params: { turnId: string; tasks: ReadonlyArray<ChatTask> }) => void;
   onPlanPresented: (params: { planId: string; turnId: string; markdown: string }) => void;
-  onSubagentStart: (params: {
-    invocationId: string;
-    parentTurnId: string;
-    subagentType: string;
-    description: string;
-  }) => void;
-  onSubagentEnd: (params: { invocationId: string; result: string; ok: boolean }) => void;
-  onQuestionPosted: (params: {
-    questionId: string;
-    turnId: string;
-    questions: ReadonlyArray<NormalizedQuestion>;
-    previewFormat: "markdown" | "html";
-  }) => void;
-  onQuestionResolved: (params: {
-    questionId: string;
-    status: "answered" | "rejected";
-    answers?: Readonly<Record<string, ReadonlyArray<string>>>;
-  }) => void;
   onDone: () => void;
   onError: (error: { code: string; message: string; [k: string]: unknown }) => void;
 }
@@ -182,9 +163,6 @@ export function streamChatMessage(
               summary: frame.summary,
               payload: frame.payload,
               ...(frame.callId !== undefined ? { callId: frame.callId } : {}),
-              ...(frame.subagentInvocationId !== undefined
-                ? { subagentInvocationId: frame.subagentInvocationId }
-                : {}),
             });
           } else if (frame.kind === "activity-result") {
             callbacks.onActivityResult({
@@ -204,32 +182,6 @@ export function streamChatMessage(
               planId: frame.planId,
               turnId: frame.turnId,
               markdown: frame.markdown,
-            });
-          } else if (frame.kind === "subagent-start") {
-            callbacks.onSubagentStart({
-              invocationId: frame.invocationId,
-              parentTurnId: frame.parentTurnId,
-              subagentType: frame.subagentType,
-              description: frame.description,
-            });
-          } else if (frame.kind === "subagent-end") {
-            callbacks.onSubagentEnd({
-              invocationId: frame.invocationId,
-              result: frame.result,
-              ok: frame.ok,
-            });
-          } else if (frame.kind === "user-question") {
-            callbacks.onQuestionPosted({
-              questionId: frame.questionId,
-              turnId: frame.turnId,
-              questions: frame.questions,
-              previewFormat: frame.previewFormat,
-            });
-          } else if (frame.kind === "user-question-resolved") {
-            callbacks.onQuestionResolved({
-              questionId: frame.questionId,
-              status: frame.status,
-              ...(frame.answers !== undefined ? { answers: frame.answers } : {}),
             });
           }
         }
@@ -320,59 +272,6 @@ export async function rejectPlan(prId: string, planId: string): Promise<void> {
   }
 }
 
-export interface SubmitQuestionAnswerParams {
-  decision: "answer" | "reject";
-  answers?: Record<string, ReadonlyArray<string>>;
-  customAnswers?: Record<string, string>;
-}
-
-export interface SubmitQuestionAnswerResult {
-  status: "ok";
-  resolution: "answered" | "rejected";
-  alreadyResolved?: boolean;
-  /** If a pending plan was auto-superseded because the conversation moved past it, its id. */
-  supersededPlanId?: string;
-}
-
-export interface SubmitQuestionAnswerError {
-  code: "QUESTION_NOT_FOUND" | "QUESTION_EXPIRED" | "OPENCODE_UNAVAILABLE" | "GENERIC_ERROR";
-  message: string;
-}
-
-/**
- * Submit the user's answer (or rejection) to an open question. Server is
- * idempotent: if the row is already resolved, the response carries
- * `alreadyResolved: true` and the same resolution. The store treats both
- * paths the same way (patch local item to terminal state).
- */
-export async function submitQuestionAnswer(
-  prId: string,
-  questionId: string,
-  params: SubmitQuestionAnswerParams,
-): Promise<SubmitQuestionAnswerResult> {
-  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/question/${questionId}/answer`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify(params),
-  });
-  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-  if (!res.ok) {
-    const err: SubmitQuestionAnswerError = {
-      code: (body.code as SubmitQuestionAnswerError["code"]) ?? "GENERIC_ERROR",
-      message: (body.message as string | undefined) ?? `Submit failed: ${res.status}`,
-    };
-    throw err;
-  }
-  return {
-    status: "ok",
-    resolution: body.resolution as "answered" | "rejected",
-    ...(body.alreadyResolved === true ? { alreadyResolved: true } : {}),
-    ...(typeof body.supersededPlanId === "string"
-      ? { supersededPlanId: body.supersededPlanId }
-      : {}),
-  };
-}
-
 export interface AvailableAgents {
   agent: AcpAgentId;
   planAvailable: boolean;
@@ -435,7 +334,6 @@ export interface PersistedChatActivity {
   output: string | null;
   isError: boolean | null;
   sequence: number;
-  subagentInvocationId: string | null;
   createdAt: string;
 }
 
@@ -453,54 +351,16 @@ export interface PersistedChatPlan {
   turnId: string;
   planMarkdown: string;
   status: "pending" | "approved" | "rejected" | "superseded";
-  source: "acp";
   sequence: number;
   createdAt: string;
   decidedAt: string | null;
-}
-
-export interface PersistedChatSubagent {
-  entryKind: "subagent";
-  id: string;
-  chatSessionId: string;
-  parentTurnId: string;
-  providerCallId: string;
-  subagentType: string;
-  description: string;
-  prompt: string;
-  status: "running" | "completed" | "errored";
-  result: string | null;
-  source: "acp";
-  sequence: number;
-  startedAt: string;
-  completedAt: string | null;
-}
-
-export interface PersistedChatQuestion {
-  entryKind: "question";
-  id: string;
-  chatSessionId: string;
-  turnId: string;
-  source: "acp";
-  providerRequestId: string;
-  providerToolCallId: string | null;
-  previewFormat: "markdown" | "html";
-  questions: ReadonlyArray<NormalizedQuestion>;
-  status: "pending" | "answered" | "rejected" | "superseded";
-  answers: Readonly<Record<string, ReadonlyArray<string>>> | null;
-  customAnswers: Readonly<Record<string, string>> | null;
-  sequence: number;
-  createdAt: string;
-  answeredAt: string | null;
 }
 
 export type PersistedChatEntry =
   | PersistedChatMessage
   | PersistedChatActivity
   | PersistedChatTaskList
-  | PersistedChatPlan
-  | PersistedChatSubagent
-  | PersistedChatQuestion;
+  | PersistedChatPlan;
 
 export interface ChatTimeline {
   chatSessionId: string | null;

@@ -31,7 +31,6 @@ import {
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import type { ChatHistoryEntry } from "../ai/prompts/chat";
-import { AgentUnavailableError } from "../ai/providers/chat-agent-errors";
 import type { ChatStreamFrame } from "../ai/providers/chat-types";
 import { WorktreeBlockedByUnpushedCommits } from "../domain/errors";
 import { logError } from "../logger";
@@ -238,25 +237,6 @@ export const chatRoute = new Elysia()
               return { kind: "plan-pending" as const, planId: pendingPlan.id };
             }
 
-            // Question-pending gate. The previous turn left an
-            // askUserQuestion / question.asked open and the user
-            // hasn't answered it. Refusing the next prompt keeps the
-            // agent's tool-loop state consistent:
-            //   • Claude: the SDK's canUseTool is still awaiting our
-            //     in-memory deferred; starting a new turn would
-            //     leave that deferred orphaned forever.
-            //   • Opencode: the daemon won't accept a new
-            //     session.prompt while one is in-flight anyway —
-            //     surface the cleaner error instead of letting the
-            //     opencode call fail with a less helpful message.
-            const pendingQuestion = yield* chatSessions.findPendingQuestion(chatSessionRow.id);
-            if (pendingQuestion) {
-              return {
-                kind: "question-pending" as const,
-                questionId: pendingQuestion.id,
-              };
-            }
-
             // Approval path: if the user is approving a plan, mark
             // it approved before kicking off the execution turn.
             // Also flip the session out of plan mode so the agent
@@ -412,22 +392,9 @@ export const chatRoute = new Elysia()
             message: "Plan not found",
           };
         }
-        if (prepared.kind === "question-pending") {
-          ctx.set.status = 409;
-          return {
-            code: "QUESTION_PENDING",
-            questionId: prepared.questionId,
-            message:
-              "The agent is waiting for your answer to an open question. Answer it before sending a new message.",
-          };
-        }
-
         const persistedStream = wrapStreamWithPersistence(prepared.frameStream, {
           chatSessionId: prepared.chatSessionId,
           turnId: prepared.turnId,
-          // All chat runs on the ACP transport; the specific registry agent is
-          // a launch detail. `source` records the transport.
-          agent: "acp",
         });
 
         // Wrap the persisted stream so the worktree lease is re-armed by the
@@ -504,15 +471,6 @@ export const chatRoute = new Elysia()
             oldHeadSha: blockedErr.oldHeadSha,
             newHeadSha: blockedErr.newHeadSha,
             commits: blockedErr.commits,
-          };
-        }
-        // Plan mode requested but the daemon has no `plan` agent.
-        if (blockedErr instanceof AgentUnavailableError) {
-          ctx.set.status = 422;
-          return {
-            code: "AGENT_UNAVAILABLE",
-            agentName: blockedErr.agentName,
-            message: blockedErr.message,
           };
         }
         return mapErrorToSSEResponse(e);

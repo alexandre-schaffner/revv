@@ -60,17 +60,12 @@ export type {
   ChatAttachment,
   ChatAttachmentMetadata,
   ChatPlan,
-  ChatQuestion,
   ChatSessionCommand,
   ChatSessionContext,
   ChatStreamFrame,
-  ChatSubagentInvocation,
   ChatTask,
   InteractionMode,
   MessageRole,
-  NormalizedQuestion,
-  NormalizedQuestionOption,
-  QuestionStatus,
 } from "./chat";
 export {
   attachmentByteSize,
