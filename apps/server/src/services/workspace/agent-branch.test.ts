@@ -114,7 +114,7 @@ describe("listProposedCommits", () => {
     writeFileSync(join(worktree, "d.ts"), "d\n");
     writeFileSync(join(worktree, "c.ts"), "c2\n");
     git(worktree, ["add", "c.ts", "d.ts"]);
-    git(worktree, ["commit", "-q", "-m", "agent: tab\tin subject? no, add d"]);
+    git(worktree, ["commit", "-q", "-m", "agent: add d"]);
     const two = git(worktree, ["rev-parse", "HEAD"]);
 
     const listed = await listProposedCommits(branch, prHead);
