@@ -10,10 +10,10 @@ import { createHash } from "node:crypto";
 import type { AcpAgentId, RiskLevel, ThinkingEffortSetting } from "@revv/shared";
 import { Effect } from "effect";
 import type { JevUnavailable } from "../../domain/errors";
-import { debug } from "../../logger";
-import { CacheService } from "../../services/Cache";
+import type { CacheService } from "../../services/Cache";
 import type { DbService } from "../../services/Db";
 import { JevService } from "../../services/Jev";
+import { cachedJev } from "./optional";
 import { numericAnswerAt } from "./questions";
 import {
   type GenerationLaunchOverride,
@@ -266,11 +266,8 @@ export function routeFromAnswers(
     readonly agent: AcpAgentId;
     readonly configuredModel: string | null | undefined;
     readonly configuredEffort: ThinkingEffortSetting | null | undefined;
-    /** TypeSafe switch. Off: answers never move the launch. */
-    readonly autoSizing: boolean;
   },
 ): GenerationLaunchOverride | null {
-  if (!opts.autoSizing) return null;
   return routeSizing({
     agent: opts.agent,
     depth: answers.depth,
@@ -283,34 +280,24 @@ export function routeFromAnswers(
 }
 
 /**
- * Cached job-start answers for a PR at a head SHA, or `null` when TypeSafe
- * can't answer. The cache lets one judgment serve both the preview and the
- * run — whichever asks first pays, keeping Jev off `startJobBody`'s critical
- * path in the common case. Immutable: head SHA in the key means a new commit
- * is a new entry.
+ * Cached job-start answers for a PR at a head SHA, or `null` when TypeSafe is
+ * off or can't answer. The cache lets one judgment serve both the preview and
+ * the run — whichever asks first pays, keeping Jev off `startJobBody`'s
+ * critical path in the common case. Immutable: head SHA in the key means a new
+ * commit is a new entry. Failures aren't cached, so the next caller retries.
  */
 export function resolveJobStartAnswers(
   prId: string,
   headSha: string,
   state: JobStartStateInput,
 ): Effect.Effect<JobStartAnswers | null, never, JevService | CacheService | DbService> {
-  return Effect.gen(function* () {
-    const cache = yield* CacheService;
-    return yield* cache
-      .getOrFetch<JobStartAnswers, JevUnavailable, JevService>(
-        JOB_START_CACHE_NS,
-        jobStartCacheKey(prId, headSha, diffFingerprint(state.files)),
-        () => askJobStart(state),
-        { immutable: true },
-      )
-      .pipe(
-        // Failures aren't cached; getOrFetch propagates so the next caller retries. Both preview and run degrade to null.
-        Effect.catch((e) =>
-          Effect.sync(() => {
-            debug("jev", `job-start unavailable for ${prId}@${headSha.slice(0, 7)}: ${String(e)}`);
-            return null;
-          }),
-        ),
-      );
-  });
+  return cachedJev(
+    `job-start for ${prId}@${headSha.slice(0, 7)}`,
+    {
+      ns: JOB_START_CACHE_NS,
+      key: jobStartCacheKey(prId, headSha, diffFingerprint(state.files)),
+      options: { immutable: true },
+    },
+    () => askJobStart(state),
+  );
 }

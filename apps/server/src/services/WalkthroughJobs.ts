@@ -701,11 +701,9 @@ export const WalkthroughJobsLive = Layer.effect(
                   // inside the service and never block job completion
                   // (invariant #8 — commit first, broadcast second; the
                   // cache push is broadcast-equivalent).
-                  if (job.mode === "reviewer") {
-                    yield* Effect.forkDetach(
-                      remoteCache.push(job.walkthroughId).pipe(Effect.catch(() => Effect.void)),
-                    );
-                  }
+                  yield* Effect.forkDetach(
+                    remoteCache.push(job.walkthroughId).pipe(Effect.catch(() => Effect.void)),
+                  );
                   yield* emitEvent(job.walkthroughId, {
                     type: "lifecycle:complete",
                     data: {
@@ -1356,11 +1354,8 @@ export const WalkthroughJobsLive = Layer.effect(
           cacheProbe:
             restack !== null
               ? Effect.succeed(true)
-              : mode === "reviewer" &&
-                  settings.cache.enabled &&
-                  settings.cache.downloadsEnabled &&
-                  partial === null
-                ? remoteCache.probe(repo.fullName, meta.headSha)
+              : partial === null
+                ? remoteCache.probe(repo.fullName, meta.headSha, mode)
                 : Effect.succeed(false),
         }).pipe(
           Effect.provideService(JevService, jevService),
@@ -1436,16 +1431,12 @@ export const WalkthroughJobsLive = Layer.effect(
         }
 
         const importedFromCache = yield* tryImportCachedWalkthrough({
-          enabled:
-            mode === "reviewer" &&
-            settings.cache.enabled &&
-            settings.cache.downloadsEnabled &&
-            partial === null,
+          enabled: partial === null,
           walkthroughId,
           prId: pr.id,
           repoFullName: repo.fullName,
           headSha: meta.headSha,
-          fetchSnapshot: remoteCache.fetch(repo.fullName, meta.headSha),
+          fetchSnapshot: remoteCache.fetch(repo.fullName, meta.headSha, mode),
           importSnapshot: (snapshot) =>
             provideDb(snapshotImporter.import({ walkthroughId, snapshot })),
           markComplete: setStatus(walkthroughId, "complete", { tokenUsage: ZERO_TOKEN_USAGE }),
@@ -1787,11 +1778,7 @@ export const WalkthroughJobsLive = Layer.effect(
       mode: WalkthroughMode = "reviewer",
     ): Effect.Effect<boolean> =>
       Effect.gen(function* () {
-        if (mode !== "reviewer") return false;
-        const settings = yield* settingsService.getSettings();
-        if (!settings.cache.enabled || !settings.cache.downloadsEnabled) return false;
-
-        const snapshotOpt = yield* remoteCache.fetch(repoFullName, headSha);
+        const snapshotOpt = yield* remoteCache.fetch(repoFullName, headSha, mode);
         if (Option.isNone(snapshotOpt)) return false;
 
         const snapshot = snapshotOpt.value;

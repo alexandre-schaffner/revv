@@ -2,6 +2,7 @@ import type { WalkthroughSizing } from "@revv/shared";
 import { Effect } from "effect";
 import { resolveJobStartAnswers, routeFromAnswers } from "../../../ai/jev/job-start";
 import type { AppServices } from "../../../runtime";
+import { JevService } from "../../../services/Jev";
 import { SettingsService } from "../../../services/Settings";
 import { loadCachedPrDiff } from "./cached-pr-diff";
 
@@ -20,13 +21,8 @@ export function getWalkthroughSizingHandler(
   userId: string,
 ): Effect.Effect<WalkthroughSizing, unknown, AppServices> {
   return Effect.gen(function* () {
-    const settingsSvc = yield* SettingsService;
-    const settings = yield* settingsSvc.getSettings();
-    // The risk tier is always wanted when TypeSafe is on, so it alone
-    // justifies the call even when model and effort are both pinned.
-    if (!settings.jev.enabled) {
-      return { status: "off" as const };
-    }
+    const jev = yield* JevService;
+    if (!(yield* jev.isAvailable())) return { status: "off" as const };
 
     const diff = yield* loadCachedPrDiff(prId, userId);
     if (diff === null) return { status: "pending" as const };
@@ -40,13 +36,12 @@ export function getWalkthroughSizingHandler(
     });
     if (answers === null) return { status: "pending" as const };
 
-    const agent = yield* settingsSvc.resolveAgent();
-
+    const settingsSvc = yield* SettingsService;
+    const settings = yield* settingsSvc.getSettings();
     const override = routeFromAnswers(answers, {
-      agent,
+      agent: yield* settingsSvc.resolveAgent(),
       configuredModel: settings.aiModel,
       configuredEffort: settings.aiThinkingEffort,
-      autoSizing: true,
     });
     return {
       status: "ready" as const,

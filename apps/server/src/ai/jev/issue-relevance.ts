@@ -8,12 +8,10 @@ import { isDiscardedScore, isLowSignalScore } from "@revv/shared";
 import { noul, type ScoreQuestion } from "@typesafe-ai/sdk";
 import { Effect } from "effect";
 import type { Db } from "../../db";
-import type { JevUnavailable } from "../../domain/errors";
 import { debug } from "../../logger";
-import { CacheService } from "../../services/Cache";
+import type { CacheService } from "../../services/Cache";
 import type { DbService } from "../../services/Db";
 import { JevService } from "../../services/Jev";
-import { SettingsService } from "../../services/Settings";
 import type { IssueCandidate, IssueJudgment } from "./contracts";
 import { collectIssueGateInput, type IssueGateInput } from "./issue-relevance-context";
 import {
@@ -26,7 +24,7 @@ import {
   SEVERITY_LEVELS,
   severityForLevel,
 } from "./issue-relevance-policy";
-import { optionalJev } from "./optional";
+import { cachedJev } from "./optional";
 import { buildIssueRelevanceState } from "./state";
 
 function answerNoul(value: unknown): number {
@@ -105,28 +103,19 @@ export function judgeIssue(
   walkthroughId: string,
   issueId: string,
   candidate: IssueCandidate,
-): Effect.Effect<
-  IssueJudgment | null,
-  never,
-  JevService | SettingsService | CacheService | DbService
-> {
+): Effect.Effect<IssueJudgment | null, never, JevService | CacheService | DbService> {
   return Effect.gen(function* () {
-    const settingsService = yield* SettingsService;
-    const settings = yield* settingsService.getSettings();
-    if (!settings.jev.enabled) return null;
-
     const input = yield* Effect.sync(() => collectIssueGateInput(db, walkthroughId, candidate));
     if (input === null) return null;
 
-    const cache = yield* CacheService;
-    const raw = yield* optionalJev(
+    const raw = yield* cachedJev<RawIssueJudgment>(
       `issue relevance for ${issueId}`,
-      cache.getOrFetch<RawIssueJudgment, JevUnavailable, JevService>(
-        ISSUE_RELEVANCE_CACHE_NS,
-        candidateKey(walkthroughId, issueId, candidate),
-        () => ask(candidate, input),
-        { ttlMs: ISSUE_RELEVANCE_CACHE_TTL_MS },
-      ),
+      {
+        ns: ISSUE_RELEVANCE_CACHE_NS,
+        key: candidateKey(walkthroughId, issueId, candidate),
+        options: { ttlMs: ISSUE_RELEVANCE_CACHE_TTL_MS },
+      },
+      () => ask(candidate, input),
     );
     if (raw === null) return null;
 

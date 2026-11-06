@@ -5,10 +5,11 @@
 // choice/score/noul judgments, never prose.
 //
 // Two invariants: (1) off is free — disabled toggle or missing key
-// short-circuits with no network call, like `RemoteWalkthroughCache` gating
-// on `cache.enabled`. (2) never fails a walkthrough — every call site
-// collapses failure to `null` (`ai/jev/optional.ts`); `ask` fails with
-// exactly one error type so that collapse is total.
+// short-circuits with no network call, and the switch is checked here (and,
+// for judgments memoized in the cache, in `cachedJev`), never by callers.
+// (2) never fails a walkthrough — every call site collapses failure to `null`
+// (`ai/jev/optional.ts`); `ask` fails with exactly one error type so that
+// collapse is total.
 
 import type { JsonValue, Questions, SystemOneResult } from "@typesafe-ai/sdk";
 import {
@@ -76,10 +77,7 @@ export class JevService extends Context.Service<
       req: JevRequest<Q>,
     ) => Effect.Effect<SystemOneResult<Q>, JevUnavailable>;
 
-    /**
-     * Whether the master switch is on *and* a key is present. Per-feature
-     * toggles are the caller's to check.
-     */
+    /** Whether the master switch is on *and* a key is present. */
     readonly isAvailable: () => Effect.Effect<boolean>;
 
     /**

@@ -12,7 +12,7 @@ export function resolveJobStart(input: {
   readonly prId: string;
   readonly headSha: string;
   readonly state: JobStartStateInput;
-  readonly settings: Pick<UserSettings, "aiModel" | "aiThinkingEffort" | "jev">;
+  readonly settings: Pick<UserSettings, "aiModel" | "aiThinkingEffort">;
   readonly agent: AcpAgentId;
   readonly trigger: StartJobTrigger;
   readonly cacheProbe: Effect.Effect<boolean>;
@@ -23,11 +23,7 @@ export function resolveJobStart(input: {
 > {
   return Effect.gen(function* () {
     const cacheWillHit = yield* input.cacheProbe;
-    const answers = shouldResolveJobStart({
-      settings: input.settings,
-      trigger: input.trigger,
-      cacheWillHit,
-    })
+    const answers = shouldResolveJobStart({ trigger: input.trigger, cacheWillHit })
       ? yield* resolveJobStartAnswers(input.prId, input.headSha, input.state)
       : null;
     return {
