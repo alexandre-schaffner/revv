@@ -79,3 +79,7 @@ export async function rebaseStack(prId: string, stack: PrStackDetail): Promise<v
     void refreshStack(prId);
   }
 }
+
+export function reset(): void {
+  requests = new Map();
+}

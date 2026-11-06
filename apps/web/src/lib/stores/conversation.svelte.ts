@@ -537,3 +537,10 @@ export function onPrConversationUpdated(data: { prId: string; fetchedAt: string 
   if (current && current.fetchedAt >= data.fetchedAt) return;
   void loadSnapshot(data.prId);
 }
+
+export function reset(): void {
+  stopWatchingChecks();
+  inflight.clear();
+  writeGeneration.clear();
+  entries = new Map();
+}

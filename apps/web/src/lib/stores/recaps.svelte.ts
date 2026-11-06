@@ -413,3 +413,14 @@ export function onRecapAdded(data: { recap: ProjectRecap }): void {
     return [...list.slice(0, insertAt), summary, ...list.slice(insertAt)];
   });
 }
+
+export function reset(): void {
+  recapsByRepo = new Map();
+  loadingByRepo = new Map();
+  monthsLoaded.clear();
+  monthsInFlight.clear();
+  monthLoading = new Map();
+  recapDetailById = new Map();
+  loadingDetailById = new Map();
+  pendingActions.map = new Map();
+}

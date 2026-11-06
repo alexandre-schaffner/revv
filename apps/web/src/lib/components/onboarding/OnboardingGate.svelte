@@ -5,8 +5,9 @@ import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import type { Snippet } from "svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { gsapFade, tokens } from "$lib/motion";
+import { endSession } from "$lib/session/lifecycle.svelte";
+import { getToken } from "$lib/session/token.svelte";
 import {
-  clearToken,
   getAccountJustRemoved,
   getAuthRestoreError,
   getAuthRestoreExhausted,
@@ -17,7 +18,6 @@ import {
   getIsOnboarded,
   getLocalAccounts,
   getLocalAccountsLoaded,
-  getToken,
   getUser,
   resetForceOnboardingFlow,
   retryAuthRestore,
@@ -155,7 +155,7 @@ function errorMessage(error: unknown): string {
 								<ArrowsClockwise data-icon="inline-start" />
 								Retry
 							</Button>
-							<Button variant="outline" size="sm" onclick={clearToken}>Use another account</Button>
+							<Button variant="outline" size="sm" onclick={endSession}>Use another account</Button>
 						</div>
 					{/if}
 				</div>

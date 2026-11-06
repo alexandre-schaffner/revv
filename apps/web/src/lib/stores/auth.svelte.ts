@@ -1,31 +1,27 @@
-import { isMaintainerLogin } from "@revv/shared";
-import { goto } from "$app/navigation";
+// Identity of the signed-in user, the device-flow sign-in, and the list of
+// accounts on this machine. The session lifecycle that acts on them (start,
+// switch, end) lives in `$lib/session/lifecycle.svelte`; this store imports
+// no other store.
+
+import { isMaintainerLogin, type UserUpdatedEnvelope } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { authClient } from "$lib/auth-client";
-import { stopPolling, withSyncSuspended } from "$lib/services/sync";
-import {
-  connect as connectEvents,
-  disconnect as disconnectEvents,
-} from "$lib/stores/events.svelte";
-import { fetchOrgs, initForUser, reset as resetOrgs } from "$lib/stores/orgs.svelte";
-import { fetchPinnedPrs, fetchPrs, fetchRepos, reset as resetPrs } from "$lib/stores/prs.svelte";
-import { clearReviewFiles } from "$lib/stores/review.svelte";
-import { fetchSettings, reset as resetSettings } from "$lib/stores/settings.svelte";
-
-const storedToken =
-  typeof localStorage !== "undefined" ? localStorage.getItem("rev_session_token") : null;
+import { clearToken, getToken, setToken } from "$lib/session/token.svelte";
+import { surfaceWindow } from "$lib/utils/surface-window";
 
 const LOAD_USER_RETRY_DELAY_MS = 1000;
 const LOAD_USER_MAX_RETRIES = 10;
 
-let token = $state<string | null>(storedToken);
-let user = $state<{
+interface User {
+  id: string;
   name: string;
   email: string;
   image?: string;
   githubLogin?: string | null;
   onboardedAt?: string | null;
-} | null>(null);
+}
+
+let user = $state<User | null>(null);
 let isLoading = $state(false);
 /**
  * Set once `/api/user/identity` has been *attempted* for the current session
@@ -50,15 +46,6 @@ let deviceFlow = $state<{
   host?: string;
   clientId?: string;
 } | null>(null);
-let _isPolling = $state(false);
-
-export type ConnectedAccount = {
-  host: string;
-  connected: boolean;
-  githubLogin: string | null;
-  avatarUrl: string | null;
-};
-
 export type LocalAccount = {
   id: string;
   name: string;
@@ -71,7 +58,6 @@ export type LocalAccount = {
   }>;
 };
 
-let _connectedAccounts = $state<ConnectedAccount[]>([]);
 let localAccounts = $state<LocalAccount[]>([]);
 let localAccountsLoaded = $state(typeof localStorage === "undefined");
 let accountJustRemoved = $state(false);
@@ -88,18 +74,18 @@ let authRestoreExhausted = $state(false);
  */
 let reauthRequired = $state<{ host: string | null; githubLogin: string | null } | null>(null);
 
+let forceOnboardingFlow = $state(false);
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
+
 export function getReauthRequired(): { host: string | null; githubLogin: string | null } | null {
   return reauthRequired;
 }
 
-export function setReauthRequired(value: {
-  host: string | null;
-  githubLogin: string | null;
-}): void {
-  reauthRequired = value;
+export function onAuthReauthRequired(data: { host: string; githubLogin: string | null }): void {
+  reauthRequired = { host: data.host, githubLogin: data.githubLogin };
 }
 
-export function clearReauthRequired(): void {
+export function onAuthReauthCleared(): void {
   reauthRequired = null;
 }
 
@@ -126,10 +112,8 @@ export function resetForceOnboardingFlow(): void {
 export function setForceOnboardingFlow(): void {
   forceOnboardingFlow = true;
 }
-let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
-const isAuthenticated = $derived(token !== null && token.length > 0);
-let forceOnboardingFlow = $state(false);
+const isAuthenticated = $derived((getToken() ?? "").length > 0);
 
 export function getIsAuthenticated(): boolean {
   return isAuthenticated;
@@ -181,29 +165,21 @@ export function getDeviceFlow(): typeof deviceFlow {
   return deviceFlow;
 }
 
-export function setToken(newToken: string): void {
+/**
+ * Forget the signed-in identity and its token. Called by the session
+ * lifecycle; stores holding account data are reset there, not here.
+ */
+export function clearIdentity(): void {
   resetLoadUserRetryState();
-  token = newToken;
-  if (typeof localStorage !== "undefined") {
-    localStorage.setItem("rev_session_token", newToken);
-  }
-}
-
-export function clearToken(): void {
-  resetLoadUserRetryState();
-  token = null;
+  clearToken();
   user = null;
   identityAttempted = false;
-  _connectedAccounts = [];
   // The re-auth modal is gated solely on `reauthRequired`, so an invalidated /
   // signed-out session must clear it (and any stale sign-in error) — otherwise
   // a dead session strands the modal with no account behind it.
   reauthRequired = null;
   error = null;
   signInErrorCode = null;
-  if (typeof localStorage !== "undefined") {
-    localStorage.removeItem("rev_session_token");
-  }
 }
 
 function parseSignInErrorCode(value: unknown): SignInErrorCode | null {
@@ -274,7 +250,7 @@ function scheduleLoadUserRetry(tokenSnapshot: string, message: string): void {
   loadUserRetryAttempts += 1;
   loadUserRetryTimer = setTimeout(() => {
     loadUserRetryTimer = null;
-    if (token === tokenSnapshot && !user) {
+    if (getToken() === tokenSnapshot && !user) {
       void loadUser();
     }
   }, LOAD_USER_RETRY_DELAY_MS);
@@ -322,7 +298,7 @@ export async function signIn(host?: string, clientId?: string): Promise<boolean>
     } catch {
       // Opening browser is best-effort
     }
-    startPolling();
+    schedulePoll(deviceFlow.interval);
     return true;
   } catch (e) {
     error = `Failed to start sign-in: ${signInErrorMessage(e)}`;
@@ -330,12 +306,6 @@ export async function signIn(host?: string, clientId?: string): Promise<boolean>
   } finally {
     isLoading = false;
   }
-}
-
-function startPolling(): void {
-  if (!deviceFlow) return;
-  _isPolling = true;
-  schedulePoll(deviceFlow.interval);
 }
 
 function schedulePoll(intervalSeconds: number): void {
@@ -353,18 +323,15 @@ async function poll(): Promise<void> {
   }
 
   try {
+    const body: Record<string, string> = { device_code: deviceFlow.deviceCode };
+    const token = getToken();
+    if (token) body.session_token = token;
+    if (deviceFlow.host) body.host = deviceFlow.host;
+    if (deviceFlow.clientId) body.client_id = deviceFlow.clientId;
     const res = await fetch(`${API_BASE_URL}/api/auth/device/poll`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(
-        (() => {
-          const body: Record<string, string> = { device_code: deviceFlow.deviceCode };
-          if (token) body.session_token = token;
-          if (deviceFlow.host) body.host = deviceFlow.host;
-          if (deviceFlow.clientId) body.client_id = deviceFlow.clientId;
-          return body;
-        })(),
-      ),
+      body: JSON.stringify(body),
     });
     const data = (await res.json()) as {
       status?: string;
@@ -387,34 +354,27 @@ async function poll(): Promise<void> {
 
     if (data.status === "linked") {
       deviceFlow = null;
-      _isPolling = false;
       // Re-auth of the active account lands here (session_token was sent).
       // Clear the gate immediately; the server also broadcasts
       // `auth:reauth-cleared`, but clearing here avoids modal flicker.
       reauthRequired = null;
-      await fetchConnectedAccounts();
-      await focusWindow();
+      await surfaceWindow();
       return;
     }
 
     if (data.status === "success" && data.token) {
+      resetLoadUserRetryState();
       setToken(data.token);
       deviceFlow = null;
-      _isPolling = false;
       reauthRequired = null;
       await loadUser();
-      await focusWindow();
-      // Auto-open-add-repo on sign-in used to live here. The onboarding
-      // flow now owns the repo step inline (StepRepo.svelte), so we
-      // intentionally don't pop a dialog — OnboardingGate stays mounted
-      // and advances to its repo step automatically.
+      await surfaceWindow();
       return;
     }
 
-    // Error cases. Surface the server-provided reason when it's anything
-    // other than the two well-known device-flow outcomes — otherwise every
-    // real failure (no email on account, GitHub API 4xx, DB error, etc.)
-    // gets flattened to the same useless "Sign-in failed" string.
+    // Surface the server-provided reason when it's anything other than the two
+    // well-known device-flow outcomes (no email on account, GitHub API 4xx, DB
+    // error, ...).
     error =
       data.error === "expired"
         ? "Sign-in timed out. Please try again."
@@ -435,7 +395,6 @@ export function cancelSignIn(): void {
   if (pollTimer) clearTimeout(pollTimer);
   pollTimer = null;
   deviceFlow = null;
-  _isPolling = false;
 }
 
 export function clearError(): void {
@@ -444,8 +403,8 @@ export function clearError(): void {
 }
 
 export async function loadUser(): Promise<void> {
-  if (!token) return;
-  const tokenSnapshot = token;
+  const tokenSnapshot = getToken();
+  if (!tokenSnapshot) return;
   isLoading = true;
   try {
     const session = await authClient.getSession();
@@ -453,17 +412,16 @@ export async function loadUser(): Promise<void> {
       resetLoadUserRetryState();
       const u = session.data.user;
       user = {
+        id: u.id,
         name: u.name,
         email: u.email,
         ...(u.image != null ? { image: u.image } : {}),
       };
-      // Fetch GitHub login + fresh avatar URL. The server refreshes
-      // `user.image` on each poll cycle (same pattern as repo avatars) so
-      // the signed-URL-expiry issue that used to break user avatars
-      // resolves itself without requiring re-auth.
+      // The server refreshes `user.image` on each poll cycle, so the identity
+      // read carries a fresh avatar even after GitHub's signed URL expired.
       try {
         const res = await fetch(`${API_BASE_URL}/api/user/identity`, {
-          headers: { Authorization: `Bearer ${token}` },
+          headers: { Authorization: `Bearer ${getToken() ?? tokenSnapshot}` },
         });
         if (res.ok) {
           const data = (await res.json()) as {
@@ -474,19 +432,17 @@ export async function loadUser(): Promise<void> {
             host?: string | null;
           };
           if (user) {
-            const next: typeof user = {
+            const next: User = {
               ...user,
               githubLogin: data.login,
               onboardedAt: data.onboardedAt ?? null,
             };
-            // Prefer the server's freshly-refreshed avatar content when available.
             if (data.avatarContent != null) {
               next.image = data.avatarContent;
             }
             user = next;
             accountJustRemoved = false;
           }
-          // Reconcile the re-auth gate from the authoritative server state.
           reauthRequired = data.reauthRequired
             ? { host: data.host ?? null, githubLogin: data.login }
             : null;
@@ -496,15 +452,9 @@ export async function loadUser(): Promise<void> {
       } finally {
         identityAttempted = true;
       }
-      // Init per-user org selection before fetching orgs
-      initForUser(u.id);
-      // Fire-and-forget org list fetch so the sidebar switcher has
-      // data ready when the user opens it. Failures degrade silently.
-      void fetchOrgs();
-      void fetchConnectedAccounts();
       void fetchLocalAccounts();
     } else if (shouldClearTokenAfterSessionMiss(session.error)) {
-      clearToken();
+      clearIdentity();
     } else {
       const message =
         authErrorMessage(session.error) ??
@@ -525,26 +475,17 @@ export async function loadUser(): Promise<void> {
   }
 }
 
-/**
- * Apply a server-pushed user update (e.g. avatar URL rotation).
- * Called by the SSE event handler when the poll scheduler detects that the
- * authenticated user's GitHub profile changed.
- */
-export function applyUserUpdate(update: {
-  image: string | null;
-  githubLogin: string | null;
-  name?: string;
-  email?: string;
-}): void {
+export function onUserUpdated(data: UserUpdatedEnvelope["data"]): void {
   if (!user) return;
-  const next: typeof user = {
-    name: update.name ?? user.name,
-    email: update.email ?? user.email,
-    githubLogin: update.githubLogin,
+  const next: User = {
+    id: user.id,
+    name: data.name,
+    email: data.email,
+    githubLogin: data.githubLogin,
     onboardedAt: user.onboardedAt ?? null,
   };
-  if (update.image != null) {
-    next.image = update.image;
+  if (data.image != null) {
+    next.image = data.image;
   }
   user = next;
 }
@@ -559,6 +500,7 @@ export function applyUserUpdate(update: {
  * actually failed.
  */
 export async function completeOnboarding(): Promise<void> {
+  const token = getToken();
   if (!token || !user) return;
   const localStamp = new Date().toISOString();
   user = { ...user, onboardedAt: localStamp };
@@ -586,6 +528,7 @@ export async function completeOnboarding(): Promise<void> {
  * logic and always start from the welcome step.
  */
 export async function resetOnboarding(): Promise<void> {
+  const token = getToken();
   if (!token || !user) return;
   if (typeof sessionStorage !== "undefined") {
     sessionStorage.setItem("revv-onboarding-replay", "1");
@@ -598,20 +541,6 @@ export async function resetOnboarding(): Promise<void> {
     });
   } catch {
     // best-effort — local mirror already flipped; the gate is showing.
-  }
-}
-
-export async function fetchConnectedAccounts(): Promise<void> {
-  if (!token) return;
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/auth/accounts`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (res.ok) {
-      _connectedAccounts = (await res.json()) as ConnectedAccount[];
-    }
-  } catch {
-    // best-effort
   }
 }
 
@@ -628,136 +557,73 @@ export async function fetchLocalAccounts(): Promise<void> {
   }
 }
 
-// Pre-fetch local accounts on module load so the account picker has data
-// before the user has a token (lock-screen scenario).
-if (typeof localStorage !== "undefined") {
-  void fetchLocalAccounts();
-}
-
-export async function switchAccount(userId: string, host?: string): Promise<void> {
+/**
+ * Run an account switch with the identity marked as switching, so the
+ * onboarding gate holds while the new user's identity loads. A failure is
+ * recorded as the sign-in error; resolves `true` when `run` succeeded.
+ */
+export async function runAccountSwitch(run: () => Promise<void>): Promise<boolean> {
   resetLoadUserRetryState();
   isSwitching = true;
   isLoading = true;
-  // Suspend background sync for the duration of the switch — an in-flight
-  // syncPrs() racing the new account's hydration can hang the swap.
-  await withSyncSuspended(async () => {
-    try {
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (token) headers.Authorization = `Bearer ${token}`;
-      const res = await fetch(`${API_BASE_URL}/api/auth/switch`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ userId }),
-      });
-      if (!res.ok) throw new Error("Switch failed");
-      const data = (await res.json()) as { token: string };
-      setToken(data.token);
-      resetPrs();
-      resetSettings();
-      resetOrgs();
-      clearReviewFiles();
-      // Fire-and-forget navigation. Awaiting `goto` blocks on SvelteKit's
-      // load/render cycle which can sit behind any number of in-flight
-      // route effects — and the data hydration below works regardless of
-      // which route we end up on.
-      if (
-        typeof window !== "undefined" &&
-        /^\/(repo|review)(\/|$)/.test(window.location.pathname)
-      ) {
-        void goto("/", { replaceState: true });
-      }
-      // Reconnect realtime channels with the new session token AND explicit
-      // host so the server binds them to the target user's correct account on
-      // the first attempt, even though the local settings store is still null.
-      disconnectEvents();
-      connectEvents(data.token, host);
-      const persistHost = host
-        ? fetch(`${API_BASE_URL}/api/settings`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.token}` },
-            body: JSON.stringify({ githubHost: host }),
-          }).catch(() => {
-            // best-effort — a missed PUT self-heals once the user updates
-            // settings explicitly.
-          })
-        : Promise.resolve();
-      // Block the switch UX only on the identity round-trip. Everything else
-      // hydrates in the background; awaiting the full payload here turned
-      // every slow /api/prs into a multi-second freeze that looked like the
-      // switch had hung.
-      await loadUser();
-      isSwitching = false;
-      void Promise.allSettled([
-        persistHost,
-        fetchSettings(),
-        fetchPrs(),
-        fetchRepos(),
-        fetchPinnedPrs(),
-      ]);
-    } catch (e) {
-      error = `Failed to switch account: ${e}`;
-    } finally {
-      isLoading = false;
-      isSwitching = false;
-    }
-  });
+  try {
+    await run();
+    return true;
+  } catch (e) {
+    error = `Failed to switch account: ${e instanceof Error ? e.message : String(e)}`;
+    return false;
+  } finally {
+    isLoading = false;
+    isSwitching = false;
+  }
 }
 
-export async function removeAccount(): Promise<void> {
-  if (!token) return;
-  stopPolling();
+/** Ask the server for a session token for another local user. */
+export async function requestAccountSwitch(userId: string): Promise<string> {
+  const res = await fetch(`${API_BASE_URL}/api/auth/switch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...bearer() },
+    body: JSON.stringify({ userId }),
+  });
+  if (!res.ok) throw new Error("Switch failed");
+  const data = (await res.json()) as { token: string };
+  return data.token;
+}
+
+/** Delete the signed-in user on the server. Throws when the server refuses. */
+export async function deleteAccount(): Promise<void> {
   const res = await fetch(`${API_BASE_URL}/api/user/account`, {
     method: "DELETE",
-    headers: { Authorization: `Bearer ${token}` },
+    headers: bearer(),
   });
   if (!res.ok) {
     throw new Error(`Failed to remove account: ${res.status}`);
   }
-  // Server confirmed deletion — now clean up local state
-  accountJustRemoved = true;
-  disconnectEvents();
-  clearToken();
-  resetPrs();
-  resetSettings();
-  resetOrgs();
-  clearReviewFiles();
-  await fetchLocalAccounts();
-  forceOnboardingFlow = true;
-  await goto("/");
 }
 
-export async function signOut(): Promise<void> {
-  stopPolling();
+/** The lock screen offers the onboarding flow rather than the removed account. */
+export function markAccountRemoved(): void {
+  accountJustRemoved = true;
+  forceOnboardingFlow = true;
+}
 
-  // Soft sign-out: tell server (no-op), then clear local state
+export async function revokeSession(): Promise<void> {
   try {
     await fetch(`${API_BASE_URL}/api/auth/revoke-and-sign-out`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
+      headers: bearer(),
     });
   } catch {
     // best-effort
   }
-
-  clearToken();
-  resetPrs();
-  resetSettings();
-  resetOrgs();
-
-  await goto("/");
 }
 
-export function getToken(): string | null {
-  return token;
+function bearer(): Record<string, string> {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-export function getUser(): {
-  name: string;
-  email: string;
-  image?: string;
-  githubLogin?: string | null;
-  onboardedAt?: string | null;
-} | null {
+export function getUser(): User | null {
   return user;
 }
 
@@ -790,14 +656,4 @@ export function getIsMaintainer(): boolean {
 
 export function getIsLoading(): boolean {
   return isLoading;
-}
-
-/** Bring the app window to the foreground after auth completes. */
-export async function focusWindow(): Promise<void> {
-  try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    await getCurrentWindow().setFocus();
-  } catch {
-    // Focus is best-effort
-  }
 }

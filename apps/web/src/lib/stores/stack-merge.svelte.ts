@@ -121,3 +121,9 @@ export function onStackMergeProgress(run: StackMergeRun): void {
   setRun(run);
   onStackUpdated(run);
 }
+
+export function reset(): void {
+  openFor = null;
+  plan = RequestState.idle();
+  runs = new Map();
+}

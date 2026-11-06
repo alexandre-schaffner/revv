@@ -1,4 +1,10 @@
-import type { ThreadSummary } from "@revv/shared";
+import type {
+  ErrorEnvelope,
+  SyncChange,
+  ThreadSummary,
+  ThreadsSyncErrorEnvelope,
+  ThreadsSyncedEnvelope,
+} from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 
@@ -41,14 +47,61 @@ export function getPrListSyncing(): boolean {
   return prListSyncing;
 }
 
-export function setPrListSyncing(v: boolean): void {
-  prListSyncing = v;
+export function onPrsSyncStarted(): void {
+  prListSyncing = true;
+}
+
+export function onPrsSyncComplete(): void {
+  prListSyncing = false;
+}
+
+/** A sync failure is terminal for that sync, and no `prs:sync-complete` follows it. */
+export function onError(data: ErrorEnvelope["data"]): void {
+  if (data.code === "SYNC_ERROR") prListSyncing = false;
+}
+
+export function onPrsSyncSummary(changes: SyncChange[]): void {
+  if (changes.length === 0) return;
+  if (changes.length > 3) {
+    toast.info(`${changes.length} pull request updates`);
+    return;
+  }
+  for (const change of changes) {
+    const description = `${change.repoFullName} #${change.prNumber}: ${change.prTitle}`;
+    switch (change.kind) {
+      case "review_requested":
+        toast.info("Review requested", { description });
+        break;
+      case "pr_updated":
+        toast.info("PR updated", { description });
+        break;
+      case "pr_closed":
+        toast.info("PR closed", { description });
+        break;
+      case "pr_authored":
+        toast.info("Your new PR", { description });
+        break;
+    }
+  }
+}
+
+/**
+ * The list just painted from SQLite can be a poll interval behind GitHub.
+ * Asked once the stream is open because the answer comes back over it.
+ */
+export function onEventsOpened(): void {
+  freshenPrList();
+}
+
+/** CONNECTING defers the freshen to `onEventsOpened`, once the stream that carries the answer is registered. */
+export function onWindowForeground(streamOpen: boolean): void {
+  if (streamOpen) freshenPrList();
 }
 
 export function requestSync(): void {
-  setPrListSyncing(true);
+  prListSyncing = true;
   void api.api.prs.sync.post().catch(() => {
-    setPrListSyncing(false);
+    prListSyncing = false;
     toast.error("Failed to sync pull requests");
   });
 }
@@ -75,7 +128,7 @@ export function requestThreadSync(prId: string): void {
  */
 export function requestFullSync(prId: string): void {
   markThreadsSyncing(prId);
-  setPrListSyncing(true);
+  prListSyncing = true;
   void api.api
     .prs({ id: prId })
     .refresh.post()
@@ -85,7 +138,7 @@ export function requestFullSync(prId: string): void {
     .finally(() => {
       // This request is awaited server-side, so its completion IS the signal —
       // there's no `prs:sync-complete` coming to release the spinner.
-      setPrListSyncing(false);
+      prListSyncing = false;
     });
   void api.api
     .prs({ id: prId })
@@ -164,7 +217,7 @@ let lastFreshenAt = 0;
  * arrives as an event, and an event sent before this client's stream is
  * registered is lost.
  */
-export function freshenPrList(): void {
+function freshenPrList(): void {
   const now = Date.now();
   if (now - lastFreshenAt < FRESHEN_MIN_INTERVAL_MS) return;
   lastFreshenAt = now;
@@ -173,8 +226,7 @@ export function freshenPrList(): void {
   void api.api.prs.freshen.post().catch(() => undefined);
 }
 
-/** Mark a PR's threads sync as in-flight (called when we send the request). */
-export function markThreadsSyncing(prId: string): void {
+function markThreadsSyncing(prId: string): void {
   const next = new Set(threadsSyncingByPr);
   next.add(prId);
   threadsSyncingByPr = next;
@@ -187,7 +239,7 @@ export function markThreadsSyncing(prId: string): void {
   }
 }
 
-export function setSyncError(prId: string, message: string): void {
+function setSyncError(prId: string, message: string): void {
   if (threadsSyncingByPr.has(prId)) {
     const nextSyncing = new Set(threadsSyncingByPr);
     nextSyncing.delete(prId);
@@ -198,7 +250,12 @@ export function setSyncError(prId: string, message: string): void {
   syncErrorByPr = nextErr;
 }
 
-export function applySynced(prId: string, summary: ThreadSummary, timestamp: string): void {
+export function onThreadsSyncError({ prId, message }: ThreadsSyncErrorEnvelope["data"]): void {
+  setSyncError(prId, message);
+  toast.error("Comment sync failed", { description: message, duration: 6000 });
+}
+
+export function onThreadsSynced({ prId, summary, timestamp }: ThreadsSyncedEnvelope["data"]): void {
   const nextSummaries = new Map(summaries);
   nextSummaries.set(prId, summary);
   summaries = nextSummaries;
@@ -224,4 +281,14 @@ export function setBatchSummaries(entries: Array<{ prId: string; summary: Thread
   const next = new Map(summaries);
   for (const { prId, summary } of entries) next.set(prId, summary);
   summaries = next;
+}
+
+export function reset(): void {
+  summaries = new Map();
+  lastSyncAtByPr = new Map();
+  threadsSyncingByPr = new Set();
+  syncErrorByPr = new Map();
+  prListSyncing = false;
+  lastHeadRefreshAt.clear();
+  lastFreshenAt = 0;
 }

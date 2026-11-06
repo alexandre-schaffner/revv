@@ -3,8 +3,15 @@ import type {
   CommentThread,
   MessageType,
   ReviewMode,
+  ThreadCreatedEnvelope,
+  ThreadDeletedEnvelope,
   ThreadMessage,
-  ThreadStatus,
+  ThreadMessageDeletedEnvelope,
+  ThreadMessageEditedEnvelope,
+  ThreadMessageEnvelope,
+  ThreadsNewReplyEnvelope,
+  ThreadsSyncedEnvelope,
+  ThreadUpdatedEnvelope,
   WalkthroughMode,
 } from "@revv/shared";
 import { toast } from "svelte-sonner";
@@ -14,10 +21,12 @@ import { reviewNewCommits } from "$lib/review/review-new-commits";
 import { RequestState, type RequestState as RequestStateType } from "$lib/stores/_types";
 import { invalidateChatHistory } from "$lib/stores/chat.svelte";
 import { enterSidebarMode } from "$lib/stores/focus-mode.svelte";
-import { getPrById, getReviewModeForPr } from "$lib/stores/prs.svelte";
+import { getPrById, getReviewModeForPr, getSelectedPrId } from "$lib/stores/prs.svelte";
 import { getSettings, updateSettings } from "$lib/stores/settings.svelte";
+import { refreshPrHead, requestThreadSync } from "$lib/stores/sync.svelte";
 import { invalidateForPull, regenerate } from "$lib/stores/walkthrough.svelte";
 import type { ReviewFile } from "$lib/types/review";
+import { createResource } from "./resource";
 
 // --- Review files (shared between sidebar tree + review page) ---
 let reviewFiles = $state<ReviewFile[]>([]);
@@ -109,14 +118,16 @@ export function getLoadedHeadSha(prId: string): string | null {
   return loadedHeadShas.get(prId) ?? null;
 }
 
-// Per-PR in-flight flag so the pull button can show a spinner without
-// racing a second click. Set-reassignment for reactivity, matching the
-// loadedHeadShas pattern above.
-let isPullingCommit = $state(new Set<string>());
-const pullCommitRequests = new Map<string, Promise<boolean>>();
+/** Concurrent pulls of one PR share a request; `loading` drives the pull button's spinner. */
+const pulls = createResource<string, true>({
+  fetch: async (prId) =>
+    (await runPullLatestCommit(prId))
+      ? { status: "ok", data: true }
+      : { status: "error", error: "Pull failed" },
+});
 
 export function getIsPullingCommit(prId: string): boolean {
-  return isPullingCommit.has(prId);
+  return pulls.entry(prId).loading;
 }
 
 /**
@@ -127,21 +138,9 @@ export function getIsPullingCommit(prId: string): boolean {
  * Coalesces concurrent calls for the same PR and resolves true only when the
  * fresh diff has been installed successfully.
  */
-export function pullLatestCommit(prId: string): Promise<boolean> {
-  const inFlight = pullCommitRequests.get(prId);
-  if (inFlight) return inFlight;
-
-  isPullingCommit.add(prId);
-  isPullingCommit = new Set(isPullingCommit);
-
-  const request = runPullLatestCommit(prId).finally(() => {
-    pullCommitRequests.delete(prId);
-    setIsLoadingFiles(false);
-    isPullingCommit.delete(prId);
-    isPullingCommit = new Set(isPullingCommit);
-  });
-  pullCommitRequests.set(prId, request);
-  return request;
+export async function pullLatestCommit(prId: string): Promise<boolean> {
+  const request = await pulls.load(prId, prId);
+  return request.status === "ok";
 }
 
 async function runPullLatestCommit(prId: string): Promise<boolean> {
@@ -199,6 +198,8 @@ async function runPullLatestCommit(prId: string): Promise<boolean> {
   } catch (e) {
     setFilesError(e instanceof Error ? e.message : "Failed to pull latest commit");
     return false;
+  } finally {
+    setIsLoadingFiles(false);
   }
 }
 
@@ -215,7 +216,6 @@ export async function reviewLatestCommit(prId: string, mode: WalkthroughMode): P
 
 // --- Session state ---
 let sessionId = $state<string | null>(null);
-let _sessionLoading = $state(false);
 /**
  * The review-session lens for a PR. Derived purely from identity (PR author
  * vs. the signed-in user) via `getReviewModeForPr` — there is no manual
@@ -227,88 +227,70 @@ export function getReviewMode(prId: string): ReviewMode {
   return getReviewModeForPr(prId);
 }
 
-function clearSession(): void {
-  sessionId = null;
-  threads = [];
-  threadMessages = {};
-  threadsVersion++;
-  // Reset the short-circuit window too — an explicit clear means callers
-  // want a fresh hydration on the next `loadSession` call.
-  lastSessionKey = null;
-  lastSessionAt = 0;
+function sessionKeyOf(prId: string, mode: ReviewMode): string {
+  return `${prId}:${mode}`;
 }
 
-let loadSessionSeq = 0;
+/** The session the threads below belong to, and the one most recently asked for. */
+let appliedSessionKey: string | null = null;
+let wantedSessionKey: string | null = null;
 
-// Phase 1 stopgap: skip redundant session loads when the same PR was hydrated
-// within the last minute AND we still have a live session id. Phase 3's
-// queryStore replaces this with per-key cache semantics.
-let lastSessionKey: string | null = null;
-let lastSessionAt = 0;
-const SESSION_REFETCH_WINDOW_MS = 60_000;
-
-/** Load (or create) the active review session for a PR, hydrating all state. */
-export async function loadSession(
-  prId: string,
-  mode: ReviewMode = getReviewMode(prId),
-  force = false,
-): Promise<void> {
-  const sessionKey = `${prId}:${mode}`;
-  // Short-circuit: same PR, recent hydration, session still live. Callers that
-  // just mutated server state (e.g. submitting a review) pass `force` to skip
-  // it — otherwise stale local rows (missing the externalId stamped on
-  // just-pushed comments) would survive and get re-submitted as duplicates.
-  if (
-    !force &&
-    sessionKey === lastSessionKey &&
-    Date.now() - lastSessionAt < SESSION_REFETCH_WINDOW_MS &&
-    sessionId !== null
-  ) {
-    return;
-  }
-
-  const seq = ++loadSessionSeq;
-  _sessionLoading = true;
-  try {
-    const { data, error } = await api.api.reviews.active({ prId }).get({
-      query: { mode },
-    });
-
-    // Discard if a newer call has started
-    if (seq !== loadSessionSeq) return;
-
+/**
+ * A session hydration stays fresh for a minute, so re-entering a PR doesn't
+ * re-read it. Only one session is on screen: applying one forgets the last.
+ */
+const sessions = createResource<{ prId: string; mode: ReviewMode }, string>({
+  freshForMs: 60_000,
+  fetch: async (key, { prId, mode }) => {
+    const { data, error } = await api.api.reviews.active({ prId }).get({ query: { mode } });
+    if (key !== wantedSessionKey) return { status: "error", error: "Superseded" };
     if (error || !data) {
       console.error("[review] Failed to load session:", error);
       toast.error("Failed to load review session");
-      return;
+      return { status: "error", error: "Failed to load review session" };
     }
-
-    // Type-narrow: the response is the full hydration payload
     const payload = data as {
       session: { id: string; mode?: ReviewMode };
       threads: CommentThread[];
       messages: Record<string, ThreadMessage[]>;
     };
-
+    if (appliedSessionKey !== null && appliedSessionKey !== key) {
+      sessions.invalidate(appliedSessionKey);
+    }
+    appliedSessionKey = key;
     sessionId = payload.session.id;
     threads = payload.threads;
-
-    // Populate thread messages
-    const msgs: Record<string, ThreadMessage[]> = {};
-    for (const [tid, msgList] of Object.entries(payload.messages)) {
-      msgs[tid] = msgList;
-    }
-    threadMessages = msgs;
-
+    threadMessages = { ...payload.messages };
     threadsVersion++;
-    lastSessionKey = sessionKey;
-    lastSessionAt = Date.now();
-  } finally {
-    // Only clear loading if this is still the active request
-    if (seq === loadSessionSeq) {
-      _sessionLoading = false;
-    }
-  }
+    return { status: "ok", data: payload.session.id };
+  },
+});
+
+function clearSession(): void {
+  sessions.reset();
+  appliedSessionKey = null;
+  wantedSessionKey = null;
+  sessionId = null;
+  threads = [];
+  threadMessages = {};
+  threadsVersion++;
+}
+
+/**
+ * Load (or create) the active review session for a PR, hydrating all state.
+ * Callers that just mutated server state (e.g. submitting a review) pass
+ * `force`, otherwise stale local rows (missing the externalId stamped on
+ * just-pushed comments) would survive and get re-submitted as duplicates.
+ */
+export async function loadSession(
+  prId: string,
+  mode: ReviewMode = getReviewMode(prId),
+  force = false,
+): Promise<void> {
+  const key = sessionKeyOf(prId, mode);
+  wantedSessionKey = key;
+  const arg = { prId, mode };
+  await (force ? sessions.refresh(key, arg) : sessions.load(key, arg));
 }
 
 // --- Per-PR view state ---
@@ -654,10 +636,7 @@ export async function reopenThread(threadId: string): Promise<void> {
   }
 }
 
-/**
- * Update a thread's status from an SSE event (no API call needed).
- */
-export function onThreadUpdated(threadId: string, status: ThreadStatus): void {
+export function onThreadUpdated({ threadId, status }: ThreadUpdatedEnvelope["data"]): void {
   const isResolved = status === "resolved" || status === "wont_fix";
   threads = threads.map((t) =>
     t.id === threadId
@@ -671,10 +650,23 @@ export function onThreadUpdated(threadId: string, status: ThreadStatus): void {
   threadsVersion++;
 }
 
-/**
- * Push a thread and message from an SSE broadcast (no API call needed).
- */
-export function onThreadCreated(thread: CommentThread, message: ThreadMessage): void {
+/** Threads of other sessions (another PR, the other lens) are not on screen. */
+export function onThreadCreated({
+  sessionId: threadSession,
+  thread,
+  message,
+}: ThreadCreatedEnvelope["data"]): void {
+  if (threadSession !== sessionId) return;
+  addThreadFromEvent(thread, message);
+}
+
+/** A GitHub sync brought in a comment: a new thread, or a reply to a known one. */
+export function onThreadsNewReply({ thread, message }: ThreadsNewReplyEnvelope["data"]): void {
+  if (thread.reviewSessionId !== sessionId) return;
+  addThreadFromEvent(thread, message);
+}
+
+function addThreadFromEvent(thread: CommentThread, message: ThreadMessage): void {
   if (!threads.some((t) => t.id === thread.id)) {
     threads = [...threads, thread];
     threadsVersion++;
@@ -689,10 +681,7 @@ export function onThreadCreated(thread: CommentThread, message: ThreadMessage): 
   }
 }
 
-/**
- * Push a message from an SSE broadcast (no API call needed).
- */
-export function onThreadMessage(threadId: string, message: ThreadMessage): void {
+export function onThreadMessage({ threadId, message }: ThreadMessageEnvelope["data"]): void {
   // Avoid duplicates
   const existing = threadMessages[threadId] ?? [];
   if (existing.some((m) => m.id === message.id)) return;
@@ -823,30 +812,27 @@ export async function pushThreadToGitHub(threadId: string): Promise<boolean> {
   return true;
 }
 
-/**
- * Remove a thread from local state in response to an SSE broadcast.
- */
-export function onThreadDeleted(threadId: string): void {
+export function onThreadDeleted({ threadId }: ThreadDeletedEnvelope["data"]): void {
   threads = threads.filter((t) => t.id !== threadId);
   const { [threadId]: _, ...rest } = threadMessages;
   threadMessages = rest;
   threadsVersion++;
 }
 
-/**
- * Update a message body from an SSE broadcast (no API call needed).
- */
-export function onThreadMessageEdited(threadId: string, message: ThreadMessage): void {
+export function onThreadMessageEdited({
+  threadId,
+  message,
+}: ThreadMessageEditedEnvelope["data"]): void {
   threadMessages = {
     ...threadMessages,
     [threadId]: (threadMessages[threadId] ?? []).map((m) => (m.id === message.id ? message : m)),
   };
 }
 
-/**
- * Remove a message from local state in response to an SSE broadcast.
- */
-export function onThreadMessageDeleted(threadId: string, messageId: string): void {
+export function onThreadMessageDeleted({
+  threadId,
+  messageId,
+}: ThreadMessageDeletedEnvelope["data"]): void {
   const existing = threadMessages[threadId];
   if (!existing) return;
   threadMessages = {
@@ -921,4 +907,46 @@ export async function applyCommentSuggestion(threadId: string, suggestion: strin
 
   // Resolve the thread
   await resolveThread(threadId);
+}
+
+/**
+ * The server only emits this when the pull actually moved something (or the
+ * user asked for the sync), so the PR on screen re-reads its session even
+ * inside the freshness window.
+ */
+export function onThreadsSynced({ prId }: ThreadsSyncedEnvelope["data"]): void {
+  if (prId === getSelectedPrId()) void loadSession(prId, undefined, true);
+}
+
+/**
+ * Thread events sent while the stream was down are gone. The session read is
+ * DB-only, so the PR on screen also asks GitHub for its threads and its head
+ * (a dropped connection may have hidden a push).
+ */
+export function onEventsReconnected(): void {
+  const prId = getSelectedPrId();
+  if (!prId) return;
+  requestThreadSync(prId);
+  void loadSession(prId, undefined, true);
+  refreshPrHead(prId);
+}
+
+/**
+ * Coming back to the window is when the user may have pushed from a terminal,
+ * and a DB read can't see a commit the poll fiber hasn't fetched yet.
+ */
+export function onWindowForeground(): void {
+  const prId = getSelectedPrId();
+  if (prId) refreshPrHead(prId);
+}
+
+export function reset(): void {
+  clearReviewFiles();
+  pulls.reset();
+  loadedHeadShas = new Map();
+  store.entries = new Map();
+  store.activePrId = null;
+  pendingDiffJump = null;
+  pendingWalkthroughBlockJump = null;
+  diffModeOverride = null;
 }
