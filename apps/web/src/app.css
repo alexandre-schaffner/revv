@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "./lib/components/ui/dotmatrix/dotmatrix-loader.css";
 @import "./lib/components/ui/glass-pill/glass-pill.css";
+@import "./lib/styles/review-columns.css";
 @plugin "@tailwindcss/typography";
 /* prose.css must be imported *after* the typography @plugin: it defines `.prose`
    overrides that the plugin has to register first, otherwise Tailwind v4 skips

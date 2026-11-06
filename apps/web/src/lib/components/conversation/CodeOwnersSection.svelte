@@ -14,7 +14,8 @@ import { SvelteSet } from "svelte/reactivity";
 import Avatar from "$lib/components/shared/Avatar.svelte";
 import { VERDICT_LABEL } from "$lib/conversation/verdict";
 import { gsapSlide } from "$lib/motion";
-import { getReviewFiles, openFileInDiff } from "$lib/stores/review.svelte";
+import { getReviewFiles } from "$lib/stores/review.svelte";
+import { openFileInDiff } from "$lib/stores/review-nav.svelte";
 import VerdictGlyph from "./VerdictGlyph.svelte";
 
 // Who CODEOWNERS makes responsible for this PR's files, read from the base

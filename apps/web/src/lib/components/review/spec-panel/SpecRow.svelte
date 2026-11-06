@@ -1,72 +1,56 @@
 <script lang="ts">
 /*
- * SpecRow — local copy-adapt of ratings-panel/RatingTestRow's row primitive.
+ * One collapsible row of a spec panel. The trigger is a grid:
  *
- * The scorecard's RatingTestRow is intentionally hard-coded to its verdict
- * palette and its trigger layout. Rather than refactor that polished file
- * (the plan forbids touching it), we replicate the *mechanical* parts —
- * gutter, grid trigger, Collapsible wiring, lifecycle keyframes — as a
- * generic row usable by both the issues and comments panels.
+ *   gutter · icon (2ch) · label + preview (1fr) · trailing (auto) · chevron (16px)
  *
- * Callers drive appearance via CSS custom properties set on their own
- * wrapper (e.g. `--c-gutter-color`, `--c-row-bg`). Slots are exposed as
- * snippets so a caller can choose between a checkbox, an icon, or nothing
- * for each column.
- *
- * Columns (grid-template):
- *   icon (2ch) · label+preview (1fr) · trailing (auto) · chevron (16px)
- *
- * The row is always collapsible (unless `disabled`). There's no "no
- * collapse" variant — panels that want click-to-jump use the scorecard's
- * own RatingTestRow directly, not this primitive.
+ * Callers paint it through custom properties on a wrapper (`--c-gutter-color`,
+ * `--c-gutter-flash`, `--c-row-bg`, …) and fill the columns with snippets.
  */
 import CaretRight from "phosphor-svelte/lib/CaretRight";
 import type { Snippet } from "svelte";
+import { fromAction } from "svelte/attachments";
 import * as Collapsible from "$lib/components/ui/collapsible";
-
-export type SpecRowState = "queued" | "running" | "resolved" | "submitted";
+import { type EnterParams, enterOnce } from "$lib/motion";
 
 interface Props {
-  /** Controlled open state. */
   open: boolean;
-  /** Fires when the user clicks the trigger (ignored while disabled). */
   onToggle: () => void;
-  /** Lifecycle state — drives gutter animation + opacity. */
-  state?: SpecRowState;
-  /** When true, the row cannot be expanded (trigger is inert). Use for
-   *  submitted or read-only rows. */
-  disabled?: boolean;
-  /** Screen-reader label for the trigger. */
+  /** Session-unique row identity; the row's one-shot motion is keyed on it. */
+  motionKey: string;
+  /** Posted to GitHub: dimmed, can't expand, success gutter. */
+  submitted?: boolean;
   ariaLabel?: string;
-  /** Binds the trigger element upward so a parent can manage focus /
-   *  keyboard navigation across rows. */
-  triggerRef?: HTMLElement | null;
-  /** Optional data attribute — useful for panel-level CSS hooks. */
-  dataKind?: string;
-  /** Slots — each returns the content for one column of the trigger
-   *  grid. All are optional; a missing slot renders an empty cell. */
+  /** Called with the trigger on mount and with null on unmount, for keyboard nav. */
+  onTriggerRef?: ((el: HTMLElement | null) => void) | undefined;
   icon?: Snippet;
   label?: Snippet;
+  /** Shown after the label while the row is closed. */
   preview?: Snippet;
   trailing?: Snippet;
-  /** Expanded body, rendered inside Collapsible.Content. */
   content?: Snippet;
 }
 
 let {
   open,
   onToggle,
-  state = "resolved",
-  disabled = false,
+  motionKey,
+  submitted = false,
   ariaLabel,
-  triggerRef = $bindable(null),
-  dataKind,
+  onTriggerRef,
   icon,
   label,
   preview,
   trailing,
   content,
 }: Props = $props();
+
+let triggerRef = $state<HTMLElement | null>(null);
+
+$effect(() => {
+  onTriggerRef?.(triggerRef);
+  return () => onTriggerRef?.(null);
+});
 
 function focusTriggerOnPointerDown(e: PointerEvent): void {
   const target = e.target as HTMLElement | null;
@@ -79,14 +63,14 @@ function focusTriggerOnPointerDown(e: PointerEvent): void {
 
 <li
     class="spec-row"
-    data-state={state}
-    data-kind={dataKind}
-    aria-busy={state === "running" ? "true" : undefined}
+    class:spec-row--submitted={submitted}
+    {@attach !submitted &&
+        fromAction(enterOnce, (): EnterParams => ({ key: `${motionKey}:nudge`, look: "nudge" }))}
 >
     <Collapsible.Root
         {open}
         onOpenChange={(next: boolean) => {
-            if (disabled) return;
+            if (submitted) return;
             if (next !== open) {
                 triggerRef?.focus({ preventScroll: true });
                 onToggle();
@@ -95,13 +79,20 @@ function focusTriggerOnPointerDown(e: PointerEvent): void {
     >
         <Collapsible.Trigger
             class="spec-row-trigger"
-            disabled={disabled}
-            aria-disabled={disabled}
+            disabled={submitted}
+            aria-disabled={submitted}
             aria-label={ariaLabel}
             bind:ref={triggerRef}
             onpointerdown={focusTriggerOnPointerDown}
         >
-            <span class="spec-row-gutter" aria-hidden="true"></span>
+            <span class="spec-row-gutter" aria-hidden="true">
+                {#if !submitted}
+                    <span
+                        class="spec-row-flash"
+                        use:enterOnce={{ key: `${motionKey}:flash`, look: "flash" }}
+                    ></span>
+                {/if}
+            </span>
 
             <span class="spec-row-icon">
                 {#if icon}{@render icon()}{/if}
@@ -121,7 +112,7 @@ function focusTriggerOnPointerDown(e: PointerEvent): void {
             <span
                 class="spec-row-chevron"
                 class:spec-row-chevron--open={open}
-                class:spec-row-chevron--hidden={disabled}
+                class:spec-row-chevron--hidden={submitted}
                 aria-hidden="true"
             >
                 <CaretRight size={14} />
@@ -147,7 +138,6 @@ function focusTriggerOnPointerDown(e: PointerEvent): void {
 
     :global(.spec-row-trigger) {
         display: grid;
-        /* icon · label+preview · trailing · chevron */
         grid-template-columns:
             2ch
             minmax(0, 1fr)
@@ -189,6 +179,10 @@ function focusTriggerOnPointerDown(e: PointerEvent): void {
         );
     }
 
+    .spec-row--submitted :global(.spec-row-trigger) {
+        opacity: 0.55;
+    }
+
     /* ── Left gutter ────────────────────────────────────────────── */
 
     .spec-row-gutter {
@@ -201,42 +195,18 @@ function focusTriggerOnPointerDown(e: PointerEvent): void {
         transition: background var(--duration-quick) var(--ease-soft);
     }
 
-    .spec-row[data-state="queued"] .spec-row-gutter {
-        background: var(--color-border);
-    }
-
-    .spec-row[data-state="running"] .spec-row-gutter {
-        animation: spec-row-pulse-gutter var(--duration-pulse) var(--ease-soft) infinite;
-    }
-
-    .spec-row[data-state="resolved"] .spec-row-gutter {
-        animation: spec-row-gutter-flash 320ms var(--ease-out-expo) 1;
-    }
-
-    .spec-row[data-state="submitted"] .spec-row-gutter {
+    .spec-row--submitted .spec-row-gutter {
         background: var(--c-gutter-color-submitted, var(--color-success));
     }
 
-    @keyframes spec-row-pulse-gutter {
-        0%,
-        100% {
-            background: var(--color-border);
-        }
-        50% {
-            background: var(--color-accent);
-        }
-    }
-
-    @keyframes spec-row-gutter-flash {
-        0% {
-            background: var(--c-gutter-flash, var(--c-gutter-color));
-            box-shadow: 0 0 6px
-                color-mix(in srgb, var(--c-gutter-color, var(--color-text-primary)) 50%, transparent);
-        }
-        100% {
-            background: var(--c-gutter-color, var(--color-border));
-            box-shadow: none;
-        }
+    /* Lit by a one-shot tween when the row first shows. */
+    .spec-row-flash {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        background: var(--c-gutter-flash, var(--c-gutter-color));
+        box-shadow: 0 0 6px
+            color-mix(in srgb, var(--c-gutter-color, var(--color-text-primary)) 50%, transparent);
     }
 
     /* ── Column slots ──────────────────────────────────────────── */
@@ -299,49 +269,5 @@ function focusTriggerOnPointerDown(e: PointerEvent): void {
 
     .spec-row-chevron--hidden {
         visibility: hidden;
-    }
-
-    /* ── Row lifecycle opacity ──────────────────────────────────── */
-
-    .spec-row[data-state="queued"] :global(.spec-row-trigger) {
-        opacity: 0.45;
-    }
-
-    .spec-row[data-state="running"] :global(.spec-row-trigger) {
-        opacity: 0.75;
-    }
-
-    .spec-row[data-state="resolved"] :global(.spec-row-trigger) {
-        animation: spec-row-resolve var(--duration-quick) var(--ease-out-expo) 1;
-    }
-
-    .spec-row[data-state="submitted"] :global(.spec-row-trigger) {
-        opacity: 0.55;
-    }
-
-    @keyframes spec-row-resolve {
-        0% {
-            transform: translateX(-2px);
-            opacity: 0.7;
-        }
-        100% {
-            transform: translateX(0);
-            opacity: 1;
-        }
-    }
-
-    /* ── Reduced motion ─────────────────────────────────────────── */
-
-    @media (prefers-reduced-motion: reduce) {
-        .spec-row[data-state="running"] .spec-row-gutter,
-        .spec-row[data-state="resolved"] .spec-row-gutter {
-            animation: none;
-        }
-        .spec-row[data-state="resolved"] :global(.spec-row-trigger) {
-            animation: none;
-        }
-        .spec-row-chevron {
-            transition: none;
-        }
     }
 </style>

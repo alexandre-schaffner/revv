@@ -1,6 +1,5 @@
 <script lang="ts">
-import { gsap, prefersReducedMotion, tokens } from "$lib/motion";
-import { hasContainerAnimated, markContainerAnimated } from "$lib/stores/walkthrough.svelte";
+import { firstEntrance, gsap, prefersReducedMotion, tokens } from "$lib/motion";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 
 /**
@@ -55,11 +54,6 @@ const dateBand = $derived.by(() => {
 
 const tooltip = $derived(mergedAt ? `Merged ${formatRelativeTime(mergedAt)}` : "Merged");
 
-// One-shot entrance: the stamp presses down once per PR, not on every tab
-// revisit. Shares the walkthrough's container-animation ledger so switching
-// to the Diff tab and back doesn't replay it.
-const ANIMATION_KEY = "merged-stamp";
-
 let el = $state<HTMLDivElement | null>(null);
 
 $effect(() => {
@@ -69,11 +63,11 @@ $effect(() => {
   // The tilt is applied here, not in CSS: GSAP writes `rotate: none` next to
   // its `transform` (it owns the independent transform properties), which
   // silently wipes a CSS `rotate` on the same element.
-  if (hasContainerAnimated(prId, ANIMATION_KEY) || prefersReducedMotion()) {
+  // The press plays once per PR per session, not on every remount.
+  if (!firstEntrance(`merged-stamp:${prId}`) || prefersReducedMotion()) {
     gsap.set(node, { autoAlpha: 1, scale: 1, rotation: tilt });
     return;
   }
-  markContainerAnimated(prId, ANIMATION_KEY);
   // Press, then seat: the die comes down big and over-rotated, lands past
   // its resting angle, and rocks back the last degree — the way a hand-held
   // stamp actually settles. Both steps ease out; no bounce.

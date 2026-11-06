@@ -1,37 +1,28 @@
 <script lang="ts">
 /*
- * CommentTestRow — one unresolved-comment row, keyed by file. Groups all
- * threads on the same file into a single collapsible line:
+ * Every unresolved thread on one file, as one row:
  *
- *   💬  src/auth.ts   First thread's first message preview…   3 threads  ›
- *   │   │             │                                       │
- *   │   │             └ preview (sans 12 muted, truncated)    └ thread-count pill
- *   │   └ FileBadge — the row's "headline" is the file
- *   └ Chat / Chats icon (multi-turn signal)
+ *   [chat icon]  src/auth.ts :12   [avatar] first message…   3 threads  ›
  *
- * Click expands to reveal every thread in the file, separated by the
- * "THREADS" hairline (rendered inside CommentExpandedBody). Jumping to
- * the diff happens either via the FileBadge (jumps to the first thread)
- * or the per-thread `jump` chip inside the expanded body.
+ * The file badge jumps to the first thread; each thread in the open body
+ * has its own jump.
  */
-
 import type { CommentThread, ThreadMessage } from "@revv/shared";
 import Chat from "phosphor-svelte/lib/Chat";
 import Chats from "phosphor-svelte/lib/Chats";
 import Robot from "phosphor-svelte/lib/Robot";
 import User from "phosphor-svelte/lib/User";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
-import SpecRow from "../shared/SpecRow.svelte";
+import { enterOnce } from "$lib/motion";
 import CommentExpandedBody from "./CommentExpandedBody.svelte";
+import SpecRow from "./SpecRow.svelte";
 
 interface Props {
   filePath: string;
-  /** All threads for this file, ordered by startLine ascending. */
+  /** Ordered by startLine. */
   threads: readonly CommentThread[];
-  /** Resolver — called per thread to load its messages. */
   getThreadMessages: (threadId: string) => ThreadMessage[];
   open: boolean;
-  index: number;
   onToggleOpen: () => void;
   onJump?: ((filePath: string, line: number) => void) | undefined;
   onDiscard?: ((threadId: string) => void) | undefined;
@@ -43,37 +34,23 @@ let {
   threads,
   getThreadMessages,
   open,
-  index,
   onToggleOpen,
   onJump,
   onDiscard,
   onTriggerRef,
 }: Props = $props();
 
-let triggerRef = $state<HTMLElement | null>(null);
-
-$effect(() => {
-  onTriggerRef?.(triggerRef);
-  return () => onTriggerRef?.(null);
-});
-
-// First thread drives the preview + badge line info. Groups are
-// guaranteed non-empty by the caller (groupThreadsByFile skips empty
-// buckets), but guard anyway so the component degrades sensibly if
-// that contract ever slips.
+// groupThreadsByFile never yields an empty group, but degrade if it ever does.
 const firstThread = $derived(threads[0]);
 const firstThreadMessages = $derived(firstThread ? getThreadMessages(firstThread.id) : []);
 const firstMessage = $derived(firstThreadMessages[0]);
 const preview = $derived(firstMessage?.body.trim() ?? "");
 
-// Total messages across all threads drives the icon choice — if the
-// whole file has only one turn we show the single-message glyph, else
-// the multi-turn one.
 const totalMessages = $derived(threads.reduce((sum, t) => sum + getThreadMessages(t.id).length, 0));
 const hasMultipleMessages = $derived(totalMessages > 1);
 const hasMultipleThreads = $derived(threads.length > 1);
 
-const delay = $derived(`${Math.min(index, 6) * 50}ms`);
+const motionKey = $derived(`spec-row:comment:${firstThread?.reviewSessionId}:${filePath}`);
 
 let avatarFailed = $state(false);
 
@@ -87,16 +64,19 @@ const ariaLabel = $derived(
 
 <div
     class="comment-row"
-    style:--issue-delay={delay}
     data-open={open ? "true" : undefined}
+    use:enterOnce={{
+        key: motionKey,
+        look: "row",
+        cascade: { group: "comment-rows", step: 0.05, cap: 6 },
+    }}
 >
     <SpecRow
         {open}
         onToggle={onToggleOpen}
-        state="resolved"
+        {motionKey}
         {ariaLabel}
-        dataKind="comment"
-        bind:triggerRef
+        {onTriggerRef}
     >
         {#snippet icon()}
             <span class="comment-icon" aria-hidden="true">
@@ -178,9 +158,6 @@ const ariaLabel = $derived(
         --c-gutter-color: var(--color-accent);
         --c-row-bg: var(--color-bg-elevated);
         --c-gutter-flash: var(--color-accent);
-
-        animation: comment-row-enter var(--duration-ceremonial-medium) var(--ease-out-expo) both;
-        animation-delay: var(--issue-delay, 0ms);
     }
 
     /* Confine the accent gutter to the clickable trigger row — without a
@@ -211,8 +188,7 @@ const ariaLabel = $derived(
         color: var(--color-accent);
     }
 
-    /* ── File-badge slot — stop click propagation so the badge
-       hover/chip doesn't also toggle the row. ─────────────── */
+    /* ── File-badge slot: stops clicks so the badge doesn't also toggle the row. */
 
     .file-badge-slot {
         display: inline-flex;
@@ -291,24 +267,5 @@ const ariaLabel = $derived(
 
     .count-pill-label {
         text-transform: lowercase;
-    }
-
-    /* ── Entry animation ───────────────────────────────────── */
-
-    @keyframes comment-row-enter {
-        from {
-            opacity: 0;
-            transform: translateY(4px);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-        .comment-row {
-            animation: none;
-        }
     }
 </style>

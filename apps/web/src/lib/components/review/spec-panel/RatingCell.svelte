@@ -5,26 +5,21 @@ import Check from "phosphor-svelte/lib/Check";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import Warning from "phosphor-svelte/lib/Warning";
 import XCircle from "phosphor-svelte/lib/XCircle";
+import { fromAction } from "svelte/attachments";
 import * as Popover from "$lib/components/ui/popover";
-import { synthesize } from "./format-synthesis";
+import { type EnterParams, enterOnce } from "$lib/motion";
 import RatingExpandedBody from "./RatingExpandedBody.svelte";
+import { synthesize } from "./rating-synthesis";
 
-/** Mirrors `RowState` from RatingTestRow — the two views share the same
- *  three lifecycle states. Duplicated as a local type alias so we don't
- *  re-export from the list row and couple these components unnecessarily. */
 export type CellState = "queued" | "running" | "resolved";
 
 interface Props {
   axis: RatingAxis;
   rating: WalkthroughRating | null;
   state: CellState;
-  /** Full ordered block list — forwarded to RatingExpandedBody so the
-   *  "step N" chips resolve to the block's global index. */
   blocks: WalkthroughBlock[];
-  /** Jump-to-block handler — forwarded to RatingExpandedBody. */
   onJump: (blockId: string) => void;
-  /** Grid-level keyboard nav binds upward so the 2-D arrow-key handler
-   *  on the orchestrator can call focus() against this trigger. */
+  /** Bound upward for the grid's arrow-key navigation. */
   triggerRef?: HTMLElement | null;
 }
 
@@ -32,14 +27,8 @@ let { axis, rating, state, blocks, onJump, triggerRef = $bindable(null) }: Props
 
 const axisLabel = $derived(RATING_AXIS_LABELS[axis]);
 
-// Verdict class — same vocabulary as RatingTestRow (`cell--pass`,
-// `cell--concern`, `cell--blocker`, `cell--pending`) so the existing
-// `--c-rating-*` CSS-variable pattern re-skins for free.
 const verdictClass = $derived(rating ? `cell--${rating.verdict}` : `cell--pending`);
 
-// Status row text — the verdict expressed in human-readable form. Pending
-// states get friendlier labels than the raw lifecycle value so a queued
-// cell reads as "Queued" rather than "queued".
 const statusText = $derived.by(() => {
   if (state === "queued") return "Queued";
   if (state === "running") return "Running…";
@@ -49,16 +38,8 @@ const statusText = $derived.by(() => {
   return "Blocker";
 });
 
-// Smart-synthesis detail line. Empty string when there's nothing useful to
-// say (queued/running, or a pass with no rationale) — the template checks
-// truthiness so we don't emit an empty <div>.
-const synthesisLine = $derived.by(() => {
-  if (!rating) return "";
-  return synthesize(rating);
-});
+const synthesisLine = $derived(rating ? synthesize(rating) : "");
 
-// Spoken semantics identical to RatingTestRow so VoiceOver / JAWS users
-// get the same phrasing regardless of which view they land in.
 const ariaLabel = $derived.by(() => {
   if (state === "queued") return `${axisLabel}: queued`;
   if (state === "running") return `${axisLabel}: running`;
@@ -66,19 +47,18 @@ const ariaLabel = $derived.by(() => {
   return `${axisLabel}: ${rating.verdict} with ${rating.confidence} confidence`;
 });
 
-// Only resolved cells open. Queued/running triggers render as inert
-// buttons (native `disabled` + `aria-disabled`) — clicking them does
-// nothing and the popover never opens, matching the list-view behavior.
+// Ratings carry no id or timestamp, so a verdict is identified by its
+// content: a rating edited later lands again; a remount or a re-shown tab
+// does not.
+const verdictKey = $derived(
+  rating ? `rating:${axis}:${rating.verdict}:${rating.confidence}:${rating.rationale}` : null,
+);
+
 const isDisabled = $derived(state !== "resolved");
 </script>
 
-<div
-    class="cell {verdictClass}"
-    data-state={state}
-    data-verdict={rating?.verdict ?? "pending"}
-    aria-busy={state === "running" ? "true" : undefined}
->
-        <Popover.Root>
+<div class="cell {verdictClass}" data-state={state}>
+    <Popover.Root>
         <Popover.Trigger
             class="cell-trigger"
             disabled={isDisabled}
@@ -86,38 +66,45 @@ const isDisabled = $derived(state !== "resolved");
             aria-label={ariaLabel}
             bind:ref={triggerRef}
         >
-            <span class="cell-label">{axisLabel}</span>
+            <span
+                class="cell-body"
+                {@attach verdictKey !== null &&
+                    fromAction(enterOnce, (): EnterParams => ({ key: `${verdictKey}:drop`, look: "drop" }))}
+            >
+                <span class="cell-label">{axisLabel}</span>
 
-            <span class="cell-status">
-                <span class="cell-status-icon" aria-hidden="true">
-                    {#if state === "queued"}
-                        <span class="icon-queued">
-                            <Spinner size={13} class="motion-essential-spin" />
-                        </span>
-                    {:else if state === "running"}
-                        <span class="icon-running">
-                            <Spinner size={13} class="motion-essential-spin" />
-                        </span>
-                    {:else if rating?.verdict === "pass"}
-                        <span class="icon-resolved">
-                            <Check size={13} />
-                        </span>
-                    {:else if rating?.verdict === "concern"}
-                        <span class="icon-resolved">
-                            <Warning size={13} weight="fill" />
-                        </span>
-                    {:else if rating?.verdict === "blocker"}
-                        <span class="icon-resolved">
-                            <XCircle size={13} weight="fill" />
-                        </span>
-                    {/if}
+                <span class="cell-status">
+                    <span class="cell-status-icon" aria-hidden="true">
+                        {#if state === "queued"}
+                            <span class="icon-queued">
+                                <Spinner size={13} class="motion-essential-spin" />
+                            </span>
+                        {:else if state === "running"}
+                            <span class="icon-running">
+                                <Spinner size={13} class="motion-essential-spin" />
+                            </span>
+                        {:else if rating && verdictKey}
+                            <span
+                                class="icon-resolved"
+                                use:enterOnce={{ key: `${verdictKey}:pop`, look: "pop" }}
+                            >
+                                {#if rating.verdict === "pass"}
+                                    <Check size={13} />
+                                {:else if rating.verdict === "concern"}
+                                    <Warning size={13} weight="fill" />
+                                {:else}
+                                    <XCircle size={13} weight="fill" />
+                                {/if}
+                            </span>
+                        {/if}
+                    </span>
+                    <span class="cell-status-text">{statusText}</span>
                 </span>
-                <span class="cell-status-text">{statusText}</span>
-            </span>
 
-            {#if synthesisLine}
-                <span class="cell-synthesis">{synthesisLine}</span>
-            {/if}
+                {#if synthesisLine}
+                    <span class="cell-synthesis">{synthesisLine}</span>
+                {/if}
+            </span>
         </Popover.Trigger>
 
         <Popover.Content
@@ -127,18 +114,10 @@ const isDisabled = $derived(state !== "resolved");
             sideOffset={8}
         >
             {#if rating}
-                <!-- Re-apply the verdict class INSIDE the popover so the
-                     `--c-rating-bg`/`--c-rating-icon` tokens RatingExpandedBody
-                     reads get set correctly. Necessary because Popover.Content
-                     portals its DOM to document.body, breaking the CSS variable
-                     cascade from the cell container. -->
+                <!-- Popover.Content portals to <body>, out of reach of the
+                     cell's verdict tokens, so the body re-applies them. -->
                 <div class="popover-body cell--{rating.verdict}">
-                    <RatingExpandedBody
-                        {rating}
-                        {blocks}
-                        {onJump}
-                        showTitle
-                    />
+                    <RatingExpandedBody {rating} {blocks} {onJump} />
                 </div>
             {/if}
         </Popover.Content>
@@ -147,9 +126,7 @@ const isDisabled = $derived(state !== "resolved");
 
 <style>
     .cell {
-        /* Verdict palette — overridden by `.cell--{verdict}` below. Same
-           token names as RatingTestRow so the palette stays in one
-           vocabulary and future re-theming touches both views. */
+        /* Verdict palette — overridden by `.cell--{verdict}` below. */
         --c-rating-bg: transparent;
         --c-rating-border: var(--color-border);
         --c-rating-icon: var(--color-text-muted);
@@ -194,9 +171,6 @@ const isDisabled = $derived(state !== "resolved");
 
     :global(.cell-trigger) {
         display: flex;
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 8px;
         width: 100%;
         padding: 12px 14px;
         background: transparent;
@@ -222,7 +196,7 @@ const isDisabled = $derived(state !== "resolved");
     }
 
     :global(.cell-trigger:hover:not(:disabled):not([aria-disabled="true"])) {
-        /* Faint verdict-tinted wash on hover — matches the list view. */
+        /* Faint verdict-tinted wash on hover. */
         background: color-mix(
             in srgb,
             var(--c-rating-bg) 55%,
@@ -231,6 +205,14 @@ const isDisabled = $derived(state !== "resolved");
     }
 
     /* ── Label (uppercase mono axis name) ────────────────────────── */
+
+    .cell-body {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+        width: 100%;
+    }
 
     .cell-label {
         font-family: var(--font-mono);
@@ -294,7 +276,6 @@ const isDisabled = $derived(state !== "resolved");
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        animation: icon-in var(--duration-quick) var(--ease-out-expo) 1;
     }
 
     .icon-resolved :global(svg) {
@@ -302,8 +283,6 @@ const isDisabled = $derived(state !== "resolved");
     }
 
     .cell-status-text {
-        /* Tabular numerals aren't strictly needed here (no digits) but
-           keeping the token consistent with other status chips. */
         letter-spacing: 0.01em;
     }
 
@@ -315,8 +294,8 @@ const isDisabled = $derived(state !== "resolved");
         color: var(--color-text-muted);
         line-height: 1.35;
         /* Clamp to a single line — citation summaries are structured and
-           short, and rationale fragments have already been truncated in
-           format-synthesis. A second line would make the grid cells uneven
+           short, and rationale fragments have already been truncated by
+           `synthesize`. A second line would make the grid cells uneven
            heights and pull the eye around. */
         overflow: hidden;
         text-overflow: ellipsis;
@@ -326,7 +305,7 @@ const isDisabled = $derived(state !== "resolved");
         align-self: stretch;
     }
 
-    /* ── Lifecycle animations ────────────────────────────────────── */
+    /* ── Lifecycle ───────────────────────────────────────────────── */
 
     .cell[data-state="queued"] :global(.cell-trigger) {
         opacity: 0.55;
@@ -337,21 +316,6 @@ const isDisabled = $derived(state !== "resolved");
         /* Subtle background pulse so the eye can pick the running cell out
            of the grid without having to interpret the spinner. */
         animation: cell-pulse var(--duration-pulse) var(--ease-soft) infinite;
-    }
-
-    .cell[data-state="resolved"] :global(.cell-trigger) {
-        animation: cell-resolve 220ms var(--ease-out-expo) 1;
-    }
-
-    @keyframes icon-in {
-        from {
-            transform: scale(0.85);
-            opacity: 0;
-        }
-        to {
-            transform: scale(1);
-            opacity: 1;
-        }
     }
 
     @keyframes cell-pulse {
@@ -368,17 +332,6 @@ const isDisabled = $derived(state !== "resolved");
         }
     }
 
-    @keyframes cell-resolve {
-        from {
-            transform: translateY(-1px);
-            opacity: 0.6;
-        }
-        to {
-            transform: translateY(0);
-            opacity: 1;
-        }
-    }
-
     /* ── Popover content overrides ───────────────────────────────── */
     /* Bits-ui's default popover caps at w-72 (288px) which is too tight for
        the expanded rating body (rationale + details + citations + chips).
@@ -388,19 +341,5 @@ const isDisabled = $derived(state !== "resolved");
         max-height: min(520px, 70vh);
         overflow-y: auto;
         padding: 0;
-    }
-
-    /* ── Reduced motion ──────────────────────────────────────────── */
-
-    @media (prefers-reduced-motion: reduce) {
-        .icon-resolved {
-            animation: none;
-        }
-        .cell[data-state="running"] :global(.cell-trigger) {
-            animation: none;
-        }
-        .cell[data-state="resolved"] :global(.cell-trigger) {
-            animation: none;
-        }
     }
 </style>

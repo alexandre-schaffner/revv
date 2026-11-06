@@ -37,9 +37,8 @@ function basename(filePath: string): string {
 }
 
 /** Trim and single-line a rationale, then cap it at RATIONALE_MAX_CHARS with
- *  an ellipsis. Character-based (not word-boundary) — documented trade-off in
- *  the plan. Returns `null` for empty/whitespace-only input so the caller can
- *  choose to render nothing rather than an empty detail line. */
+ *  an ellipsis (character-based, not word-boundary). Returns `null` for
+ *  empty/whitespace-only input so the caller can render nothing. */
 function truncateRationale(rationale: string): string | null {
   const trimmed = rationale.trim();
   if (trimmed.length === 0) return null;

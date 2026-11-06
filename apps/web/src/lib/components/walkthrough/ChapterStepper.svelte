@@ -86,7 +86,7 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 						<Dotmatrix variant={chapter.spinner} {active} />
 						{#if toolCalls.length > 0}
 							<div class="chapter-tool-calls">
-								{#each toolCalls.slice(-2) as { step, ordinal }, row (ordinal)}
+								{#each toolCalls as { step, ordinal }, row (ordinal)}
 									<div
 										class="chapter-tool-call"
 										style="top: {row * TOOL_CALL_ROW_H}px"

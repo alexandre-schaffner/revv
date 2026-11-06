@@ -24,7 +24,7 @@ import { jsonCodec, readStored, STORAGE_KEYS, writeStored } from "$lib/stores/pe
 import { getPrById, getReviewModeForPr, getSelectedPrId } from "$lib/stores/prs.svelte";
 import { getSettings, isSettingsLoaded, updateSettings } from "$lib/stores/settings.svelte";
 import { refreshPrHead, requestThreadSync } from "$lib/stores/sync.svelte";
-import { invalidateForPull, regenerate } from "$lib/stores/walkthrough.svelte";
+import { invalidateForPull, regenerate } from "$lib/stores/walkthrough-actions";
 import type { ReviewFile } from "$lib/types/review";
 import { createResource } from "./resource";
 
@@ -393,27 +393,10 @@ export function switchPrViewState(newPrId: string): void {
   rememberLastTab(newPrId, restoredTab);
 }
 
-// --- Diff scroll reset signal -----------------------------------------------
-//
-// Monotonic counter bumped whenever the user explicitly selects a file from
-// the sidebar tree — even if it's the same file already active. ReviewLayout
-// watches this to scroll the diff pane back to the top.
-let diffScrollResetSeq = $state(0);
-
-export function getDiffScrollResetSeq(): number {
-  return diffScrollResetSeq;
-}
-
-export function requestDiffScrollReset(): void {
-  diffScrollResetSeq++;
-}
-
 // --- Per-PR scroll persistence ---------------------------------------------
 //
-// Read once on mount (or on the trailing edge of a tab/PR switch); write on
-// every scroll event. Components are responsible for plumbing these into the
-// right scroll container — see +page.svelte (walkthrough/conversation),
-// ReviewLayout.svelte (diff), Sidebar.svelte (sidebar).
+// The review panes persist through `review-nav`'s `scrollPane` action; the
+// sidebar through Sidebar.svelte.
 
 export function getPrScrollPosition(prId: string, key: ScrollPaneKey): number {
   return store.entries.get(prId)?.scroll[key] ?? 0;
@@ -663,68 +646,6 @@ export function setDiffMode(mode: DiffMode): void {
   void updateSettings({ diffViewMode: mode });
 }
 
-// --- Pending diff jump ---
-interface PendingDiffJump {
-  filePath: string;
-  lineNumber: number;
-}
-
-let pendingDiffJump = $state<PendingDiffJump | null>(null);
-
-export function getPendingDiffJump(): PendingDiffJump | null {
-  return pendingDiffJump;
-}
-
-export function jumpToDiffLine(filePath: string, lineNumber: number): void {
-  pendingDiffJump = { filePath, lineNumber };
-  setActiveFilePath(filePath);
-  setActiveTab("diff");
-}
-
-export function clearPendingDiffJump(): void {
-  pendingDiffJump = null;
-}
-
-/**
- * Open a changed file in the diff tab, optionally scrolling to a line. Used by
- * clickable file references in the chat panel: with a line we reuse the
- * pending-jump scroll machinery; without one we just select the file and switch
- * tabs. No-ops when the path isn't part of the current review (the file
- * reference resolver only emits known paths, but a stale render could lag a
- * fresh pull). Matches against `oldPath` too so a renamed file still resolves.
- */
-export function openFileInDiff(filePath: string, lineNumber?: number): void {
-  const match = reviewFiles.find((f) => f.path === filePath || f.oldPath === filePath);
-  if (!match) return;
-  if (typeof lineNumber === "number") {
-    jumpToDiffLine(match.path, lineNumber);
-    return;
-  }
-  setActiveFilePath(match.path);
-  setActiveTab("diff");
-}
-
-// --- Pending walkthrough-block jump ---
-// Mirrors the pending-diff-jump pattern: YourReview (and potentially other
-// tabs) can request a scroll to a specific walkthrough block without needing a
-// direct ref to the walkthrough's scroll root. GuidedWalkthrough consumes this
-// when it becomes active and clears it after scrolling.
-
-let pendingWalkthroughBlockJump = $state<string | null>(null);
-
-export function getPendingWalkthroughBlockJump(): string | null {
-  return pendingWalkthroughBlockJump;
-}
-
-export function jumpToWalkthroughBlock(blockId: string): void {
-  pendingWalkthroughBlockJump = blockId;
-  setActiveTab("walkthrough");
-}
-
-export function clearPendingWalkthroughBlockJump(): void {
-  pendingWalkthroughBlockJump = null;
-}
-
 /**
  * Delete a pending (unsynced) thread. Optimistic: removes from local state
  * immediately and reverts on API failure.
@@ -898,7 +819,5 @@ export function reset(): void {
   loadedHeadShas = new Map();
   store.entries = new Map();
   store.activePrId = null;
-  pendingDiffJump = null;
-  pendingWalkthroughBlockJump = null;
   diffModeOverride = null;
 }

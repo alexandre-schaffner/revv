@@ -4,14 +4,15 @@ import IssueGroups from "$lib/components/walkthrough/IssueGroups.svelte";
 import { getIssueSignal } from "$lib/stores/walkthrough.svelte";
 
 interface Props {
+  prId: string;
   filePath: string;
 }
 
-let { filePath }: Props = $props();
+let { prId, filePath }: Props = $props();
 
 // No disclosure here: an expander per file would out-weigh the rows it
 // hides. Filtered issues stay reachable via the walkthrough and RC panel.
-const issues = $derived(getIssueSignal(filePath).shown);
+const issues = $derived(getIssueSignal(prId, filePath).shown);
 </script>
 
 {#if issues.length > 0}

@@ -14,7 +14,7 @@
 import { MENTION_PATH_PATTERN } from "@revv/shared";
 import type { Action } from "svelte/action";
 
-import { openFileInDiff } from "$lib/stores/review.svelte";
+import { openFileInDiff } from "$lib/stores/review-nav.svelte";
 import type { ReviewFile } from "$lib/types/review";
 import { appendPillContents } from "$lib/utils/file-glyph";
 import { basename } from "$lib/utils/path";

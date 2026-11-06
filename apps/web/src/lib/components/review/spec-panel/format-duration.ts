@@ -1,5 +1,5 @@
 /**
- * Format a millisecond duration for display in the ratings panel duration chip.
+ * Format a millisecond duration for the ratings grid's elapsed readout.
  *
  * Mirrors the style used by unit test runners (Vitest, Jest) so the UI reads
  * like terminal test output:

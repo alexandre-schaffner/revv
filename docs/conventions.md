@@ -333,9 +333,10 @@ in ways the store doesn't control.
 
 **Canonical example.** `apps/web/src/lib/stores/sync.svelte.ts` declares module-scope
 `$state` and exposes only `getLastSyncAt`, `getThreadsSyncing`, `requestSync`, etc.
-`apps/web/src/lib/stores/walkthrough.svelte.ts:144` exports a single `store` object as the
-reactive root — also acceptable for stores with many related fields, but the getter discipline
-still applies (`getBlocks`, `getIssues`, etc. at `:188`+).
+`apps/web/src/lib/stores/walkthrough.svelte.ts` keeps its maps private and exposes getters that
+take the PR (`getBlocks(prId)`, `getWalkthroughUiState(prId)`); a store never reads an implicit
+"active" key. Its pure folding lives beside it in `walkthrough-reducer.ts` (unit-tested), its
+user verbs in `walkthrough-actions.ts`.
 
 **Anti-pattern.** `export function createWalkthroughStore() { ... }` returning an object with
 methods — the consumer instantiates per-component and reactive sharing across components breaks.
@@ -355,11 +356,9 @@ gets its own mutation helper that obeys the reactive-Map idiom (§4.3).
 `summaries/lastSyncAtByPr/syncErrorByPr`). Picking one means future per-PR stores compose
 trivially with existing dispatchers and don't reinvent the API surface.
 
-**Canonical example.** `apps/web/src/lib/stores/walkthrough.svelte.ts:144` declares
-`store = $state({ entries: new Map<string, WalkthroughEntry>(), activePrId: ... })`; the helpers
-`setEntry` (`:167`), `deleteEntry` (`:172`), and `updateEntry` (`:177`) own all writes. The
-in-file comment at `:129–142` documents the idiom and the Svelte 5 reactivity rationale —
-required reading before adding a new keyed store.
+**Canonical example.** `apps/web/src/lib/stores/walkthrough.svelte.ts` declares
+`entries = new SvelteMap<string, WalkthroughEntry>()`; `setEntry`, `deleteEntry` and
+`updateEntry` own all writes, and every write stores a new entry object (§4.3).
 
 **Anti-pattern.** `apps/web/src/lib/stores/review.svelte.ts:417` keeps `prViewStates = new Map<string, PrViewState>()`
 as a non-reactive plain Map plus a separate `let activeTab = $state(...)` mirror that has to
@@ -369,35 +368,26 @@ for the same state.
 **Backlog.** [`S-001`](./conventions-backlog.md#s-001), [`S-002`](./conventions-backlog.md#s-002).
 
 <a id="stores-reactive-map"></a>
-### 4.3 Reactive Map mutation: `.set/delete` then reassign
+### 4.3 Reactive keyed state is a `SvelteMap` whose values are replaced, not mutated
 
-**Rule.** Every write to a `$state`-backed Map or Set is followed by a reassignment:
-`m.set(k, v); m = new Map(m);`. The same applies to nested Maps/Sets reached through a `$state`
-object: `store.entries.set(k, v); store.entries = new Map(store.entries);`. In-place mutation
-without reassignment is silently non-reactive in Svelte 5.
+**Rule.** Per-key reactive state is a `SvelteMap` (or `SvelteSet`) from `svelte/reactivity`.
+A write stores a new value: `entries.set(prId, { ...entry, field })`. Never mutate the stored
+object and `set` the same reference again.
 
-**Why.** Svelte 5's `$state` proxy intercepts property writes on the proxied object, but does
-not currently track raw `.set/.delete` calls on a `Map`/`Set` it wraps. Reassigning forces a
-write through the proxy and triggers invalidation. This is documented in code at
-`walkthrough.svelte.ts:137–142` — the comment cites the bug that motivated the idiom.
+**Why.** `SvelteMap.set` notifies readers only when the stored reference changes; an in-place
+mutation followed by a same-reference `set` lands the data and re-renders nothing (the
+"walkthrough empty on reload" bug). `updateEntryInMap` (`walkthrough-entry-equal.ts`) clones,
+lets the updater change the clone, and skips the write when nothing changed.
 
-**Canonical example.** `apps/web/src/lib/stores/walkthrough.svelte.ts:167–184` — every
-`setEntry` / `deleteEntry` / `updateEntry` ends with `store.entries = new Map(store.entries)`.
-`apps/web/src/lib/stores/sync.svelte.ts:51–62` does the same pattern with multiple Maps and Sets
-in a single helper.
+**Canonical example.** `apps/web/src/lib/stores/walkthrough.svelte.ts`: the reducer returns a
+new entry, `hydrateFromCache` stores the merged snapshot as a new object. The chat modules
+(`apps/web/src/lib/chat/*.svelte.ts`) and `createResource` hold their per-PR entries the same way.
 
-**Anti-pattern.** `someMap.set(k, v)` with no follow-up reassignment. The state mutates, but
-no consumer recomputes. Showed up as a Floating Action Button stuck on "Stop" until a tab
-switch invalidated derivations — the exact bug the comment in `walkthrough.svelte.ts:154–159`
-warns about.
+**Anti-pattern.** `entry.blocks.push(b); entries.set(prId, entry)`.
 
-A `SvelteMap` (`svelte/reactivity`) tracks its own `.set/.delete`, so it needs no
-reassignment; its entries are replaced, never mutated in place (a same-reference `.set` is not a
-change). The chat modules (`apps/web/src/lib/chat/*.svelte.ts`) and `createResource` hold their
-per-PR entries this way.
-
-**Backlog.** Existing reactive-Map sites in `review.svelte.ts` already follow the idiom — no
-remediation needed today. The rule is a guardrail for future writes.
+**Backlog.** `review`, `sync`, `stacks`, `hunk-scan` and `merge-eligibility` still hold a plain
+`Map` in `$state` and reassign it after each write (`m = new Map(m)`). It still works; move them
+when the store is next split.
 
 <a id="stores-request-state"></a>
 ### 4.4 Request-state triplet uses a shared `RequestState<T>` type
@@ -419,7 +409,7 @@ to the component. `stacks.svelte.ts` and `conversation.svelte.ts` keep `RequestS
 their own entries.
 
 **Anti-pattern.** Boolean + nullable shape from
-`apps/web/src/lib/stores/walkthrough.svelte.ts:48–49`: `isStreaming: boolean; streamError: string | null`
+`apps/web/src/lib/stores/walkthrough-reducer.ts` (`WalkthroughEntry`): `isStreaming: boolean; streamError: string | null`
 plus separate `summary: string | null; blocks: WalkthroughBlock[]`. The four fields form 16
 possible combinations; only ~4 are legal.
 

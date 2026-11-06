@@ -1,6 +1,6 @@
 <script lang="ts">
 import { isImagePath } from "@revv/shared";
-import { onDestroy, untrack } from "svelte";
+import { onDestroy } from "svelte";
 import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import {
   enterLineMode,
@@ -17,14 +17,8 @@ import {
   jumpCursor,
   moveCursor,
 } from "$lib/stores/focus-mode.svelte";
-import {
-  getActiveFilePath,
-  getDiffScrollResetSeq,
-  getPrScrollPosition,
-  setActiveFilePath,
-  setDiffMode,
-  setPrScrollPosition,
-} from "$lib/stores/review.svelte";
+import { getActiveFilePath, setActiveFilePath, setDiffMode } from "$lib/stores/review.svelte";
+import { scrollPane } from "$lib/stores/review-nav.svelte";
 import type { ReviewFile } from "$lib/types/review";
 import { isTextEditingKeyTarget } from "$lib/utils";
 import DiffViewer from "./DiffViewer.svelte";
@@ -140,47 +134,7 @@ onDestroy(() => {
   pendingG.destroy();
 });
 
-// ── Diff-pane scroll persistence ─────────────────────────────────────────
-//
-// ReviewLayout is mounted only while the Diff tab is active (see
-// +page.svelte's `{#if activeTab === 'diff'}` gate), so we save/restore
-// against the per-PR `prViewStates` map. Save happens continuously via
-// `onscroll`; restore happens once on mount. A latch suppresses the
-// scroll event emitted by setting scrollTop during the restore so it
-// can't clobber the freshly-restored value.
 let diffScrollEl = $state<HTMLElement | null>(null);
-let suppressNextDiffScroll = false;
-
-function getDiffScroll(): HTMLElement | null {
-  return diffScrollEl ?? document.querySelector<HTMLElement>(".diff-scroll");
-}
-
-function handleDiffScroll(): void {
-  if (suppressNextDiffScroll) {
-    suppressNextDiffScroll = false;
-    return;
-  }
-  if (!diffScrollEl) return;
-  setPrScrollPosition(prId, "diff", diffScrollEl.scrollTop);
-}
-
-$effect(() => {
-  if (!diffScrollEl) return;
-  const saved = getPrScrollPosition(prId, "diff");
-  suppressNextDiffScroll = true;
-  diffScrollEl.scrollTop = saved;
-});
-
-// Scroll to top whenever the user explicitly selects a file from the sidebar
-// (even if it's the same file — common in 1-file PRs).
-$effect(() => {
-  getDiffScrollResetSeq(); // track
-  untrack(() => {
-    if (!diffScrollEl) return;
-    suppressNextDiffScroll = true;
-    diffScrollEl.scrollTop = 0;
-  });
-});
 
 function navigateFile(direction: 1 | -1) {
   const currentIdx = files.findIndex((f) => f.path === activeFilePath);
@@ -345,40 +299,40 @@ const DIFF_SCROLL_KEYS: Record<string, KeyHandler> = {
   },
   j: (e) => {
     e.preventDefault();
-    getDiffScroll()?.scrollBy({ top: SCROLL_STEP, behavior: "instant" });
+    diffScrollEl?.scrollBy({ top: SCROLL_STEP, behavior: "instant" });
     return true;
   },
   ArrowDown: (e) => {
     e.preventDefault();
-    getDiffScroll()?.scrollBy({ top: SCROLL_STEP, behavior: "instant" });
+    diffScrollEl?.scrollBy({ top: SCROLL_STEP, behavior: "instant" });
     return true;
   },
   k: (e) => {
     e.preventDefault();
-    getDiffScroll()?.scrollBy({ top: -SCROLL_STEP, behavior: "instant" });
+    diffScrollEl?.scrollBy({ top: -SCROLL_STEP, behavior: "instant" });
     return true;
   },
   ArrowUp: (e) => {
     e.preventDefault();
-    getDiffScroll()?.scrollBy({ top: -SCROLL_STEP, behavior: "instant" });
+    diffScrollEl?.scrollBy({ top: -SCROLL_STEP, behavior: "instant" });
     return true;
   },
   d: (e) => {
     e.preventDefault();
-    const el = getDiffScroll();
+    const el = diffScrollEl;
     if (el) el.scrollBy({ top: el.clientHeight / 2, behavior: "instant" });
     return true;
   },
   u: (e) => {
     e.preventDefault();
-    const el = getDiffScroll();
+    const el = diffScrollEl;
     if (el) el.scrollBy({ top: -el.clientHeight / 2, behavior: "instant" });
     return true;
   },
   G: (e) => {
     e.preventDefault();
     pendingG.disarm();
-    const el = getDiffScroll();
+    const el = diffScrollEl;
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: "instant" });
     return true;
   },
@@ -403,7 +357,7 @@ function dispatchKey(panel: string, key: string, e: KeyboardEvent): boolean {
         if (panel === "diff-line") {
           jumpCursor("top");
         } else {
-          const el = getDiffScroll();
+          const el = diffScrollEl;
           if (el) el.scrollTo({ top: 0, behavior: "instant" });
         }
         return true;
@@ -436,14 +390,14 @@ const panel = $derived(getActivePanel());
 		tabindex="-1"
 		role="presentation"
 		bind:this={diffScrollEl}
-		onscroll={handleDiffScroll}
+		use:scrollPane={{ prId, pane: "diff" }}
 	>
 		{#if diffScrollEl}
 			{#if activeFile}
 				<div class="file-title-section" bind:this={fileTitleSectionEl}>
 					<h1 class="file-title">{activeFileName}</h1>
 				</div>
-				<FileIssues filePath={activeFile.path} />
+				<FileIssues {prId} filePath={activeFile.path} />
 				<FileFirstPass {prId} filePath={activeFile.path} patch={activeFile.patch} />
 				{#if activeFileIsImage}
 					<ImageDiffViewer {prId} file={activeFile} />

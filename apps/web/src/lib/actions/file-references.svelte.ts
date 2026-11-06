@@ -19,7 +19,7 @@
 
 import type { Action } from "svelte/action";
 
-import { openFileInDiff } from "$lib/stores/review.svelte";
+import { openFileInDiff } from "$lib/stores/review-nav.svelte";
 import type { ReviewFile } from "$lib/types/review";
 import { createFileGlyph } from "$lib/utils/file-glyph";
 import { basename } from "$lib/utils/path";
