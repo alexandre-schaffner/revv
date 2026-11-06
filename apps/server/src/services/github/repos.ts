@@ -1,5 +1,5 @@
 /** Repositories, orgs, teams and repository statistics on GitHub. */
-import type { Org, Team } from "@revv/shared";
+import type { Team } from "@revv/shared";
 import { Effect, Result } from "effect";
 import type { GitHubError } from "../../domain/errors";
 import { reposByName, splitFullName } from "./graphql-batch";
@@ -168,17 +168,6 @@ export const reposApi = (http: GitHubHttp) => {
             ),
             retryTransient,
           ),
-
-    orgsForUser: (client: GitHubClient): Effect.Effect<Org[], GitHubError> =>
-      http.pages(client, "/user/orgs?per_page=100", { maxPages: 3 }).pipe(
-        Effect.map((data) =>
-          (data as Record<string, unknown>[]).map((raw) => ({
-            login: raw.login as string,
-            avatarUrl: (raw.avatar_url as string | null) ?? null,
-          })),
-        ),
-        retryTransient,
-      ),
 
     /**
      * Installations of the GitHub App behind a user access token. Only

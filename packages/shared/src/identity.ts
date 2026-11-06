@@ -35,11 +35,6 @@ export interface UserIdentity {
   host: string | null;
 }
 
-export interface Org {
-  login: string;
-  avatarUrl: string | null;
-}
-
 export interface Team {
   /** GitHub team slug — unique within the org, used as the stable key. */
   slug: string;
