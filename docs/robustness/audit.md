@@ -46,7 +46,7 @@ The SSE channel carries per-job Phase A→D events from MCP tool handlers to the
 
 | Layer | File | Responsibility |
 |---|---|---|
-| Stream primitives | `apps/server/src/routes/reviews/sse.ts` | `createSseStream()`, 15s heartbeat (`: ping`), idempotent `close`, `send` returns `false` on enqueue throw. |
+| Stream primitives | `apps/server/src/routes/sse.ts` | `openSse()` / `pipeToSse()`, 15s heartbeat (`: ping`, or a named `heartbeat` event for `EventSource`), idempotent `close`, `send` returns `false` on enqueue throw. |
 | Route handler | `apps/server/src/routes/reviews/handlers/walkthrough-stream.ts` | Subscribe → DB snapshot replay → flush buffer → live forward. Replay dedup. |
 | Client transport | `apps/web/src/lib/services/walkthrough-sse.ts` + `apps/web/src/lib/stores/walkthrough-stream.svelte.ts` | Fetch + body reader + parser, inactivity (90s) and exploration-stall (3min) guards, abort controller, reconciliation poll on unexpected end. |
 
@@ -141,7 +141,7 @@ Event envelope shape is defined in `packages/shared/src/walkthrough.ts` as the `
 |---|---|
 | **Severity** | Low |
 | **Walkthrough impact** | Low |
-| **Location** | `apps/server/src/routes/reviews/sse.ts:86–107` |
+| **Location** | `apps/server/src/routes/sse.ts` (`openSse` `write`) |
 | **Failure mode** | `controller.enqueue()` throws when the stream's internal buffer fills (slow client, network lag). The write helper catches the throw and marks the subscriber cancelled; no retry, no flow control. The job continues, the client reconnects and reconciles — but the failure mode is invisible. |
 | **Remediation** | Optionally track `controller.desiredSize`; surface a single warning log per subscriber when enqueue throws (rather than the silent `false` return). Real backpressure is out of scope for a single-user app. |
 

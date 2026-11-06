@@ -8,12 +8,7 @@ import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { AcpAgentId, ChatSessionContext } from "@revv/shared";
-import {
-  getAcpAgentDefaultModel,
-  resolveThinkingEffort,
-  SSE_DONE_FRAME,
-  sseErrorFrame,
-} from "@revv/shared";
+import { getAcpAgentDefaultModel, resolveThinkingEffort } from "@revv/shared";
 import { and, desc, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { getAcpConnection, peekAcpConnection } from "../ai/acp/acp-connection";
@@ -25,7 +20,6 @@ import { walkthroughIssues } from "../db/schema/walkthrough-issues";
 import { walkthroughs } from "../db/schema/walkthroughs";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
-import type { ResolvePushFrame } from "../services/ChatChangesPush";
 import { type ChatSessionRow, ChatSessionService } from "../services/ChatSession";
 import { PROPOSED_COMMIT_RANGE_FLAGS } from "../services/GitOps";
 import { PrContextService } from "../services/PrContext";
@@ -834,38 +828,4 @@ export async function listProposedCommits(
     });
   }
   return commits;
-}
-
-/**
- * Wrap a ResolvePushFrame stream into SSE bytes. Mirrors the shape of
- * `chatStreamToSSE` so the web client can reuse `parseSSEBuffer`.
- */
-export function resolvePushStreamToSSE(
-  frameStream: ReadableStream<ResolvePushFrame>,
-): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder();
-  return new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const reader = frameStream.getReader();
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`));
-        }
-        controller.enqueue(encoder.encode(SSE_DONE_FRAME));
-        controller.close();
-      } catch (err) {
-        controller.enqueue(
-          encoder.encode(
-            sseErrorFrame({
-              code: "GENERATION_ERROR",
-              message: err instanceof Error ? err.message : "Unknown error",
-            }),
-          ),
-        );
-        controller.close();
-      }
-    },
-  });
 }

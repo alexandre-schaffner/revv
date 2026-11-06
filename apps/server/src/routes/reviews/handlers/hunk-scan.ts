@@ -1,7 +1,7 @@
 import type { HunkScanEnsureResult } from "@revv/shared";
 import { Effect } from "effect";
 import { filePriorityOrder, resolveJobStartAnswers } from "../../../ai/jev/job-start";
-import { AppRuntime } from "../../../runtime";
+import type { AppServices } from "../../../runtime";
 import { HunkScanService } from "../../../services/HunkScan";
 import { JevService } from "../../../services/Jev";
 import { loadCachedPrDiff } from "./cached-pr-diff";
@@ -20,25 +20,26 @@ import { loadCachedPrDiff } from "./cached-pr-diff";
  * the sizing preview and the walkthrough use, so generated files are skipped
  * and the important ones go first.
  */
-export function ensureHunkScanHandler(prId: string, userId: string): Promise<HunkScanEnsureResult> {
-  return AppRuntime.runPromise(
-    Effect.gen(function* () {
-      const jev = yield* JevService;
-      if (!(yield* jev.isAvailable())) return { status: "off" as const };
+export function ensureHunkScanHandler(
+  prId: string,
+  userId: string,
+): Effect.Effect<HunkScanEnsureResult, unknown, AppServices> {
+  return Effect.gen(function* () {
+    const jev = yield* JevService;
+    if (!(yield* jev.isAvailable())) return { status: "off" as const };
 
-      const diff = yield* loadCachedPrDiff(prId, userId);
-      if (diff === null) return { status: "pending" as const };
-      const { pr, headSha, files } = diff;
+    const diff = yield* loadCachedPrDiff(prId, userId);
+    if (diff === null) return { status: "pending" as const };
+    const { pr, headSha, files } = diff;
 
-      const answers = yield* resolveJobStartAnswers(pr.id, headSha, { pr, files, commits: [] });
-      const hunkScan = yield* HunkScanService;
-      yield* hunkScan.start({
-        prId: pr.id,
-        headSha,
-        files,
-        filePriorities: answers === null ? null : filePriorityOrder(answers, files),
-      });
-      return { status: "ready" as const, scan: yield* hunkScan.snapshot(pr.id, headSha) };
-    }),
-  );
+    const answers = yield* resolveJobStartAnswers(pr.id, headSha, { pr, files, commits: [] });
+    const hunkScan = yield* HunkScanService;
+    yield* hunkScan.start({
+      prId: pr.id,
+      headSha,
+      files,
+      filePriorities: answers === null ? null : filePriorityOrder(answers, files),
+    });
+    return { status: "ready" as const, scan: yield* hunkScan.snapshot(pr.id, headSha) };
+  });
 }

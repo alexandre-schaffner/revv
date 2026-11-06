@@ -7,9 +7,8 @@ import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { clearJevApiKey, setJevApiKey } from "../ai/jev/api-key";
 import type { JevUnavailableReason } from "../domain/errors";
-import { AppRuntime } from "../runtime";
 import { JevService } from "../services/Jev";
-import { handleAppError, withAuth } from "./middleware";
+import { runRoute, withAuth } from "./middleware";
 
 /** Human-readable cause for the Settings "Test connection" result. */
 const TEST_FAILURE_MESSAGE: Record<JevUnavailableReason, string> = {
@@ -25,40 +24,23 @@ export const settingsJevRoutes = new Elysia()
   .use(withAuth)
   .put(
     "/jev/api-key",
-    async (ctx) => {
-      try {
-        const hasApiKey = await AppRuntime.runPromise(setJevApiKey(ctx.body.apiKey));
-        return { hasApiKey };
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
+    (ctx) =>
+      runRoute(setJevApiKey(ctx.body.apiKey).pipe(Effect.map((hasApiKey) => ({ hasApiKey })))),
     { body: t.Object({ apiKey: t.String() }) },
   )
-  .delete("/jev/api-key", async (ctx) => {
-    try {
-      await AppRuntime.runPromise(clearJevApiKey);
-      return { hasApiKey: false };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
+  .delete("/jev/api-key", () => runRoute(clearJevApiKey.pipe(Effect.as({ hasApiKey: false }))))
   // Lets the user tell a bad key from a bad network without generating a
   // walkthrough. Mirrors `/cache/signing/test`: failures return `{ ok: false, error }`, not a non-2xx.
-  .post("/jev/test", async (ctx) => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.flatMap(JevService, (jev) => jev.testConnection()).pipe(
-          Effect.map((r) => ({ ok: true as const, model: r.model, latencyMs: r.latencyMs })),
-          Effect.catchTag("JevUnavailable", (e) =>
-            Effect.succeed({
-              ok: false as const,
-              error: e.message || TEST_FAILURE_MESSAGE[e.reason],
-            }),
-          ),
+  .post("/jev/test", () =>
+    runRoute(
+      Effect.flatMap(JevService, (jev) => jev.testConnection()).pipe(
+        Effect.map((r) => ({ ok: true as const, model: r.model, latencyMs: r.latencyMs })),
+        Effect.catchTag("JevUnavailable", (e) =>
+          Effect.succeed({
+            ok: false as const,
+            error: e.message || TEST_FAILURE_MESSAGE[e.reason],
+          }),
         ),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  });
+      ),
+    ),
+  );

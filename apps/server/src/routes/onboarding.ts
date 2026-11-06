@@ -4,60 +4,48 @@ import { Effect } from "effect";
 import { Elysia } from "elysia";
 import { invalidateCliAgentCache } from "../ai/providers/cli-agent";
 import { user } from "../db/schema";
+import { ValidationError } from "../domain/errors";
+import { tryDb } from "../effects/db-try";
 import { AppRuntime } from "../runtime";
 import { AgentLoginService } from "../services/AgentLogin";
-import { appDatabase } from "../services/Db";
 import { OnboardingService } from "../services/Onboarding";
-import { handleAppError, withAuth } from "./middleware";
-import { createSseStream, sseHeaders } from "./reviews/sse";
-
-const db = appDatabase();
+import { type ApiErrorResponse, errorResponse, runRoute, withAuth } from "./middleware";
+import { openSse } from "./sse";
 
 /**
- * Stream a job's events over SSE. Validates `jobId`, opens an SSE stream,
- * resolves the subscription (via the owning service), replays the captured
- * buffer, and forwards live events until the terminal `{ type: 'done' }` — then
- * closes the stream. Shared by the install and login streams, which differ only
- * in their service and their "unknown job" error text.
+ * Stream a job's events: the owning service replays what the job logged so
+ * far, then forwards live events until the terminal `done`. Shared by the
+ * install and login streams.
  */
 async function streamJobEvents<E extends { type: string }>(
-  ctx: { query: Record<string, string | undefined>; set: { status?: number | string } },
+  ctx: { query: Record<string, string | undefined> },
   resolve: (
     jobId: string,
     send: (event: E) => void,
   ) => Promise<{ found: boolean; unsubscribe: () => void }>,
   notFoundEvent: E,
-): Promise<Response | { error: string }> {
+): Promise<Response | ApiErrorResponse> {
   const jobId = ctx.query?.jobId;
   if (typeof jobId !== "string" || jobId.length === 0) {
-    ctx.set.status = 400;
-    return { error: "Missing jobId" };
+    return errorResponse(new ValidationError({ message: "Missing jobId" }));
   }
 
-  const { stream, writer, stopHeartbeat, onCancel } = createSseStream();
-  onCancel(() => stopHeartbeat());
-
+  const { response, channel } = openSse();
   const send = (event: E): void => {
-    writer.send(event);
-    if (event.type === "done") writer.sendDone();
+    channel.send(event);
+    if (event.type === "done") channel.done();
   };
 
   try {
     const sub = await resolve(jobId, send);
-    if (!sub.found) {
-      send(notFoundEvent);
-      return new Response(stream, { headers: sseHeaders });
-    }
-    onCancel(sub.unsubscribe);
+    if (sub.found) channel.onClose(sub.unsubscribe);
+    else send(notFoundEvent);
   } catch (err) {
-    // The shared terminal `done` shape across both event unions — `writer.send`
-    // takes `unknown`, so no generic cast is needed to close the stream.
     const message = err instanceof Error ? err.message : "Subscription failed";
-    writer.send({ type: "done", success: false, error: message });
-    writer.sendDone();
+    channel.send({ type: "done", success: false, error: message });
+    channel.done();
   }
-
-  return new Response(stream, { headers: sseHeaders });
+  return response;
 }
 
 /**
@@ -72,28 +60,23 @@ async function streamJobEvents<E extends { type: string }>(
  */
 export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
   .use(withAuth)
-  .post("/complete", async (ctx) => {
-    try {
-      const userId = ctx.session.user.id;
-      const now = new Date();
+  .post("/complete", (ctx) =>
+    runRoute(
+      tryDb("complete onboarding", (db) => {
+        const userId = ctx.session.user.id;
+        const current = db
+          .select({ onboardedAt: user.onboardedAt })
+          .from(user)
+          .where(eq(user.id, userId))
+          .get()?.onboardedAt;
+        if (current) return { onboardedAt: current.toISOString() };
 
-      const existing = await db
-        .select({ onboardedAt: user.onboardedAt })
-        .from(user)
-        .where(eq(user.id, userId));
-      const current = existing[0]?.onboardedAt ?? null;
-
-      if (current) {
-        return { onboardedAt: current.toISOString() };
-      }
-
-      await db.update(user).set({ onboardedAt: now, updatedAt: now }).where(eq(user.id, userId));
-
-      return { onboardedAt: now.toISOString() };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
+        const now = new Date();
+        db.update(user).set({ onboardedAt: now, updatedAt: now }).where(eq(user.id, userId)).run();
+        return { onboardedAt: now.toISOString() };
+      }),
+    ),
+  )
   /**
    * Clear the user's `onboardedAt` so the gate re-shows the flow on next
    * render. Used by the "Replay onboarding" affordance in settings —
@@ -101,18 +84,17 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
    * pairs this with a sessionStorage flag that forces the flow to start
    * from the welcome step rather than honoring its usual resume logic.
    */
-  .post("/reset", async (ctx) => {
-    try {
-      const userId = ctx.session.user.id;
-      await db
-        .update(user)
-        .set({ onboardedAt: null, updatedAt: new Date() })
-        .where(eq(user.id, userId));
-      return { onboardedAt: null };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
+  .post("/reset", (ctx) =>
+    runRoute(
+      tryDb("reset onboarding", (db) =>
+        db
+          .update(user)
+          .set({ onboardedAt: null, updatedAt: new Date() })
+          .where(eq(user.id, ctx.session.user.id))
+          .run(),
+      ).pipe(Effect.as({ onboardedAt: null })),
+    ),
+  )
   /**
    * Single detection snapshot the agent-selection step consumes: per-agent
    * installed + authed + login command, plus whether this host supports the
@@ -120,14 +102,8 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
    * adaptive Install / Sign-in / Continue CTA.
    */
   .get("/agent-status", async (ctx) => {
-    try {
-      if (ctx.query?.refresh === "1") invalidateCliAgentCache();
-      return await AppRuntime.runPromise(
-        Effect.flatMap(OnboardingService, (s) => s.detectAgentStatus()),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
+    if (ctx.query?.refresh === "1") invalidateCliAgentCache();
+    return runRoute(Effect.flatMap(OnboardingService, (s) => s.detectAgentStatus()));
   })
   /**
    * Kick off (or join) the install job for the selected registry agent.
@@ -135,18 +111,11 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
    * same `jobId`. Body: `{ agent: AcpAgentId }`.
    */
   .post("/install", async (ctx) => {
-    try {
-      const agent = (ctx.body as { agent?: unknown } | undefined)?.agent;
-      if (typeof agent !== "string" || !isAcpAgentId(agent)) {
-        ctx.set.status = 400;
-        return { error: "Invalid or missing agent" };
-      }
-      return await AppRuntime.runPromise(
-        Effect.flatMap(OnboardingService, (s) => s.startInstall(agent)),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
+    const agent = (ctx.body as { agent?: unknown } | undefined)?.agent;
+    if (typeof agent !== "string" || !isAcpAgentId(agent)) {
+      return errorResponse(new ValidationError({ message: "Invalid or missing agent" }));
     }
+    return runRoute(Effect.flatMap(OnboardingService, (s) => s.startInstall(agent)));
   })
   /**
    * SSE stream of `InstallEvent`s. Replays the log captured up to the
@@ -167,38 +136,24 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
    * Idempotent per agent. Body: `{ agent: AcpAgentId }`.
    */
   .post("/login", async (ctx) => {
-    try {
-      const agent = (ctx.body as { agent?: unknown } | undefined)?.agent;
-      if (typeof agent !== "string" || !isAcpAgentId(agent)) {
-        ctx.set.status = 400;
-        return { error: "Invalid or missing agent" };
-      }
-      return await AppRuntime.runPromise(
-        Effect.flatMap(AgentLoginService, (s) => s.startLogin(agent)),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
+    const agent = (ctx.body as { agent?: unknown } | undefined)?.agent;
+    if (typeof agent !== "string" || !isAcpAgentId(agent)) {
+      return errorResponse(new ValidationError({ message: "Invalid or missing agent" }));
     }
+    return runRoute(Effect.flatMap(AgentLoginService, (s) => s.startLogin(agent)));
   })
   /**
    * Forward a chunk of user keystrokes to the login job's PTY (e.g. a pasted
    * auth code). Body: `{ jobId, data }`.
    */
   .post("/login/input", async (ctx) => {
-    try {
-      const body = ctx.body as { jobId?: unknown; data?: unknown } | undefined;
-      const jobId = body?.jobId;
-      const data = body?.data;
-      if (typeof jobId !== "string" || jobId.length === 0 || typeof data !== "string") {
-        ctx.set.status = 400;
-        return { error: "Missing jobId or data" };
-      }
-      return await AppRuntime.runPromise(
-        Effect.flatMap(AgentLoginService, (s) => s.writeInput(jobId, data)),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
+    const body = ctx.body as { jobId?: unknown; data?: unknown } | undefined;
+    const jobId = body?.jobId;
+    const data = body?.data;
+    if (typeof jobId !== "string" || jobId.length === 0 || typeof data !== "string") {
+      return errorResponse(new ValidationError({ message: "Missing jobId or data" }));
     }
+    return runRoute(Effect.flatMap(AgentLoginService, (s) => s.writeInput(jobId, data)));
   })
   /**
    * Tear down a login job's PTY when the user abandons sign-in (skip / unmount /
@@ -206,18 +161,11 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
    * Idempotent. Body: `{ jobId }`.
    */
   .post("/login/cancel", async (ctx) => {
-    try {
-      const jobId = (ctx.body as { jobId?: unknown } | undefined)?.jobId;
-      if (typeof jobId !== "string" || jobId.length === 0) {
-        ctx.set.status = 400;
-        return { error: "Missing jobId" };
-      }
-      return await AppRuntime.runPromise(
-        Effect.flatMap(AgentLoginService, (s) => s.cancelLogin(jobId)),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
+    const jobId = (ctx.body as { jobId?: unknown } | undefined)?.jobId;
+    if (typeof jobId !== "string" || jobId.length === 0) {
+      return errorResponse(new ValidationError({ message: "Missing jobId" }));
     }
+    return runRoute(Effect.flatMap(AgentLoginService, (s) => s.cancelLogin(jobId)));
   })
   /**
    * SSE stream of `LoginEvent`s. Replays the terminal output captured up to the

@@ -1,7 +1,7 @@
 import type { WalkthroughSizing } from "@revv/shared";
 import { Effect } from "effect";
 import { resolveJobStartAnswers, routeFromAnswers } from "../../../ai/jev/job-start";
-import { AppRuntime } from "../../../runtime";
+import type { AppServices } from "../../../runtime";
 import { SettingsService } from "../../../services/Settings";
 import { loadCachedPrDiff } from "./cached-pr-diff";
 
@@ -18,43 +18,41 @@ import { loadCachedPrDiff } from "./cached-pr-diff";
 export function getWalkthroughSizingHandler(
   prId: string,
   userId: string,
-): Promise<WalkthroughSizing> {
-  return AppRuntime.runPromise(
-    Effect.gen(function* () {
-      const settingsSvc = yield* SettingsService;
-      const settings = yield* settingsSvc.getSettings();
-      // The risk tier is always wanted when TypeSafe is on, so it alone
-      // justifies the call even when model and effort are both pinned.
-      if (!settings.jev.enabled) {
-        return { status: "off" as const };
-      }
+): Effect.Effect<WalkthroughSizing, unknown, AppServices> {
+  return Effect.gen(function* () {
+    const settingsSvc = yield* SettingsService;
+    const settings = yield* settingsSvc.getSettings();
+    // The risk tier is always wanted when TypeSafe is on, so it alone
+    // justifies the call even when model and effort are both pinned.
+    if (!settings.jev.enabled) {
+      return { status: "off" as const };
+    }
 
-      const diff = yield* loadCachedPrDiff(prId, userId);
-      if (diff === null) return { status: "pending" as const };
+    const diff = yield* loadCachedPrDiff(prId, userId);
+    if (diff === null) return { status: "pending" as const };
 
-      const answers = yield* resolveJobStartAnswers(diff.pr.id, diff.headSha, {
-        pr: diff.pr,
-        files: diff.files,
-        // Commit subjects are a sizing nicety, not load-bearing; skipping
-        // them keeps this off the GitHub path.
-        commits: [],
-      });
-      if (answers === null) return { status: "pending" as const };
+    const answers = yield* resolveJobStartAnswers(diff.pr.id, diff.headSha, {
+      pr: diff.pr,
+      files: diff.files,
+      // Commit subjects are a sizing nicety, not load-bearing; skipping
+      // them keeps this off the GitHub path.
+      commits: [],
+    });
+    if (answers === null) return { status: "pending" as const };
 
-      const agent = yield* settingsSvc.resolveAgent();
+    const agent = yield* settingsSvc.resolveAgent();
 
-      const override = routeFromAnswers(answers, {
-        agent,
-        configuredModel: settings.aiModel,
-        configuredEffort: settings.aiThinkingEffort,
-        autoSizing: true,
-      });
-      return {
-        status: "ready" as const,
-        riskLevel: answers.riskLevel,
-        model: override?.model ?? null,
-        thinkingEffort: override?.thinkingEffort ?? null,
-      };
-    }),
-  );
+    const override = routeFromAnswers(answers, {
+      agent,
+      configuredModel: settings.aiModel,
+      configuredEffort: settings.aiThinkingEffort,
+      autoSizing: true,
+    });
+    return {
+      status: "ready" as const,
+      riskLevel: answers.riskLevel,
+      model: override?.model ?? null,
+      thinkingEffort: override?.thinkingEffort ?? null,
+    };
+  });
 }

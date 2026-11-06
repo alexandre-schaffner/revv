@@ -1,51 +1,25 @@
-import type { StreamErrorBody, StreamErrorCode } from "@revv/shared";
-import { SSE_DONE_FRAME, sseErrorFrame } from "@revv/shared";
-import { Cause, Effect, Option } from "effect";
-import { Elysia, status } from "elysia";
-import {
-  AiNotConfiguredError,
-  BaseConflictsRejectedError,
-  type BaseConflictsRejection,
-  CloneError,
-  CloneInProgressError,
-  CloneNotReadyError,
-  ExternalIntegrationError,
-  externalIntegrationHttpStatus,
-  GitHubAccessDeniedError,
-  GitHubApiError,
-  GitHubAuthError,
-  GitHubNetworkError,
-  GitHubNotFoundError,
-  GitHubRateLimitError,
-  isReviewError,
-  NotFoundError,
-  RepoNotAccessibleError,
-  StackRejectedError,
-  type StackRejection,
-  SyncError,
-  ValidationError,
-} from "../domain/errors";
-import { debug, logError } from "../logger";
-import { AppRuntime } from "../runtime";
+import type { ApiErrorBody } from "@revv/shared";
+import { Cause, Effect, Exit } from "effect";
+import { Elysia, type ElysiaCustomStatusResponse, status } from "elysia";
+import { GitHubAuthError, type HttpErrorStatus, httpErrorOf } from "../domain/errors";
+import { logError } from "../logger";
+import { AppRuntime, type AppServices } from "../runtime";
 import { Identity } from "../services/Identity";
 import { SettingsService } from "../services/Settings";
 
-// ── Auth middleware ───────────────────────────────────────────────────────────
+// ── Auth ────────────────────────────────────────────────────────────────────
 
-/**
- * Elysia `.derive()` plugin that extracts the session from request headers.
- * Short-circuits with 401 if no valid session is found; otherwise injects
- * `session` into typed context for downstream handlers.
- */
+const unauthorized = () =>
+  status(401, { error: "Unauthorized", code: "UNAUTHORIZED" } satisfies ApiErrorBody);
+
+/** Derives the signed-in `session`; answers 401 without one. */
 export const withAuth = new Elysia({ name: "with-auth" }).derive({ as: "scoped" }, async (ctx) => {
   const session = await AppRuntime.runPromise(
     Effect.flatMap(Identity, (identity) =>
       Effect.promise(() => identity.sessionFromHeaders(ctx.request.headers)),
     ),
   );
-  if (!session) {
-    return status(401, { error: "Unauthorized" });
-  }
+  if (!session) return unauthorized();
   return { session };
 });
 
@@ -56,330 +30,85 @@ function queryHost(query: Record<string, unknown>): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-// NOTE: this resolves the session itself rather than chaining `.use(withAuth)`
-// and reading `ctx.session`. Elysia deduplicates named plugins, and the
-// `withAuth` ("with-auth") scoped `derive` is also mounted on other route
-// trees — when deduped, its derived `session` does not propagate into this
-// sibling `derive`, leaving `ctx.session` undefined and 401-ing every
-// account-scoped route. Resolving from headers here (mirroring the events
-// route) keeps `withAccount` self-contained and immune to that ordering.
+/** The GitHub account a request acts as: the one on `?host=`, else the settings host's. */
+export const requestAccount = (userId: string, query: Record<string, unknown>) =>
+  Effect.gen(function* () {
+    const host =
+      queryHost(query) ?? (yield* Effect.flatMap(SettingsService, (s) => s.githubHost()));
+    return yield* Effect.flatMap(Identity, (identity) => identity.resolveAccount(userId, host));
+  });
+
+/**
+ * Derives `session` and the request's GitHub `account` (see `requestAccount`).
+ *
+ * It resolves the session itself instead of chaining `.use(withAuth)`:
+ * Elysia deduplicates named plugins, and when `withAuth` is deduped its
+ * derived `session` does not reach a sibling `derive`.
+ */
 export const withAccount = new Elysia({ name: "with-account" }).derive(
   { as: "scoped" },
   async (ctx) => {
-    const result = await AppRuntime.runPromise(
+    const exit = await AppRuntime.runPromiseExit(
       Effect.gen(function* () {
         const identity = yield* Identity;
         const session = yield* Effect.promise(() =>
           identity.sessionFromHeaders(ctx.request.headers),
         );
-        if (!session) return { __noSession: true as const };
-
-        const host =
-          queryHost(ctx.query as Record<string, unknown>) ??
-          (yield* Effect.flatMap(SettingsService, (s) => s.githubHost()));
-        const account = yield* identity.resolveAccount(session.user.id, host);
+        if (!session) return null;
+        const account = yield* requestAccount(
+          session.user.id,
+          ctx.query as Record<string, unknown>,
+        );
         return { session, account };
       }),
-    ).catch((err) => {
-      const unwrapped = unwrapEffectError(err);
-      if (unwrapped instanceof GitHubAuthError) {
-        return { __authError: true as const, error: unwrapped };
-      }
-      logError(
-        "withAccount",
-        "account resolution failed:",
-        unwrapped instanceof Error ? unwrapped.message : String(unwrapped),
-      );
-      return null;
-    });
-
-    if (!result) {
-      return status(401, { error: "Unauthorized" });
-    }
-    if ("__noSession" in result) {
-      return status(401, { error: "Unauthorized" });
-    }
-    if ("__authError" in result) {
-      return status(401, { error: "GitHub token expired or invalid" });
-    }
-    return { session: result.session, account: result.account };
+    );
+    if (Exit.isSuccess(exit)) return exit.value ?? unauthorized();
+    const error = Cause.squash(exit.cause);
+    if (error instanceof GitHubAuthError) return errorResponse(error);
+    logError(
+      "withAccount",
+      "account resolution failed:",
+      error instanceof Error ? error.message : String(error),
+    );
+    return unauthorized();
   },
 );
 
-// ── Effect error unwrapping ─────────────────────────────────────────────────
+// ── Route runner ────────────────────────────────────────────────────────────
 
-const FIBER_FAILURE_CAUSE = Symbol.for("effect/Runtime/FiberFailure/Cause");
+/** A refused request, typed so Eden knows every error status and its body. */
+export type ApiErrorResponse = ElysiaCustomStatusResponse<
+  HttpErrorStatus,
+  ApiErrorBody,
+  HttpErrorStatus
+>;
 
-/**
- * Extract the original domain error from an Effect FiberFailure.
- * `Effect.runPromise` wraps failures in a FiberFailure — we use
- * `Cause.failureOption` to extract the underlying tagged error.
- */
-export function unwrapEffectError(e: unknown): unknown {
-  if (e !== null && typeof e === "object" && FIBER_FAILURE_CAUSE in e) {
-    const cause = (e as Record<symbol, unknown>)[FIBER_FAILURE_CAUSE];
-    const opt = Cause.findErrorOption(cause as Cause.Cause<unknown>);
-    if (Option.isSome(opt)) {
-      return opt.value;
-    }
-  }
-  return e;
-}
-
-// ── Error mapping ─────────────────────────────────────────────────────────────
-
-const STACK_REJECTION_STATUS = {
-  stale: 409,
-  busy: 409,
-  "replay-conflict": 409,
-  "lease-lost": 409,
-  invalid: 400,
-  failed: 422,
-} as const satisfies Record<StackRejection["reason"], number>;
-
-const BASE_CONFLICTS_REJECTION_STATUS = {
-  busy: 409,
-  stale: 409,
-  invalid: 422,
-  unavailable: 503,
-  failed: 500,
-} as const satisfies Record<BaseConflictsRejection, number>;
-
-const BASE_CONFLICTS_REJECTION_CODE = {
-  busy: "BUSY",
-  stale: "STALE",
-  invalid: "INVALID",
-  unavailable: "UNAVAILABLE",
-  failed: "FAILED",
-} as const satisfies Record<BaseConflictsRejection, StreamErrorCode>;
-
-/**
- * Maps tagged Effect domain errors to HTTP responses.
- * Unwraps FiberFailure first, then checks instanceof.
- * Sets `ctx.set.status` and returns the error body.
- * Unknown errors fall back to 500 with a generic message.
- */
-export function handleAppError(
-  raw: unknown,
-  ctx: { set: { status?: number | string } },
-): {
-  error: string;
-  detail?: string;
-  action?: { label: string; url: string };
-  files?: readonly string[];
-} {
-  const e = unwrapEffectError(raw);
-
-  if (e instanceof NotFoundError) {
-    ctx.set.status = 404;
-    return { error: "Not found" };
-  }
-
-  if (e instanceof GitHubAuthError) {
-    ctx.set.status = 401;
-    return { error: "GitHub token expired or invalid" };
-  }
-
-  if (e instanceof RepoNotAccessibleError) {
-    ctx.set.status = 404;
-    return { error: e.message, detail: e.detail, ...(e.action ? { action: e.action } : {}) };
-  }
-
-  if (e instanceof GitHubNotFoundError) {
-    ctx.set.status = 404;
-    return { error: "Not found on GitHub" };
-  }
-
-  if (e instanceof GitHubAccessDeniedError) {
-    ctx.set.status = 403;
-    return { error: e.message };
-  }
-
-  if (e instanceof AiNotConfiguredError) {
-    ctx.set.status = 400;
-    return { error: "AI CLI agent not configured — install opencode or claude" };
-  }
-
-  if (e instanceof ValidationError) {
-    ctx.set.status = 400;
-    return { error: e.message };
-  }
-
-  if (e instanceof StackRejectedError) {
-    const { rejection } = e;
-    ctx.set.status = STACK_REJECTION_STATUS[rejection.reason];
-    return rejection.reason === "replay-conflict"
-      ? { error: e.message, files: rejection.files }
-      : { error: e.message };
-  }
-
-  if (e instanceof BaseConflictsRejectedError) {
-    ctx.set.status = BASE_CONFLICTS_REJECTION_STATUS[e.reason];
-    return { error: e.message };
-  }
-
-  if (e instanceof ExternalIntegrationError) {
-    ctx.set.status = externalIntegrationHttpStatus(e);
-    return { error: e.message };
-  }
-
-  if (isReviewError(e)) {
-    if (e.code === "NOT_FOUND") {
-      ctx.set.status = 404;
-      return { error: e.message };
-    }
-    if (e.code === "FORBIDDEN") {
-      ctx.set.status = 403;
-      return { error: e.message };
-    }
-    ctx.set.status = 500;
-    return { error: e.message };
-  }
-
-  if (e instanceof SyncError) {
-    ctx.set.status = 502;
-    return { error: e.message };
-  }
-
-  if (e instanceof GitHubNetworkError) {
-    ctx.set.status = 502;
-    return { error: `GitHub API error: ${String(e.cause)}` };
-  }
-
-  // GitHub rejected the request on its merits, so this is not a bad-gateway
-  // condition — pass its own 4xx through (clamped, since a mapped 401/403/404
-  // is already handled above by its dedicated error class).
-  if (e instanceof GitHubApiError) {
-    ctx.set.status = e.status >= 400 && e.status < 500 ? e.status : 502;
-    return { error: `GitHub API error: ${String(e.cause)}` };
-  }
-
-  if (e instanceof GitHubRateLimitError) {
-    ctx.set.status = 429;
-    return { error: `GitHub rate limit exceeded, resets at ${e.resetAt.toISOString()}` };
-  }
-
-  if (e instanceof CloneNotReadyError) {
-    ctx.set.status = 409;
-    return { error: "Repository clone is not ready yet" };
-  }
-
-  if (e instanceof CloneInProgressError) {
-    ctx.set.status = 409;
-    return { error: "Repository clone is already in progress" };
-  }
-
-  if (e instanceof CloneError) {
-    ctx.set.status = 502;
-    return { error: e.message };
-  }
-
-  // Unknown error — log and return a generic 500.
-  const message = e instanceof Error ? e.message : "Internal server error";
-  logError("handleAppError", "unhandled error:", message);
-  ctx.set.status = 500;
-  return { error: message };
-}
-
-// ── Shared response helpers ─────────────────────────────────────────────────
-
-/** Build a JSON Response with the given body and status code. */
-export function jsonResponse(body: Record<string, unknown>, statusCode: number): Response {
-  return new Response(JSON.stringify(body), {
-    status: statusCode,
-    headers: { "Content-Type": "application/json" },
-  });
+/** Answer a request with `error`'s HTTP meaning (see `httpErrorOf`). */
+export function errorResponse(error: unknown): ApiErrorResponse {
+  const { status: code, code: errorCode, message, details } = httpErrorOf(error);
+  if (code >= 500) logError("route", `${errorCode}:`, message);
+  return status(code, { ...details, error: message, code: errorCode } satisfies ApiErrorBody);
 }
 
 /**
- * Map an error (potentially wrapped in a FiberFailure) to a JSON Response.
- * Used by SSE endpoints that return raw Response objects instead of using
- * Elysia's `ctx.set.status` convention.
+ * Run a route's work and answer with its value, or with the HTTP meaning of
+ * whatever it failed with. Takes the work as an Effect on the app runtime, or
+ * as an async function for handlers that still await promises of their own.
  */
-export function mapErrorToSSEResponse(raw: unknown): Response {
-  const e = unwrapEffectError(raw);
-  const fail = (code: StreamErrorCode, message: string, status: number): Response =>
-    jsonResponse({ code, message } satisfies StreamErrorBody, status);
-
-  if (e instanceof AiNotConfiguredError) {
-    return fail("NOT_CONFIGURED", "AI CLI agent not configured — install opencode or claude", 400);
+export function runRoute<A, E>(
+  work: Effect.Effect<A, E, AppServices>,
+): Promise<A | ApiErrorResponse>;
+export function runRoute<A>(work: () => Promise<A>): Promise<A | ApiErrorResponse>;
+export async function runRoute<A, E>(
+  work: Effect.Effect<A, E, AppServices> | (() => Promise<A>),
+): Promise<A | ApiErrorResponse> {
+  if (Effect.isEffect(work)) {
+    const exit = await AppRuntime.runPromiseExit(work);
+    return Exit.isSuccess(exit) ? exit.value : errorResponse(Cause.squash(exit.cause));
   }
-  if (e instanceof NotFoundError) {
-    return fail("NOT_FOUND", `${e.resource} not found`, 404);
+  try {
+    return await work();
+  } catch (e) {
+    return errorResponse(e);
   }
-  if (e instanceof GitHubAuthError) {
-    return fail("GITHUB_AUTH_ERROR", "GitHub token expired or invalid", 401);
-  }
-  if (e instanceof GitHubRateLimitError) {
-    return fail("GITHUB_RATE_LIMITED", "GitHub API rate limited", 429);
-  }
-  if (isReviewError(e)) {
-    return fail("REVIEW_ERROR", e.message, 500);
-  }
-  if (e instanceof BaseConflictsRejectedError) {
-    return fail(
-      BASE_CONFLICTS_REJECTION_CODE[e.reason],
-      e.message,
-      BASE_CONFLICTS_REJECTION_STATUS[e.reason],
-    );
-  }
-
-  return fail("INTERNAL_ERROR", e instanceof Error ? e.message : "Internal server error", 500);
-}
-
-const CHAT_SSE_HEARTBEAT_MS = 15_000;
-
-/**
- * Wrap a stream of typed frames (`{kind: 'text' | 'activity', ...}`) used by
- * the chat route into an SSE-formatted byte stream. Each frame becomes a single
- * `data: <json>\n\n` event so the client's `parseSSEBuffer<ChatStreamFrame>`
- * gets the discriminator preserved.
- *
- * A `: keepalive` comment is sent every 15 s during quiet stretches to prevent
- * Bun's idle-timeout and WKWebView's TCP-idle drop from killing the connection
- * mid-turn.
- */
-export function chatStreamToSSE<T>(frameStream: ReadableStream<T>): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder();
-  let reader: ReadableStreamDefaultReader<T> | undefined;
-  let heartbeat: ReturnType<typeof setInterval> | undefined;
-
-  return new ReadableStream<Uint8Array>({
-    async start(controller) {
-      reader = frameStream.getReader();
-      heartbeat = setInterval(() => {
-        try {
-          controller.enqueue(encoder.encode(": keepalive\n\n"));
-        } catch {
-          // controller already closed — interval will be cleared in finally
-        }
-      }, CHAT_SSE_HEARTBEAT_MS);
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`));
-        }
-        controller.enqueue(encoder.encode(SSE_DONE_FRAME));
-        controller.close();
-      } catch (err) {
-        controller.enqueue(
-          encoder.encode(
-            sseErrorFrame({
-              code: "GENERATION_ERROR",
-              message: err instanceof Error ? err.message : "Unknown error",
-            }),
-          ),
-        );
-        controller.close();
-      } finally {
-        clearInterval(heartbeat);
-      }
-    },
-    cancel() {
-      clearInterval(heartbeat);
-      reader?.cancel().catch(() => {});
-      debug("chat-sse", "client disconnected mid-stream");
-    },
-  });
 }

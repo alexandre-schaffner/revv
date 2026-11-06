@@ -27,13 +27,12 @@ import {
   MAX_CHAT_ATTACHMENT_BYTES,
   MAX_CHAT_ATTACHMENTS_COUNT,
   MAX_CHAT_ATTACHMENTS_TOTAL_BYTES,
-  type StreamErrorCode,
+  type StreamErrorBody,
 } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import type { ChatHistoryEntry } from "../ai/prompts/chat";
 import type { ChatStreamFrame } from "../ai/providers/chat-types";
-import { WorktreeBlockedByUnpushedCommits } from "../domain/errors";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import { AiService } from "../services/Ai";
@@ -51,14 +50,9 @@ import {
 } from "./chat-helpers";
 import { chatInteractionRoutes } from "./chat-route-interactions";
 import { chatProposedChangesRoutes } from "./chat-route-proposed-changes";
-import {
-  chatStreamToSSE,
-  handleAppError,
-  jsonResponse,
-  mapErrorToSSEResponse,
-  unwrapEffectError,
-  withAuth,
-} from "./middleware";
+import { runRoute, withAuth } from "./middleware";
+import { ownedBy } from "./ownership";
+import { pipeToSse, runStream } from "./sse";
 
 // ── Route ──────────────────────────────────────────────────────────────────
 
@@ -158,324 +152,301 @@ function validateAttachments(
 
 export const chatRoute = new Elysia()
   .use(withAuth)
+  .use(chatProposedChangesRoutes)
+  .use(chatInteractionRoutes)
+  .onBeforeHandle(ownedBy({ prId: "pull request" }))
   .post(
     "/api/chat",
     async (ctx) => {
-      try {
-        const attachments = ctx.body.attachments ?? [];
-        const attachmentValidation = validateAttachments(attachments);
-        if (!attachmentValidation.ok) {
-          ctx.set.status = attachmentValidation.status;
-          return {
-            code: attachmentValidation.code,
-            message: attachmentValidation.message,
-          };
-        }
-        const requestedMode: InteractionMode | undefined =
-          ctx.body.interactionMode === "plan" || ctx.body.interactionMode === "default"
-            ? ctx.body.interactionMode
-            : undefined;
-        const approvedPlanIdInput =
-          typeof ctx.body.approvedPlanId === "string" && ctx.body.approvedPlanId.length > 0
-            ? ctx.body.approvedPlanId
-            : undefined;
-        const prepared = await AppRuntime.runPromise(
-          Effect.gen(function* () {
-            const ai = yield* AiService;
-            const chatSessions = yield* ChatSessionService;
-            const chatPush = yield* ChatChangesPushService;
-            const { db } = yield* DbService;
+      const attachments = ctx.body.attachments ?? [];
+      const attachmentValidation = validateAttachments(attachments);
+      if (!attachmentValidation.ok) {
+        ctx.set.status = attachmentValidation.status;
+        return {
+          code: attachmentValidation.code,
+          message: attachmentValidation.message,
+        };
+      }
+      const requestedMode: InteractionMode | undefined =
+        ctx.body.interactionMode === "plan" || ctx.body.interactionMode === "default"
+          ? ctx.body.interactionMode
+          : undefined;
+      const approvedPlanIdInput =
+        typeof ctx.body.approvedPlanId === "string" && ctx.body.approvedPlanId.length > 0
+          ? ctx.body.approvedPlanId
+          : undefined;
+      const prepare = Effect.gen(function* () {
+        const ai = yield* AiService;
+        const chatSessions = yield* ChatSessionService;
+        const chatPush = yield* ChatChangesPushService;
+        const { db } = yield* DbService;
 
-            // Shared bootstrap: PR/repo/token, head SHA, agent/model, the
-            // existing session row (read-only), and the per-PR worktree. The
-            // worktree preserves a descendant HEAD (unpushed agent commits
-            // from a prior turn) and only resets when its base diverges from
-            // `prHeadSha` (PR head moved on the remote).
-            const { pr, headSha, agent, model, worktreePath, branchName, existingSessionRow } =
-              yield* resolveChatTurnContext(ctx.body.prId, ctx.session.user.id);
+        // Shared bootstrap: PR/repo/token, head SHA, agent/model, the
+        // existing session row (read-only), and the per-PR worktree. The
+        // worktree preserves a descendant HEAD (unpushed agent commits
+        // from a prior turn) and only resets when its base diverges from
+        // `prHeadSha` (PR head moved on the remote).
+        const { pr, headSha, agent, model, worktreePath, branchName, existingSessionRow } =
+          yield* resolveChatTurnContext(ctx.body.prId, ctx.session.user.id);
 
-            // No row means this is a fresh start (e.g. the user just cleared
-            // chat), so after acquiring the worktree we hard-reset it — stale
-            // agent commits may have survived the clear if the reset raced
-            // with this new message.
-            const isFreshStart = existingSessionRow === null;
+        // No row means this is a fresh start (e.g. the user just cleared
+        // chat), so after acquiring the worktree we hard-reset it — stale
+        // agent commits may have survived the clear if the reset raced
+        // with this new message.
+        const isFreshStart = existingSessionRow === null;
 
-            // Fresh start: hard-reset the worktree to `prHeadSha`
-            // so any stale agent commits that survived the clear
-            // (due to a race between discardAgentCommits and this
-            // handler) are unconditionally removed.
-            if (isFreshStart) {
-              yield* Effect.promise(() =>
-                discardAgentCommits({
-                  worktreePath,
-                  branchName,
-                  prHeadSha: headSha,
-                }),
-              );
-            }
-
-            // Eagerly create (or look up) the chat_sessions row so
-            // chat_messages and chat_activities can FK to it BEFORE
-            // the agent emits its session id. The agent-side id
-            // arrives mid-stream via onSessionId and is patched in.
-            const chatSessionRow = yield* chatSessions.findOrCreate({
-              prId: pr.id,
-              agent,
-              model,
-              prHeadSha: headSha,
+        // Fresh start: hard-reset the worktree to `prHeadSha`
+        // so any stale agent commits that survived the clear
+        // (due to a race between discardAgentCommits and this
+        // handler) are unconditionally removed.
+        if (isFreshStart) {
+          yield* Effect.promise(() =>
+            discardAgentCommits({
               worktreePath,
               branchName,
+              prHeadSha: headSha,
+            }),
+          );
+        }
+
+        // Eagerly create (or look up) the chat_sessions row so
+        // chat_messages and chat_activities can FK to it BEFORE
+        // the agent emits its session id. The agent-side id
+        // arrives mid-stream via onSessionId and is patched in.
+        const chatSessionRow = yield* chatSessions.findOrCreate({
+          prId: pr.id,
+          agent,
+          model,
+          prHeadSha: headSha,
+          worktreePath,
+          branchName,
+        });
+
+        // Plan-pending gate. If the most recent plan is still
+        // pending and the user didn't explicitly approve it,
+        // refuse the turn so the user has to either approve,
+        // reject, or refine instead of accidentally moving past
+        // it. Tagged return — the outer await unwraps and
+        // surfaces a 409 to the client.
+        const pendingPlan = yield* chatSessions.findPendingPlan(chatSessionRow.id);
+        if (pendingPlan && pendingPlan.id !== approvedPlanIdInput) {
+          return { kind: "plan-pending" as const, planId: pendingPlan.id };
+        }
+
+        // Approval path: if the user is approving a plan, mark
+        // it approved before kicking off the execution turn.
+        // Also flip the session out of plan mode so the agent
+        // can actually mutate the worktree this turn.
+        if (approvedPlanIdInput) {
+          const decided = yield* chatSessions.decidePlan({
+            planId: approvedPlanIdInput,
+            decision: "approved",
+          });
+          if (!decided) {
+            return { kind: "plan-not-found" as const, planId: approvedPlanIdInput };
+          }
+          yield* chatSessions.setInteractionMode({
+            chatSessionId: chatSessionRow.id,
+            mode: "default",
+          });
+        } else if (requestedMode !== undefined) {
+          yield* chatSessions.setInteractionMode({
+            chatSessionId: chatSessionRow.id,
+            mode: requestedMode,
+          });
+        }
+
+        // Effective mode for this turn. After approval, we run
+        // in 'default'. Otherwise: requested mode override, or
+        // fall back to the session's stored mode.
+        const effectiveMode: InteractionMode = approvedPlanIdInput
+          ? "default"
+          : (requestedMode ?? chatSessionRow.interactionMode);
+
+        // "Resume" semantics: present only once the agent has
+        // emitted a session id on a previous turn. A fresh row
+        // (sessionId === null) means we're starting from scratch.
+        const resumeSessionId = chatSessionRow.sessionId ?? null;
+
+        // On new session, fetch walkthrough context for the system prompt.
+        // On resume, the agent already has it baked into its persisted session.
+        const walkthrough = resumeSessionId ? null : fetchWalkthroughContext(db, pr.id);
+
+        // Snapshot the prior transcript BEFORE appending the new
+        // user message so the agent's history block doesn't end
+        // with a duplicate of the message it's about to receive.
+        // Plans / tasks / sub-agents aren't surfaced in the
+        // prompt's history block (they have their own dedicated
+        // surfaces) — drop them here.
+        const priorTimeline = yield* chatSessions.listTimeline(chatSessionRow.id);
+        const history: ChatHistoryEntry[] = [];
+        for (const e of priorTimeline) {
+          if (e.entryKind === "message") {
+            history.push({
+              entryKind: "message",
+              role: e.role,
+              content: e.content,
             });
-
-            // Plan-pending gate. If the most recent plan is still
-            // pending and the user didn't explicitly approve it,
-            // refuse the turn so the user has to either approve,
-            // reject, or refine instead of accidentally moving past
-            // it. Tagged return — the outer await unwraps and
-            // surfaces a 409 to the client.
-            const pendingPlan = yield* chatSessions.findPendingPlan(chatSessionRow.id);
-            if (pendingPlan && pendingPlan.id !== approvedPlanIdInput) {
-              return { kind: "plan-pending" as const, planId: pendingPlan.id };
-            }
-
-            // Approval path: if the user is approving a plan, mark
-            // it approved before kicking off the execution turn.
-            // Also flip the session out of plan mode so the agent
-            // can actually mutate the worktree this turn.
-            if (approvedPlanIdInput) {
-              const decided = yield* chatSessions.decidePlan({
-                planId: approvedPlanIdInput,
-                decision: "approved",
-              });
-              if (!decided) {
-                return { kind: "plan-not-found" as const, planId: approvedPlanIdInput };
-              }
-              yield* chatSessions.setInteractionMode({
-                chatSessionId: chatSessionRow.id,
-                mode: "default",
-              });
-            } else if (requestedMode !== undefined) {
-              yield* chatSessions.setInteractionMode({
-                chatSessionId: chatSessionRow.id,
-                mode: requestedMode,
-              });
-            }
-
-            // Effective mode for this turn. After approval, we run
-            // in 'default'. Otherwise: requested mode override, or
-            // fall back to the session's stored mode.
-            const effectiveMode: InteractionMode = approvedPlanIdInput
-              ? "default"
-              : (requestedMode ?? chatSessionRow.interactionMode);
-
-            // "Resume" semantics: present only once the agent has
-            // emitted a session id on a previous turn. A fresh row
-            // (sessionId === null) means we're starting from scratch.
-            const resumeSessionId = chatSessionRow.sessionId ?? null;
-
-            // On new session, fetch walkthrough context for the system prompt.
-            // On resume, the agent already has it baked into its persisted session.
-            const walkthrough = resumeSessionId ? null : fetchWalkthroughContext(db, pr.id);
-
-            // Snapshot the prior transcript BEFORE appending the new
-            // user message so the agent's history block doesn't end
-            // with a duplicate of the message it's about to receive.
-            // Plans / tasks / sub-agents aren't surfaced in the
-            // prompt's history block (they have their own dedicated
-            // surfaces) — drop them here.
-            const priorTimeline = yield* chatSessions.listTimeline(chatSessionRow.id);
-            const history: ChatHistoryEntry[] = [];
-            for (const e of priorTimeline) {
-              if (e.entryKind === "message") {
-                history.push({
-                  entryKind: "message",
-                  role: e.role,
-                  content: e.content,
-                });
-              } else if (e.entryKind === "activity") {
-                history.push({
-                  entryKind: "activity",
-                  activityKind: e.activityKind,
-                  toolName: e.toolName,
-                  summary: e.summary,
-                });
-              }
-              // task-list / plan / subagent: skipped — they're rendered
-              // from their own tables via the frontend timeline.
-            }
-
-            // Append the user message immediately so it persists even
-            // if the agent process never emits anything (timeout, crash).
-            const turnId = crypto.randomUUID();
-            yield* chatSessions.appendUserMessage({
-              chatSessionId: chatSessionRow.id,
-              turnId,
-              content: ctx.body.message,
-              attachments: attachmentValidation.metadata,
+          } else if (e.entryKind === "activity") {
+            history.push({
+              entryKind: "activity",
+              activityKind: e.activityKind,
+              toolName: e.toolName,
+              summary: e.summary,
             });
+          }
+          // task-list / plan / subagent: skipped — they're rendered
+          // from their own tables via the frontend timeline.
+        }
 
-            // Synchronous-by-await: drivers must await this before
-            // streaming any user-visible content (opencode) or before
-            // closing their stream (claude). That serializes the
-            // SQLite write so a follow-up `chatSessions.find()` for
-            // the same (prId, agent, headSha) reliably sees the row,
-            // preventing the "fresh session on resend" race.
-            const onSessionId = async (sid: string): Promise<void> => {
+        // Append the user message immediately so it persists even
+        // if the agent process never emits anything (timeout, crash).
+        const turnId = crypto.randomUUID();
+        yield* chatSessions.appendUserMessage({
+          chatSessionId: chatSessionRow.id,
+          turnId,
+          content: ctx.body.message,
+          attachments: attachmentValidation.metadata,
+        });
+
+        // Synchronous-by-await: drivers must await this before
+        // streaming any user-visible content (opencode) or before
+        // closing their stream (claude). That serializes the
+        // SQLite write so a follow-up `chatSessions.find()` for
+        // the same (prId, agent, headSha) reliably sees the row,
+        // preventing the "fresh session on resend" race.
+        const onSessionId = async (sid: string): Promise<void> => {
+          try {
+            await AppRuntime.runPromise(
+              chatSessions.setAgentSessionId({
+                chatSessionId: chatSessionRow.id,
+                sessionId: sid,
+                worktreePath,
+                branchName,
+              }),
+            );
+          } catch (err) {
+            logError(
+              "chat",
+              "chatSessions.setAgentSessionId failed:",
+              err instanceof Error ? err.message : String(err),
+            );
+          }
+        };
+
+        const frameStream = yield* ai.chat({
+          pr: {
+            title: pr.title,
+            body: pr.body,
+            sourceBranch: pr.sourceBranch,
+            targetBranch: pr.targetBranch,
+          },
+          walkthrough,
+          message: ctx.body.message,
+          attachments,
+          history,
+          cwd: worktreePath,
+          branchName,
+          resumeSessionId,
+          onSessionId,
+          prId: pr.id,
+          userId: ctx.session.user.id,
+          interactionMode: effectiveMode,
+        });
+
+        // Claim the PR's worktree for this turn so a concurrent push is
+        // refused (the agent might write to the worktree at any moment,
+        // which would race with the push's `git checkout` / `git merge`).
+        // The lease is handed to the stream below, which re-arms it per
+        // frame and drops it on every exit path.
+        const lease = chatPush.beginChatStream(pr.id);
+
+        return {
+          kind: "ok" as const,
+          frameStream,
+          chatSessionId: chatSessionRow.id,
+          turnId,
+          lease,
+        };
+      });
+
+      return runStream(
+        Effect.map(prepare, (prepared) => {
+          if (prepared.kind === "plan-pending") {
+            return Response.json(
+              {
+                code: "PLAN_PENDING",
+                planId: prepared.planId,
+                message:
+                  "A plan is awaiting your decision. Approve or reject it before sending a new message.",
+              } satisfies StreamErrorBody,
+              { status: 409 },
+            );
+          }
+          if (prepared.kind === "plan-not-found") {
+            return Response.json(
+              {
+                code: "PLAN_NOT_FOUND",
+                planId: prepared.planId,
+                message: "Plan not found",
+              } satisfies StreamErrorBody,
+              { status: 404 },
+            );
+          }
+          const persistedStream = wrapStreamWithPersistence(prepared.frameStream, {
+            chatSessionId: prepared.chatSessionId,
+            turnId: prepared.turnId,
+          });
+
+          // Wrap the persisted stream so the worktree lease is re-armed by the
+          // turn's own output and dropped when the SSE consumer finishes —
+          // success, error, or client disconnect.
+          const { lease } = prepared;
+          const reader = persistedStream.getReader();
+          const leasedStream = new ReadableStream<ChatStreamFrame>({
+            async start(controller) {
+              // Span over the turn's token stream, carrying time-to-first-token
+              // (first text/reasoning frame). Ai.chat's own span only covers
+              // setup and has already ended by the time frames are pulled.
+              const span = trace.getTracer("revv-server").startSpan("Chat.stream", {
+                // All chat runs on the ACP transport now; the specific registry
+                // agent is a launch detail, so the transport is the provider.
+                attributes: { prId: ctx.body.prId, provider: "acp" },
+              });
+              const streamStartMs = Date.now();
+              let ttftRecorded = false;
               try {
-                await AppRuntime.runPromise(
-                  chatSessions.setAgentSessionId({
-                    chatSessionId: chatSessionRow.id,
-                    sessionId: sid,
-                    worktreePath,
-                    branchName,
-                  }),
-                );
-              } catch (err) {
-                logError(
-                  "chat",
-                  "chatSessions.setAgentSessionId failed:",
-                  err instanceof Error ? err.message : String(err),
-                );
-              }
-            };
-
-            const frameStream = yield* ai.chat({
-              pr: {
-                title: pr.title,
-                body: pr.body,
-                sourceBranch: pr.sourceBranch,
-                targetBranch: pr.targetBranch,
-              },
-              walkthrough,
-              message: ctx.body.message,
-              attachments,
-              history,
-              cwd: worktreePath,
-              branchName,
-              resumeSessionId,
-              onSessionId,
-              prId: pr.id,
-              userId: ctx.session.user.id,
-              interactionMode: effectiveMode,
-            });
-
-            // Claim the PR's worktree for this turn so a concurrent push is
-            // refused (the agent might write to the worktree at any moment,
-            // which would race with the push's `git checkout` / `git merge`).
-            // The lease is handed to the stream below, which re-arms it per
-            // frame and drops it on every exit path.
-            const lease = chatPush.beginChatStream(pr.id);
-
-            return {
-              kind: "ok" as const,
-              frameStream,
-              chatSessionId: chatSessionRow.id,
-              turnId,
-              lease,
-            };
-          }),
-        );
-
-        if (prepared.kind === "plan-pending") {
-          ctx.set.status = 409;
-          return {
-            code: "PLAN_PENDING" satisfies StreamErrorCode,
-            planId: prepared.planId,
-            message:
-              "A plan is awaiting your decision. Approve or reject it before sending a new message.",
-          };
-        }
-        if (prepared.kind === "plan-not-found") {
-          ctx.set.status = 404;
-          return {
-            code: "PLAN_NOT_FOUND" satisfies StreamErrorCode,
-            planId: prepared.planId,
-            message: "Plan not found",
-          };
-        }
-        const persistedStream = wrapStreamWithPersistence(prepared.frameStream, {
-          chatSessionId: prepared.chatSessionId,
-          turnId: prepared.turnId,
-        });
-
-        // Wrap the persisted stream so the worktree lease is re-armed by the
-        // turn's own output and dropped when the SSE consumer finishes —
-        // success, error, or client disconnect.
-        //
-        // `release()` is a plain synchronous call on the lease the turn was
-        // handed. It used to re-resolve the service through
-        // `AppRuntime.runPromise` inside a `catch {}`, so the one cleanup that
-        // mattered could fail without a trace; and since the lease now expires
-        // on its own, even a release that never runs stops being permanent.
-        const { lease } = prepared;
-        const reader = persistedStream.getReader();
-        const leasedStream = new ReadableStream<ChatStreamFrame>({
-          async start(controller) {
-            // Span over the turn's token stream, carrying time-to-first-token
-            // (first text/reasoning frame). Ai.chat's own span only covers
-            // setup and has already ended by the time frames are pulled.
-            const span = trace.getTracer("revv-server").startSpan("Chat.stream", {
-              // All chat runs on the ACP transport now; the specific registry
-              // agent is a launch detail, so the transport is the provider.
-              attributes: { prId: ctx.body.prId, provider: "acp" },
-            });
-            const streamStartMs = Date.now();
-            let ttftRecorded = false;
-            try {
-              while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                if (!ttftRecorded && (value.kind === "text" || value.kind === "reasoning")) {
-                  ttftRecorded = true;
-                  span.setAttribute("ttft_ms", Date.now() - streamStartMs);
+                while (true) {
+                  const { done, value } = await reader.read();
+                  if (done) break;
+                  if (!ttftRecorded && (value.kind === "text" || value.kind === "reasoning")) {
+                    ttftRecorded = true;
+                    span.setAttribute("ttft_ms", Date.now() - streamStartMs);
+                  }
+                  lease.touch();
+                  controller.enqueue(value);
                 }
-                lease.touch();
-                controller.enqueue(value);
+                controller.close();
+              } catch (err) {
+                span.setStatus({ code: SpanStatusCode.ERROR });
+                controller.error(err);
+              } finally {
+                span.end();
+                lease.release();
               }
-              controller.close();
-            } catch (err) {
-              span.setStatus({ code: SpanStatusCode.ERROR });
-              controller.error(err);
-            } finally {
-              span.end();
+            },
+            async cancel(reason) {
+              // The consumer went away (client disconnect). Tear the turn's
+              // stream down rather than leaving `start`'s loop pulling frames
+              // into a controller nobody reads.
               lease.release();
-            }
-          },
-          async cancel(reason) {
-            // The consumer went away (client disconnect). Tear the turn's
-            // stream down rather than leaving `start`'s loop pulling frames
-            // into a controller nobody reads.
-            lease.release();
-            await reader.cancel(reason).catch(() => {});
-          },
-        });
+              await reader.cancel(reason).catch(() => {});
+            },
+          });
 
-        return new Response(chatStreamToSSE<ChatStreamFrame>(leasedStream), {
-          headers: {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            Connection: "keep-alive",
-          },
-        });
-      } catch (e) {
-        // Special case: worktree is blocked by unpushed agent commits.
-        // Return a structured JSON 409 so the client can show the
-        // blocked-commits UI instead of treating it as a generic error.
-        const blockedErr = unwrapEffectError(e);
-        if (blockedErr instanceof WorktreeBlockedByUnpushedCommits) {
-          ctx.set.status = 409;
-          return {
-            code: "WORKTREE_BLOCKED" satisfies StreamErrorCode,
-            message: "PR head advanced but worktree has unpushed agent commits",
-            worktreePath: blockedErr.worktreePath,
-            branchName: blockedErr.branchName,
-            oldHeadSha: blockedErr.oldHeadSha,
-            newHeadSha: blockedErr.newHeadSha,
-            commits: blockedErr.commits,
-          };
-        }
-        return mapErrorToSSEResponse(e);
-      }
+          return pipeToSse(leasedStream);
+        }),
+      );
     },
     {
       body: t.Object({
@@ -499,109 +470,71 @@ export const chatRoute = new Elysia()
   )
   .get(
     "/api/chat/:prId/messages",
-    async (ctx) => {
-      try {
-        const result = await AppRuntime.runPromise(
-          Effect.gen(function* () {
-            const prCtx = yield* PrContextService;
-            const chatSessions = yield* ChatSessionService;
-            const settingsService = yield* SettingsService;
-            const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const settings = yield* settingsService.getSettings();
-            const agent = yield* settingsService.resolveAgent();
+    (ctx) =>
+      runRoute(
+        Effect.gen(function* () {
+          const prCtx = yield* PrContextService;
+          const chatSessions = yield* ChatSessionService;
+          const settingsService = yield* SettingsService;
+          const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+          const settings = yield* settingsService.getSettings();
+          const agent = yield* settingsService.resolveAgent();
 
-            if (!pr.headSha) return null;
-
-            // Resolve the chat session for the *current* head SHA
-            // only. Older SHAs are dormant — the user has moved on
-            // and a fresh PR commit creates a fresh session row.
-            const row = yield* chatSessions.find(
-              pr.id,
-              agent,
-              chatSessionModel(agent, settings.aiModel),
-              pr.headSha,
-            );
-            if (!row) return null;
-
-            const timeline = yield* chatSessions.listTimeline(row.id);
-            return { row, timeline };
-          }),
-        );
-
-        if (!result) {
-          return jsonResponse(
-            { chatSessionId: null, entries: [], interactionMode: "default" },
-            200,
-          );
-        }
-
-        return jsonResponse(
-          {
-            chatSessionId: result.row.id,
-            entries: result.timeline,
-            interactionMode: result.row.interactionMode,
-          },
-          200,
-        );
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
+          // Only the current head's session: a new commit starts a new one.
+          const row = pr.headSha
+            ? yield* chatSessions.find(
+                pr.id,
+                agent,
+                chatSessionModel(agent, settings.aiModel),
+                pr.headSha,
+              )
+            : null;
+          if (!row) {
+            return { chatSessionId: null, entries: [], interactionMode: "default" as const };
+          }
+          return {
+            chatSessionId: row.id,
+            entries: yield* chatSessions.listTimeline(row.id),
+            interactionMode: row.interactionMode,
+          };
+        }),
+      ),
     {
       params: t.Object({ prId: t.String() }),
     },
   )
   .delete(
     "/api/chat/:prId",
-    async (ctx) => {
-      try {
-        const latest = await AppRuntime.runPromise(
-          Effect.gen(function* () {
-            const prCtx = yield* PrContextService;
-            const chatSessions = yield* ChatSessionService;
-            const settingsService = yield* SettingsService;
-            const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const agent = yield* settingsService.resolveAgent();
+    (ctx) =>
+      runRoute(
+        Effect.gen(function* () {
+          const prCtx = yield* PrContextService;
+          const chatSessions = yield* ChatSessionService;
+          const settingsService = yield* SettingsService;
+          const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+          const agent = yield* settingsService.resolveAgent();
 
-            // Capture the active worktree and its resolved baseline before
-            // dropping rows, so we can rewind it below — clearing the
-            // conversation also discards any unpushed agent commits the user
-            // accumulated during this session. Resolving the baseline has to
-            // happen BEFORE `clearAllForPr`, since it reads the row.
-            const active = yield* chatSessions.findLatestForPrWithBase(pr.id, agent);
+          // Clearing the conversation also discards the unpushed agent
+          // commits, so read the worktree and its baseline before the rows go.
+          const active = yield* chatSessions.findLatestForPrWithBase(pr.id, agent);
+          // The per-PR worktree stays: walkthroughs share it.
+          yield* chatSessions.clearAllForPr(pr.id, agent);
 
-            // Drop every chat-session row for (pr, agent). The
-            // per-PR worktree itself stays put — it's shared with
-            // walkthrough generation and re-used across chat
-            // sessions, refreshed in place on the next acquire.
-            yield* chatSessions.clearAllForPr(pr.id, agent);
-
-            return active;
-          }),
-        );
-
-        if (latest && existsSync(latest.row.worktreePath)) {
-          // Rewind to the head the branch is actually built on, not the one
-          // the session was created at — those diverge as soon as the PR head
-          // moves, and resetting to a stale session baseline rewinds the
-          // worktree to a commit the PR left behind. Same baseline the
-          // proposed-changes strip and the push path use.
-          await discardAgentCommits({
-            worktreePath: latest.row.worktreePath,
-            branchName: latest.row.branchName,
-            prHeadSha: latest.baseSha,
-          });
-        }
-
-        return new Response(null, { status: 204 });
-      } catch (e) {
-        ctx.set.status = 500;
-        return handleAppError(e, ctx);
-      }
-    },
+          if (active && existsSync(active.row.worktreePath)) {
+            // Rewind to the head the branch is built on; the session's own
+            // baseline goes stale as soon as the PR head moves.
+            yield* Effect.promise(() =>
+              discardAgentCommits({
+                worktreePath: active.row.worktreePath,
+                branchName: active.row.branchName,
+                prHeadSha: active.baseSha,
+              }),
+            );
+          }
+          return new Response(null, { status: 204 });
+        }),
+      ),
     {
       params: t.Object({ prId: t.String() }),
     },
-  )
-  .use(chatProposedChangesRoutes)
-  .use(chatInteractionRoutes);
+  );

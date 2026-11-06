@@ -14,7 +14,7 @@ import { commentThreads } from "../db/schema/comment-threads";
 import { remoteUsers } from "../db/schema/remote-users";
 import { reviewSessions } from "../db/schema/review-sessions";
 import { threadMessages } from "../db/schema/thread-messages";
-import { type DbError, ReviewError } from "../domain/errors";
+import { type DbError, ForbiddenError, NotFoundError } from "../domain/errors";
 import { tryDb } from "../effects/db-try";
 import type { DbService } from "./Db";
 import { resolveReviewModeForPr } from "./review-mode";
@@ -125,7 +125,7 @@ export class ReviewService extends Context.Service<
     ) => Effect.Effect<CommentThread, DbError, DbService>;
     readonly getThread: (
       threadId: string,
-    ) => Effect.Effect<CommentThread, ReviewError | DbError, DbService>;
+    ) => Effect.Effect<CommentThread, NotFoundError | ForbiddenError | DbError, DbService>;
     readonly getThreadsForSession: (
       sessionId: string,
     ) => Effect.Effect<CommentThread[], DbError, DbService>;
@@ -156,7 +156,7 @@ export class ReviewService extends Context.Service<
     readonly updateThreadStatus: (
       threadId: string,
       status: ThreadStatus,
-    ) => Effect.Effect<CommentThread, ReviewError | DbError, DbService>;
+    ) => Effect.Effect<CommentThread, NotFoundError | ForbiddenError | DbError, DbService>;
     readonly setThreadExternalIds: (
       threadId: string,
       ids: { externalThreadId?: string; externalCommentId?: string; lastSyncedAt?: string },
@@ -170,12 +170,12 @@ export class ReviewService extends Context.Service<
     readonly transitionStatus: (
       threadId: string,
       authorRole: AuthorRole,
-    ) => Effect.Effect<CommentThread, ReviewError | DbError, DbService>;
+    ) => Effect.Effect<CommentThread, NotFoundError | ForbiddenError | DbError, DbService>;
     readonly deleteThread: (threadId: string) => Effect.Effect<void, DbError, DbService>;
     readonly deleteThreadAsUser: (
       threadId: string,
       actorLogin: string | null,
-    ) => Effect.Effect<void, ReviewError | DbError, DbService>;
+    ) => Effect.Effect<void, NotFoundError | ForbiddenError | DbError, DbService>;
 
     // Messages
     readonly addMessage: (
@@ -185,7 +185,7 @@ export class ReviewService extends Context.Service<
     readonly getMessages: (threadId: string) => Effect.Effect<ThreadMessage[], DbError, DbService>;
     readonly getMessage: (
       messageId: string,
-    ) => Effect.Effect<ThreadMessage, ReviewError | DbError, DbService>;
+    ) => Effect.Effect<ThreadMessage, NotFoundError | ForbiddenError | DbError, DbService>;
     readonly setMessageExternalId: (
       messageId: string,
       externalId: string,
@@ -199,7 +199,7 @@ export class ReviewService extends Context.Service<
       messageId: string,
       body: string,
       actorLogin: string | null,
-    ) => Effect.Effect<ThreadMessage, ReviewError | DbError, DbService>;
+    ) => Effect.Effect<ThreadMessage, NotFoundError | ForbiddenError | DbError, DbService>;
     /**
      * Delete a reply message that hasn't been synced to GitHub yet.
      * Guards:
@@ -212,7 +212,7 @@ export class ReviewService extends Context.Service<
     readonly deleteMessage: (
       messageId: string,
       actorLogin: string | null,
-    ) => Effect.Effect<{ threadId: string }, ReviewError | DbError, DbService>;
+    ) => Effect.Effect<{ threadId: string }, NotFoundError | ForbiddenError | DbError, DbService>;
     readonly findMessageByExternalId: (
       externalId: string,
     ) => Effect.Effect<ThreadMessage | null, DbError, DbService>;
@@ -335,9 +335,7 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
         db.select().from(commentThreads).where(eq(commentThreads.id, threadId)).get(),
       );
       if (!row) {
-        return yield* Effect.fail(
-          new ReviewError({ message: "Thread not found", code: "NOT_FOUND" }),
-        );
+        return yield* Effect.fail(new NotFoundError({ resource: "thread", id: threadId }));
       }
       return rowToThread(row);
     }),
@@ -410,9 +408,7 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
         db.select().from(commentThreads).where(eq(commentThreads.id, threadId)).get(),
       );
       if (!existing) {
-        return yield* Effect.fail(
-          new ReviewError({ message: "Thread not found", code: "NOT_FOUND" }),
-        );
+        return yield* Effect.fail(new NotFoundError({ resource: "thread", id: threadId }));
       }
       // AI messages never change status; resolved/wont_fix are terminal until an
       // explicit reopen — replies don't auto-reopen.
@@ -454,16 +450,11 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
         db.select().from(commentThreads).where(eq(commentThreads.id, threadId)).get(),
       );
       if (!thread) {
-        return yield* Effect.fail(
-          new ReviewError({ message: "Thread not found", code: "NOT_FOUND" }),
-        );
+        return yield* Effect.fail(new NotFoundError({ resource: "thread", id: threadId }));
       }
       if (thread.externalCommentId !== null) {
         return yield* Effect.fail(
-          new ReviewError({
-            message: "Cannot discard a thread already synced to GitHub",
-            code: "FORBIDDEN",
-          }),
+          new ForbiddenError({ message: "Cannot discard a thread already synced to GitHub" }),
         );
       }
 
@@ -477,15 +468,12 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
           .get(),
       );
       if (!firstMessage) {
-        return yield* Effect.fail(
-          new ReviewError({ message: "Thread has no message", code: "NOT_FOUND" }),
-        );
+        return yield* Effect.fail(new NotFoundError({ resource: "thread message", id: threadId }));
       }
       if (!canUserModifyComment(firstMessage, actorLogin)) {
         return yield* Effect.fail(
-          new ReviewError({
+          new ForbiddenError({
             message: "You can only discard your own comments or comments left by Revv",
-            code: "FORBIDDEN",
           }),
         );
       }
@@ -502,9 +490,7 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
       );
 
       if (!existing) {
-        return yield* Effect.fail(
-          new ReviewError({ message: "Thread not found", code: "NOT_FOUND" }),
-        );
+        return yield* Effect.fail(new NotFoundError({ resource: "thread", id: threadId }));
       }
 
       const isResolving = isThreadResolved(status);
@@ -523,12 +509,7 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
       );
 
       if (!updated) {
-        return yield* Effect.fail(
-          new ReviewError({
-            message: "Thread disappeared after update",
-            code: "NOT_FOUND",
-          }),
-        );
+        return yield* Effect.fail(new NotFoundError({ resource: "thread", id: threadId }));
       }
 
       return rowToThread(updated);
@@ -633,9 +614,7 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
           .get(),
       );
       if (!row) {
-        return yield* Effect.fail(
-          new ReviewError({ message: "Message not found", code: "NOT_FOUND" }),
-        );
+        return yield* Effect.fail(new NotFoundError({ resource: "message", id: messageId }));
       }
       return rowToMessage(row.msg, row.avatarContent);
     }),
@@ -661,24 +640,20 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
       );
 
       if (!msgRow) {
-        return yield* Effect.fail(
-          new ReviewError({ message: "Message not found", code: "NOT_FOUND" }),
-        );
+        return yield* Effect.fail(new NotFoundError({ resource: "message", id: messageId }));
       }
 
       if (msgRow.externalId !== null) {
         return yield* Effect.fail(
-          new ReviewError({
+          new ForbiddenError({
             message: "Cannot edit a message that has already been synced to GitHub",
-            code: "FORBIDDEN",
           }),
         );
       }
       if (!canUserModifyComment(msgRow, actorLogin)) {
         return yield* Effect.fail(
-          new ReviewError({
+          new ForbiddenError({
             message: "You can only edit your own comments or comments left by Revv",
-            code: "FORBIDDEN",
           }),
         );
       }
@@ -703,24 +678,18 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
       );
 
       if (!msgRow) {
-        return yield* Effect.fail(
-          new ReviewError({ message: "Message not found", code: "NOT_FOUND" }),
-        );
+        return yield* Effect.fail(new NotFoundError({ resource: "message", id: messageId }));
       }
 
       if (msgRow.externalId !== null) {
         return yield* Effect.fail(
-          new ReviewError({
-            message: "Cannot discard a reply already synced to GitHub",
-            code: "FORBIDDEN",
-          }),
+          new ForbiddenError({ message: "Cannot discard a reply already synced to GitHub" }),
         );
       }
       if (!canUserModifyComment(msgRow, actorLogin)) {
         return yield* Effect.fail(
-          new ReviewError({
+          new ForbiddenError({
             message: "You can only discard your own comments or comments left by Revv",
-            code: "FORBIDDEN",
           }),
         );
       }
@@ -739,9 +708,8 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 
       if (first?.id === messageId) {
         return yield* Effect.fail(
-          new ReviewError({
+          new ForbiddenError({
             message: "Cannot discard a thread's first message — discard the thread instead",
-            code: "FORBIDDEN",
           }),
         );
       }

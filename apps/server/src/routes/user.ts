@@ -13,7 +13,7 @@ import { Identity } from "../services/Identity";
 import { PullRequestService } from "../services/PullRequest";
 import { RemoteUserService } from "../services/RemoteUser";
 import { SettingsService } from "../services/Settings";
-import { handleAppError, withAuth } from "./middleware";
+import { runRoute, withAuth } from "./middleware";
 
 const db = appDatabase();
 
@@ -32,7 +32,7 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
   .get(
     "/identity",
     async (ctx) => {
-      try {
+      return runRoute(async () => {
         const userId = ctx.session.user.id;
 
         // Read current stored login + image (server-refreshed avatar URL).
@@ -185,9 +185,7 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
           ...identity,
           onboardedAt: onboardedAt ? onboardedAt.toISOString() : null,
         };
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
+      });
     },
     {
       query: t.Object({
@@ -196,7 +194,7 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
     },
   )
   .get("/orgs", async (ctx) => {
-    try {
+    return runRoute(async () => {
       const userId = ctx.session.user.id;
       const orgs = await AppRuntime.runPromise(
         Effect.gen(function* () {
@@ -214,12 +212,10 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
         }).pipe(Effect.orElseSucceed(() => [] as Org[])),
       );
       return { orgs };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
+    });
   })
   .delete("/account", async (ctx) => {
-    try {
+    return runRoute(async () => {
       const userId = ctx.session.user.id;
       // Delete only the repositories linked to this user's accounts.
       // pull_requests cascade from repositories, and review_sessions,
@@ -237,7 +233,5 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
       // so the explicit delete above is belt-and-suspenders.
       await db.delete(user).where(eq(user.id, userId));
       return { deleted: true };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
+    });
   });

@@ -1,3 +1,4 @@
+import type { ApiErrorCode } from "@revv/shared";
 import { Data } from "effect";
 
 export class ProfilingError extends Data.TaggedError("ProfilingError")<{
@@ -95,22 +96,6 @@ export class ExternalIntegrationError extends Data.TaggedError("ExternalIntegrat
   readonly cause?: unknown;
 }> {}
 
-export function externalIntegrationHttpStatus(error: ExternalIntegrationError): number {
-  switch (error.code) {
-    case "INVALID_CREDENTIAL":
-      return 403;
-    case "INVALID_PROJECT":
-    case "PR_NOT_FOUND":
-      return 404;
-    case "NOT_CONNECTED":
-      return 409;
-    case "INSTALL_FAILED":
-      return 400;
-    case "INTERNAL":
-      return 500;
-  }
-}
-
 // AI errors
 export class AiGenerationError extends Data.TaggedError("AiGenerationError")<{
   readonly cause: unknown;
@@ -151,9 +136,9 @@ export class JevUnavailable extends Data.TaggedError("JevUnavailable")<{
 
 export type AiError = AiGenerationError | AiNotConfiguredError;
 
-export class ReviewError extends Data.TaggedError("ReviewError")<{
+/** The caller may see the resource but not do this to it; `message` says why. */
+export class ForbiddenError extends Data.TaggedError("ForbiddenError")<{
   readonly message: string;
-  readonly code?: string;
 }> {}
 
 export class SyncError extends Data.TaggedError("SyncError")<{
@@ -205,6 +190,42 @@ export class StackRejectedError extends Data.TaggedError("StackRejectedError")<{
 /** Another push (a chat push or a base sync) already holds the PR's push lock. */
 export class ConcurrentPushError extends Data.TaggedError("ConcurrentPushError")<{
   readonly prId: string;
+}> {}
+
+// Pushing the chat agent's commits
+
+/** A chat turn is still writing to the PR's worktree. */
+export class ChatStreamingConflictError extends Data.TaggedError("ChatStreamingConflictError")<{
+  readonly prId: string;
+}> {}
+
+export class DirtyWorktreeError extends Data.TaggedError("DirtyWorktreeError")<{
+  readonly message: string;
+}> {}
+
+export class NoChangesError extends Data.TaggedError("NoChangesError")<{
+  readonly prId: string;
+}> {}
+
+export class NoChatSessionError extends Data.TaggedError("NoChatSessionError")<{
+  readonly prId: string;
+}> {}
+
+export class GitOperationError extends Data.TaggedError("GitOperationError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+export class PushRejectedError extends Data.TaggedError("PushRejectedError")<{
+  readonly message: string;
+}> {}
+
+export class RefAlreadyExistsError extends Data.TaggedError("RefAlreadyExistsError")<{
+  readonly ref: string;
+}> {}
+
+export class InvalidBranchNameError extends Data.TaggedError("InvalidBranchNameError")<{
+  readonly message: string;
 }> {}
 
 /**
@@ -359,17 +380,219 @@ export class SshKeysFetchFailed extends Data.TaggedError("SshKeysFetchFailed")<{
   readonly cause?: unknown;
 }> {}
 
-/**
- * Type guard for ReviewError.
- * Checks both instanceof (for directly thrown errors) and _tag (defensive for
- * serialized/deserialized errors crossing async boundaries, e.g. Effect channels).
- */
-export function isReviewError(e: unknown): e is ReviewError {
+// ── HTTP meaning ────────────────────────────────────────────────────────────
+//
+// Every error above answers an HTTP request the same way wherever it
+// surfaces: a REST route, a stream refused before it starts, or the external
+// agent's MCP route. Adding an error class means adding its row here.
+
+export type HttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502 | 503;
+
+export interface HttpError {
+  readonly status: HttpErrorStatus;
+  readonly code: ApiErrorCode;
+  readonly message: string;
+  /** Extra body fields the client reads for this code. */
+  readonly details?: Readonly<Record<string, unknown>>;
+}
+
+type AppError =
+  | ProfilingError
+  | GitHubRateLimitError
+  | GitHubAuthError
+  | GitHubNetworkError
+  | GitHubApiError
+  | GitHubAccessDeniedError
+  | GitHubNotFoundError
+  | RepoNotAccessibleError
+  | NotFoundError
+  | ValidationError
+  | ExternalIntegrationError
+  | AiGenerationError
+  | AiNotConfiguredError
+  | JevUnavailable
+  | ForbiddenError
+  | SyncError
+  | CloneError
+  | CloneNotReadyError
+  | CloneInProgressError
+  | StackRejectedError
+  | ConcurrentPushError
+  | ChatStreamingConflictError
+  | DirtyWorktreeError
+  | NoChangesError
+  | NoChatSessionError
+  | GitOperationError
+  | PushRejectedError
+  | RefAlreadyExistsError
+  | InvalidBranchNameError
+  | BaseConflictsRejectedError
+  | HeadShaMismatchError
+  | WorktreeBlockedByUnpushedCommits
+  | RecapNotFoundError
+  | DbError
+  | BlobStoreUnavailable
+  | BlobCorrupt
+  | CacheUnavailable
+  | CacheSerialization
+  | ImportError
+  | SshKeygenMissing
+  | SshSigningUnavailable
+  | SshSignatureInvalid
+  | SshKeysFetchFailed;
+
+const http = (
+  status: HttpErrorStatus,
+  code: ApiErrorCode,
+  message: string,
+  details?: Readonly<Record<string, unknown>>,
+): HttpError => (details ? { status, code, message, details } : { status, code, message });
+
+const notFoundMessage = (resource: string): string =>
+  `${resource.charAt(0).toUpperCase()}${resource.slice(1)} not found`;
+
+const internal = (message: string): HttpError => http(500, "INTERNAL_ERROR", message);
+
+const STACK_REJECTION_HTTP = {
+  stale: [409, "STALE"],
+  busy: [409, "BUSY"],
+  "replay-conflict": [409, "REPLAY_CONFLICT"],
+  "lease-lost": [409, "STALE"],
+  invalid: [400, "INVALID"],
+  failed: [422, "FAILED"],
+} as const satisfies Record<StackRejection["reason"], readonly [HttpErrorStatus, ApiErrorCode]>;
+
+const BASE_CONFLICTS_REJECTION_HTTP = {
+  busy: [409, "BUSY"],
+  stale: [409, "STALE"],
+  invalid: [422, "INVALID"],
+  unavailable: [503, "UNAVAILABLE"],
+  failed: [500, "FAILED"],
+} as const satisfies Record<BaseConflictsRejection, readonly [HttpErrorStatus, ApiErrorCode]>;
+
+const EXTERNAL_INTEGRATION_HTTP = {
+  INVALID_CREDENTIAL: [403, "FORBIDDEN"],
+  INVALID_PROJECT: [404, "NOT_FOUND"],
+  PR_NOT_FOUND: [404, "NOT_FOUND"],
+  NOT_CONNECTED: [409, "NOT_CONNECTED"],
+  INSTALL_FAILED: [400, "FAILED"],
+  INTERNAL: [500, "INTERNAL_ERROR"],
+} as const satisfies Record<
+  ExternalIntegrationError["code"],
+  readonly [HttpErrorStatus, ApiErrorCode]
+>;
+
+const HTTP_ERRORS: {
+  readonly [Tag in AppError["_tag"]]: (e: Extract<AppError, { _tag: Tag }>) => HttpError;
+} = {
+  NotFoundError: (e) => http(404, "NOT_FOUND", notFoundMessage(e.resource)),
+  RecapNotFoundError: () => http(404, "NOT_FOUND", notFoundMessage("recap")),
+  ValidationError: (e) => http(400, "INVALID", e.message),
+  ForbiddenError: (e) => http(403, "FORBIDDEN", e.message),
+  GitHubAuthError: () => http(401, "GITHUB_AUTH_ERROR", "GitHub token expired or invalid"),
+  GitHubAccessDeniedError: (e) => http(403, "FORBIDDEN", e.message),
+  GitHubNotFoundError: () => http(404, "NOT_FOUND", "Not found on GitHub"),
+  RepoNotAccessibleError: (e) =>
+    http(404, "NOT_FOUND", e.message, {
+      detail: e.detail,
+      ...(e.action ? { action: e.action } : {}),
+    }),
+  GitHubRateLimitError: (e) =>
+    http(
+      429,
+      "GITHUB_RATE_LIMITED",
+      `GitHub rate limit exceeded, resets at ${e.resetAt.toISOString()}`,
+    ),
+  GitHubNetworkError: (e) => http(502, "GITHUB_ERROR", `GitHub API error: ${String(e.cause)}`),
+  // GitHub rejected the request on its merits: pass its 4xx through. A 401,
+  // 403 or 404 never gets here; each has its own class.
+  GitHubApiError: (e) =>
+    http(
+      e.status >= 400 && e.status < 500 ? (e.status as HttpErrorStatus) : 502,
+      "GITHUB_ERROR",
+      `GitHub API error: ${String(e.cause)}`,
+    ),
+  SyncError: (e) => http(502, "GITHUB_ERROR", e.message),
+  AiNotConfiguredError: () =>
+    http(400, "NOT_CONFIGURED", "AI CLI agent not configured — install opencode or claude"),
+  AiGenerationError: (e) =>
+    http(500, "GENERATION_ERROR", e.message ?? `Generation failed: ${String(e.cause)}`),
+  JevUnavailable: (e) =>
+    http(503, "UNAVAILABLE", e.message ?? `TypeSafe is unavailable (${e.reason})`),
+  ExternalIntegrationError: (e) => {
+    const [status, code] = EXTERNAL_INTEGRATION_HTTP[e.code];
+    return http(status, code, e.message);
+  },
+  CloneNotReadyError: () => http(409, "UNAVAILABLE", "Repository clone is not ready yet"),
+  CloneInProgressError: () => http(409, "BUSY", "Repository clone is already in progress"),
+  CloneError: (e) => http(502, "FAILED", e.message),
+  StackRejectedError: (e) => {
+    const [status, code] = STACK_REJECTION_HTTP[e.rejection.reason];
+    return http(
+      status,
+      code,
+      e.message,
+      e.rejection.reason === "replay-conflict" ? { files: e.rejection.files } : undefined,
+    );
+  },
+  BaseConflictsRejectedError: (e) => {
+    const [status, code] = BASE_CONFLICTS_REJECTION_HTTP[e.reason];
+    return http(status, code, e.message);
+  },
+  HeadShaMismatchError: (e) =>
+    http(
+      409,
+      "STALE",
+      `GitHub reports head ${e.githubHeadSha.slice(0, 7)}, not the requested ${e.expectedHeadSha.slice(0, 7)}`,
+    ),
+  WorktreeBlockedByUnpushedCommits: (e) =>
+    http(409, "WORKTREE_BLOCKED", "PR head advanced but worktree has unpushed agent commits", {
+      worktreePath: e.worktreePath,
+      branchName: e.branchName,
+      oldHeadSha: e.oldHeadSha,
+      newHeadSha: e.newHeadSha,
+      commits: e.commits,
+    }),
+  ConcurrentPushError: () =>
+    http(409, "CONCURRENT_PUSH", "A push is already in progress for this PR"),
+  ChatStreamingConflictError: () =>
+    http(409, "CHAT_STREAMING", "Wait for the chat agent to finish before pushing"),
+  DirtyWorktreeError: (e) => http(409, "DIRTY_WORKTREE", e.message),
+  NoChangesError: () => http(422, "NO_CHANGES", "No agent commits to push"),
+  NoChatSessionError: () =>
+    http(404, "NO_CHAT_SESSION", "No chat session for this PR — start a chat first"),
+  InvalidBranchNameError: (e) => http(400, "INVALID_BRANCH_NAME", e.message),
+  RefAlreadyExistsError: (e) => http(409, "REF_EXISTS", `branch ${e.ref} already exists`),
+  PushRejectedError: (e) => http(502, "PUSH_REJECTED", e.message),
+  GitOperationError: (e) => http(500, "FAILED", e.message),
+  DbError: (e) => internal(e.message),
+  ProfilingError: (e) => internal(String(e.cause)),
+  BlobStoreUnavailable: (e) => internal(e.message),
+  BlobCorrupt: (e) => internal(e.reason),
+  CacheUnavailable: (e) => internal(e.message),
+  CacheSerialization: (e) => internal(e.message),
+  ImportError: (e) => internal(e.reason),
+  SshKeygenMissing: (e) => internal(e.message),
+  SshSigningUnavailable: (e) => internal(e.message),
+  SshSignatureInvalid: (e) => internal(e.message),
+  SshKeysFetchFailed: (e) => internal(`Couldn't fetch ${e.login}'s keys from ${e.host}`),
+};
+
+function isAppError(e: unknown): e is AppError {
   return (
-    e instanceof ReviewError ||
-    (e !== null &&
-      typeof e === "object" &&
-      "_tag" in e &&
-      (e as { _tag: unknown })._tag === "ReviewError")
+    typeof e === "object" &&
+    e !== null &&
+    "_tag" in e &&
+    typeof e._tag === "string" &&
+    Object.hasOwn(HTTP_ERRORS, e._tag)
   );
+}
+
+/** How `e` answers an HTTP request. Anything that isn't a domain error is a 500. */
+export function httpErrorOf(e: unknown): HttpError {
+  if (isAppError(e)) {
+    const toHttp = HTTP_ERRORS[e._tag] as (error: AppError) => HttpError;
+    return toHttp(e);
+  }
+  return internal(e instanceof Error ? e.message : "Internal server error");
 }

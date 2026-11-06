@@ -5,19 +5,10 @@
 
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
+import { InvalidBranchNameError, ValidationError } from "../domain/errors";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
-import {
-  ChatChangesPushService,
-  ChatStreamingConflictError,
-  ConcurrentPushError,
-  DirtyWorktreeError,
-  InvalidBranchNameError,
-  NoChangesError,
-  NoChatSessionError,
-  PushRejectedError,
-  RefAlreadyExistsError,
-} from "../services/ChatChangesPush";
+import { ChatChangesPushService } from "../services/ChatChangesPush";
 import { ChatSessionService } from "../services/ChatSession";
 import { PROPOSED_COMMIT_RANGE_FLAGS } from "../services/GitOps";
 import { PrContextService } from "../services/PrContext";
@@ -29,22 +20,18 @@ import {
   gitStdoutBestEffort,
   listProposedCommits,
   type ProposedCommit,
-  resolvePushStreamToSSE,
 } from "./chat-helpers";
-import {
-  handleAppError,
-  jsonResponse,
-  mapErrorToSSEResponse,
-  unwrapEffectError,
-  withAuth,
-} from "./middleware";
+import { errorResponse, runRoute, withAuth } from "./middleware";
+import { ownedBy } from "./ownership";
+import { pipeToSse, runStream } from "./sse";
 
 export const chatProposedChangesRoutes = new Elysia()
   .use(withAuth)
+  .onBeforeHandle(ownedBy({ prId: "pull request" }))
   .get(
     "/api/chat/:prId/proposed-changes",
     async (ctx) => {
-      try {
+      return runRoute(async () => {
         const result = await AppRuntime.runPromise(
           Effect.gen(function* () {
             const prCtx = yield* PrContextService;
@@ -58,7 +45,7 @@ export const chatProposedChangesRoutes = new Elysia()
         );
 
         if (!result) {
-          return jsonResponse({ branchName: null, baseSha: null, commits: [] }, 200);
+          return { branchName: null, baseSha: null, commits: [] };
         }
 
         // One resolved baseline, shared with the push/rebuild/discard paths —
@@ -74,17 +61,12 @@ export const chatProposedChangesRoutes = new Elysia()
           return [] as ProposedCommit[];
         });
 
-        return jsonResponse(
-          {
-            branchName: row.branchName,
-            baseSha,
-            commits,
-          },
-          200,
-        );
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
+        return {
+          branchName: row.branchName,
+          baseSha,
+          commits,
+        };
+      });
     },
     {
       params: t.Object({ prId: t.String() }),
@@ -93,7 +75,7 @@ export const chatProposedChangesRoutes = new Elysia()
   .get(
     "/api/chat/:prId/proposed-changes/:sha/diff",
     async (ctx) => {
-      try {
+      return runRoute(async () => {
         const result = await AppRuntime.runPromise(
           Effect.gen(function* () {
             const prCtx = yield* PrContextService;
@@ -113,8 +95,7 @@ export const chatProposedChangesRoutes = new Elysia()
 
         // Validate the SHA shape — defense in depth against arg injection.
         if (!/^[0-9a-f]{7,40}$/i.test(ctx.params.sha)) {
-          ctx.set.status = 400;
-          return { error: "Invalid commit SHA" };
+          return errorResponse(new ValidationError({ message: "Invalid commit SHA" }));
         }
 
         const diff = await gitStdout(
@@ -126,9 +107,7 @@ export const chatProposedChangesRoutes = new Elysia()
         return new Response(diff, {
           headers: { "Content-Type": "text/plain; charset=utf-8" },
         });
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
+      });
     },
     {
       params: t.Object({ prId: t.String(), sha: t.String() }),
@@ -137,7 +116,7 @@ export const chatProposedChangesRoutes = new Elysia()
   .get(
     "/api/chat/:prId/proposed-changes/:sha/files",
     async (ctx) => {
-      try {
+      return runRoute(async () => {
         const result = await AppRuntime.runPromise(
           Effect.gen(function* () {
             const prCtx = yield* PrContextService;
@@ -156,8 +135,7 @@ export const chatProposedChangesRoutes = new Elysia()
         }
 
         if (!/^[0-9a-f]{7,40}$/i.test(ctx.params.sha)) {
-          ctx.set.status = 400;
-          return { error: "Invalid commit SHA" };
+          return errorResponse(new ValidationError({ message: "Invalid commit SHA" }));
         }
 
         // `-z -M --name-status` outputs one record per changed file as
@@ -223,9 +201,7 @@ export const chatProposedChangesRoutes = new Elysia()
 
         const files = await Promise.all(fileTasks);
         return { files };
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
+      });
     },
     {
       params: t.Object({ prId: t.String(), sha: t.String() }),
@@ -234,7 +210,7 @@ export const chatProposedChangesRoutes = new Elysia()
   .post(
     "/api/chat/:prId/proposed-changes/merge-and-push",
     async (ctx) => {
-      try {
+      return runRoute(async () => {
         const body = (ctx.body ?? {}) as {
           newBranchName?: unknown;
           force?: unknown;
@@ -242,11 +218,9 @@ export const chatProposedChangesRoutes = new Elysia()
         let newBranchName: string | undefined;
         if (body.newBranchName !== undefined) {
           if (typeof body.newBranchName !== "string") {
-            ctx.set.status = 400;
-            return {
-              code: "INVALID_BRANCH_NAME",
-              message: "newBranchName must be a string",
-            };
+            return errorResponse(
+              new InvalidBranchNameError({ message: "newBranchName must be a string" }),
+            );
           }
           const trimmed = body.newBranchName.trim();
           if (
@@ -255,11 +229,11 @@ export const chatProposedChangesRoutes = new Elysia()
             trimmed.startsWith("-") ||
             trimmed.includes("..")
           ) {
-            ctx.set.status = 400;
-            return {
-              code: "INVALID_BRANCH_NAME",
-              message: "newBranchName is empty or contains invalid characters",
-            };
+            return errorResponse(
+              new InvalidBranchNameError({
+                message: "newBranchName is empty or contains invalid characters",
+              }),
+            );
           }
           newBranchName = trimmed;
         }
@@ -291,48 +265,7 @@ export const chatProposedChangesRoutes = new Elysia()
           return result;
         }
         return result;
-      } catch (e) {
-        const err = unwrapEffectError(e);
-        if (err instanceof ConcurrentPushError) {
-          ctx.set.status = 409;
-          return { code: "CONCURRENT_PUSH", message: "A push is already in progress for this PR" };
-        }
-        if (err instanceof ChatStreamingConflictError) {
-          ctx.set.status = 409;
-          return {
-            code: "CHAT_STREAMING",
-            message: "Wait for the chat agent to finish before pushing",
-          };
-        }
-        if (err instanceof DirtyWorktreeError) {
-          ctx.set.status = 422;
-          return { code: "DIRTY_WORKTREE", message: err.message };
-        }
-        if (err instanceof NoChangesError) {
-          ctx.set.status = 422;
-          return { code: "NO_CHANGES", message: "No agent commits to push" };
-        }
-        if (err instanceof NoChatSessionError) {
-          ctx.set.status = 422;
-          return {
-            code: "NO_CHAT_SESSION",
-            message: "No chat session for this PR — start a chat first",
-          };
-        }
-        if (err instanceof InvalidBranchNameError) {
-          ctx.set.status = 400;
-          return { code: "INVALID_BRANCH_NAME", message: err.message };
-        }
-        if (err instanceof RefAlreadyExistsError) {
-          ctx.set.status = 409;
-          return { code: "REF_EXISTS", message: `branch ${err.ref} already exists` };
-        }
-        if (err instanceof PushRejectedError) {
-          ctx.set.status = 502;
-          return { code: "PUSH_REJECTED", message: err.message };
-        }
-        return handleAppError(e, ctx);
-      }
+      });
     },
     {
       params: t.Object({ prId: t.String() }),
@@ -346,28 +279,12 @@ export const chatProposedChangesRoutes = new Elysia()
   )
   .post(
     "/api/chat/:prId/proposed-changes/resolve-and-push",
-    async (ctx) => {
-      try {
-        const stream = await AppRuntime.runPromise(
-          Effect.flatMap(ChatChangesPushService, (svc) =>
-            svc.resolveConflictsAndPush({
-              prId: ctx.params.prId,
-              userId: ctx.session.user.id,
-            }),
-          ),
-        );
-
-        return new Response(resolvePushStreamToSSE(stream), {
-          headers: {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            Connection: "keep-alive",
-          },
-        });
-      } catch (e) {
-        return mapErrorToSSEResponse(e);
-      }
-    },
+    (ctx) =>
+      runStream(
+        Effect.flatMap(ChatChangesPushService, (svc) =>
+          svc.resolveConflictsAndPush({ prId: ctx.params.prId, userId: ctx.session.user.id }),
+        ).pipe(Effect.map(pipeToSse)),
+      ),
     {
       params: t.Object({ prId: t.String() }),
     },
@@ -383,12 +300,13 @@ export const chatProposedChangesRoutes = new Elysia()
     async (ctx) => {
       const body = (ctx.body ?? {}) as { sha?: unknown };
       if (typeof body.sha !== "string" || !/^[0-9a-f]{7,40}$/i.test(body.sha)) {
-        ctx.set.status = 400;
-        return { error: "sha is required and must be a valid commit hash" };
+        return errorResponse(
+          new ValidationError({ message: "sha is required and must be a valid commit hash" }),
+        );
       }
       const { sha } = body;
 
-      try {
+      return runRoute(async () => {
         const result = await AppRuntime.runPromise(
           Effect.flatMap(ChatChangesPushService, (svc) =>
             svc.cherryPickAndPush({
@@ -400,15 +318,12 @@ export const chatProposedChangesRoutes = new Elysia()
         );
 
         if (result.status === "pushed") {
-          return jsonResponse(
-            {
-              status: "pushed",
-              newSha: result.newSha,
-              pushedCommits: result.pushedCommits,
-              branch: result.branch,
-            },
-            200,
-          );
+          return {
+            status: "pushed",
+            newSha: result.newSha,
+            pushedCommits: result.pushedCommits,
+            branch: result.branch,
+          };
         }
         if (result.status === "remote-changed") {
           ctx.set.status = 409;
@@ -416,29 +331,7 @@ export const chatProposedChangesRoutes = new Elysia()
         }
         ctx.set.status = 500;
         return { error: "Unexpected cherry-pick result" };
-      } catch (e) {
-        const err = unwrapEffectError(e);
-        if (err instanceof ConcurrentPushError) {
-          ctx.set.status = 409;
-          return {
-            code: "CONCURRENT_PUSH",
-            message: "Another push is already in progress for this PR",
-          };
-        }
-        if (err instanceof DirtyWorktreeError) {
-          ctx.set.status = 409;
-          return { code: "DIRTY_WORKTREE", message: err.message };
-        }
-        if (err instanceof NoChangesError) {
-          ctx.set.status = 409;
-          return { code: "NO_CHANGES", message: "No proposed commits found" };
-        }
-        if (err instanceof NoChatSessionError) {
-          ctx.set.status = 404;
-          return { code: "NO_CHAT_SESSION", message: "No chat session found for this PR" };
-        }
-        return handleAppError(e, ctx);
-      }
+      });
     },
     {
       params: t.Object({ prId: t.String() }),
@@ -449,19 +342,21 @@ export const chatProposedChangesRoutes = new Elysia()
     async (ctx) => {
       const body = (ctx.body ?? {}) as { shas?: unknown };
       if (!Array.isArray(body.shas) || body.shas.length === 0) {
-        ctx.set.status = 400;
-        return { error: "shas must be a non-empty array of commit hashes" };
+        return errorResponse(
+          new ValidationError({ message: "shas must be a non-empty array of commit hashes" }),
+        );
       }
       const shas: string[] = [];
       for (const raw of body.shas) {
         if (typeof raw !== "string" || !/^[0-9a-f]{7,40}$/i.test(raw)) {
-          ctx.set.status = 400;
-          return { error: "shas must contain valid commit hashes" };
+          return errorResponse(
+            new ValidationError({ message: "shas must contain valid commit hashes" }),
+          );
         }
         shas.push(raw);
       }
 
-      try {
+      return runRoute(async () => {
         const result = await AppRuntime.runPromise(
           Effect.flatMap(ChatChangesPushService, (svc) =>
             svc.batchCherryPickAndPush({
@@ -473,15 +368,12 @@ export const chatProposedChangesRoutes = new Elysia()
         );
 
         if (result.status === "pushed") {
-          return jsonResponse(
-            {
-              status: "pushed",
-              newSha: result.newSha,
-              pushedCommits: result.pushedCommits,
-              branch: result.branch,
-            },
-            200,
-          );
+          return {
+            status: "pushed",
+            newSha: result.newSha,
+            pushedCommits: result.pushedCommits,
+            branch: result.branch,
+          };
         }
         if (result.status === "remote-changed") {
           ctx.set.status = 409;
@@ -489,29 +381,7 @@ export const chatProposedChangesRoutes = new Elysia()
         }
         ctx.set.status = 500;
         return { error: "Unexpected cherry-pick result" };
-      } catch (e) {
-        const err = unwrapEffectError(e);
-        if (err instanceof ConcurrentPushError) {
-          ctx.set.status = 409;
-          return {
-            code: "CONCURRENT_PUSH",
-            message: "Another push is already in progress for this PR",
-          };
-        }
-        if (err instanceof DirtyWorktreeError) {
-          ctx.set.status = 409;
-          return { code: "DIRTY_WORKTREE", message: err.message };
-        }
-        if (err instanceof NoChangesError) {
-          ctx.set.status = 409;
-          return { code: "NO_CHANGES", message: "No proposed commits found" };
-        }
-        if (err instanceof NoChatSessionError) {
-          ctx.set.status = 404;
-          return { code: "NO_CHAT_SESSION", message: "No chat session found for this PR" };
-        }
-        return handleAppError(e, ctx);
-      }
+      });
     },
     {
       params: t.Object({ prId: t.String() }),
@@ -522,11 +392,10 @@ export const chatProposedChangesRoutes = new Elysia()
     async (ctx) => {
       // Validate SHA before doing anything expensive.
       if (!/^[0-9a-f]{7,40}$/i.test(ctx.params.sha)) {
-        ctx.set.status = 400;
-        return { error: "Invalid commit SHA" };
+        return errorResponse(new ValidationError({ message: "Invalid commit SHA" }));
       }
 
-      try {
+      return runRoute(async () => {
         const row = await AppRuntime.runPromise(
           Effect.gen(function* () {
             const prCtx = yield* PrContextService;
@@ -583,10 +452,8 @@ export const chatProposedChangesRoutes = new Elysia()
           };
         }
 
-        return jsonResponse({ status: "discarded" }, 200);
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
+        return { status: "discarded" };
+      });
     },
     {
       params: t.Object({ prId: t.String(), sha: t.String() }),
@@ -597,19 +464,21 @@ export const chatProposedChangesRoutes = new Elysia()
     async (ctx) => {
       const body = (ctx.body ?? {}) as { shas?: unknown };
       if (!Array.isArray(body.shas) || body.shas.length === 0) {
-        ctx.set.status = 400;
-        return { error: "shas must be a non-empty array of commit hashes" };
+        return errorResponse(
+          new ValidationError({ message: "shas must be a non-empty array of commit hashes" }),
+        );
       }
       const rawShas: string[] = [];
       for (const raw of body.shas) {
         if (typeof raw !== "string" || !/^[0-9a-f]{7,40}$/i.test(raw)) {
-          ctx.set.status = 400;
-          return { error: "shas must contain valid commit hashes" };
+          return errorResponse(
+            new ValidationError({ message: "shas must contain valid commit hashes" }),
+          );
         }
         rawShas.push(raw);
       }
 
-      try {
+      return runRoute(async () => {
         const resolved = await AppRuntime.runPromise(
           Effect.gen(function* () {
             const prCtx = yield* PrContextService;
@@ -735,10 +604,8 @@ export const chatProposedChangesRoutes = new Elysia()
           };
         }
 
-        return jsonResponse({ status: "discarded", discardedCount: matchedDropCount }, 200);
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
+        return { status: "discarded", discardedCount: matchedDropCount };
+      });
     },
     {
       params: t.Object({ prId: t.String() }),
@@ -749,12 +616,13 @@ export const chatProposedChangesRoutes = new Elysia()
     async (ctx) => {
       const body = (ctx.body ?? {}) as { oldHeadSha?: unknown; newHeadSha?: unknown };
       if (typeof body.oldHeadSha !== "string" || typeof body.newHeadSha !== "string") {
-        ctx.set.status = 400;
-        return { error: "oldHeadSha and newHeadSha are required strings" };
+        return errorResponse(
+          new ValidationError({ message: "oldHeadSha and newHeadSha are required strings" }),
+        );
       }
       const { oldHeadSha, newHeadSha } = body;
 
-      try {
+      return runRoute(async () => {
         const row = await AppRuntime.runPromise(
           Effect.gen(function* () {
             const prCtx = yield* PrContextService;
@@ -796,10 +664,8 @@ export const chatProposedChangesRoutes = new Elysia()
           };
         }
 
-        return jsonResponse({ status: "rebased" }, 200);
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
+        return { status: "rebased" };
+      });
     },
     {
       params: t.Object({ prId: t.String() }),
@@ -810,12 +676,11 @@ export const chatProposedChangesRoutes = new Elysia()
     async (ctx) => {
       const body = (ctx.body ?? {}) as { newHeadSha?: unknown };
       if (typeof body.newHeadSha !== "string") {
-        ctx.set.status = 400;
-        return { error: "newHeadSha is required" };
+        return errorResponse(new ValidationError({ message: "newHeadSha is required" }));
       }
       const { newHeadSha } = body;
 
-      try {
+      return runRoute(async () => {
         await AppRuntime.runPromise(
           Effect.gen(function* () {
             const prCtx = yield* PrContextService;
@@ -848,10 +713,8 @@ export const chatProposedChangesRoutes = new Elysia()
           }),
         );
 
-        return jsonResponse({ status: "advanced" }, 200);
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
+        return { status: "advanced" };
+      });
     },
     {
       params: t.Object({ prId: t.String() }),

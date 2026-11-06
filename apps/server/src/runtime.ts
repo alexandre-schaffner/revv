@@ -6,8 +6,16 @@ import { AppLayer } from "./services/AppLayer";
 
 const managed = ManagedRuntime.make(Layer.mergeAll(AppLayer, TracingLive, ContinuousProfilingLive));
 
-export const AppRuntime: Pick<typeof managed, "runPromise" | "runSync" | "dispose"> = {
+/** Every service an effect run on {@link AppRuntime} may require. */
+export type AppServices = ManagedRuntime.ManagedRuntime.Services<typeof managed>;
+
+export const AppRuntime: Pick<
+  typeof managed,
+  "runPromise" | "runPromiseExit" | "runSync" | "dispose"
+> = {
   runPromise: (effect, options) => managed.runPromise(seedOriginFromAmbient(effect), options),
+  runPromiseExit: (effect, options) =>
+    managed.runPromiseExit(seedOriginFromAmbient(effect), options),
   runSync: (effect) => managed.runSync(seedOriginFromAmbient(effect)),
   dispose: () => managed.dispose(),
 };

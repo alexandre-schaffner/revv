@@ -18,11 +18,10 @@ import { Effect } from "effect";
 import { Elysia, type TSchema, t } from "elysia";
 import { hasJevApiKey } from "../ai/jev/api-key";
 import { listCliModels } from "../ai/providers/cli-models";
-import { AppRuntime } from "../runtime";
 import { BlobStore } from "../services/blob/BlobStore";
 import { SshSigner } from "../services/cache-signing/index";
 import { SettingsService } from "../services/Settings";
-import { handleAppError } from "./middleware";
+import { runRoute } from "./middleware";
 import { literalUnion } from "./schemas";
 import { settingsJevRoutes } from "./settings-jev";
 
@@ -96,138 +95,122 @@ function isAdcValid(gcloudPath: string | null, adcExists: boolean): boolean {
 const settingsPatchSchema = t.Unsafe<SettingsUpdate>(patchSchemaOf(SETTINGS_SPEC));
 
 export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
-  .get("/", async (ctx) => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.flatMap(SettingsService, (s) => s.getSettings()).pipe(
-          Effect.flatMap(withJevKeyState),
-        ),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
+  .get("/", () =>
+    runRoute(
+      Effect.flatMap(SettingsService, (s) => s.getSettings()).pipe(Effect.flatMap(withJevKeyState)),
+    ),
+  )
   // Only persists: reactions to a change subscribe to `SettingsService.watch`.
   .put(
     "/",
-    async (ctx) => {
-      try {
-        return await AppRuntime.runPromise(
-          Effect.flatMap(SettingsService, (s) => s.updateSettings(ctx.body)).pipe(
-            Effect.flatMap(withJevKeyState),
-          ),
-        );
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
+    (ctx) =>
+      runRoute(
+        Effect.flatMap(SettingsService, (s) => s.updateSettings(ctx.body)).pipe(
+          Effect.flatMap(withJevKeyState),
+        ),
+      ),
     { body: settingsPatchSchema },
   )
   // Key management lives in its own sub-router because every route on it is
   // individually `withAuth`-guarded, unlike this one.
   .use(settingsJevRoutes)
-  .get("/cache/status", async (ctx) => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const blob = yield* BlobStore;
-          return yield* blob.status();
-        }),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-  .post("/cache/signing/test", async (ctx) => {
-    try {
-      const probe = "revv-signing-test";
-      const result = await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const signerSvc = yield* SshSigner;
-          const signed = yield* signerSvc.sign(probe);
-          yield* signerSvc.verify(probe, signed.signature, signed.signerHost, signed.signerLogin);
-          return {
-            ok: true as const,
-            signerLogin: signed.signerLogin,
-            signerHost: signed.signerHost,
-            signatureNamespace: signed.signatureNamespace,
-          };
-        }).pipe(
-          Effect.catch((e) =>
-            Effect.succeed({
-              ok: false as const,
-              error: (e as { message?: string }).message ?? String(e),
-            }),
-          ),
-        ),
-      );
-      return result;
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-  .get("/cache/adc-status", (ctx) => {
-    try {
-      const gcloudPath = findGcloud();
-      // An explicit service-account key or path is trusted as configured:
-      // service-account JSON keys don't work with `print-access-token`.
-      const envPath = process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
-      if (envPath && existsSync(envPath)) {
+  .get("/cache/status", () =>
+    runRoute(
+      Effect.gen(function* () {
+        const blob = yield* BlobStore;
+        return yield* blob.status();
+      }),
+    ),
+  )
+  .post("/cache/signing/test", () => {
+    const probe = "revv-signing-test";
+    return runRoute(
+      Effect.gen(function* () {
+        const signerSvc = yield* SshSigner;
+        const signed = yield* signerSvc.sign(probe);
+        yield* signerSvc.verify(probe, signed.signature, signed.signerHost, signed.signerLogin);
         return {
-          available: true as const,
-          source: "env" as const,
+          ok: true as const,
+          signerLogin: signed.signerLogin,
+          signerHost: signed.signerHost,
+          signatureNamespace: signed.signatureNamespace,
+        };
+      }).pipe(
+        Effect.catch((e) =>
+          Effect.succeed({
+            ok: false as const,
+            error: (e as { message?: string }).message ?? String(e),
+          }),
+        ),
+      ),
+    );
+  })
+  .get("/cache/adc-status", () =>
+    runRoute(
+      Effect.sync(() => {
+        const gcloudPath = findGcloud();
+        // An explicit service-account key or path is trusted as configured:
+        // service-account JSON keys don't work with `print-access-token`.
+        const envPath = process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
+        if (envPath && existsSync(envPath)) {
+          return {
+            available: true as const,
+            source: "env" as const,
+            gcloudFound: gcloudPath !== null,
+            gcloudPath,
+            adcPath: envPath,
+          };
+        }
+        const adcPath = join(
+          homedir(),
+          ".config",
+          "gcloud",
+          "application_default_credentials.json",
+        );
+        const adcExists = existsSync(adcPath);
+        return {
+          available: adcExists && isAdcValid(gcloudPath, adcExists),
+          source: adcExists ? ("default" as const) : null,
           gcloudFound: gcloudPath !== null,
           gcloudPath,
-          adcPath: envPath,
+          adcPath,
         };
-      }
-      const adcPath = join(homedir(), ".config", "gcloud", "application_default_credentials.json");
-      const adcExists = existsSync(adcPath);
-      return {
-        available: adcExists && isAdcValid(gcloudPath, adcExists),
-        source: adcExists ? ("default" as const) : null,
-        gcloudFound: gcloudPath !== null,
-        gcloudPath,
-        adcPath,
-      };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-  .post("/cache/adc-login", (ctx) => {
-    try {
-      const gcloudPath = findGcloud();
-      if (!gcloudPath) {
-        return {
-          started: false as const,
-          error: "gcloud CLI not found. Install the Google Cloud SDK first.",
-        };
-      }
-      const proc = Bun.spawn([gcloudPath, "auth", "application-default", "login"], {
-        detached: true,
-        stdio: ["ignore", "ignore", "ignore"],
-      });
-      proc.unref();
-      return { started: true as const, pid: proc.pid };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
+      }),
+    ),
+  )
+  .post("/cache/adc-login", () =>
+    runRoute(
+      Effect.sync(() => {
+        const gcloudPath = findGcloud();
+        if (!gcloudPath) {
+          return {
+            started: false as const,
+            error: "gcloud CLI not found. Install the Google Cloud SDK first.",
+          };
+        }
+        const proc = Bun.spawn([gcloudPath, "auth", "application-default", "login"], {
+          detached: true,
+          stdio: ["ignore", "ignore", "ignore"],
+        });
+        proc.unref();
+        return { started: true as const, pid: proc.pid };
+      }),
+    ),
+  )
   .get(
     "/models",
-    async (ctx) => {
-      try {
-        const agentParam = ctx.query?.agent;
-        const agent: AcpAgentId =
-          agentParam && isAcpAgentId(agentParam)
-            ? agentParam
-            : await AppRuntime.runPromise(Effect.flatMap(SettingsService, (s) => s.resolveAgent()));
-        const models = await listCliModels(agent);
-        return { models, agent };
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
+    (ctx) =>
+      runRoute(
+        Effect.gen(function* () {
+          const agentParam = ctx.query?.agent;
+          const agent: AcpAgentId =
+            agentParam && isAcpAgentId(agentParam)
+              ? agentParam
+              : yield* Effect.flatMap(SettingsService, (s) => s.resolveAgent());
+          const models = yield* Effect.promise(() => listCliModels(agent));
+          return { models, agent };
+        }),
+      ),
     {
       query: t.Optional(
         t.Object({

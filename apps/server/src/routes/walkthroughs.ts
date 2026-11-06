@@ -9,28 +9,15 @@
 
 import { Effect } from "effect";
 import { Elysia } from "elysia";
-import { logError } from "../logger";
-import { AppRuntime } from "../runtime";
 import { WalkthroughService } from "../services/Walkthrough";
-import { handleAppError, withAccount } from "./middleware";
+import { runRoute, withAccount } from "./middleware";
 
 export const walkthroughsRoute = new Elysia({ prefix: "/api/walkthroughs" })
   .use(withAccount)
-  .get("/active", async (ctx) => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const wts = yield* WalkthroughService;
-          const rows = yield* wts.listActiveForAccount(ctx.account.accountId);
-          return { walkthroughs: rows };
-        }),
-      );
-    } catch (err) {
-      logError(
-        "walkthroughs-active",
-        "failed to list active walkthroughs:",
-        err instanceof Error ? err.message : String(err),
-      );
-      return handleAppError(err, ctx);
-    }
-  });
+  .get("/active", (ctx) =>
+    runRoute(
+      Effect.flatMap(WalkthroughService, (wts) =>
+        wts.listActiveForAccount(ctx.account.accountId),
+      ).pipe(Effect.map((walkthroughs) => ({ walkthroughs }))),
+    ),
+  );
