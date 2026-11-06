@@ -5,7 +5,6 @@ import type {
   PullRequest,
   Repository,
   Team,
-  ThreadSummary,
 } from "@revv/shared";
 import { type ReviewMode, reviewModeFor } from "@revv/shared";
 import { toast } from "svelte-sonner";
@@ -15,7 +14,6 @@ import { apiErrorMessage } from "$lib/api/errors";
 import { reasonFor } from "$lib/prs/tagged-prs";
 import { getCurrentUserLogin, hasAttemptedIdentityLoad } from "$lib/stores/auth.svelte";
 
-import { setBatchSummaries } from "$lib/stores/sync.svelte";
 import { clearOwnerHueCache, preloadOwnerHues } from "$lib/utils/avatarPalette";
 import { fuzzyScore } from "$lib/utils/fuzzy";
 
@@ -402,31 +400,12 @@ export function updateRepoCloneStatus(repoId: string, status: CloneStatus, error
   );
 }
 
-const THREAD_SUMMARIES_BATCH = 200;
-
-export async function fetchThreadSummaries(prIds: string[]): Promise<void> {
-  for (let i = 0; i < prIds.length; i += THREAD_SUMMARIES_BATCH) {
-    try {
-      const { data, error } = await api.api.prs["thread-summaries"].post({
-        prIds: prIds.slice(i, i + THREAD_SUMMARIES_BATCH),
-      });
-      if (error || !data || !("summaries" in data)) continue;
-      setBatchSummaries(data.summaries as { prId: string; summary: ThreadSummary }[]);
-    } catch {
-      // best-effort
-    }
-  }
-}
-
 export async function fetchPrs(): Promise<void> {
   isLoading = true;
   try {
     const { data } = await api.api.prs.get();
     if (data) {
       pullRequests = data as PullRequest[];
-      // Fire-and-forget: load thread summaries for all open PRs
-      const openIds = (data as PullRequest[]).filter((p) => p.status === "open").map((p) => p.id);
-      void fetchThreadSummaries(openIds);
       void fetchArchivedPrs();
     }
   } catch {

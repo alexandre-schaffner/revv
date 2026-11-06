@@ -15,7 +15,7 @@ import {
   type SuggestionsWalkthroughContext,
 } from "../ai/providers/suggestions";
 import { db } from "../auth";
-import { pinnedPullRequests, user } from "../db/schema";
+import { pinnedPullRequests } from "../db/schema";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import { Broadcaster } from "../services/Broadcaster";
@@ -41,7 +41,6 @@ import { RepoCloneService } from "../services/RepoClone";
 import { RepositoryService } from "../services/Repository";
 import { ReviewService } from "../services/Review";
 import { SettingsService } from "../services/Settings";
-import { SyncService } from "../services/Sync";
 import { WalkthroughService } from "../services/Walkthrough";
 import { handleAppError, withAccount } from "./middleware";
 import { coerceReviewMode } from "./reviews/handlers/active-session";
@@ -568,34 +567,6 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
       return handleAppError(e, ctx);
     }
   })
-
-  .post(
-    "/thread-summaries",
-    async (ctx) => {
-      try {
-        const rows = await db
-          .select({ githubLogin: user.githubLogin })
-          .from(user)
-          .where(eq(user.id, ctx.session.user.id));
-        const login = rows[0]?.githubLogin ?? null;
-
-        const summaries = await AppRuntime.runPromise(
-          Effect.flatMap(SyncService, (s) =>
-            Effect.forEach(ctx.body.prIds, (prId) =>
-              s.getThreadSummary(prId, login).pipe(
-                Effect.map((summary) => ({ prId, summary })),
-                Effect.orElseSucceed(() => null),
-              ),
-            ),
-          ),
-        );
-        return { summaries: summaries.filter((entry) => entry !== null) };
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
-    { body: t.Object({ prIds: t.Array(t.String(), { maxItems: 200 }) }) },
-  )
 
   // ── Owner-only PR mutations (draft toggle, close) ─────────────────────
   //

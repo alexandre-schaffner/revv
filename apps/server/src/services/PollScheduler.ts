@@ -705,7 +705,7 @@ export const PollSchedulerLive = Layer.effect(
       for (const { pr, recheck } of rankThreadSweep(openPrs, threadSweepMarks, now)) {
         if (candidates.length >= THREAD_SWEEP_MAX_PRS) break;
         if (recheck) {
-          const summary = yield* withDb(syncService.getThreadSummary(pr.id, null)).pipe(
+          const summary = yield* withDb(syncService.getThreadSummary(pr.id)).pipe(
             Effect.orElseSucceed(() => null),
           );
           if (summary !== null && summary.total === summary.resolved) {

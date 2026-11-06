@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { CommentThread, ThreadSummary, UserRole } from "@revv/shared";
+import type { ThreadSummary } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { reviewSessions } from "../db/schema/review-sessions";
@@ -68,10 +68,7 @@ export class SyncService extends Context.Service<
       prId: string,
       opts?: { readonly force?: boolean },
     ) => Effect.Effect<SyncResult, SyncError, DbService | GitHubEtagCache | SettingsService>;
-    readonly getThreadSummary: (
-      prId: string,
-      userLogin: string | null,
-    ) => Effect.Effect<ThreadSummary, SyncError, DbService>;
+    readonly getThreadSummary: (prId: string) => Effect.Effect<ThreadSummary, SyncError, DbService>;
   }
 >()("SyncService") {}
 
@@ -86,19 +83,6 @@ function toSyncError(threadId?: string): (e: unknown) => SyncError {
       ...(threadId !== undefined ? { threadId } : {}),
     });
   };
-}
-
-/** Role-aware "is this my turn" check — used for summary + UI gutter colors. */
-function rolePendingYou(thread: CommentThread, role: UserRole): boolean {
-  if (thread.status === "pending_coder") return role === "coder";
-  if (thread.status === "pending_reviewer") return role === "reviewer";
-  return false;
-}
-
-function rolePendingThem(thread: CommentThread, role: UserRole): boolean {
-  if (thread.status === "pending_coder") return role !== "coder" && role !== "unknown";
-  if (thread.status === "pending_reviewer") return role !== "reviewer" && role !== "unknown";
-  return false;
 }
 
 export const SyncServiceLive = Layer.effect(
@@ -288,34 +272,15 @@ export const SyncServiceLive = Layer.effect(
           : github.reviews.unresolveThread(thread.externalThreadId, token, apiBase);
       }).pipe(Effect.mapError(toSyncError(threadId)));
 
-    const getThreadSummary = (
-      prId: string,
-      userLogin: string | null,
-    ): Effect.Effect<ThreadSummary, SyncError, DbService> =>
+    const getThreadSummary = (prId: string): Effect.Effect<ThreadSummary, SyncError, DbService> =>
       Effect.gen(function* () {
         const session = yield* reviewService.getOrCreateIdentitySession(prId);
         const threads = yield* reviewService.getThreadsForSession(session.id);
 
-        let role: UserRole = "unknown";
-        if (userLogin) {
-          const pr = yield* prService.getPr(prId);
-          role = pr.authorLogin === userLogin ? "coder" : "reviewer";
-        }
-
-        const summary: ThreadSummary = {
-          total: threads.length,
-          open: 0,
-          pendingYou: 0,
-          pendingThem: 0,
-          resolved: 0,
-        };
-        for (const t of threads) {
-          if (t.status === "resolved" || t.status === "wont_fix") summary.resolved++;
-          else if (rolePendingYou(t, role)) summary.pendingYou++;
-          else if (rolePendingThem(t, role)) summary.pendingThem++;
-          else summary.open++;
-        }
-        return summary;
+        const resolved = threads.filter(
+          (t) => t.status === "resolved" || t.status === "wont_fix",
+        ).length;
+        return { total: threads.length, open: threads.length - resolved, resolved };
       }).pipe(Effect.mapError(toSyncError()));
 
     const pullCommentsFromGitHub = (
@@ -584,7 +549,7 @@ export const SyncServiceLive = Layer.effect(
     ): Effect.Effect<SyncResult, SyncError, DbService | GitHubEtagCache | SettingsService> =>
       Effect.gen(function* () {
         const pulled = yield* pullComments(prId);
-        const summary = yield* getThreadSummary(prId, null);
+        const summary = yield* getThreadSummary(prId);
         // The background sweep visits every open PR on every tick. Announcing
         // an unchanged summary for each one costs an SSE message per PR and two
         // Map clones in every connected client, for no new information — so stay

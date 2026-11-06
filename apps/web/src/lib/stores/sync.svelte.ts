@@ -2,10 +2,6 @@ import type { ThreadSummary } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 
-// Map keyed by PR id (`owner/repo:number`) — summary is recomputed server-side
-// on every sync tick and broadcast via `threads:synced`.
-let summaries = $state<Map<string, ThreadSummary>>(new Map());
-
 // Per-PR last-successful-thread-sync timestamps (ISO). The bottom bar's
 // "Synced Xm ago" reflects the currently selected PR's entry, not a global.
 let lastSyncAtByPr = $state<Map<string, string>>(new Map());
@@ -198,11 +194,8 @@ export function setSyncError(prId: string, message: string): void {
   syncErrorByPr = nextErr;
 }
 
-export function applySynced(prId: string, summary: ThreadSummary, timestamp: string): void {
-  const nextSummaries = new Map(summaries);
-  nextSummaries.set(prId, summary);
-  summaries = nextSummaries;
-
+// `threads:synced` still carries a thread summary; nothing on the web reads it.
+export function applySynced(prId: string, _summary: ThreadSummary, timestamp: string): void {
   const nextTs = new Map(lastSyncAtByPr);
   nextTs.set(prId, timestamp);
   lastSyncAtByPr = nextTs;
@@ -218,10 +211,4 @@ export function applySynced(prId: string, summary: ThreadSummary, timestamp: str
     nextErr.delete(prId);
     syncErrorByPr = nextErr;
   }
-}
-
-export function setBatchSummaries(entries: Array<{ prId: string; summary: ThreadSummary }>): void {
-  const next = new Map(summaries);
-  for (const { prId, summary } of entries) next.set(prId, summary);
-  summaries = next;
 }

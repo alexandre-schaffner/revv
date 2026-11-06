@@ -358,8 +358,6 @@ export interface CommentThread {
 export interface ThreadSummary {
   total: number;
   open: number;
-  pendingYou: number;
-  pendingThem: number;
   resolved: number;
 }
 
