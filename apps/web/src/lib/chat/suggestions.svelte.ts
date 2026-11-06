@@ -1,4 +1,4 @@
-// ── suggestions store ─────────────────────────────────────────────────────
+// ── Chat empty-state suggestions ──────────────────────────────────────────
 //
 // Per-PR cache of the right-panel empty-state suggestions. The server
 // generates them from PR metadata + the AI walkthrough (when complete) and
@@ -13,9 +13,10 @@
 // rather than "fetch failed". Consumers can use `FALLBACK_PROMPTS` for the
 // pre-fetch render.
 
+import { untrack } from "svelte";
 import { api } from "$lib/api/client";
+import { createResource } from "$lib/stores/resource";
 import { getSettings } from "$lib/stores/settings.svelte";
-import { createResource } from "./resource";
 
 export const FALLBACK_PROMPTS: readonly string[] = [
   "What's the riskiest change here?",
@@ -52,9 +53,10 @@ export function isSuggestionsLoading(prId: string): boolean {
   return suggestions.entry(cacheKey(prId)).loading;
 }
 
-export async function fetchSuggestions(prId: string): Promise<void> {
-  if (!prId) return;
-  await suggestions.load(cacheKey(prId), prId);
+/** Ask for the prompts unless they are cached. Tracks only the key's inputs. */
+export function fetchSuggestions(prId: string): void {
+  const key = cacheKey(prId);
+  untrack(() => void suggestions.load(key, prId));
 }
 
 export function reset(): void {

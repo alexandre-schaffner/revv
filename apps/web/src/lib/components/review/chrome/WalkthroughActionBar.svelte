@@ -2,10 +2,10 @@
 import ArrowDown from "phosphor-svelte/lib/ArrowDown";
 import ArrowUp from "phosphor-svelte/lib/ArrowUp";
 import Star from "phosphor-svelte/lib/Star";
+import { isChatStreaming } from "$lib/chat/timeline.svelte";
 import GenActionBar, { type GenActionState } from "$lib/components/shared/GenActionBar.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
-import { isChatStreaming } from "$lib/stores/chat.svelte";
 import { getIsPullingCommit, reviewLatestCommit } from "$lib/stores/review.svelte";
 import {
   abort as abortWalkthrough,

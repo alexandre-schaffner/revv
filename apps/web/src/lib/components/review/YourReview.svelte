@@ -2,9 +2,9 @@
 import { isPublishableDraftComment } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
+import { sendChatMessage } from "$lib/chat/turn.svelte";
 import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import ReviewActionBar from "$lib/components/review/chrome/ReviewActionBar.svelte";
-import { sendChatMessage } from "$lib/stores/chat.svelte";
 import { acceptWriteResult } from "$lib/stores/conversation.svelte";
 import {
   deleteThread,

@@ -17,8 +17,8 @@ import type {
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { apiErrorMessage } from "$lib/api/errors";
+import { reloadChatForNewHead } from "$lib/chat/turn.svelte";
 import { reviewNewCommits } from "$lib/review/review-new-commits";
-import { invalidateChatHistory } from "$lib/stores/chat.svelte";
 import { enterSidebarMode } from "$lib/stores/focus-mode.svelte";
 import { getPrById, getReviewModeForPr, getSelectedPrId } from "$lib/stores/prs.svelte";
 import { getSettings, updateSettings } from "$lib/stores/settings.svelte";
@@ -163,7 +163,7 @@ async function runPullLatestCommit(prId: string): Promise<boolean> {
     // button and opts in explicitly. This avoids burning tokens on every pull
     // and unblocks the page immediately — we no longer await the SSE stream.
     await invalidateForPull(prId);
-    invalidateChatHistory(prId);
+    reloadChatForNewHead(prId);
     return true;
   } catch (e) {
     setFilesError(e instanceof Error ? e.message : "Failed to pull latest commit");
@@ -425,8 +425,7 @@ export function requestDiffScrollReset(): void {
 // Read once on mount (or on the trailing edge of a tab/PR switch); write on
 // every scroll event. Components are responsible for plumbing these into the
 // right scroll container — see +page.svelte (walkthrough/conversation),
-// ReviewLayout.svelte (diff), Sidebar.svelte (sidebar), RightPanel.svelte
-// (rightPanel).
+// ReviewLayout.svelte (diff), Sidebar.svelte (sidebar).
 
 export function getPrScrollPosition(prId: string, key: ScrollPaneKey): number {
   return store.entries.get(prId)?.scroll[key] ?? 0;
