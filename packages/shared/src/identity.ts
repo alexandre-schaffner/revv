@@ -13,9 +13,8 @@ export interface UserIdentity {
   login: string | null;
   role: UserRole;
   /**
-   * Base64 data URL of the user's avatar (e.g. "data:image/png;base64,...").
-   * Resolved from the remote_users table so expired GitHub Enterprise signed
-   * URLs never cause 404s.
+   * Base64 data URL resolved from `remote_users`: GitHub Enterprise avatar
+   * URLs are signed and expire, so the raw URL is never sent.
    */
   avatarContent: string | null;
   /**
@@ -38,11 +37,10 @@ export interface UserIdentity {
 export interface Team {
   /** GitHub team slug — unique within the org, used as the stable key. */
   slug: string;
-  /** Human-readable team name. */
   name: string;
   /**
-   * Logins of the team's members. Currently capped at the first 100 members
-   * per team (and the first 100 teams per org) — see `listTeamsForOrg`.
+   * Read through GraphQL, capped at the first 100 members per team (and the
+   * first 100 teams per org); see `teamsForOrg`.
    */
   memberLogins: string[];
 }

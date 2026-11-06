@@ -25,7 +25,6 @@ export function canUserModifyComment(
   return loginsMatch(message.authorLogin, currentUserLogin);
 }
 
-/** A local human or Revv-authored draft that can be included in a GitHub review. */
 export function isPublishableDraftComment(message: DraftReviewMessage): boolean {
   return (
     message.externalId === null &&

@@ -88,8 +88,7 @@ export interface GitHubStackLayerFields extends PrStackEntry {
 }
 
 /**
- * A layer's GitHub merge state in the terms Revv acts on. The merge plan, the
- * merge driver, the restack verdict and the rebase offer all branch on this.
+ * A layer's GitHub merge state in the terms Revv acts on.
  *
  *   mergeable — GitHub would merge it now.
  *   behind    — its base has commits it lacks (BEHIND, or a compare said so).

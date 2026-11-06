@@ -1,20 +1,11 @@
 # shellcheck shell=bash
-# ──────────────────────────────────────────────────────────────
-# Revv — Shared shell helpers (sourced by install.sh and scripts/revv)
-#
-# This file is intentionally NOT executable and has no shebang — it's meant
-# to be loaded with `source`. It provides colors, logging helpers, TTY-safe
-# prompts, platform detection, and toolchain-install routines that both the
-# installer and the management CLI use.
-# ──────────────────────────────────────────────────────────────
+# Shared shell helpers, sourced (not executed) by install.sh and scripts/revv.
 
-# ── Double-source guard ───────────────────────────────────────
 if [[ -n "${__REVV_COMMON_LOADED__:-}" ]]; then
   return 0 2>/dev/null || true
 fi
 __REVV_COMMON_LOADED__=1
 
-# ── Colors (only when stdout is a TTY) ────────────────────────
 if [[ -t 1 ]]; then
   REVV_RED=$'\033[0;31m'
   REVV_GREEN=$'\033[0;32m'
@@ -29,7 +20,7 @@ else
   REVV_BOLD="" REVV_DIM="" REVV_RESET=""
 fi
 
-# Legacy short aliases — existing scripts reference $RED, $GREEN, etc.
+# Short aliases used by scripts/revv.
 RED="$REVV_RED"
 GREEN="$REVV_GREEN"
 YELLOW="$REVV_YELLOW"
@@ -39,14 +30,12 @@ BOLD="$REVV_BOLD"
 DIM="$REVV_DIM"
 RESET="$REVV_RESET"
 
-# ── Logging ───────────────────────────────────────────────────
 info()    { printf "  %s·%s  %s\n"        "$REVV_CYAN"   "$REVV_RESET" "$*"; }
 success() { printf "  %s✓%s  %s\n"        "$REVV_GREEN"  "$REVV_RESET" "$*"; }
 warn()    { printf "  %s⚠%s  %s\n"        "$REVV_YELLOW" "$REVV_RESET" "$*"; }
 fail()    { printf "\n  %s✗%s  %s\n\n"    "$REVV_RED"    "$REVV_RESET" "$*" >&2; exit 1; }
 step()    { printf "\n  %s%s▸%s  %s\n\n" "$REVV_BOLD" "$REVV_CYAN" "$REVV_RESET" "$*"; }
 
-# ── Banner ────────────────────────────────────────────────────
 banner() {
   printf "\n"
   printf "  %s%s██████╗ ███████╗██╗   ██╗██╗   ██╗%s\n" "$REVV_CYAN" "$REVV_BOLD" "$REVV_RESET"
@@ -58,7 +47,6 @@ banner() {
   printf "\n  %sAI-powered code review%s\n\n" "$REVV_DIM" "$REVV_RESET"
 }
 
-# ── Spinner ───────────────────────────────────────────────────
 _REVV_SP_FRAMES='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 _REVV_SP_MSG=''
 _REVV_SP_PID=''
@@ -95,11 +83,8 @@ spin_stop() {
   fi
 }
 
-# ── Quiet command runner ──────────────────────────────────────
-# Usage: run_quiet "Label" command [args...]
-#   Default: spinner while running; stdout+stderr captured to a temp log.
-#   REVV_VERBOSE=1: streams output inline with an indented label header.
-# On failure: prints exit code, log path, and last 15 log lines.
+# run_quiet LABEL CMD [ARGS...]: spinner while output goes to a temp log
+# (REVV_VERBOSE=1 streams it instead); exits on failure.
 run_quiet() {
   local label="$1"; shift
   local _log _rc
@@ -134,10 +119,8 @@ run_quiet() {
   exit 1
 }
 
-# ── TTY-safe input (works under `curl … | bash`) ──────────────
-#
-# Reads from /dev/tty so prompts work even when stdin is the pipe carrying
-# the script itself. `read_tty VAR PROMPT [DEFAULT] [silent]`.
+# read_tty VAR PROMPT [DEFAULT] [silent]. Reads /dev/tty: under
+# `curl … | bash`, stdin is the pipe carrying the script.
 read_tty() {
   local __varname="$1" __prompt="$2" __default="${3:-}" __silent="${4:-}"
   if [[ "${REVV_AUTO_YES:-0}" == "1" && -n "$__default" ]]; then
@@ -165,10 +148,7 @@ confirm() {
 
 check_cmd() { command -v "$1" >/dev/null 2>&1; }
 
-# ── Platform detection ────────────────────────────────────────
-#
-# Revv is macOS-only. Sets globals: PLATFORM (always macos), ARCH (raw
-# uname -m), RUST_TARGET (aarch64-apple-darwin | x86_64-apple-darwin).
+# Sets and exports PLATFORM, ARCH (raw uname -m) and RUST_TARGET.
 detect_platform() {
   local os arch
   os="$(uname -s)"
@@ -184,9 +164,7 @@ detect_platform() {
   export PLATFORM ARCH RUST_TARGET
 }
 
-# ── Canonical paths ───────────────────────────────────────────
-#
-# Sets globals: REVV_SUPPORT_DIR, REVV_SRC_DIR, REVV_LOG_DIR,
+# Sets and exports REVV_SUPPORT_DIR, REVV_SRC_DIR, REVV_LOG_DIR,
 # REVV_LAUNCH_AGENT_PLIST, REVV_CLI_DIR, REVV_AUTH_KEY.
 revv_paths() {
   : "${PLATFORM:=$(uname -s)}"
@@ -210,11 +188,8 @@ revv_paths() {
   export REVV_LAUNCH_AGENT_PLIST REVV_CLI_DIR REVV_AUTH_KEY
 }
 
-# ── Auth key management ───────────────────────────────────────
-#
-# Creates $REVV_AUTH_KEY (64 hex chars) mode 600 in a dir mode 700 if it
-# doesn't exist. No-op if already present and non-empty. The server reads
-# this file at startup (see apps/server/src/auth.ts loadOrCreateAuthSecret).
+# The server reads this key at startup (loadOrCreateAuthSecret in
+# apps/server/src/auth.ts).
 ensure_auth_key() {
   revv_paths
   if [[ -s "$REVV_AUTH_KEY" ]]; then
@@ -238,8 +213,6 @@ ensure_auth_key() {
   chmod 600 "$REVV_AUTH_KEY"
   success "Generated auth key at $REVV_AUTH_KEY"
 }
-
-# ── Toolchain installers ──────────────────────────────────────
 
 ensure_xcode_clt() {
   [[ "${PLATFORM:-}" == "macos" ]] || return 0
@@ -296,7 +269,6 @@ ensure_bun() {
 }
 
 ensure_rust() {
-  # Pick up cargo if it was just installed in this shell
   [[ -f "$HOME/.cargo/env" ]] && { # shellcheck disable=SC1091
     source "$HOME/.cargo/env"; }
 
@@ -314,7 +286,6 @@ ensure_rust() {
     success "rustc $(rustc --version | awk '{print $2}')"
   fi
 
-  # Rust target
   : "${RUST_TARGET:?detect_platform must run before ensure_rust}"
   if check_cmd rustup; then
     if rustup target list --installed 2>/dev/null | grep -q "^$RUST_TARGET$"; then
@@ -338,8 +309,6 @@ ensure_rust() {
     fi
   fi
 }
-
-# ── Release bundle install ────────────────────────────────────
 
 revv_sha256_of() {
   if check_cmd sha256sum; then
@@ -464,8 +433,6 @@ _revv_cleanup_release_app_install() {
   rm -rf "$mount_point" "$bundle_file"
 }
 
-# ── Desktop server configuration ────────────────────────────
-
 quit_revv_app() {
   local app_path="$1" executable pid command pids="" deadline
   [[ -d "$app_path" ]] || return 0
@@ -484,23 +451,18 @@ quit_revv_app() {
   return 0
 }
 
-# Parse a single KEY=value (or KEY="value") line from a .env file.
-# Strips surrounding single- or double-quotes; ignores blank lines and comments.
-# Prints the bare value, or nothing if the key is absent.
+# Prints KEY's value from a .env-style file, surrounding quotes stripped, or
+# nothing if absent.
 _revv_dotenv_get() {
   local key="$1" env_file="$2"
   [[ -f "$env_file" ]] || return 0
   local line value
   while IFS= read -r line; do
-    # Skip comments and lines that don't start with KEY=
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
     [[ "$line" =~ ^[[:space:]]*${key}= ]] || continue
-    # Extract everything after the first '='
     value="${line#*=}"
-    # Strip surrounding double-quotes
     value="${value%\"}"
     value="${value#\"}"
-    # Strip surrounding single-quotes
     value="${value%\'}"
     value="${value#\'}"
     printf '%s' "$value"

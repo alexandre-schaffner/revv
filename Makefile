@@ -1,7 +1,3 @@
-# ──────────────────────────────────────────────────────────────
-# Revv — Build & Development Commands
-# ──────────────────────────────────────────────────────────────
-
 .PHONY: install dev build dist clean typecheck lint format format-check help cache-emulator-up cache-emulator-down dev-cache-emulator dev-desktop-cache-emulator
 
 # Default target
@@ -11,15 +7,11 @@ help: ## Show this help
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 	@printf "\n"
 
-# ── Setup ─────────────────────────────────────────────────────
-
 install: ## Set up development environment (install all dependencies)
 	@./install.sh
 
 install-deps: ## Install project dependencies only (skip tool checks)
 	bun install
-
-# ── Development ───────────────────────────────────────────────
 
 # Dev env: use a different port/db/clone-dir so dev doesn't clash with the
 # installed (production) Revv instance running in the background.
@@ -47,11 +39,8 @@ kill-server: ## Kill any stale dev server processes (uses PID files; safe to run
 	  rm -f apps/server/revv-dev.db.dev.pid; \
 	fi
 
-# ── Team Cache Emulator (fake-gcs-server) ─────────────────────
-
-# fake-gcs-server stand-in for GCS. The @google-cloud/storage SDK honors
-# STORAGE_EMULATOR_HOST, so pointing the server at a local container is
-# enough to exercise upload + hydrate without touching a real bucket.
+# fake-gcs-server stands in for the team cache's GCS bucket; the server
+# reaches it through REVV_CACHE_API_ENDPOINT (see apps/server/src/config.ts).
 CACHE_EMULATOR_CONTAINER = revv-gcs-emulator
 CACHE_EMULATOR_PORT      = 4443
 CACHE_EMULATOR_BUCKET    = revv-cache-test
@@ -97,8 +86,6 @@ dev-cache-emulator: cache-emulator-up kill-server ## Start the dev server pointe
 dev-desktop-cache-emulator: cache-emulator-up kill-server ## Start the Tauri desktop app pointed at the local fake-gcs-server
 	REVV_CACHE_API_ENDPOINT=http://localhost:$(CACHE_EMULATOR_PORT) $(DEV_ENV) bun run dev:desktop
 
-# ── Build ─────────────────────────────────────────────────────
-
 build: ## Build all packages (web + server + shared)
 	bun run build
 
@@ -107,8 +94,6 @@ build-web: ## Build the web frontend only
 
 build-server: ## Build the API server only
 	cd apps/server && bun run build
-
-# ── Distribution ──────────────────────────────────────────────
 
 dist: ## Build the Revv.app bundle used by the source installer
 	@printf "\n\033[1m\033[36m▸ Building Revv distribution package...\033[0m\n\n"
@@ -129,17 +114,14 @@ dist: ## Build the Revv.app bundle used by the source installer
 			exit 1; \
 		fi; \
 	fi
-	@# --bundles app skips the DMG. Revv is distributed via source install,
-	@# not via a signed DMG, and tauri-bundler's bundle_dmg.sh has been flaky
-	@# on machines where it's blocked from Finder/AppleEvents. Use `make dmg`
-	@# explicitly if you actually need the .dmg.
+	@# --bundles app skips the DMG: the installers copy the .app directly, and
+	@# tauri-bundler's bundle_dmg.sh is flaky where Finder/AppleEvents are
+	@# blocked (`make dmg` builds one).
 	@#
-	@# createUpdaterArtifacts is true in tauri.conf.json so CI-signed release
-	@# builds emit a signed .app.tar.gz for the updater. This target runs on
-	@# end-user/dev machines (install.sh and `revv update`'s local-build
-	@# fallback) that never hold TAURI_SIGNING_PRIVATE_KEY, so it's overridden
-	@# off here -- otherwise the bundler hard-fails with "public key has been
-	@# found, but no private key".
+	@# tauri.conf.json sets createUpdaterArtifacts for CI-signed releases. This
+	@# target runs on machines without TAURI_SIGNING_PRIVATE_KEY (install.sh,
+	@# `revv update`'s local-build fallback), where the bundler would hard-fail
+	@# with "public key has been found, but no private key".
 	@export PATH="$$HOME/.cargo/bin:$$PATH"; cd apps/desktop && bunx tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
 	@printf "\n\033[1m\033[32m  Build complete!\033[0m\n"
 	@printf "  Bundle located in: apps/desktop/target/release/bundle/macos/\n\n"
@@ -149,8 +131,6 @@ dmg: ## Build the full DMG installer (requires Finder/AppleEvents permission)
 
 dist-debug: ## Build a debug distribution (faster, larger binary)
 	cd apps/desktop && bunx tauri build --debug --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
-
-# ── Quality ───────────────────────────────────────────────────
 
 typecheck: ## Run TypeScript type checking across all packages
 	bun run typecheck
@@ -163,8 +143,6 @@ format: ## Auto-format all files (Biome)
 
 format-check: ## Check formatting without writing (Biome)
 	bun run format:check
-
-# ── Maintenance ───────────────────────────────────────────────
 
 clean: ## Remove all build artifacts
 	@printf "Cleaning build artifacts...\n"

@@ -11,12 +11,9 @@ mod server_config;
 
 const ARTIFACT_HOST_HTML: &str = include_str!("../../web/static/artifact-host.html");
 
-/// Single source of truth for the artifact-host CSP is the
-/// `<meta http-equiv="Content-Security-Policy" content="…">` tag inside
-/// artifact-host.html. We extract it from the compiled-in HTML and serve it as
-/// an HTTP header too — the header (unlike the meta tag) survives the host's
-/// `document.write`, so it is the durable enforcement. Deriving it here instead
-/// of duplicating the literal keeps the header and the meta from drifting.
+/// The artifact-host CSP is authored in artifact-host.html's
+/// `<meta http-equiv="Content-Security-Policy">` tag and served as a header too:
+/// the header, unlike the meta tag, survives the host's `document.write`.
 fn artifact_host_csp() -> &'static str {
 	const FALLBACK: &str = "default-src 'none'";
 	let html = ARTIFACT_HOST_HTML;
@@ -34,9 +31,6 @@ fn artifact_host_csp() -> &'static str {
 	}
 }
 
-/// Show, unminimize, and focus the main window. Called from tray menu
-/// interactions, tray left-clicks, and the single-instance handler (when
-/// the user re-launches Revv while it's already running in the tray).
 fn show_main_window(app: &AppHandle) {
 	if let Some(window) = app.get_webview_window("main") {
 		let _ = window.unminimize();
@@ -64,11 +58,8 @@ pub fn run() {
 					.expect("artifact not-found response should be valid")
 			}
 		})
-		// Single-instance must be the first plugin registered. If a second
-		// copy of Revv is launched (e.g. the user clicks the app icon while
-		// it's already running in the tray), this fires in the existing
-		// process instead of spawning a duplicate. Critical for tray-app
-		// UX — without it, every launch would start another PollScheduler.
+		// Must be the first plugin registered. A relaunch while Revv sits in the
+		// tray lands here instead of starting a second server and PollScheduler.
 		.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
 			if !argv.iter().any(|arg| arg == "--hidden") {
 				show_main_window(app);
@@ -77,32 +68,20 @@ pub fn run() {
 		.plugin(tauri_plugin_deep_link::init())
 		.plugin(tauri_plugin_dialog::init())
 		.plugin(tauri_plugin_opener::init())
-		// Registered so the frontend can toggle launch-on-login via the
-		// `plugin:autostart|enable` / `disable` / `is_enabled` IPC commands.
-		// No automatic behavior — users opt in explicitly from Settings.
-		//
-		// `--hidden` is appended to the login launcher so we can distinguish
-		// autostart-triggered launches from manual ones: on login we keep
-		// the window in the tray (Slack/Linear convention), on a manual
-		// launch we surface it. See setup() below.
+		// Launch-on-login is opt-in from Settings. Only the login launcher
+		// passes `--hidden`, so a login launch stays in the tray.
 		.plugin(tauri_plugin_autostart::init(
 			tauri_plugin_autostart::MacosLauncher::LaunchAgent,
 			Some(vec!["--hidden"]),
 		))
-		// Background auto-update: the updater plugin is a pure passthrough.
-		// The endpoint, signing key, and install mode all live in
-		// tauri.conf.json → plugins.updater; the frontend drives the actual
-		// check/install loop via `@tauri-apps/plugin-updater`.
+		// Endpoint, signing key, and install mode live in tauri.conf.json →
+		// plugins.updater; the frontend drives check/install.
 		.plugin(tauri_plugin_updater::Builder::new().build())
-		// Required by the updater flow: macOS swaps the .app bundle in place
-		// but leaves the running process alone, so the frontend calls
-		// `relaunch()` from `@tauri-apps/plugin-process` once the install
-		// lands. Without this plugin registered that call fails and a
-		// perfectly good update looks like a failed one.
+		// macOS swaps the .app bundle in place but leaves the running process
+		// alone; the frontend's post-install `relaunch()` needs this plugin, or
+		// a good update looks like a failed one.
 		.plugin(tauri_plugin_process::init());
 
-	// Shadow-rebind under debug only; release builds skip this entirely,
-	// so the binding above never needs `mut` and produces no warning.
 	#[cfg(debug_assertions)]
 	let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
 
@@ -145,11 +124,8 @@ pub fn run() {
 					}
 				}
 			}
-			// Tray menu: [ Open Revv | --- | Quit Revv ].
-			// `Open Revv` and left-clicking the tray icon both surface the
-			// window. `Quit Revv` calls `app.exit(0)` which bypasses the
-			// close-to-tray interception below and fully terminates the
-			// process (stopping the embedded server and PollScheduler).
+			// `app.exit(0)` bypasses the close-to-tray interception below, so
+			// Quit stops the embedded server too.
 			let open_item = MenuItem::with_id(app, "open", "Open Revv", true, None::<&str>)?;
 			let separator = PredefinedMenuItem::separator(app)?;
 			let quit_item = MenuItem::with_id(app, "quit", "Quit Revv", true, None::<&str>)?;
@@ -164,8 +140,6 @@ pub fn run() {
 				.icon(icon)
 				.tooltip("Revv")
 				.menu(&menu)
-				// Left-click surfaces the window; right-click opens the menu
-				// (platform-native). This matches Slack / Linear / 1Password.
 				.show_menu_on_left_click(false)
 				.on_menu_event(|app, event| match event.id.as_ref() {
 					"open" => show_main_window(app),
@@ -184,14 +158,8 @@ pub fn run() {
 				})
 				.build(app)?;
 
-			// Surface the main window on launch. The window is configured
-			// with `visible: false` in tauri.conf.json to prevent a flash
-			// before setup finishes wiring up the tray; we make the call
-			// here so the UI appears alongside (not instead of) the tray.
-			//
-			// Skip when `--hidden` is in argv: that arg is only passed by
-			// the autostart LaunchAgent, so a login-triggered launch stays
-			// in the tray while a manual launch opens the window.
+			// The window starts `visible: false` (tauri.conf.json) so it doesn't
+			// flash before the tray is wired up.
 			let launched_hidden = std::env::args().any(|arg| arg == "--hidden");
 			if !launched_hidden {
 				show_main_window(app.handle());
@@ -199,10 +167,8 @@ pub fn run() {
 
 			Ok(())
 		})
-		// Intercept the window's close button and hide to tray instead of
-		// exiting. The Bun/Elysia server keeps running with PollScheduler
-		// syncing PRs in the background; the window is just a view on top
-		// of it. Users quit the whole app explicitly via the tray menu.
+		// Closing the window hides it to the tray; the server keeps syncing PRs
+		// until the user quits from the tray menu.
 		.on_window_event(|window, event| {
 			if let WindowEvent::CloseRequested { api, .. } = event {
 				if window.label() == "main" {

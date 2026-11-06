@@ -1,5 +1,3 @@
-// ── API errors ──────────────────────────────────────────────────────────────
-//
 // A refused request answers with one of these codes. The server maps each of
 // its errors to a code and an HTTP status in one table
 // (`apps/server/src/domain/errors.ts`); the client branches on the code,

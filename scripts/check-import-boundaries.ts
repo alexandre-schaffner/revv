@@ -32,14 +32,12 @@ const identityBoundaryRoots = [
 
 const identityForbiddenImports = new Set(["apps/server/src/services/SecretStore"]);
 
-// ── GitHub transport boundary ───────────────────────────────────────────────
 // Only the GitHub module itself sends requests; everything else calls
 // `GitHubGateway` with a client minted by `GitHubAccounts`/`PrContext`, and
 // may import the transport's types only.
 const githubTransportModule = "apps/server/src/services/github/transport";
 const githubModuleDir = "apps/server/src/services/github/";
 
-// ── Git boundary ────────────────────────────────────────────────────────────
 // `services/git/` is the one place Revv spawns git: its runner applies the
 // policy every git command needs (no prompts, none of the user's hooks or
 // signing, a timeout, the process registry, token redaction). Nothing outside
@@ -52,7 +50,6 @@ const gitSpawnAllowed = new Set(["apps/server/src/build-info.ts"]);
 const gitSpawnPattern =
   /(?:spawn|spawnSync|execFile|execFileSync|exec|execSync)\(\s*\[?\s*["'`]git\b|Bun\.spawn(?:Sync)?\(\s*\[\s*["'`]git["'`]/;
 
-// ── Realtime boundary ───────────────────────────────────────────────────────
 // `Broadcaster` only moves bytes to connected clients. Features address a push
 // through `Realtime`, which resolves the receiving account in one place.
 const broadcasterModule = "apps/server/src/services/Broadcaster";
@@ -62,7 +59,6 @@ const broadcasterAllowedImporters = new Set([
   "apps/server/src/routes/events.ts",
 ]);
 
-// ── Agent turn boundary ─────────────────────────────────────────────────────
 // Every agent turn runs through the turn runner, which owns connect, session,
 // deadlines and cancel. Nothing else may reach into the connection pool;
 // the boot layer's finalizer stops it at shutdown.
@@ -72,7 +68,6 @@ const acpConnectionAllowedImporters = new Set([
   "apps/server/src/boot.ts",
 ]);
 
-// ── GSAP boundary ───────────────────────────────────────────────────────────
 // Web motion goes through `$lib/motion`, which owns plugin registration, the
 // token eases and the reduced-motion contract. Only its GSAP module may import
 // the package.

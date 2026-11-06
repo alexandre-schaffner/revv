@@ -1,7 +1,5 @@
 import type { ApiErrorCode } from "./api-errors";
 
-// ── Streaming responses (SSE) ───────────────────────────────────────────────
-//
 // The chat turn, push-resolution, base-conflict and review streams send one
 // `data: <json>` frame per item, end with a `data: [DONE]` frame, and report
 // a failure mid-stream as an `event: error` frame. A request refused before

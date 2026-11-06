@@ -32,16 +32,14 @@
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail
 
-# ── Defaults ─────────────────────────────────────────────────
 REVV_REPO_URL="${REVV_REPO_URL:-https://github.com/alexandre-schaffner/revv.git}"
 REVV_BRANCH="${REVV_BRANCH:-main}"
 REVV_RELEASE_TAG="${REVV_RELEASE_TAG:-}"
 REVV_APP_DIR="${REVV_APP_DIR:-/Applications}"
 REVV_AUTO_YES="${REVV_AUTO_YES:-0}"
-MODE="user"   # user | dev
+MODE="user"
 REVV_GITHUB_REPO="alexandre-schaffner/revv"
 
-# ── Parse args ───────────────────────────────────────────────
 for arg in "$@"; do
   case "$arg" in
     --dev)       MODE="dev" ;;
@@ -59,10 +57,8 @@ for arg in "$@"; do
 done
 export REVV_AUTO_YES
 
-# ── Inline bootstrap helpers ──────────────────────────────────
-# We can't source scripts/lib/common.sh yet — we might be running from a
-# curl-pipe where the file isn't on disk. Define just enough to clone the
-# repo, then re-exec under the on-disk installer which *can* source the lib.
+# Piped from curl, scripts/lib/common.sh isn't on disk yet: these helpers
+# are just enough to clone the repo and re-exec the on-disk installer.
 if [[ -t 1 ]]; then
   _R=$'\033[0m'; _B=$'\033[1m'; _D=$'\033[2m'
   _RED=$'\033[31m'; _GREEN=$'\033[32m'; _YELLOW=$'\033[33m'
@@ -96,7 +92,6 @@ _latest_nightly_tag() {
   printf '%s' "$tag"
 }
 
-# ── Banner ────────────────────────────────────────────────────
 if [[ -z "${REVV_SKIP_BANNER:-}" ]]; then
   printf "\n"
   printf "  ${_CYAN}${_B}██████╗ ███████╗██╗   ██╗██╗   ██╗${_R}\n"
@@ -117,20 +112,8 @@ if [[ -z "${REVV_SKIP_BANNER:-}" ]]; then
   printf "${_R}\n\n"
 fi
 
-# ── Locate the checkout, cloning if necessary ─────────────────
-#
-# Three scenarios:
-#
-#  (a) We're piped from curl. BASH_SOURCE[0] is empty/non-existent and this
-#      script has no neighbours on disk. Clone the repo, then re-exec the
-#      on-disk copy so the rest of the flow has everything it needs.
-#
-#  (b) We're run from inside a checkout (./install.sh). BASH_SOURCE[0] is
-#      a real file sitting next to package.json. Nothing to clone.
-#
-#  (c) We already re-exec'd ourselves from (a). Same as (b) but arrived
-#      via exec, not by the user's hand.
-
+# Piped from curl, BASH_SOURCE[0] is not a file beside package.json: clone,
+# then re-exec the on-disk copy.
 PROJECT_ROOT=""
 if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -141,15 +124,14 @@ if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
 fi
 
 if [[ -z "$PROJECT_ROOT" ]]; then
-  # Curl-pipe path. Revv is macOS-only.
   _step "Bootstrapping from curl"
   os="$(uname -s)"
   if [[ "$os" != "Darwin" ]]; then
     _fail "Revv is macOS-only; this installer requires macOS (detected $os)."
   fi
 
-  # Xcode CLT (gives us git). Minimal inline copy of ensure_xcode_clt —
-  # we don't have the helper lib on disk yet.
+  # Inline copy of ensure_xcode_clt (the helper lib isn't on disk yet); the
+  # CLT provides git.
   if ! xcode-select -p >/dev/null 2>&1; then
     _warn "Xcode Command Line Tools are required."
     xcode-select --install >/dev/null 2>&1 || true
@@ -196,12 +178,10 @@ if [[ -z "$PROJECT_ROOT" ]]; then
   fi
 
   _info "Re-executing installer from the cloned checkout"
-  # Preserve flags for the re-exec — quote heavily, path may contain spaces.
   unset REVV_SKIP_BANNER
   exec bash "$dest/install.sh" "$@"
 fi
 
-# ── Source the shared helper library ──────────────────────────
 if [[ ! -f "$PROJECT_ROOT/scripts/lib/common.sh" ]]; then
   _fail "$PROJECT_ROOT/scripts/lib/common.sh is missing. Your checkout is incomplete."
 fi
@@ -210,13 +190,10 @@ source "$PROJECT_ROOT/scripts/lib/common.sh"
 
 info "Project root: $PROJECT_ROOT"
 
-# ── 1. Platform detect ────────────────────────────────────────
-# detect_platform fails hard on any non-macOS host — Revv is macOS-only.
 step "Detecting platform"
 detect_platform
 success "Platform: $PLATFORM ($ARCH) → target $RUST_TARGET"
 
-# ── 2. Toolchain ──────────────────────────────────────────────
 step "Checking build toolchain"
 ensure_xcode_clt
 ensure_git
@@ -225,21 +202,19 @@ if [[ "$MODE" == "dev" ]]; then
   ensure_rust
 fi
 
-# Pick up bun/cargo in this shell if they were just installed.
 [[ -d "$HOME/.bun/bin" ]] && export PATH="$HOME/.bun/bin:$PATH"
 # shellcheck disable=SC1091
 [[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
 
-# ── 3. Install project deps ───────────────────────────────────
 step "Installing project dependencies"
 cd "$PROJECT_ROOT"
 run_quiet "Installing workspace dependencies" bun install
 
-# Verify workspace deps actually landed in node_modules (Bun's workspace
-# hoisting can leave stale trees when the lockfile changes under a warm cache).
+# Bun's workspace hoisting can leave stale trees when the lockfile changes
+# under a warm cache.
 _verify_workspace_deps() {
   local missing=()
-  # Critical frontend deps that have caused runtime crashes when absent
+  # Frontend deps whose absence has crashed the app at runtime.
   [[ -d "node_modules/gsap" ]] || missing+=("gsap")
   [[ -d "node_modules/phosphor-svelte" ]] || missing+=("phosphor-svelte")
   if [[ ${#missing[@]} -gt 0 ]]; then
@@ -255,9 +230,7 @@ _verify_workspace_deps() {
 }
 _verify_workspace_deps
 
-# ── 4. Dev mode exits here ────────────────────────────────────
 if [[ "$MODE" == "dev" ]]; then
-  # Warn about stale dev DBs that can crash migrations on first dev-server start.
   for stale_db in "apps/server/revv-dev.db" "revv-dev.db"; do
     if [[ -f "$stale_db" ]]; then
       warn "A dev database already exists at $stale_db."
@@ -282,8 +255,6 @@ if [[ "$MODE" == "dev" ]]; then
   exit 0
 fi
 
-# ── 5. User install: auth key, build, ship ────────────────────
-
 step "Ensuring auth key"
 ensure_auth_key
 
@@ -307,9 +278,8 @@ if ! install_release_app "$release_tag" "$REVV_APP_DIR"; then
   warn "Could not install a pre-built app bundle; falling back to a local build."
   ensure_rust
   step "Building Revv.app (first run can take several minutes)"
-  # We build only the .app, not the .dmg. The .dmg flow (create-dmg) is
-  # fragile with paths containing spaces or parentheses and we copy the
-  # .app to /Applications directly anyway.
+  # Only the .app: create-dmg breaks on paths with spaces or parentheses,
+  # and the .app is copied to /Applications directly anyway.
   (
     cd "$PROJECT_ROOT/packages/shared" && bun run typecheck
   )
@@ -331,7 +301,6 @@ if ! install_release_app "$release_tag" "$REVV_APP_DIR"; then
   success "Built $bundle_app"
 
   step "Installing $app_name"
-  # Prefer /Applications; fall back to ~/Applications if unwritable.
   if [[ -w "$REVV_APP_DIR" ]]; then
     dest_app_dir="$REVV_APP_DIR"
   else
@@ -341,11 +310,8 @@ if ! install_release_app "$release_tag" "$REVV_APP_DIR"; then
   fi
   dest_app="$dest_app_dir/$app_name"
 
-  # Clear quarantine before copying; it may still land on the destination
-  # but be robust and strip again after the copy.
   xattr -cr "$bundle_app" 2>/dev/null || true
 
-  # Stop any running instance and unload the agent so we can swap the binary.
   if [[ -f "$REVV_LAUNCH_AGENT_PLIST" ]]; then
     launchctl unload "$REVV_LAUNCH_AGENT_PLIST" 2>/dev/null || true
   fi
@@ -362,20 +328,17 @@ else
   success "Installed → $dest_app"
 fi
 
-# Revv bundles a GitHub OAuth App registered on nocturlab.ghe.com — the host
-# and client_id defaults live in apps/server/src/config.ts and are baked into
-# the server. No installer prompt.
-#
-# Power users can target a different GitHub instance by exporting both
+# The server bundles a github.com OAuth App (defaults in
+# apps/server/src/config.ts). To target another GitHub instance, export both
 # REVV_GITHUB_HOST and REVV_GITHUB_CLIENT_ID before running the installer:
 #
 #   curl -fsSL …/install.sh | \
-#     REVV_GITHUB_HOST=github.com \
+#     REVV_GITHUB_HOST=ghe.example.com \
 #     REVV_GITHUB_CLIENT_ID=<your-oauth-app-client-id> bash
 #
-# When set, we persist them to $REVV_SUPPORT_DIR/github.conf so `revv update`
-# refreshes the desktop server configuration with the same overrides. When unset, we
-# wipe any stale conf so the bundled defaults win.
+# They persist to $REVV_SUPPORT_DIR/github.conf so `revv update` rewrites the
+# desktop server configuration with the same overrides; when unset, a stale
+# conf is wiped so the bundled defaults win.
 mkdir -p "$REVV_SUPPORT_DIR"
 if [[ -n "${REVV_GITHUB_HOST:-}" || -n "${REVV_GITHUB_CLIENT_ID:-}" ]]; then
   {
@@ -390,7 +353,6 @@ else
   rm -f "$REVV_SUPPORT_DIR/github.conf" 2>/dev/null || true
 fi
 
-# ── 6. Configure the app-owned server ────────────────────────
 step "Configuring the Revv server"
 bun_bin="$HOME/.bun/bin/bun"
 [[ -x "$bun_bin" ]] || bun_bin="$(command -v bun || true)"
@@ -400,7 +362,6 @@ write_desktop_server_config \
 retire_server_launch_agent "$REVV_LAUNCH_AGENT_PLIST"
 success "Revv will start and stop its API server with the desktop app"
 
-# ── 7. Install the management CLI ─────────────────────────────
 step "Installing revv CLI"
 mkdir -p "$REVV_SUPPORT_DIR"
 cat > "$REVV_SUPPORT_DIR/config" <<CFG
@@ -416,8 +377,8 @@ success "Wrote $REVV_SUPPORT_DIR/config"
 mkdir -p "$REVV_CLI_DIR" "$REVV_CLI_DIR/../share/revv"
 cp "$PROJECT_ROOT/scripts/revv" "$REVV_CLI_DIR/revv"
 chmod +x "$REVV_CLI_DIR/revv"
-# Ship the shared helper lib alongside the CLI so it keeps working even
-# after the source tree moves. The CLI looks for it at $REVV_CLI_LIB.
+# The CLI sources this copy first, so it keeps working if the source tree
+# moves.
 cp "$PROJECT_ROOT/scripts/lib/common.sh" "$REVV_CLI_DIR/../share/revv/common.sh"
 success "Installed → $REVV_CLI_DIR/revv"
 
@@ -441,11 +402,9 @@ if ! printf '%s' ":$PATH:" | grep -q ":$REVV_CLI_DIR:"; then
   fi
 fi
 
-# ── 8. Launch the app ─────────────────────────────────────────
 step "Launching Revv"
 open "$dest_app" || warn "Could not auto-launch. Open it from $dest_app_dir manually."
 
-# ── 9. Summary ────────────────────────────────────────────────
 printf '\n%s%s' "$REVV_BOLD" "$REVV_GREEN"
 printf '  ┌────────────────────────────────────────┐\n'
 printf '  │   ✓  Revv installed successfully       │\n'

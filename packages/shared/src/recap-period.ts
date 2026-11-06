@@ -1,5 +1,3 @@
-// ── Recap windows (UTC) ─────────────────────────────────────────────────────
-//
 // A recap covers one UTC day or one ISO week (Monday first). The server picks
 // windows to generate and the web picks the window a calendar cell asks for;
 // both use these, so a cell and the row it requests can't disagree.

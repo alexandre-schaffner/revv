@@ -1,7 +1,5 @@
-// The user settings shape, owned in one place. `SETTINGS_SPEC` declares every
-// field once: its default, how a stored or legacy value is coerced, and what a
-// patch may send. Defaults, `normalizeSettings`, the server's request schema
-// and the web's optimistic merge all derive from it. Adding a setting means a
+// Defaults, `normalizeSettings`, the server's request schema and the web's
+// optimistic merge all derive from `SETTINGS_SPEC`. Adding a setting means a
 // field on `UserSettings` plus its spec entry here (the compiler pairs them),
 // then the DB column and the pane that renders it.
 
@@ -69,7 +67,7 @@ export interface JevSettings {
 }
 
 export interface UserSettings {
-  /** The single agent that drives chat, walkthrough and recap generation. */
+  /** Drives chat and every generation pipeline; `recap.agent` may override it for recaps. */
   aiAgent: AcpAgentId;
   aiModel: string;
   aiThinkingEffort: ThinkingEffortSetting;
@@ -142,8 +140,6 @@ export type SettingsUpdate = Partial<Omit<UserSettings, "recap" | "cache" | "jev
   };
   jev?: Partial<Omit<JevSettings, "hasApiKey">>;
 };
-
-// ── Spec ─────────────────────────────────────────────────────────────────────
 
 /** What a patch may carry for a field; the server builds its request schema from this. */
 export type SettingWire =
@@ -271,8 +267,6 @@ export const SETTINGS_SPEC: SettingsSpec<UserSettings> = {
   updateChannel: oneOf(UPDATE_CHANNELS, DEFAULT_UPDATE_CHANNEL),
   baseConflictStrategy: oneOf(BASE_CONFLICT_STRATEGIES, DEFAULT_BASE_CONFLICT_STRATEGY),
 };
-
-// ── Operations ───────────────────────────────────────────────────────────────
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

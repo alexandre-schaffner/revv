@@ -1,19 +1,14 @@
-// ── OTLP parsing + idempotent writer ─────────────────────────────────────────
+// Revv controls every exporter feeding this collector, so only OTLP/HTTP JSON
+// is accepted; no protobuf decoding.
 //
-// We control every exporter feeding this collector, so we only accept OTLP/HTTP
-// *JSON* (the `-http` exporter's default encoding). That lets us parse with
-// `JSON.parse` and skip protobuf decoding entirely.
-//
-// The parse is intentionally defensive: a malformed batch drops the bad spans
-// rather than rejecting the whole request, so one wrong field from one source
-// never blinds the dashboard to everything else.
+// A malformed span is dropped rather than rejecting the whole request, so one
+// wrong field from one source never blinds the dashboard to everything else.
 
 import type { DuckDBConnection } from "@duckdb/node-api";
 import { SPAN_ATTR } from "@revv/shared/telemetry";
 import type { SpanStatusCode } from "../shared/types";
 import { SPAN_COLUMNS } from "./schema";
 
-/** A fully-flattened span ready to bind into the `spans` table. */
 export interface SpanInsert {
   traceId: string;
   spanId: string;
@@ -36,8 +31,6 @@ export interface SpanInsert {
   httpPath: string | null;
   httpStatus: number | null;
 }
-
-// ── OTLP anyValue decoding ───────────────────────────────────────────────────
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -74,8 +67,6 @@ function decodeAttributes(value: unknown): Record<string, unknown> {
   return Object.fromEntries(entries);
 }
 
-// ── attribute → hot-column extraction ────────────────────────────────────────
-
 const str = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
 const num = (v: unknown): number | null => {
   if (typeof v === "number" && Number.isFinite(v)) return v;
@@ -83,7 +74,6 @@ const num = (v: unknown): number | null => {
   return null;
 };
 
-/** First non-null value across a set of candidate attribute keys. */
 function pick(attrs: Record<string, unknown>, ...keys: string[]): unknown {
   for (const k of keys) {
     const v = attrs[k];
@@ -92,8 +82,6 @@ function pick(attrs: Record<string, unknown>, ...keys: string[]): unknown {
   return null;
 }
 
-// ── OTLP status decoding ─────────────────────────────────────────────────────
-
 function decodeStatusCode(code: unknown): SpanStatusCode {
   // proto3 JSON may serialize the enum as a name or as its number.
   if (code === 2 || code === "STATUS_CODE_ERROR") return 2;
@@ -101,7 +89,7 @@ function decodeStatusCode(code: unknown): SpanStatusCode {
   return 0;
 }
 
-/** nanosecond unix string (proto int64 → JSON string) → epoch ms. */
+/** OTLP JSON carries unix nanoseconds as a string (proto int64). */
 function nanoToMs(nano: unknown): number {
   if (typeof nano === "number") return nano / 1e6;
   if (typeof nano === "string" && nano !== "") {
@@ -120,8 +108,6 @@ export class OtlpPayloadError extends Error {
   }
 }
 
-/** Validate containers before accepting any writes. Individual malformed spans
- * are rejected without dropping their valid siblings. */
 export function parseOtlpBatch(body: unknown): { spans: SpanInsert[]; rejectedSpans: number } {
   const root = object(body);
   if (!root || !Array.isArray(root.resourceSpans)) throw new OtlpPayloadError();
@@ -170,8 +156,8 @@ export function parseOtlpBatch(body: unknown): { spans: SpanInsert[]; rejectedSp
           statusCode: decodeStatusCode(status?.code),
           statusMessage: str(status?.message),
           attributes: attrs,
-          // Revv's Effect spans annotate camelCase keys; OTel semconv and our
-          // new KPI annotations use snake_case. Accept both.
+          // Revv's Effect spans annotate camelCase keys; OTel semconv and the KPI
+          // annotations use snake_case.
           walkthroughId: str(pick(attrs, "walkthrough_id", "walkthrough.id", "walkthroughId")),
           prId: str(pick(attrs, "pr_id", "pr.id", "pull_request_id", "prId")),
           model: str(
@@ -209,7 +195,6 @@ export function parseOtlpBatch(body: unknown): { spans: SpanInsert[]; rejectedSp
   return { spans: rows, rejectedSpans };
 }
 
-/** Benchmark/parser convenience: malformed containers have no usable rows. */
 export function parseOtlp(body: unknown): SpanInsert[] {
   try {
     return parseOtlpBatch(body).spans;
@@ -219,16 +204,12 @@ export function parseOtlp(body: unknown): SpanInsert[] {
   }
 }
 
-// ── Writer ───────────────────────────────────────────────────────────────────
-
 const PLACEHOLDERS = SPAN_COLUMNS.map((_, i) => `$${i + 1}`).join(", ");
 const INSERT_SQL = `INSERT INTO spans (${SPAN_COLUMNS.join(", ")}) VALUES (${PLACEHOLDERS}) ON CONFLICT DO NOTHING`;
 
 /**
- * Batch-insert spans inside one transaction. Idempotent on (trace_id, span_id):
- * a replayed batch inserts nothing. Returns the row count handed in (DuckDB's
- * ON CONFLICT makes the effective count best-effort, but the caller only needs
- * a magnitude for the SSE signal).
+ * Returns the row count handed in, not the rows inserted: replayed spans are
+ * skipped by ON CONFLICT.
  */
 export async function insertSpans(conn: DuckDBConnection, rows: SpanInsert[]): Promise<number> {
   if (rows.length === 0) return 0;
@@ -266,11 +247,6 @@ export async function insertSpans(conn: DuckDBConnection, rows: SpanInsert[]): P
   return rows.length;
 }
 
-/**
- * Rolling-window retention: drop spans older than `maxAgeMs`, then hard-cap the
- * table at `maxRows` (keeping the most recent). The dashboard is for live/recent
- * analysis, not infinite history.
- */
 export async function pruneSpans(
   conn: DuckDBConnection,
   opts: { maxAgeMs: number; maxRows: number },

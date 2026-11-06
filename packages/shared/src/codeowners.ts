@@ -1,5 +1,3 @@
-// ── CODEOWNERS ──────────────────────────────────────────────────────────────
-//
 // GitHub tells us which review requests came from CODEOWNERS, but not which
 // owner covers which file. So the Conversation tab reads the base branch's
 // CODEOWNERS (the server parses it) and matches it against the PR's changed

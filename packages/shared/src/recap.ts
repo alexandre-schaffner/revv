@@ -8,12 +8,7 @@ export type RecapPeriod = "daily" | "weekly";
  */
 export type ProjectRecapStatus = "generating" | "complete" | "error" | "stopped" | "superseded";
 
-/**
- * Pre-aggregated summary stats for the recap, computed alongside the
- * overview by the agent's `commit_recap_overview` MCP tool. The UI uses these
- * to render the recap list-item header without re-aggregating; the agent
- * also embeds them in the overview markdown for narrative purposes.
- */
+/** Derived from the recap's source PRs by the server, never written by the agent. */
 export interface RecapSummaryStats {
   /** Total archived PRs in the period (mergedCount + closedCount). */
   readonly prCount: number;
@@ -27,23 +22,16 @@ export interface RecapSummaryStats {
     readonly medium: number;
     readonly high: number;
   };
-  /**
-   * Count of source PRs that had no completed walkthrough at recap time.
-   * Surfaced in the UI as the "regenerate to incorporate N late walkthroughs"
-   * affordance. Computed by `listArchivedPrsForWindow` at recap generation.
-   */
+  /** Source PRs that had no completed walkthrough at recap time. */
   readonly walkthroughsMissingCount: number;
 }
 
 /**
- * Structured per-PR row inside a recap. Written by the agent via
- * `add_pr_entry` (idempotent upsert on `(recapId, prId)`); see
- * `db/schema/recap-pr-entries.ts` for the storage shape.
+ * Written by the agent via `add_pr_entry`, keyed on `(recapId, prId)`.
  *
  * `theme` is an open-vocabulary lowercase label — the UI maps it
  * deterministically to a swatch via hash and orders chapters by count desc.
- * `description` may contain backtick-wrapped code spans; nothing else. `tight`
- * is reserved for a future dense view.
+ * `description` may contain backtick-wrapped code spans; nothing else.
  */
 export interface RecapPrEntry {
   readonly id: string;
@@ -52,16 +40,15 @@ export interface RecapPrEntry {
   readonly position: number;
   readonly theme: string;
   readonly verb: string;
-  /** Denormalized PR title at recap time. Falls back to "(PR removed)". */
+  /** Denormalized PR title at recap time. */
   readonly prTitle: string;
   /** Denormalized GitHub PR number at recap time. */
   readonly prExternalId: number;
   /** Denormalized author github login at recap time. */
   readonly prAuthorLogin: string;
   /**
-   * Base64 data URL of the author's avatar, joined from `remote_users` at read
-   * time. Not persisted on the entry row. Null when no avatar has been synced
-   * for this login yet — the UI falls back to an initials swatch.
+   * Base64 data URL joined from `remote_users` at read time, not persisted on
+   * the entry. Null when no avatar has been synced for this login yet.
    */
   readonly prAuthorAvatar: string | null;
   readonly description: string;
@@ -69,19 +56,14 @@ export interface RecapPrEntry {
   readonly linesRemoved: number;
   /**
    * Whether the PR was already archived (merged/closed) at recap time or still
-   * open. Server-derived from which list the `pr_id` appeared in
-   * (`sourceBundle.prs` vs `sourceBundle.openPrs`) — agents never set this
-   * directly. The UI renders open entries as an "In progress" subgroup inside
-   * the theme chapter, alongside the merged entries.
+   * open. Server-derived from the source bundle; agents never set it.
    */
   readonly prState: "merged" | "open";
 }
 
 /**
- * Short editorial paragraph (1–2 sentences) introducing the work that landed
- * in a single theme. Written by the agent via the `set_theme_summary` MCP
- * tool, idempotent upsert on `(recapId, theme)`. Themes without a summary
- * row still render — the UI only adds the lede when one is present.
+ * Written by the agent via `set_theme_summary`, keyed on `(recapId, theme)`.
+ * Optional per theme: a theme without one still renders.
  */
 export interface RecapThemeSummary {
   readonly id: string;
@@ -103,22 +85,13 @@ export interface ProjectRecap {
    * tags only — everything else is stripped at render.
    */
   readonly lede: string;
-  /** Sum of `entries[].linesAdded`. Stamped by `complete_recap`. */
+  /** Sum of `entries[].linesAdded`, computed on read. */
   readonly totalLinesAdded: number;
   /** Sum of `entries[].linesRemoved`. */
   readonly totalLinesRemoved: number;
-  /**
-   * Structured per-PR entries, ordered by `position`. Populated by joining
-   * `recap_pr_entries` on read.
-   */
+  /** Ordered by `position`. */
   readonly entries: ReadonlyArray<RecapPrEntry>;
-  /**
-   * Per-theme summary paragraphs. Each row binds a `theme` label (matching
-   * one of the `entries[].theme` values) to a 1–2 sentence editorial blurb
-   * that frames the chapter. Populated by joining `recap_theme_summaries`
-   * on read. May be empty when the agent skipped summaries or hasn't reached
-   * that step yet.
-   */
+  /** May be empty: the agent can skip summaries or not have reached them yet. */
   readonly themeSummaries: ReadonlyArray<RecapThemeSummary>;
   readonly status: ProjectRecapStatus;
   readonly supersededBy: string | null;
@@ -132,11 +105,7 @@ export interface ProjectRecap {
   readonly errorMessage: string | null;
 }
 
-/**
- * Lightweight projection of a recap suitable for the UI's list view: drops
- * the full overview markdown to keep payloads small. The detail view fetches
- * the full ProjectRecap via `GET /api/recaps/:id`.
- */
+/** List-view projection; the full ProjectRecap comes from `GET /api/recaps/:id`. */
 export interface ProjectRecapSummary {
   readonly id: string;
   readonly repositoryId: string;
@@ -169,20 +138,15 @@ export function recapSummaryOf(recap: ProjectRecap): ProjectRecapSummary {
 }
 
 /**
- * Fixed lede written for a *historical* window that turned out to hold no
- * activity at all — no PR closed in it, none in flight across it. The
- * orchestrator short-circuits before invoking the agent and completes the row
- * with this text, so a quiet weekend costs zero tokens and renders as a
- * finished recap rather than a failure.
- *
- * Only historical windows take this path. A live window (today / this week)
- * with nothing in it still errors: "nothing has happened yet, come back
- * later" is the honest answer there.
+ * Lede for a *historical* window with no activity at all — no PR closed in
+ * it, none in flight across it. The orchestrator completes the row with this
+ * text without invoking the agent, so a quiet weekend renders as a finished
+ * recap rather than a failure. A live window (today / this week) with nothing
+ * in it still errors: "nothing has happened yet" is the honest answer there.
  */
 export const RECAP_EMPTY_WINDOW_LEDE =
   "Nothing shipped in this window — no pull requests closed, and none were in flight.";
 
-/** Default stats object when the agent hasn't written any yet. */
 export const EMPTY_RECAP_STATS: RecapSummaryStats = {
   prCount: 0,
   mergedCount: 0,
@@ -191,8 +155,6 @@ export const EMPTY_RECAP_STATS: RecapSummaryStats = {
   riskBreakdown: { low: 0, medium: 0, high: 0 },
   walkthroughsMissingCount: 0,
 };
-
-// ── SSE stream events ───────────────────────────────────────────────────────
 
 export type RecapStreamPhase =
   | "analyzing"

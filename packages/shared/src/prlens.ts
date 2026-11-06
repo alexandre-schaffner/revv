@@ -1,11 +1,7 @@
-// ── prlens ───────────────────────────────────────────────────────────────────
-//
-// The shape a `prlens` fence body must take on before it can be handed to
-// `@coldtea/pr-lens-schema`. Shared because the document is validated twice
-// against the same contract: once on the server when an agent writes the block
-// (so a rejected diagram never reaches the reader), and once in the web app
-// when the fence is rendered. Two copies of this wrapper would let the two
-// verdicts drift.
+// A `prlens` fence is validated against `@coldtea/pr-lens-schema` twice: by
+// the server when an agent writes the block, and by the web app when it
+// renders. Both must recognise and wrap fences identically, or the server
+// accepts a diagram the reader never sees drawn (or rejects one it would have).
 
 /**
  * The renderer never reads provenance — only the manifest builder does, and we
@@ -20,8 +16,6 @@ const PLACEHOLDER_PROVENANCE = {
 };
 
 /**
- * Wrap a fence body into a full graph document.
- *
  * `schemaVersion` and `kind` are ours to state: they identify the contract, not
  * the diagram, and an author guessing at either turns a good document into a
  * rejected one. Provenance is overridable because a fence may legitimately
@@ -36,17 +30,8 @@ export function toGraphDocInput(body: Record<string, unknown>, schemaVersion: st
   };
 }
 
-/**
- * Info-string languages that mark a fenced block as a PR Lens diagram.
- *
- * Shared for the same reason the wrapper above is: the server decides which
- * fences to *validate* at write time and the web app decides which fences to
- * *render*, and a third alias added to one list alone means the server accepts
- * a document the reader never sees drawn (or rejects one it would have).
- */
 const FENCE_LANGS: readonly string[] = ["prlens", "pr-lens"];
 
-/** `true` when a fence's info-string language names a PR Lens diagram. */
 export function isPrLensFenceLang(lang: string | null | undefined): boolean {
   return FENCE_LANGS.includes(lang?.trim().toLowerCase() ?? "");
 }

@@ -38,17 +38,13 @@ export interface PullRequest {
   authorAvatarUrl: string | null;
   requestedReviewers: string[];
   /**
-   * Logins @-mentioned in the PR body or in any of its review comments.
-   *
-   * Populated on the DB read path only (`rowToPr`); always `[]` when a PR is
-   * mapped straight from a GitHub API payload, since GitHub has no such field
-   * — mentions are parsed out of the body and merged with comment-sourced
-   * mentions during sync.
+   * Logins @-mentioned in the PR body or any of its review comments. GitHub
+   * has no such field, so it is `[]` on a PR mapped straight from an API
+   * payload; sync parses it and only DB reads carry it.
    */
   mentionedUsers: string[];
   status: PullRequestStatus;
   reviewStatus: ReviewStatus;
-  /** GitHub draft state — `true` while the PR is in draft. */
   isDraft: boolean;
   sourceBranch: string;
   targetBranch: string;

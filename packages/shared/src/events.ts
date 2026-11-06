@@ -1,10 +1,5 @@
-// ── Global event stream (SSE) envelopes ─────────────────────────────────────
-//
-// Server → client messages delivered over the long-lived `GET /api/events`
-// SSE connection. One stream per client tab, lifetime = session.
-//
-// This is the single server -> client realtime channel. Inbound commands use
-// REST endpoints instead of this stream.
+// Envelopes on the `GET /api/events` SSE stream: one per client tab, the only
+// server → client realtime channel. Inbound commands use REST endpoints.
 
 import type { HunkScanRow, HunkScanStatus } from "./hunk-scan";
 import type {
@@ -50,12 +45,10 @@ export interface WalkthroughLiveEnvelope {
   };
 }
 
-// ── First pass (per PR head, independent of any walkthrough) ───────────────
-//
-// Rows are committed to `hunk_scan_rows` before each event, so a client that
-// misses one reconciles from `POST /api/reviews/:id/hunk-scan`. Every arm is
-// keyed on `(prId, headSha)`: a pull starts a new scan rather than mutating
-// the old one.
+// First pass, per PR head and independent of any walkthrough. Rows are
+// committed to `hunk_scan_rows` before each event, so a client that misses one
+// reconciles from `POST /api/reviews/:id/hunk-scan`. Every arm is keyed on
+// `(prId, headSha)`: a pull starts a new scan rather than mutating the old one.
 
 /**
  * Full-state: every hunk the scan will consider, skipped ones included, with
