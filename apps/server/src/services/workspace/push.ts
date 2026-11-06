@@ -13,7 +13,7 @@
 // for its whole run; both are taken before any git work, so an overlapping
 // flow is refused up front.
 
-import type { AgentProgressFrame } from "@revv/shared";
+import type { ResolvePushFrame } from "@revv/shared";
 import { type Context, Effect, Exit, Queue, Scope } from "effect";
 import {
   type AiError,
@@ -30,7 +30,6 @@ import {
   NoChatSessionError,
   type NotFoundError,
   PushRejectedError,
-  type RefAlreadyExistsError,
   type WorkspaceBusyError,
 } from "../../domain/errors";
 import { logError } from "../../logger";
@@ -83,7 +82,6 @@ export type ChatPushError =
   | NoChatSessionError
   | PushRejectedError
   | GitOperationError
-  | RefAlreadyExistsError
   | InvalidBranchNameError
   | NotFoundError
   | GitHubAuthError
@@ -105,24 +103,10 @@ export type AttemptPushResult =
   | { readonly status: "remote-changed"; readonly branch: string }
   | { readonly status: "ref-exists"; readonly branch: string };
 
-export type ResolvePushFrame =
-  | { readonly kind: "status"; readonly message: string }
-  | { readonly kind: "conflict-files"; readonly files: readonly string[] }
-  | AgentProgressFrame
-  | {
-      readonly kind: "result";
-      readonly status: "pushed";
-      readonly newSha: string;
-      readonly pushedCommits: number;
-      readonly branch: string;
-    }
-  | { readonly kind: "result"; readonly status: "remote-changed"; readonly branch: string }
-  | { readonly kind: "result"; readonly status: "failed"; readonly message: string };
-
 type PushR = DbService | SettingsService;
 
 interface PushDeps {
-  readonly resolve: (prId: string, userId: string) => Effect.Effect<PrContextBasic, PrContextError>;
+  readonly resolve: (prId: string) => Effect.Effect<PrContextBasic, PrContextError>;
   readonly claim: (
     prId: string,
     holder: "push",
@@ -159,10 +143,10 @@ const requireOk = (attempt: { readonly ok: boolean; readonly stderr: string }, w
 
 export function makeAgentPush(deps: PushDeps) {
   /** Hold the workspace and the target branch, then check there's something clean to push. */
-  const begin = (params: { readonly prId: string; readonly userId: string }, target?: string) =>
+  const begin = (prId: string, target?: string) =>
     Effect.gen(function* () {
-      const claim = yield* deps.claim(params.prId, "push");
-      const ctx = yield* deps.resolve(params.prId, params.userId);
+      const claim = yield* deps.claim(prId, "push");
+      const ctx = yield* deps.resolve(prId);
       const { pr, repo } = ctx;
       const token = ctx.client.token;
       yield* deps.pushLock.hold(
@@ -347,7 +331,7 @@ export function makeAgentPush(deps: PushDeps) {
     });
 
   const pushToNewBranch = (
-    params: { readonly prId: string; readonly userId: string },
+    prId: string,
     newBranchName: string,
     force: boolean,
   ) =>
@@ -360,7 +344,7 @@ export function makeAgentPush(deps: PushDeps) {
           }),
         );
       }
-      const run = yield* begin(params, name);
+      const run = yield* begin(prId, name);
       const { branch, url } = run;
       if (!force && (yield* gitStep(() => lsRemoteHead(branch.worktreePath, url, name)))) {
         return { status: "ref-exists" as const, branch: name };
@@ -402,15 +386,14 @@ export function makeAgentPush(deps: PushDeps) {
 
   const mergeAndPush = (params: {
     readonly prId: string;
-    readonly userId: string;
     readonly newBranchName?: string;
     readonly force?: boolean;
   }): Effect.Effect<AttemptPushResult, ChatPushError, PushR> =>
     Effect.scoped<AttemptPushResult, ChatPushError, PushR | Scope.Scope>(
       params.newBranchName !== undefined
-        ? pushToNewBranch(params, params.newBranchName, params.force ?? false)
+        ? pushToNewBranch(params.prId, params.newBranchName, params.force ?? false)
         : Effect.gen(function* () {
-            const run = yield* begin(params);
+            const run = yield* begin(params.prId);
             const leaseSha = yield* fetchSource(run);
             const merged = yield* mergeOntoSource(run, true);
             if (merged.status === "conflict") {
@@ -431,16 +414,13 @@ export function makeAgentPush(deps: PushDeps) {
         ? { kind: "result", status: "remote-changed", branch: pushed.branch }
         : { kind: "result", status: "failed", message: "Unexpected push outcome." };
 
-  const resolveAndPush = (params: {
-    readonly prId: string;
-    readonly userId: string;
-  }): Effect.Effect<ReadableStream<ResolvePushFrame>, ChatPushError, PushR> =>
+  const resolveAndPush = (prId: string): Effect.Effect<ReadableStream<ResolvePushFrame>, ChatPushError, PushR> =>
     Effect.gen(function* () {
       // The run outlives the request; the stream closes the scope.
       const scope = yield* Scope.make();
       const release = Scope.close(scope, Exit.void);
       const setup = Effect.gen(function* () {
-        const run = yield* begin(params);
+        const run = yield* begin(prId);
         const leaseSha = yield* fetchSource(run);
         const merged = yield* mergeOntoSource(run, false);
         return { run, leaseSha, merged };
@@ -529,7 +509,6 @@ export function makeAgentPush(deps: PushDeps) {
   /** Push the chosen proposed commits, oldest first, onto the source branch; the rest stay proposed. */
   const cherryPickAndPush = (params: {
     readonly prId: string;
-    readonly userId: string;
     readonly shas: readonly string[];
   }): Effect.Effect<AttemptPushResult, ChatPushError, PushR> =>
     Effect.scoped(
@@ -540,7 +519,7 @@ export function makeAgentPush(deps: PushDeps) {
         if (invalid)
           return yield* Effect.fail(new GitOperationError({ message: `Invalid SHA: ${invalid}` }));
 
-        const run = yield* begin(params);
+        const run = yield* begin(params.prId);
         const { branch } = run;
         const requested = new Set<string>();
         for (const sha of params.shas) {

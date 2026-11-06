@@ -227,7 +227,7 @@ export const chatRoute = new Elysia()
     (ctx) =>
       runRoute(
         Effect.flatMap(PrWorkspace, (workspace) =>
-          workspace.clear(ctx.params.prId, ctx.session.user.id),
+          workspace.clear(ctx.params.prId),
         ).pipe(Effect.as(new Response(null, { status: 204 }))),
       ),
     {

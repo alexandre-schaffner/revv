@@ -2,11 +2,12 @@
 //
 // /api/chat/:prId/proposed-changes/*: the agent's commits on the PR's agent
 // branch, and what the user does with them. All of it is `PrWorkspace`; a
-// refusal answers through the error table.
+// refusal answers through the error table. A push answers 200 with its
+// outcome: `conflict`, `remote-changed` and `ref-exists` are results the UI
+// acts on, not refusals.
 
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import type { AttemptPushResult } from "../services/workspace/PrWorkspace";
 import { PrWorkspace } from "../services/workspace/PrWorkspace";
 import { runRoute, withAuth } from "./middleware";
 import { ownedBy } from "./ownership";
@@ -16,12 +17,6 @@ const prParams = t.Object({ prId: t.String() });
 const commitParams = t.Object({ prId: t.String(), sha: t.String() });
 const shasBody = t.Object({ shas: t.Array(t.String(), { minItems: 1 }) });
 
-/** Conflict, remote-changed and ref-exists are outcomes, not errors; 409 lets the client branch on them. */
-const pushResponse = (set: { status?: number | string }, result: AttemptPushResult) => {
-  if (result.status !== "pushed") set.status = 409;
-  return result;
-};
-
 export const chatProposedChangesRoutes = new Elysia()
   .use(withAuth)
   .onBeforeHandle(ownedBy({ prId: "pull request" }))
@@ -29,7 +24,7 @@ export const chatProposedChangesRoutes = new Elysia()
     "/api/chat/:prId/proposed-changes",
     (ctx) =>
       runRoute(
-        Effect.flatMap(PrWorkspace, (w) => w.proposed(ctx.params.prId, ctx.session.user.id)),
+        Effect.flatMap(PrWorkspace, (w) => w.proposed(ctx.params.prId)),
       ),
     { params: prParams },
   )
@@ -38,7 +33,7 @@ export const chatProposedChangesRoutes = new Elysia()
     (ctx) =>
       runRoute(
         Effect.flatMap(PrWorkspace, (w) =>
-          w.commitPatch(ctx.params.prId, ctx.session.user.id, ctx.params.sha),
+          w.commitPatch(ctx.params.prId, ctx.params.sha),
         ).pipe(
           Effect.map(
             (diff) =>
@@ -53,7 +48,7 @@ export const chatProposedChangesRoutes = new Elysia()
     (ctx) =>
       runRoute(
         Effect.flatMap(PrWorkspace, (w) =>
-          w.commitFiles(ctx.params.prId, ctx.session.user.id, ctx.params.sha),
+          w.commitFiles(ctx.params.prId, ctx.params.sha),
         ).pipe(Effect.map((files) => ({ files }))),
       ),
     { params: commitParams },
@@ -65,13 +60,12 @@ export const chatProposedChangesRoutes = new Elysia()
         Effect.flatMap(PrWorkspace, (w) =>
           w.mergeAndPush({
             prId: ctx.params.prId,
-            userId: ctx.session.user.id,
             ...(ctx.body?.newBranchName !== undefined
               ? { newBranchName: ctx.body.newBranchName }
               : {}),
             ...(ctx.body?.force !== undefined ? { force: ctx.body.force } : {}),
           }),
-        ).pipe(Effect.map((result) => pushResponse(ctx.set, result))),
+        ),
       ),
     {
       params: prParams,
@@ -88,7 +82,7 @@ export const chatProposedChangesRoutes = new Elysia()
     (ctx) =>
       runStream(
         Effect.flatMap(PrWorkspace, (w) =>
-          w.resolveAndPush({ prId: ctx.params.prId, userId: ctx.session.user.id }),
+          w.resolveAndPush(ctx.params.prId),
         ).pipe(Effect.map(pipeToSse)),
       ),
     { params: prParams },
@@ -100,10 +94,9 @@ export const chatProposedChangesRoutes = new Elysia()
         Effect.flatMap(PrWorkspace, (w) =>
           w.cherryPickAndPush({
             prId: ctx.params.prId,
-            userId: ctx.session.user.id,
             shas: [ctx.body.sha],
           }),
-        ).pipe(Effect.map((result) => pushResponse(ctx.set, result))),
+        ),
       ),
     { params: prParams, body: t.Object({ sha: t.String() }) },
   )
@@ -114,10 +107,9 @@ export const chatProposedChangesRoutes = new Elysia()
         Effect.flatMap(PrWorkspace, (w) =>
           w.cherryPickAndPush({
             prId: ctx.params.prId,
-            userId: ctx.session.user.id,
             shas: ctx.body.shas,
           }),
-        ).pipe(Effect.map((result) => pushResponse(ctx.set, result))),
+        ),
       ),
     { params: prParams, body: shasBody },
   )
@@ -126,7 +118,7 @@ export const chatProposedChangesRoutes = new Elysia()
     (ctx) =>
       runRoute(
         Effect.flatMap(PrWorkspace, (w) =>
-          w.discard(ctx.params.prId, ctx.session.user.id, [ctx.params.sha]),
+          w.discard(ctx.params.prId, [ctx.params.sha]),
         ).pipe(Effect.as({ status: "discarded" as const })),
       ),
     { params: commitParams },
@@ -136,7 +128,7 @@ export const chatProposedChangesRoutes = new Elysia()
     (ctx) =>
       runRoute(
         Effect.flatMap(PrWorkspace, (w) =>
-          w.discard(ctx.params.prId, ctx.session.user.id, ctx.body.shas),
+          w.discard(ctx.params.prId, ctx.body.shas),
         ).pipe(
           Effect.map(({ discardedCount }) => ({ status: "discarded" as const, discardedCount })),
         ),
@@ -150,12 +142,7 @@ export const chatProposedChangesRoutes = new Elysia()
     (ctx) =>
       runRoute(
         Effect.flatMap(PrWorkspace, (w) =>
-          w.rebaseOnto(
-            ctx.params.prId,
-            ctx.session.user.id,
-            ctx.body.oldHeadSha,
-            ctx.body.newHeadSha,
-          ),
+          w.rebaseOnto(ctx.params.prId, ctx.body.oldHeadSha, ctx.body.newHeadSha),
         ).pipe(Effect.as({ status: "rebased" as const })),
       ),
     { params: prParams, body: t.Object({ oldHeadSha: t.String(), newHeadSha: t.String() }) },
@@ -165,7 +152,7 @@ export const chatProposedChangesRoutes = new Elysia()
     (ctx) =>
       runRoute(
         Effect.flatMap(PrWorkspace, (w) =>
-          w.advance(ctx.params.prId, ctx.session.user.id, ctx.body.newHeadSha),
+          w.advance(ctx.params.prId, ctx.body.newHeadSha),
         ).pipe(Effect.as({ status: "advanced" as const })),
       ),
     { params: prParams, body: t.Object({ newHeadSha: t.String() }) },

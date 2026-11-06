@@ -27,7 +27,6 @@ export type ApiErrorCode =
   | "NO_CHANGES"
   | "NO_CHAT_SESSION"
   | "INVALID_BRANCH_NAME"
-  | "REF_EXISTS"
   | "PUSH_REJECTED"
   | "GENERATION_ERROR"
   // The agent isn't signed in, or Revv can't read its login (Keychain). Also

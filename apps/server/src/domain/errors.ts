@@ -1,4 +1,4 @@
-import type { ApiErrorCode } from "@revv/shared";
+import type { ApiErrorCode, ProposedCommit } from "@revv/shared";
 import { Data } from "effect";
 
 export class ProfilingError extends Data.TaggedError("ProfilingError")<{
@@ -245,10 +245,6 @@ export class PushRejectedError extends Data.TaggedError("PushRejectedError")<{
   readonly message: string;
 }> {}
 
-export class RefAlreadyExistsError extends Data.TaggedError("RefAlreadyExistsError")<{
-  readonly ref: string;
-}> {}
-
 export class InvalidBranchNameError extends Data.TaggedError("InvalidBranchNameError")<{
   readonly message: string;
 }> {}
@@ -292,13 +288,7 @@ export class WorktreeBlockedByUnpushedCommits extends Data.TaggedError(
   readonly branchName: string;
   readonly oldHeadSha: string;
   readonly newHeadSha: string;
-  readonly commits: ReadonlyArray<{
-    sha: string;
-    shortSha: string;
-    subject: string;
-    committedAt: string;
-    files: string[];
-  }>;
+  readonly commits: readonly ProposedCommit[];
 }> {}
 
 // ── Project Recap errors ───────────────────────────────────────────────────
@@ -450,7 +440,6 @@ type AppError =
   | AgentBranchConflictError
   | GitOperationError
   | PushRejectedError
-  | RefAlreadyExistsError
   | InvalidBranchNameError
   | BaseConflictsRejectedError
   | HeadShaMismatchError
@@ -605,7 +594,6 @@ const HTTP_ERRORS: {
     http(404, "NO_CHAT_SESSION", "No chat session for this PR — start a chat first"),
   AgentBranchConflictError: (e) => http(409, "REPLAY_CONFLICT", e.message),
   InvalidBranchNameError: (e) => http(400, "INVALID_BRANCH_NAME", e.message),
-  RefAlreadyExistsError: (e) => http(409, "REF_EXISTS", `branch ${e.ref} already exists`),
   PushRejectedError: (e) => http(502, "PUSH_REJECTED", e.message),
   GitOperationError: (e) => http(500, "FAILED", e.message),
   DbError: (e) => internal(e.message),

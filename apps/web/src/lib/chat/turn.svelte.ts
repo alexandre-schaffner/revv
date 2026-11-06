@@ -2,7 +2,12 @@
 // timeline as it streams, stopping it, plan decisions, the send queue, and the
 // PR-level actions that span the chat modules (open, reload, clear, reset).
 
-import { attachmentByteSize, type ChatAttachment, type InteractionMode } from "@revv/shared";
+import {
+  attachmentByteSize,
+  type ChatAttachment,
+  type InteractionMode,
+  type ProposedCommit,
+} from "@revv/shared";
 import { untrack } from "svelte";
 import { toast } from "svelte-sonner";
 import {
@@ -15,7 +20,6 @@ import {
 import { openSettings } from "$lib/stores/settingsModal.svelte";
 import { AGENT_AUTH_REQUIRED, agentAuthRecoveryDescription } from "$lib/utils/agent-auth-recovery";
 import {
-  type BlockedCommit,
   clearProposed,
   clearProposedComments,
   getProposedComments,
@@ -148,7 +152,7 @@ export function sendChatMessage(params: SendChatMessageParams): void {
           setWorktreeBlocked(prId, {
             oldHeadSha: typeof err.oldHeadSha === "string" ? err.oldHeadSha : "",
             newHeadSha: typeof err.newHeadSha === "string" ? err.newHeadSha : "",
-            commits: Array.isArray(err.commits) ? (err.commits as BlockedCommit[]) : [],
+            commits: Array.isArray(err.commits) ? (err.commits as ProposedCommit[]) : [],
           });
           endTurn(prId, turn);
           return;

@@ -6,6 +6,7 @@
 import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
+import type { ProposedCommit } from "@revv/shared";
 import { logError } from "../../logger";
 import {
   abortCherryPick,
@@ -72,14 +73,6 @@ export async function resolveBaseSha(
 
 export async function countProposed(branch: AgentBranch, baseSha: string): Promise<number> {
   return (await proposedCommitCount(branch.worktreePath, range(branch, baseSha))) ?? 0;
-}
-
-export interface ProposedCommit {
-  readonly sha: string;
-  readonly shortSha: string;
-  readonly subject: string;
-  readonly committedAt: string;
-  readonly files: string[];
 }
 
 export async function listProposedCommits(

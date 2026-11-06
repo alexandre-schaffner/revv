@@ -59,7 +59,7 @@ async function openDiff(commit: { sha: string; subject: string }): Promise<void>
   }
 }
 
-function filesSummary(files: string[]): string {
+function filesSummary(files: readonly string[]): string {
   const basenames = files.map((f) => f.split("/").pop() ?? f);
   if (basenames.length === 1) return basenames[0] ?? "";
   if (basenames.length === 2) return `${basenames[0]} · ${basenames[1]}`;
