@@ -14,18 +14,10 @@ import type {
   NewPrSessionSnapshot,
   NewPrSessionStatus,
 } from "./new-pr-session";
+import type { CloneStatus, PullRequest, Repository, SyncChange } from "./pull-requests";
 import type { ProjectRecap, ProjectRecapStatus, RecapPeriod } from "./recap";
+import type { CommentThread, ThreadMessage, ThreadStatus, ThreadSummary } from "./review";
 import type { StackBriefStatus, StackMergeRun } from "./stacks";
-import type {
-  CloneStatus,
-  CommentThread,
-  PullRequest,
-  Repository,
-  SyncChange,
-  ThreadMessage,
-  ThreadStatus,
-  ThreadSummary,
-} from "./types";
 import type { WalkthroughStreamEvent } from "./walkthrough";
 
 /**

@@ -44,7 +44,7 @@
       "ignoreDependencies": ["bun-types"]
     },
     "packages/shared": {
-      "entry": ["src/index.ts"]
+      "includeEntryExports": true
     }
   },
   "ignore": [

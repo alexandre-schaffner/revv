@@ -1,4 +1,5 @@
 import { cors } from "@elysiajs/cors";
+import type { RuntimeHealth } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
 import { stopAllAcpConnections } from "./ai/acp/acp-connection";
@@ -162,13 +163,16 @@ const app = new Elysia()
   .use(mcpExternalAgentRoute)
   .use(externalIntegrationRoutes)
   .use(agentCheckRoutes)
-  .get("/api/health", () => ({
-    status: "ok" as const,
-    channel: serverEnv.channel,
-    commit: SOURCE_COMMIT,
-    port,
-    timestamp: new Date().toISOString(),
-  }))
+  .get(
+    "/api/health",
+    (): RuntimeHealth => ({
+      status: "ok",
+      channel: serverEnv.channel,
+      commit: SOURCE_COMMIT,
+      port,
+      timestamp: new Date().toISOString(),
+    }),
+  )
   .listen({
     port,
     // Loopback only — without a hostname Bun binds to 0.0.0.0 (every interface).

@@ -22,7 +22,7 @@ import type {
   Verdict,
   WalkthroughBlock,
   WalkthroughTokenUsage,
-} from "./walkthrough";
+} from "@revv/shared";
 
 /** Bump this when the snapshot shape changes. Importers reject mismatches. */
 export const CACHE_SCHEMA_VERSION = 2 as const;
@@ -174,15 +174,6 @@ export const CACHE_METADATA_KEYS = {
   /** SSHSIG namespace — `revv-cache@<signerHost>`. */
   signatureNamespace: "signatureNamespace",
 } as const;
-
-/**
- * Signing mode for the team cache. Controls whether blobs must be signed
- * (`'strict'`), accepted with a warning when signature is missing/invalid
- * (`'permissive'`), or have signing bypassed entirely (`'off'`).
- *
- * Default is `'strict'` — new installs get protection out of the box.
- */
-export type CacheSigningMode = "off" | "permissive" | "strict";
 
 /**
  * Build the canonical signing message that is signed on push and

@@ -1,9 +1,10 @@
 // ── Block types ─────────────────────────────────────────────────────────────
 
+import type { ThinkingEffort } from "./acp-agents";
 import type { Activity, ActivityResult } from "./activity";
 import type { ExternalAgentProvider } from "./external-integrations";
 import type { HunkSmell, WalkthroughLead } from "./hunk-scan";
-import type { ReviewMode, ThinkingEffort } from "./types";
+import type { ReviewMode } from "./review";
 
 /**
  * How much attention a PR needs, and what "Auto" would pick for it, answered

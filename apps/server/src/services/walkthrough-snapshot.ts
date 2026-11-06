@@ -19,21 +19,13 @@
 
 import type {
   Confidence,
-  GeneratedBy,
-  GenerationProviderConfig,
   RatingAxis,
   RatingCitation,
   RiskLevel,
   Verdict,
   WalkthroughBlock,
-  WalkthroughSnapshotBlock,
-  WalkthroughSnapshotIssue,
-  WalkthroughSnapshotRating,
-  WalkthroughSnapshotSemanticStep,
-  WalkthroughSnapshotV2,
   WalkthroughTokenUsage,
 } from "@revv/shared";
-import { CACHE_SCHEMA_VERSION } from "@revv/shared";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { walkthroughBlocks } from "../db/schema/walkthrough-blocks";
@@ -41,6 +33,16 @@ import { walkthroughIssues } from "../db/schema/walkthrough-issues";
 import { walkthroughRatings } from "../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../db/schema/walkthroughs";
+import {
+  CACHE_SCHEMA_VERSION,
+  type GeneratedBy,
+  type GenerationProviderConfig,
+  type WalkthroughSnapshotBlock,
+  type WalkthroughSnapshotIssue,
+  type WalkthroughSnapshotRating,
+  type WalkthroughSnapshotSemanticStep,
+  type WalkthroughSnapshotV2,
+} from "./walkthrough-cache-format";
 
 export class ExportError extends Error {
   readonly _tag = "ExportError" as const;

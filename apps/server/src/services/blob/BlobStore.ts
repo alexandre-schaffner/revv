@@ -18,7 +18,7 @@ import type { BlobCorrupt, BlobStoreUnavailable } from "../../domain/errors";
  *   • integrity tracking (`contentSha256`)
  *   • forward-compat versioning (`schemaVersion`)
  *   • advisory attribution (`uploadedByUserId`, `modelUsed`)
- * — see `CACHE_METADATA_KEYS` in `@revv/shared`.
+ * — see `CACHE_METADATA_KEYS` in `../walkthrough-cache-format`.
  */
 export type BlobMetadata = Record<string, string>;
 

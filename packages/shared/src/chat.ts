@@ -30,37 +30,6 @@ export interface ChatTask {
 }
 
 /**
- * A plan emitted by the agent in plan mode. Status reflects user decision
- * — plans never auto-transition.
- */
-export interface ChatPlan {
-  readonly id: string;
-  readonly turnId: string;
-  readonly planMarkdown: string;
-  readonly status: "pending" | "approved" | "rejected" | "superseded";
-  readonly source: "acp";
-  readonly createdAt: string;
-  readonly decidedAt: string | null;
-}
-
-/**
- * One sub-agent invocation. The UI renders this as a collapsible card; all
- * `Activity` rows whose `subagentInvocationId === id` get grouped under it.
- */
-export interface ChatSubagentInvocation {
-  readonly id: string;
-  readonly parentTurnId: string;
-  readonly subagentType: string;
-  readonly description: string;
-  readonly prompt: string;
-  readonly status: "running" | "completed" | "errored";
-  readonly result: string | null;
-  readonly source: "acp";
-  readonly startedAt: string;
-  readonly completedAt: string | null;
-}
-
-/**
  * One option in a multiple-choice question prompt. Shared by both providers
  * (Claude `askUserQuestion`, opencode `question.asked`). `preview` carries
  * optional markdown/HTML content the renderer can disclose under the

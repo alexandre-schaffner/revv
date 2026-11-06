@@ -1,6 +1,5 @@
 export type AppChannel = "prod" | "dev";
 
-export const APP_CHANNELS: readonly AppChannel[] = ["prod", "dev"];
 export const DEFAULT_APP_CHANNEL: AppChannel = "prod";
 
 // Changing API_PORT means also changing the updater endpoint hard-coded in
@@ -9,7 +8,6 @@ export const DEFAULT_APP_CHANNEL: AppChannel = "prod";
 // import this constant. See `docs/updater-setup.md`.
 export const API_PORT = 45678;
 export const DEV_API_PORT = 45679;
-export const API_BASE_URL = `http://localhost:${API_PORT}`;
 
 // Local telemetry collector (apps/collector): single port serves OTLP
 // ingest and the archive query API used by the Grafana frontend.

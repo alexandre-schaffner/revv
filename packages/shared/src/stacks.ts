@@ -5,7 +5,7 @@ import type {
   ReviewVerdict,
   StackEntryStatus,
 } from "./conversation";
-import type { MergeMethod } from "./types";
+import type { MergeMethod } from "./pull-requests";
 import type { RiskLevel } from "./walkthrough";
 
 export function stackKey(repositoryId: string, stackNumber: number): string {
