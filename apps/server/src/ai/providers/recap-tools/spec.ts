@@ -28,10 +28,11 @@
 // `complete_recap` only validates; the orchestrator observes the run's natural
 // end and flips `status` to `'complete'` after.
 
-import type { ProjectRecap, RecapPeriod, RecapStreamEvent, RecapSummaryStats } from "@revv/shared";
+import type { ProjectRecap, RecapStreamEvent } from "@revv/shared";
 import type { Effect } from "effect";
 import { z } from "zod";
 import type { Db } from "../../../db";
+import type { RecapSourceBundle } from "../../../db/schema/project-recaps";
 import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gateway";
 
 // ── Handler execution context ────────────────────────────────────────────────
@@ -130,69 +131,6 @@ export interface RecapSourcePrDiff {
   readonly source: "cache" | "github" | "unavailable";
   /** Optional human-readable hint about truncation / missing data for the agent. */
   readonly note: string | null;
-}
-
-export interface RecapSourcePrDigest {
-  readonly source: "cache" | "github" | "unavailable";
-  readonly digest: string;
-  readonly files: ReadonlyArray<{
-    readonly path: string;
-    readonly status: string;
-    readonly additions: number;
-    readonly deletions: number;
-    readonly patchAvailable: boolean;
-    readonly patchTruncated: boolean;
-  }>;
-  readonly note: string | null;
-}
-
-export interface RecapSourcePr {
-  readonly id: string;
-  readonly externalId: number;
-  readonly title: string;
-  readonly authorLogin: string;
-  readonly status: "closed" | "merged" | "open";
-  readonly closedAt: string;
-  readonly sourceBranch: string;
-  readonly targetBranch: string;
-  readonly additions: number;
-  readonly deletions: number;
-  readonly changedFiles: number;
-  readonly url: string;
-  /**
-   * Body of the PR description, truncated if very long. Null if GitHub
-   * never had one or it was empty.
-   */
-  readonly body: string | null;
-  /**
-   * The PR's latest non-superseded complete walkthrough, if any. Null when
-   * no human ever generated a walkthrough or all of them are
-   * superseded/error/generating. Recap agent should still include the PR
-   * in the narrative — just without walkthrough-derived insight.
-   */
-  readonly walkthrough: {
-    readonly id: string;
-    readonly summary: string;
-    readonly sentiment: string | null;
-    readonly riskLevel: "low" | "medium" | "high";
-    readonly completedAt: string | null;
-  } | null;
-  /** Compact pre-ingested diff context for PRs without walkthroughs. */
-  readonly diffDigest: RecapSourcePrDigest | null;
-}
-
-export interface RecapSourceBundle {
-  readonly repoId: string;
-  readonly repoFullName: string;
-  readonly period: RecapPeriod;
-  readonly periodStart: string;
-  readonly periodEnd: string;
-  /** Archived (closed/merged) PRs in the period window. */
-  readonly prs: ReadonlyArray<RecapSourcePr>;
-  /** Currently open PRs with walkthrough context, sorted by relevancy. */
-  readonly openPrs: ReadonlyArray<RecapSourcePr>;
-  /** Pre-computed summary stats — same shape persisted on the recap row. */
-  readonly stats: RecapSummaryStats;
 }
 
 // ── Tool input schemas ───────────────────────────────────────────────────────

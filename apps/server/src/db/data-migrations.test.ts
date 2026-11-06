@@ -114,3 +114,37 @@ describe("recap stopped-status migration", () => {
     db.$client.close();
   });
 });
+
+describe("walkthrough end-reason migration", () => {
+  // Only the backfill: the rest of the file adds the columns, which a booted DB has.
+  const backfill = readFileSync(join(import.meta.dir, "migrations/0490_jobs_kernel.sql"), "utf8")
+    .split("--> statement-breakpoint")
+    .at(-1);
+
+  it("records a stop that only its message told apart as `cancelled`", () => {
+    const db = createDb(":memory:");
+    db.$client.run("PRAGMA foreign_keys = OFF");
+    const insert = (id: string, status: string, message: string | null) =>
+      db.$client.run(
+        `INSERT INTO walkthroughs
+          (id, review_session_id, pull_request_id, status, error_message, generated_at, model_used, pr_head_sha)
+         VALUES (?, 's', 'pr', ?, ?, '2026-11-01T00:00:00Z', 'm', ?)`,
+        [id, status, message, id],
+      );
+    insert("stopped", "error", "Walkthrough cancelled");
+    insert("failed", "error", "agent crashed");
+    insert("done", "complete", null);
+
+    db.$client.run(backfill ?? "");
+
+    const reasons = db.$client
+      .query("SELECT id, end_reason AS reason FROM walkthroughs ORDER BY id")
+      .all();
+    expect(reasons).toEqual([
+      { id: "done", reason: null },
+      { id: "failed", reason: null },
+      { id: "stopped", reason: "cancelled" },
+    ]);
+    db.$client.close();
+  });
+});

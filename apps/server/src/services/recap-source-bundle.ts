@@ -5,13 +5,12 @@
 // ProjectRecapJobs so that file stays focused on orchestration.
 
 import type { RecapPeriod, RecapSummaryStats } from "@revv/shared";
+import type { RecapSourcePrDiff, RecapSourcePrDiffFile } from "../ai/providers/recap-tools";
 import type {
   RecapSourceBundle,
   RecapSourcePr,
-  RecapSourcePrDiff,
-  RecapSourcePrDiffFile,
   RecapSourcePrDigest,
-} from "../ai/providers/recap-tools";
+} from "../db/schema/project-recaps";
 import type { ArchivedPrWithWalkthrough } from "./PullRequest";
 import { truncatePatchToChars } from "./patch-truncate";
 

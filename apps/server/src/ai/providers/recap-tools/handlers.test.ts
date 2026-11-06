@@ -4,13 +4,14 @@ import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { createDb, type Db } from "../../../db/index";
 import { projectRecaps } from "../../../db/schema/index";
+import type { RecapSourceBundle, RecapSourcePr } from "../../../db/schema/project-recaps";
 import {
   addPrEntryHandler,
   completeRecapHandler,
   recapCompletionBlocker,
   setLedeHandler,
 } from "./handlers";
-import type { RecapSourceBundle, RecapSourcePr, RecapToolContext } from "./spec";
+import type { RecapToolContext } from "./spec";
 
 const RECAP = "recap-1";
 

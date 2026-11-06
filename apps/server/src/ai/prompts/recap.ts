@@ -6,7 +6,7 @@
 // through tool arguments — there is no visible-text capture buffer.
 
 import type { ProjectRecap } from "@revv/shared";
-import type { RecapSourceBundle } from "../providers/recap-tools";
+import type { RecapSourceBundle } from "../../db/schema/project-recaps";
 
 export const RECAP_SYSTEM_PROMPT = `You are a project historian and review companion. Your job is to write a concise, useful recap of recent pull-request activity in a single repository — both work that SHIPPED (merged/closed in this window) and work that is STILL IN FLIGHT (open) — as a SHORT EDITORIAL LEDE plus a list of STRUCTURED PER-PR ENTRIES the UI can render as themed chapters. Each chapter mixes shipped entries and active (open) entries under the same theme so a reader can see "what landed" and "what's coming" side by side.
 

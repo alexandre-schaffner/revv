@@ -1,5 +1,8 @@
 import {
+  type AcpAgentId,
   REVIEW_MODE,
+  type ThinkingEffort,
+  type WalkthroughEndReason,
   type WalkthroughMode,
   type WalkthroughStackSnapshot,
   type WalkthroughStatus,
@@ -18,6 +21,29 @@ import { reviewSessions } from "./review-sessions";
 
 /** Per-file hash of a PR diff, keyed by filename. */
 export type DiffFingerprint = Readonly<Record<string, string>>;
+
+/**
+ * What a run of this row launches with, decided once when the row is created
+ * so every run of it (auto-continuations, resume-on-boot) launches the same
+ * way. Null on rows created before plans were recorded.
+ */
+export interface WalkthroughLaunchPlan {
+  readonly agent: AcpAgentId;
+  readonly model: string;
+  readonly thinkingEffort: ThinkingEffort | null;
+  /** The job-start judgment's sizing, kept so a re-resolved launch (Resume after an error) still applies it. */
+  readonly sizing: {
+    readonly model?: string | undefined;
+    readonly thinkingEffort?: ThinkingEffort | undefined;
+  } | null;
+  readonly filePriorities: ReadonlyArray<{
+    readonly filename: string;
+    readonly tier: number | null;
+  }> | null;
+  readonly splitRecommendation: { readonly pieces: number } | null;
+  /** Whether a doomed run may be stopped early between auto-continuations. */
+  readonly adjudicateContinuations: boolean;
+}
 
 /**
  * A generated AI walkthrough of a PR, pinned to a specific head SHA.
@@ -135,9 +161,9 @@ export const walkthroughs = sqliteTable(
     tokenUsage: text("token_usage").notNull().default("{}"),
     prHeadSha: text("pr_head_sha").notNull(),
     opencodeSessionId: text("opencode_session_id"),
-    // Incremented each time WalkthroughJobs.resumePending() picks this row back up
-    // after a server restart. Capped at WALKTHROUGH_MAX_RESUME_ATTEMPTS before the
-    // row is marked `error` and left alone.
+    // Counted each time a resume picks this row back up after its run died.
+    // Past MAX_RESUME_ATTEMPTS (services/jobs/agent-jobs.ts) the row is marked
+    // `error` and left alone.
     resumeAttempts: integer("resume_attempts").notNull().default(0),
     /**
      * ISO 8601 timestamp of the most recent post-completion edit. Null until
@@ -211,6 +237,8 @@ export const walkthroughs = sqliteTable(
     stackContext: text("stack_context", { mode: "json" }).$type<WalkthroughStackSnapshot>(),
     diffFingerprint: text("diff_fingerprint", { mode: "json" }).$type<DiffFingerprint>(),
     carriedFromWalkthroughId: text("carried_from_walkthrough_id"),
+    endReason: text("end_reason").$type<WalkthroughEndReason>(),
+    launchPlan: text("launch_plan", { mode: "json" }).$type<WalkthroughLaunchPlan>(),
   },
   (t) => ({
     /**
