@@ -5,12 +5,23 @@ import { SshKeygenMissing, SshSignatureInvalid, SshSigningUnavailable } from "..
 
 const TIMEOUT_MS = 5000;
 
+function spawnSshKeygen(args: string[], stdin: string) {
+  try {
+    return Bun.spawn(["ssh-keygen", ...args], {
+      stdin: Buffer.from(stdin, "utf8"),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new SshKeygenMissing({ message: "ssh-keygen not found on PATH" });
+    }
+    throw e;
+  }
+}
+
 async function runSshKeygen(args: string[], stdin: string): Promise<string> {
-  const proc = Bun.spawn(["ssh-keygen", ...args], {
-    stdin: Buffer.from(stdin, "utf8"),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  const proc = spawnSshKeygen(args, stdin);
 
   const timer = setTimeout(() => {
     try {
@@ -33,12 +44,6 @@ async function runSshKeygen(args: string[], stdin: string): Promise<string> {
   return stdoutText;
 }
 
-function isMissingExecutable(e: unknown): boolean {
-  if (!(e instanceof Error)) return false;
-  const m = e.message.toLowerCase();
-  return m.includes("enoent") || m.includes("not found") || m.includes("no such file");
-}
-
 /** Returns the armored SSHSIG block, BEGIN/END lines included. */
 export async function sshSign(
   message: string,
@@ -49,9 +54,7 @@ export async function sshSign(
     const out = await runSshKeygen(["-Y", "sign", "-f", keyPath, "-n", namespace, "-"], message);
     return out.trim();
   } catch (e) {
-    if (isMissingExecutable(e)) {
-      throw new SshKeygenMissing({ message: "ssh-keygen not found on PATH" });
-    }
+    if (e instanceof SshKeygenMissing) throw e;
     throw new SshSigningUnavailable({
       message: e instanceof Error ? e.message : String(e),
       cause: e,
@@ -99,9 +102,7 @@ export async function sshVerify(
       message,
     );
   } catch (e) {
-    if (isMissingExecutable(e)) {
-      throw new SshKeygenMissing({ message: "ssh-keygen not found on PATH" });
-    }
+    if (e instanceof SshKeygenMissing) throw e;
     throw new SshSignatureInvalid({
       message: e instanceof Error ? e.message : String(e),
     });
