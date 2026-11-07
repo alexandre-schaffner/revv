@@ -271,6 +271,16 @@ export interface ThreadsSyncedEnvelope {
   data: { prId: string; timestamp: string };
 }
 
+/**
+ * Signal: a push posted `prId`'s comments to GitHub and linked them, so a
+ * posted draft is no longer editable; re-read the session. Not a pull: the
+ * PR's last sync and sync error stand.
+ */
+export interface ThreadsLinkedEnvelope {
+  type: "threads:linked";
+  data: { prId: string };
+}
+
 /** Delta: what changed in the last sync, for notifications; not state. */
 export interface PrsSyncSummaryEnvelope {
   type: "prs:sync-summary";
@@ -325,6 +335,7 @@ export type ThreadEventMessage =
   | ThreadUpdatedEnvelope
   | ThreadMessageEnvelope
   | ThreadsSyncedEnvelope
+  | ThreadsLinkedEnvelope
   | ThreadDeletedEnvelope
   | ThreadMessageEditedEnvelope
   | ThreadMessageDeletedEnvelope

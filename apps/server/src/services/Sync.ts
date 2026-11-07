@@ -52,6 +52,8 @@ export class SyncService extends Context.Service<
     /**
      * Post replies one at a time, in order, so each thread's land as they were
      * written. A reply GitHub refuses is logged and counted; resolves how many.
+     * Announces nothing: its caller (a review submit) pulls the PR's threads
+     * next, and that pull answers the PR's clients.
      */
     readonly pushReplies: (messageIds: readonly string[]) => Effect.Effect<number>;
     /** Push a thread's status to GitHub, for a thread GitHub knows. */
@@ -93,14 +95,8 @@ export const SyncServiceLive = Layer.effect(
     const diffCache = yield* DiffCacheService;
     const accounts = yield* GitHubAccounts;
 
-    // A push links local rows to the GitHub comments it posted; `threads:synced`
-    // tells the PR's clients to re-read them (a posted draft is no longer
-    // editable).
     const announceLinked = (prId: string) =>
-      realtime.toPr(prId, {
-        type: "threads:synced",
-        data: { prId, timestamp: new Date().toISOString() },
-      });
+      realtime.toPr(prId, { type: "threads:linked", data: { prId } });
 
     /** Resolves the PR when it posted something. */
     const postThread = (threadId: string) =>
@@ -209,20 +205,16 @@ export const SyncServiceLive = Layer.effect(
     const pushReplies = (messageIds: readonly string[]) =>
       Effect.gen(function* () {
         let failed = 0;
-        const linked = new Set<string>();
         for (const id of messageIds) {
-          const prId = yield* postReply(id).pipe(
+          yield* postReply(id).pipe(
             Effect.catch((e) =>
               Effect.sync(() => {
                 logError("sync", `push reply ${id}:`, e.message);
                 failed++;
-                return null;
               }),
             ),
           );
-          if (prId !== null) linked.add(prId);
         }
-        for (const prId of linked) yield* announceLinked(prId);
         return failed;
       });
 
