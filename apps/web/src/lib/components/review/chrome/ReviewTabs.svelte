@@ -59,11 +59,6 @@ const TAB_LABEL: Record<ReviewTab, string> = {
 
 const tabs = REVIEW_TABS.map((id) => ({ id, label: TAB_LABEL[id] }));
 
-function handleTabChange(tabId: string) {
-  const tab = REVIEW_TABS.find((known) => known === tabId);
-  if (tab) setActiveTab(tab);
-}
-
 let dotEl: HTMLSpanElement | null = $state(null);
 let pullBtnEl: HTMLButtonElement | null = $state(null);
 let pulseTl: gsap.core.Timeline | null = null;
@@ -141,7 +136,7 @@ $effect(() => {
 });
 </script>
 
-<PillTabs {tabs} {activeTab} onTabChange={handleTabChange} {trailingReserve}>
+<PillTabs {tabs} {activeTab} onTabChange={setActiveTab} {trailingReserve}>
 	{#snippet trailing()}
 		<span
 			bind:this={dotEl}

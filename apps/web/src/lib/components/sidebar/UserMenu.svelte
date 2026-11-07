@@ -16,7 +16,7 @@ import { type AccountEntry, accountEntries } from "$lib/session/account-entries"
 import { getSwitchingTo, signOut, switchSession } from "$lib/session/lifecycle.svelte";
 import { getIsSwitching, getLocalAccounts, getUser } from "$lib/stores/auth.svelte";
 import { getGithubHost } from "$lib/stores/settings.svelte";
-import { toggleSettings } from "$lib/stores/settingsModal.svelte";
+import { openSettings } from "$lib/stores/settingsModal.svelte";
 
 interface Props {
   collapsed?: boolean;
@@ -45,7 +45,7 @@ async function handleSwitchEntry(entry: AccountEntry): Promise<void> {
 
 function handleSettings(): void {
   open = false;
-  toggleSettings();
+  openSettings("general");
 }
 
 function handleSignOut(): void {

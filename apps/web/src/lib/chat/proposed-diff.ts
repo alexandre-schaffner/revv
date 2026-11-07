@@ -38,7 +38,11 @@ export function proposedFiles(sha: string, files: readonly ProposedDiffFile[]): 
       diff: f.binary
         ? null
         : parseDiffFromFile(
-            { name: f.oldPath ?? f.path, contents: f.oldContent ?? "", cacheKey: `${cacheKey}-old` },
+            {
+              name: f.oldPath ?? f.path,
+              contents: f.oldContent ?? "",
+              cacheKey: `${cacheKey}-old`,
+            },
             { name: f.path, contents: f.newContent ?? "", cacheKey: `${cacheKey}-new` },
           ),
     };
