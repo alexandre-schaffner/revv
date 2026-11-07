@@ -70,15 +70,13 @@ async function onGenerate(): Promise<void> {
 </script>
 
 {#snippet recapActions()}
-<div class="actions-float">
-	<div class="actions-row" role="toolbar" aria-label="Recap actions">
-		<RecapGeneratePill
-			label="Generate recap"
-			busyLabel="Generating recap…"
-			title="Write the {period} recap for {title}"
-			run={onGenerate}
-		/>
-	</div>
+<div class="actions-row" role="toolbar" aria-label="Recap actions">
+	<RecapGeneratePill
+		label="Generate recap"
+		busyLabel="Generating recap…"
+		title="Write the {period} recap for {title}"
+		run={onGenerate}
+	/>
 </div>
 {/snippet}
 

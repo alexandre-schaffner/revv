@@ -8,10 +8,8 @@ import Notebook from "phosphor-svelte/lib/Notebook";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import { untrack } from "svelte";
-import { api } from "$lib/api/client";
-import type { EdenData } from "$lib/api/wire";
+import { getPrCommits, loadPrCommits } from "$lib/review/pr-commits.svelte";
 import { setActiveTab } from "$lib/stores/pr-view-state.svelte";
-import { refreshPrHead } from "$lib/stores/sync.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { WALKTHROUGH_PERSPECTIVES } from "$lib/walkthrough/perspective";
 import {
@@ -23,16 +21,12 @@ import {
 
 let { pr }: { pr: PullRequest } = $props();
 
-type Commit = EdenData<ReturnType<typeof api.api.prs>["commits"]["get"]>[number];
-
 let open = $state(false);
-// Cache key is `prId@headSha`, not just `prId`: a head-SHA move makes the
-// cached list wrong (it is missing the new commits and its "latest" marker
-// points at a commit that is no longer the head), so the next open must refetch.
-let cachedKey = $state<string | null>(null);
-let commits = $state<readonly Commit[] | null>(null);
-let loading = $state(false);
-let fetchError = $state(false);
+// The head the list was last asked at. The live head can move while the menu
+// is open (the list itself can reveal that); the next open asks again.
+let askedHead = $state<string | null>(null);
+const listing = $derived(getPrCommits(pr.id, askedHead));
+const commits = $derived(listing.request.status === "ok" ? listing.request.data : null);
 
 // The commit list doubles as the walkthrough history: a commit a walkthrough
 // reviewed up to (`round.toSha`) loads that report into the walkthrough tab.
@@ -96,51 +90,14 @@ function reportLabel(round: WalkthroughReviewRound): string {
   return `${kind} · ${formatRelativeTime(round.completedAt ?? round.createdAt)}`;
 }
 
-function cacheKey(prId: string, headSha: string | null): string {
-  return `${prId}@${headSha ?? ""}`;
-}
-
-async function fetchData(prId: string, headSha: string | null) {
-  const key = cacheKey(prId, headSha);
-  if (cachedKey === key) return;
-  loading = true;
-  fetchError = false;
-  try {
-    const { data: fetched, error } = await api.api.prs({ id: prId }).commits.get();
-    if (error) {
-      fetchError = true;
-      return;
-    }
-    commits = fetched;
-    cachedKey = key;
-    // This endpoint reads GitHub live and returns the PR's commits head-first,
-    // so `fetched[0]` IS the real head. When it disagrees with the head we have
-    // stored, the row is behind — the poll fiber hasn't caught this push yet —
-    // and every head-derived affordance (the "Pull" button, the "latest" marker
-    // below) is currently lying. Reconcile from the evidence already in hand
-    // instead of waiting out the poll interval.
-    const liveHead = fetched[0]?.sha;
-    if (liveHead !== undefined && liveHead !== headSha) refreshPrHead(prId);
-  } catch {
-    fetchError = true;
-  } finally {
-    loading = false;
-  }
-}
-
 $effect(() => {
-  // Only `open` is tracked here. The PR is read via untrack so SSE-driven
-  // PR object updates don't re-trigger a fetch while the dropdown is open.
-  if (open) {
-    const { id: prId, headSha } = untrack(() => ({ id: pr.id, headSha: pr.headSha }));
-    if (cachedKey !== null && cachedKey !== cacheKey(prId, headSha)) {
-      commits = null;
-      cachedKey = null;
-    }
-    fetchData(prId, headSha);
-    // Refresh the report list too: a round can finish while the menu is shut.
-    void loadReviewRounds(prId);
-  }
+  // Only `open` is tracked: SSE-driven PR updates mustn't re-ask while it's open.
+  if (!open) return;
+  const { id: prId, headSha } = untrack(() => ({ id: pr.id, headSha: pr.headSha }));
+  askedHead = headSha;
+  loadPrCommits(prId, headSha);
+  // A round can finish while the menu is shut.
+  void loadReviewRounds(prId);
 });
 </script>
 
@@ -190,12 +147,12 @@ $effect(() => {
 			sideOffset={6}
 			class="z-50 max-h-[60vh] min-w-[340px] overflow-y-auto overscroll-contain rounded-lg border border-border bg-bg-primary py-1 shadow-lg"
 		>
-			{#if loading}
+			{#if listing.request.status === "loading" || listing.request.status === "idle"}
 				<div class="flex items-center justify-center gap-2 px-3 py-3 text-xs text-text-muted">
 					<Spinner size={12} class="motion-essential-spin" />
 					<span>Loading commits…</span>
 				</div>
-			{:else if fetchError}
+			{:else if listing.request.status === "error"}
 				<div class="flex items-center justify-center gap-2 px-3 py-3 text-xs text-danger">
 					<WarningCircle size={12} weight="fill" />
 					<span>Failed to load commits</span>

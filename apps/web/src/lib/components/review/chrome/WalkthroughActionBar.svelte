@@ -160,68 +160,68 @@ function handleRegenerate(): void {
 
 {#if genActionState}
   <div
-    class="actions-float"
+    class="actions-row"
+    role="toolbar"
+    aria-label="Walkthrough actions"
     in:gsapFadeY={{ duration: tokens.quick, y: 8 }}
     out:gsapFade={{ duration: tokens.snap }}
   >
-    <div class="actions-row" role="toolbar" aria-label="Walkthrough actions">
-      <GlassPill
-        icon
-        onclick={scrollToTop}
-        aria-label="Scroll to top of walkthrough"
+    <GlassPill
+      icon
+      onclick={scrollToTop}
+      aria-label="Scroll to top of walkthrough"
+    >
+      <ArrowUp size={16} />
+    </GlassPill>
+
+    <GenActionBar
+      uiState={genActionState}
+      pendingAction={combinedPendingAction}
+      disabledTitle={combinedDisabledTitle}
+      copy={GEN_COPY}
+      onStop={() => abortWalkthrough(prId)}
+      onResume={() => resumeWalkthrough(prId, selectedMode)}
+      onGenerate={(next) => generateWalkthrough(prId, next ?? selectedMode)}
+      onRegenerate={handleRegenerate}
+      onRegenerateFromScratch={(next) =>
+        regenerateWalkthroughFromScratch(prId, next ?? selectedMode)}
+      {perspective}
+    />
+
+    {#if walkthroughUiState.kind === "streaming" && walkthroughHasNewContentBelow}
+      <!-- Inline-flex wrapper so the Svelte transition has a real box.
+           80ms in-delay damps flicker if the user scrolls past the
+           threshold and immediately back. -->
+      <span
+        class="pill-wrap"
+        in:gsapFadeY={{ duration: tokens.quick, y: 4, delay: 0.08 }}
+        out:gsapFade={{ duration: tokens.snap }}
       >
-        <ArrowUp size={16} />
-      </GlassPill>
-
-      <GenActionBar
-        uiState={genActionState}
-        pendingAction={combinedPendingAction}
-        disabledTitle={combinedDisabledTitle}
-        copy={GEN_COPY}
-        onStop={() => abortWalkthrough(prId)}
-        onResume={() => resumeWalkthrough(prId, selectedMode)}
-        onGenerate={(next) => generateWalkthrough(prId, next ?? selectedMode)}
-        onRegenerate={handleRegenerate}
-        onRegenerateFromScratch={(next) =>
-          regenerateWalkthroughFromScratch(prId, next ?? selectedMode)}
-        {perspective}
-      />
-
-      {#if walkthroughUiState.kind === "streaming" && walkthroughHasNewContentBelow}
-        <!-- Inline-flex wrapper so the Svelte transition has a real box.
-             80ms in-delay damps flicker if the user scrolls past the
-             threshold and immediately back. -->
-        <span
-          class="pill-wrap"
-          in:gsapFadeY={{ duration: tokens.quick, y: 4, delay: 0.08 }}
-          out:gsapFade={{ duration: tokens.snap }}
+        <GlassPill
+          onclick={scrollToBottom}
+          aria-label="Scroll to newest walkthrough content"
         >
-          <GlassPill
-            onclick={scrollToBottom}
-            aria-label="Scroll to newest walkthrough content"
-          >
-            <ArrowDown size={16} />
-            New content
-          </GlassPill>
-        </span>
-      {/if}
+          <ArrowDown size={16} />
+          New content
+        </GlassPill>
+      </span>
+    {/if}
 
-      {#if walkthroughHasRatings}
-        <span
-          class="pill-wrap"
-          in:gsapFadeY={{ duration: tokens.quick, y: 4 }}
-          out:gsapFade={{ duration: tokens.snap }}
+    {#if walkthroughHasRatings}
+      <span
+        class="pill-wrap"
+        in:gsapFadeY={{ duration: tokens.quick, y: 4 }}
+        out:gsapFade={{ duration: tokens.snap }}
+      >
+        <GlassPill
+          onclick={scrollToRatings}
+          aria-label="Scroll to rating panel"
         >
-          <GlassPill
-            onclick={scrollToRatings}
-            aria-label="Scroll to rating panel"
-          >
-            <Star size={16} weight="fill" />
-            Rating
-          </GlassPill>
-        </span>
-      {/if}
-    </div>
+          <Star size={16} weight="fill" />
+          Rating
+        </GlassPill>
+      </span>
+    {/if}
   </div>
 {/if}
 

@@ -1,46 +1,15 @@
 <script lang="ts">
-import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
-import ContextUsage from "$lib/components/agent-activity/ContextUsage.svelte";
-import { getSelectedPr, getSelectedPrId } from "$lib/stores/route.svelte";
-import { getSettings } from "$lib/stores/settings.svelte";
-import {
-  getLastSyncAt,
-  getSyncError,
-  getThreadsSyncing,
-  requestFullSync,
-} from "$lib/stores/sync.svelte";
-import { now } from "$lib/utils/clock.svelte";
-import { formatRelativeTime } from "$lib/utils/format-relative-time";
-import { getTokenUsage } from "$lib/walkthrough/store.svelte";
+import type { Snippet } from "svelte";
 import AgentSelector from "./AgentSelector.svelte";
-import CommitsDropdown from "./CommitsDropdown.svelte";
 import ModelSelector from "./ModelSelector.svelte";
 import ThinkingEffortSelector from "./ThinkingEffortSelector.svelte";
 
-const pr = $derived(getSelectedPr());
-const selectedPrId = $derived(getSelectedPrId());
-const lastSyncAt = $derived(getLastSyncAt(selectedPrId));
-const syncing = $derived(getThreadsSyncing(selectedPrId));
-const syncError = $derived(getSyncError(selectedPrId));
-
-const usage = $derived(getTokenUsage(selectedPrId ?? ""));
-const usedTokens = $derived(usage.contextTokens);
-// `contextWindowTokens` comes from the agent's ACP `usage_update.size`, which
-// an agent may leave unknown. Revv always runs at the full window, so the
-// fallback is a constant rather than a setting.
-const FALLBACK_CONTEXT_WINDOW = 1_000_000;
-const maxContext = $derived(usage.contextWindowTokens ?? FALLBACK_CONTEXT_WINDOW);
-const showUsage = $derived(selectedPrId !== null);
-
-const syncLabel = $derived(
-  lastSyncAt ? formatRelativeTime(lastSyncAt, { now: now(1000), seconds: true }) : "",
-);
-
-function handleRetrySync() {
-  if (!syncing && selectedPrId) {
-    requestFullSync(selectedPrId);
-  }
+interface Props {
+  /** The page's status chrome (see `ShellChrome.status`). */
+  status?: Snippet | undefined;
 }
+
+let { status }: Props = $props();
 </script>
 
 <div class="bottombar-row">
@@ -53,36 +22,7 @@ function handleRetrySync() {
 	</div>
 
 	<div class="bottombar-right">
-		{#if showUsage}
-			<ContextUsage {usedTokens} maxTokens={maxContext} {usage} />
-			<span class="h-3 w-px shrink-0 bg-border"></span>
-		{/if}
-		{#if selectedPrId}
-			<button
-				class="flex cursor-pointer items-center gap-1.5 text-xs tabular-nums text-text-muted rounded px-1 py-0.5 transition-colors hover:bg-bg-elevated hover:text-text-secondary disabled:cursor-default disabled:opacity-60"
-				onclick={handleRetrySync}
-				disabled={syncing}
-				title="Sync comments for this PR"
-			>
-				{#if syncing}
-					<span class="flex items-center motion-essential-spin"><ArrowsClockwise size={11} /></span>
-					<span class="whitespace-nowrap">Syncing…</span>
-				{:else if syncError}
-					<ArrowsClockwise size={11} />
-					<span class="whitespace-nowrap text-danger">Sync failed</span>
-				{:else if lastSyncAt}
-					<ArrowsClockwise size={11} />
-					<span class="whitespace-nowrap">Synced {syncLabel}</span>
-				{:else}
-					<ArrowsClockwise size={11} />
-					<span class="whitespace-nowrap">Sync now</span>
-				{/if}
-			</button>
-		{/if}
-		{#if pr}
-			<span class="h-3 w-px shrink-0 bg-border"></span>
-			<CommitsDropdown {pr} />
-		{/if}
+		{@render status?.()}
 	</div>
 </div>
 

@@ -68,116 +68,116 @@ async function runOwnerAction(action: OwnerAction): Promise<void> {
 </script>
 
 <div
-  class="actions-float"
+  class="actions-row"
+  role="toolbar"
+  aria-label="Review actions"
   in:gsapFadeY={{ duration: tokens.quick, y: 8 }}
   out:gsapFade={{ duration: tokens.snap }}
 >
-  <div class="actions-row" role="toolbar" aria-label="Review actions">
+  <GlassPill
+    variant="muted"
+    disabled={submitting !== null || selectedCount === 0 || agentWorking}
+    onclick={onGenerateChanges}
+    title={selectedCount === 0
+      ? "Select at least one issue to ask the agent to address"
+      : agentWorking
+        ? "Agent is generating changes…"
+        : "Open the chat panel and ask the agent to address the selected issues as commits"}
+  >
+    <PenNib size={16} />
+    <Shimmer active={submitting === null && selectedCount > 0}>
+      {agentWorking ? "Generating changes…" : "Generate changes"}
+    </Shimmer>
+  </GlassPill>
+
+  {#if isPrOwner && pr}
+    <!-- Owner view — GitHub rejects Approve / Request Changes on your own
+         PR, so instead of that pair we surface the actions a coder actually
+         needs here: post review comments (the one review event allowed on
+         your own PR), toggle draft state, merge, and close. -->
+    <!-- A plain COMMENT review: pushes line comments + selected walkthrough
+         issues without approving or requesting changes. Labelled "Submit
+         review", not "Comment", so it doesn't read as a twin of the
+         Conversation tab's composer, which posts a top-level PR comment. -->
     <GlassPill
       variant="muted"
-      disabled={submitting !== null || selectedCount === 0 || agentWorking}
-      onclick={onGenerateChanges}
-      title={selectedCount === 0
-        ? "Select at least one issue to ask the agent to address"
-        : agentWorking
-          ? "Agent is generating changes…"
-          : "Open the chat panel and ask the agent to address the selected issues as commits"}
+      disabled={submitting !== null || !canComment}
+      onclick={onComment}
+      title={!canComment
+        ? "Add comments or select walkthrough issues first"
+        : "Post your line comments and selected issues to GitHub as a review"}
     >
-      <PenNib size={16} />
-      <Shimmer active={submitting === null && selectedCount > 0}>
-        {agentWorking ? "Generating changes…" : "Generate changes"}
-      </Shimmer>
+      <ArrowUp size={16} />
+      {submitting === "comment" ? "Submitting…" : "Submit review"}
     </GlassPill>
-
-    {#if isPrOwner && pr}
-      <!-- Owner view — GitHub rejects Approve / Request Changes on your own
-           PR, so instead of that pair we surface the actions a coder actually
-           needs here: post review comments (the one review event allowed on
-           your own PR), toggle draft state, merge, and close. -->
-      <!-- A plain COMMENT review: pushes line comments + selected walkthrough
-           issues without approving or requesting changes. Labelled "Submit
-           review", not "Comment", so it doesn't read as a twin of the
-           Conversation tab's composer, which posts a top-level PR comment. -->
-      <GlassPill
-        variant="muted"
-        disabled={submitting !== null || !canComment}
-        onclick={onComment}
-        title={!canComment
-          ? "Add comments or select walkthrough issues first"
-          : "Post your line comments and selected issues to GitHub as a review"}
-      >
-        <ArrowUp size={16} />
-        {submitting === "comment" ? "Submitting…" : "Submit review"}
-      </GlassPill>
-      {#if isPrOpen && pr.isDraft}
-        <GlassPill
-          variant="accent"
-          disabled={ownerSubmitting !== null}
-          onclick={() => runOwnerAction("ready-for-review")}
-          title="Mark this draft as ready for review"
-        >
-          <PaperPlaneRight size={16} />
-          {ownerSubmitting === "ready-for-review" ? "Marking ready…" : "Ready for review"}
-        </GlassPill>
-      {:else if isPrOpen}
-        <GlassPill
-          disabled={ownerSubmitting !== null}
-          onclick={() => runOwnerAction("convert-to-draft")}
-          title="Move this PR back to draft state"
-        >
-          <PencilSimple size={16} />
-          {ownerSubmitting === "convert-to-draft" ? "Converting…" : "Convert to draft"}
-        </GlassPill>
-      {/if}
-
-      <MergeControl {prId} disabled={ownerSubmitting !== null} />
-
-      {#if isPrOpen}
-        <GlassPill
-          variant="danger"
-          disabled={ownerSubmitting !== null}
-          onclick={() => runOwnerAction("close")}
-          title="Close this pull request without merging"
-        >
-          <XCircle size={16} />
-          {ownerSubmitting === "close" ? "Closing…" : "Close PR"}
-        </GlassPill>
-      {/if}
-    {:else}
-      <!-- One "Submit review" posts everything as a single GitHub review: the
-           line comments always, and it requests changes when walkthrough
-           issues are selected. Approve stays a separate action. -->
+    {#if isPrOpen && pr.isDraft}
       <GlassPill
         variant="accent"
-        disabled={submitting !== null || !canComment}
-        onclick={onSubmitReview}
-        title={!canComment
-          ? "Add comments or select walkthrough issues first"
-          : "Submit your review — posts your comments, and requests changes if any issues are selected"}
+        disabled={ownerSubmitting !== null}
+        onclick={() => runOwnerAction("ready-for-review")}
+        title="Mark this draft as ready for review"
       >
-        <ArrowUp size={16} />
-        {submitting !== null ? "Submitting…" : "Submit review"}
+        <PaperPlaneRight size={16} />
+        {ownerSubmitting === "ready-for-review" ? "Marking ready…" : "Ready for review"}
       </GlassPill>
-      {#if viewerApproved}
-        <GlassPill variant="success" disabled title="You approved this pull request">
-          <Check size={16} />
-          Approved
-        </GlassPill>
-        <MergeControl {prId} />
-      {:else}
-        <GlassPill
-          variant="success"
-          disabled={submitting !== null}
-          onclick={onApprove}
-          title={approveBlockerSummary
-            ? `Approve this pull request (${approveBlockerSummary} still open)`
-            : "Approve this pull request on GitHub"}
-        >
-          <Check size={16} />
-          {submitting === "approve" ? "Approving…" : "Approve"}
-        </GlassPill>
-      {/if}
+    {:else if isPrOpen}
+      <GlassPill
+        disabled={ownerSubmitting !== null}
+        onclick={() => runOwnerAction("convert-to-draft")}
+        title="Move this PR back to draft state"
+      >
+        <PencilSimple size={16} />
+        {ownerSubmitting === "convert-to-draft" ? "Converting…" : "Convert to draft"}
+      </GlassPill>
     {/if}
-  </div>
+
+    <MergeControl {prId} disabled={ownerSubmitting !== null} />
+
+    {#if isPrOpen}
+      <GlassPill
+        variant="danger"
+        disabled={ownerSubmitting !== null}
+        onclick={() => runOwnerAction("close")}
+        title="Close this pull request without merging"
+      >
+        <XCircle size={16} />
+        {ownerSubmitting === "close" ? "Closing…" : "Close PR"}
+      </GlassPill>
+    {/if}
+  {:else}
+    <!-- One "Submit review" posts everything as a single GitHub review: the
+         line comments always, and it requests changes when walkthrough
+         issues are selected. Approve stays a separate action. -->
+    <GlassPill
+      variant="accent"
+      disabled={submitting !== null || !canComment}
+      onclick={onSubmitReview}
+      title={!canComment
+        ? "Add comments or select walkthrough issues first"
+        : "Submit your review — posts your comments, and requests changes if any issues are selected"}
+    >
+      <ArrowUp size={16} />
+      {submitting !== null ? "Submitting…" : "Submit review"}
+    </GlassPill>
+    {#if viewerApproved}
+      <GlassPill variant="success" disabled title="You approved this pull request">
+        <Check size={16} />
+        Approved
+      </GlassPill>
+      <MergeControl {prId} />
+    {:else}
+      <GlassPill
+        variant="success"
+        disabled={submitting !== null}
+        onclick={onApprove}
+        title={approveBlockerSummary
+          ? `Approve this pull request (${approveBlockerSummary} still open)`
+          : "Approve this pull request on GitHub"}
+      >
+        <Check size={16} />
+        {submitting === "approve" ? "Approving…" : "Approve"}
+      </GlassPill>
+    {/if}
+  {/if}
 </div>
 

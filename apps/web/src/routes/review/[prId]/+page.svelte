@@ -10,6 +10,7 @@ export { reviewTabs };
 import { page } from "$app/state";
 import ConversationTab from "$lib/components/conversation/ConversationTab.svelte";
 import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
+import ReviewStatus from "$lib/components/review/chrome/ReviewStatus.svelte";
 import WalkthroughActionBar from "$lib/components/review/chrome/WalkthroughActionBar.svelte";
 import ReviewLayout from "$lib/components/review/ReviewLayout.svelte";
 import { readStackPlace } from "$lib/stacks/place";
@@ -20,9 +21,8 @@ import { Badge } from "$lib/components/ui/badge";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import GuidedWalkthrough from "$lib/components/walkthrough/GuidedWalkthrough.svelte";
 import { useOpenReview } from "$lib/review/open-review.svelte";
-import { useCommands } from "$lib/stores/commands.svelte";
 import { getReviewFiles } from "$lib/stores/diff-files.svelte";
-import { getActiveTab, REVIEW_TABS, setActiveTab } from "$lib/stores/pr-view-state.svelte";
+import { getActiveTab } from "$lib/stores/pr-view-state.svelte";
 import { getPrById } from "$lib/stores/prs.svelte";
 import { scrollPane } from "$lib/stores/review-nav.svelte";
 import { getPrRiskTier } from "$lib/walkthrough/sizing.svelte";
@@ -56,21 +56,16 @@ const riskClasses: Record<string, string> = {
 
 const scrollRootPane = $derived(activeTab === "diff" ? null : activeTab);
 
-useCommands(
-  REVIEW_TABS.map((tab, index) => ({
-    id: `review:tab-${tab}`,
-    label: `Show ${tab} tab`,
-    keys: { key: String(index + 1) },
-    hidden: true,
-    run: () => setActiveTab(tab),
-  })),
-);
-
 useShellChrome(() => ({
   tabs: pr ? { snippet: reviewTabs, key: prId } : undefined,
   actions: pr && activeTab === "walkthrough" ? walkthroughActions : undefined,
+  status: prId ? reviewStatus : undefined,
 }));
 </script>
+
+{#snippet reviewStatus()}
+	<ReviewStatus {prId} />
+{/snippet}
 
 {#snippet reviewTabs(prId: string)}
 	<ReviewTabs {prId} />

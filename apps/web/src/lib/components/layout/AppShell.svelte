@@ -220,7 +220,11 @@ function onRightHandleDblClick(): void {
 			{/key}
 		</div>
 
-		{@render chrome.current.actions?.()}
+		{#if chrome.current.actions}
+			<div class="actions-float">
+				{@render chrome.current.actions()}
+			</div>
+		{/if}
 	</main>
 
 	<aside class="userbar-area">
@@ -228,7 +232,7 @@ function onRightHandleDblClick(): void {
 	</aside>
 
 	<footer class="bottombar-area">
-		<BottomBar />
+		<BottomBar status={chrome.current.status} />
 	</footer>
 
 	<div class="rightpanel-slot">
@@ -407,6 +411,29 @@ function onRightHandleDblClick(): void {
 
 	:where(.tabs-float) :global(*) {
 		pointer-events: auto;
+	}
+
+	.actions-float {
+		position: absolute;
+		bottom: 0;
+		left: 0;
+		right: 0;
+		display: flex;
+		justify-content: center;
+		padding: 8px 0 10px;
+		z-index: 10;
+		pointer-events: none;
+	}
+
+	:where(.actions-float) :global(*) {
+		pointer-events: auto;
+	}
+
+	/* The row every page's actions render in. */
+	.actions-float :global(.actions-row) {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--spacing-island);
 	}
 
 	.page-slot {

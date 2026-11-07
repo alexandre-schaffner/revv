@@ -38,25 +38,23 @@ async function generateCurrent(): Promise<void> {
 </script>
 
 {#snippet actions()}
-	<div class="actions-float">
-		<div class="actions-row" role="toolbar" aria-label="Recap actions">
-			{#if controller.offersCurrentWindow}
-				<RecapGeneratePill
-					label="Generate {current} recap"
-					busyLabel="Generating {current} recap…"
-					title="Write a brand-new recap for {current} {period} window. The recap below stays as-is."
-					run={generateCurrent}
-				/>
-			{/if}
-			{#if controller.actionState}
-				<GenActionBar
-					uiState={controller.actionState}
-					pendingAction={controller.pendingAction}
-					copy={GEN_COPY}
-					onStop={() => controller.stop()}
-					onRegenerate={() => controller.regenerate()}
-				/>
-			{/if}
-		</div>
+	<div class="actions-row" role="toolbar" aria-label="Recap actions">
+		{#if controller.offersCurrentWindow}
+			<RecapGeneratePill
+				label="Generate {current} recap"
+				busyLabel="Generating {current} recap…"
+				title="Write a brand-new recap for {current} {period} window. The recap below stays as-is."
+				run={generateCurrent}
+			/>
+		{/if}
+		{#if controller.actionState}
+			<GenActionBar
+				uiState={controller.actionState}
+				pendingAction={controller.pendingAction}
+				copy={GEN_COPY}
+				onStop={() => controller.stop()}
+				onRegenerate={() => controller.regenerate()}
+			/>
+		{/if}
 	</div>
 {/snippet}
