@@ -10,70 +10,62 @@ function request(body: unknown): Request {
   });
 }
 
+const echoProject = {
+  name: "test",
+  version: "1",
+  specs: [
+    {
+      name: "echo",
+      description: "Echo",
+      inputSchema: z.object({}),
+      handler: async (ctx: { project: string }) => ({
+        content: [{ type: "text" as const, text: ctx.project }],
+      }),
+    },
+  ],
+};
+
 describe("bindHttp connection resolution", () => {
-  it("authenticates initialize and tools/list without resolving tool context", async () => {
-    let connectionCalls = 0;
-    let contextCalls = 0;
+  it("answers initialize and tools/list on the credential alone, without a project", async () => {
     const app = bindHttp({
       path: "/test",
       logScope: "mcp-test",
-      bundle: {
-        name: "test",
-        version: "1",
-        specs: [
-          {
-            name: "echo",
-            description: "Echo",
-            inputSchema: z.object({}),
-            handler: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
-          },
-        ],
-      },
-      resolveConnection: async () => {
-        connectionCalls += 1;
-        return { ok: true, meta: { scopes: ["read"] } };
-      },
-      resolveContext: async () => {
-        contextCalls += 1;
-        return { ok: true, ctx: { project: "resolved" }, meta: { scopes: ["read"] } };
-      },
+      bundle: echoProject,
+      resolveConnection: async () => ({ ok: true, meta: null }),
+      resolveContext: async () => ({ ok: false, status: 400, message: "no checkout" }),
     });
 
     const initialize = await app.handle(request({ jsonrpc: "2.0", id: 1, method: "initialize" }));
     const list = await app.handle(request({ jsonrpc: "2.0", id: 2, method: "tools/list" }));
 
     expect(initialize.status).toBe(200);
+    expect(await initialize.json()).toHaveProperty("result.serverInfo.name", "test");
     expect(list.status).toBe(200);
-    expect(connectionCalls).toBe(2);
-    expect(contextCalls).toBe(0);
+    expect(await list.json()).toMatchObject({ result: { tools: [{ name: "echo" }] } });
   });
 
-  it("resolves project context for tools/call", async () => {
-    let connectionCalls = 0;
-    let contextCalls = 0;
+  it("refuses the handshake when the credential doesn't resolve", async () => {
     const app = bindHttp({
       path: "/test",
       logScope: "mcp-test",
-      bundle: {
-        name: "test",
-        version: "1",
-        specs: [
-          {
-            name: "echo",
-            description: "Echo",
-            inputSchema: z.object({}),
-            handler: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
-          },
-        ],
-      },
-      resolveConnection: async () => {
-        connectionCalls += 1;
-        return { ok: true, meta: null };
-      },
-      resolveContext: async () => {
-        contextCalls += 1;
-        return { ok: true, ctx: { project: "resolved" }, meta: null };
-      },
+      bundle: echoProject,
+      resolveConnection: async () => ({ ok: false, status: 401, message: "Missing bearer token" }),
+      resolveContext: async () => ({ ok: true, ctx: { project: "resolved" }, meta: null }),
+    });
+
+    const response = await app.handle(request({ jsonrpc: "2.0", id: 1, method: "initialize" }));
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({ error: { message: "Missing bearer token" } });
+  });
+
+  it("hands tools/call the resolved project context", async () => {
+    const app = bindHttp({
+      path: "/test",
+      logScope: "mcp-test",
+      bundle: echoProject,
+      resolveConnection: async () => ({ ok: true, meta: null }),
+      resolveContext: async () => ({ ok: true, ctx: { project: "resolved" }, meta: null }),
     });
 
     const response = await app.handle(
@@ -86,26 +78,16 @@ describe("bindHttp connection resolution", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(connectionCalls).toBe(0);
-    expect(contextCalls).toBe(1);
+    expect(await response.json()).toMatchObject({
+      result: { content: [{ type: "text", text: "resolved" }] },
+    });
   });
 
   it("keeps handshake responses when project resolution fails in a mixed batch", async () => {
     const app = bindHttp({
       path: "/test",
       logScope: "mcp-test",
-      bundle: {
-        name: "test",
-        version: "1",
-        specs: [
-          {
-            name: "echo",
-            description: "Echo",
-            inputSchema: z.object({}),
-            handler: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
-          },
-        ],
-      },
+      bundle: echoProject,
       resolveConnection: async () => ({ ok: true, meta: null }),
       resolveContext: async () => ({
         ok: false,
