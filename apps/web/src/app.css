@@ -845,17 +845,13 @@ diffs-container {
    GSAP-driven motion is gated by prefersReducedMotion() in
    $lib/motion/reduced-motion.ts — the SOLE arbiter for GSAP motion.
 
-   The block below is defensive coverage for the CSS animations
-   that intentionally stayed off GSAP (see motion/README.md for
-   the list and the per-case justification): the loader spin,
-   the text-shimmer sweep, the per-character markdown reveal,
-   the indeterminate progress bar, and the Dotmatrix variants.
-   Each is either semantically essential (kept running via the
-   .motion-essential-* utility) or a compositor-only paint loop
-   that explicitly opts out via the @media query below.
-
-   Add new exceptions sparingly. Each one needs a comment
-   explaining why losing the animation would harm meaning. */
+   The block at the end of this file covers the CSS animations and
+   transitions that stayed off GSAP (motion/README.md lists them): the
+   skeleton sweep, the text shimmer, the per-character markdown reveal,
+   the indeterminate progress bar, the Dotmatrix variants, component
+   keyframes and hover transitions. It is `!important` because a bare
+   `*` selector loses to every class rule that sets `animation`; only
+   `.motion-essential-*` (the loader spin) is exempt and keeps running. */
 /* Per-character fade-in for streamed markdown, after Luxe's
    `TextGenerativeEffect` (https://animation-svelte.vercel.app/luxe/text-generate-effect).
    The renderer in `lib/markdown/render.ts` sets each span's stagger inline.
@@ -881,14 +877,21 @@ diffs-container {
   }
 }
 
+/* Every animation runs once in 1ms and lands on its end state (a
+   reveal shows its text, a sweep or pulse comes to rest); transitions
+   snap. See the reduced-motion contract above. */
 @media (prefers-reduced-motion: reduce) {
-  *,
+  *:not(.motion-essential-spin),
   *::before,
   *::after {
-    animation-duration: 1ms;
-    animation-iteration-count: 1;
-    transition-duration: 1ms;
-    scroll-behavior: auto;
+    /* biome-ignore lint/complexity/noImportantStyles: must outrank class rules */
+    animation-duration: 1ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: must outrank class rules */
+    animation-iteration-count: 1 !important;
+    /* biome-ignore lint/complexity/noImportantStyles: must outrank class rules */
+    transition-duration: 1ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: must outrank class rules */
+    scroll-behavior: auto !important;
   }
 }
 

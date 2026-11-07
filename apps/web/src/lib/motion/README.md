@@ -91,10 +91,15 @@ wrapper. It is a synchronous read everywhere, and backed by a Svelte
 `MediaQuery`, so an `$effect` or `$derived` that reads it re-runs when the OS
 setting flips (Dotmatrix's JS sequencers rely on that).
 
-The defensive `@media (prefers-reduced-motion: reduce)` block in `app.css`
+The `@media (prefers-reduced-motion: reduce)` block at the end of `app.css`
 covers the CSS animations that intentionally stayed off GSAP — see the
-"Surviving CSS animations" section below. Components don't add their own
-reduced-motion blocks.
+"Surviving CSS animations" section below. Every animation runs once in 1 ms
+and lands on its end state, and transitions snap. It is `!important`: a bare
+`*` rule loses to any class that sets `animation`, so without it the skeleton,
+shimmer, markdown reveal and progress bar kept animating. `.motion-essential-spin`
+is the one exemption. A component adds its own reduced-motion rule only when
+an animation's end state is wrong at rest (`clone-pulse` would leave its halo
+showing), or for motion that isn't an animation (`AccountPicker`'s hover lift).
 
 ## Surviving CSS animations
 
@@ -108,7 +113,7 @@ Kept off GSAP by design — moving them would be a regression:
 - **`indeterminate-progress`** — single element, low cost, runs only when active.
 - **`skeleton-sweep`** — the `.skeleton` placeholder highlight (and its SVG
   twin on the repo activity heatmap). Compositor-only translate, the spinner's
-  reasoning; under reduced motion it plays once and leaves a still block.
+  reasoning; under reduced motion it ends at once and leaves a still block.
 - **`sd-char-in` / `.sd-char-new`** — per-character fade on markdown injected
   via `{@html}`. No Svelte handle for `use:`, so a keyframe is the right tool.
 - **Dotmatrix variants** — three animation kinds with their own reduced-motion
