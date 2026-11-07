@@ -7,9 +7,13 @@ import { Effect } from "effect";
 import { type GitHubError, GitHubNotFoundError } from "../../domain/errors";
 import type { GitHubClient, GitHubHttp } from "./transport";
 
-export function splitFullName(
-  fullName: string,
-): Effect.Effect<{ owner: string; repo: string }, GitHubNotFoundError> {
+/** A repository named by owner and name, as GitHub's REST paths and GraphQL take it. */
+export interface RepoRef {
+  readonly owner: string;
+  readonly repo: string;
+}
+
+export function splitFullName(fullName: string): Effect.Effect<RepoRef, GitHubNotFoundError> {
   const [owner, repo] = fullName.split("/");
   if (!owner || !repo) {
     return Effect.fail(new GitHubNotFoundError({ resource: "repo", id: fullName }));

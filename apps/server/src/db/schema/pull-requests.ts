@@ -27,11 +27,7 @@ export const pullRequests = sqliteTable(
      * GraphQL stats endpoint. Distinguishes a real 0/0/0 from the list endpoint's placeholder.
      */
     diffStatsHeadSha: text("diff_stats_head_sha"),
-    /**
-     * How many `pr_diff_files` rows the last GitHub files fetch stored, written
-     * with them. Nothing reads it: the rows are written whole in one
-     * transaction, so the head/base stamp below already says they are complete.
-     */
+    /** Retired: never written or read. */
     diffFilesCachedCount: integer("diff_files_cached_count"),
     /**
      * The `head_sha` and `base_sha` this row held when the fetch behind the

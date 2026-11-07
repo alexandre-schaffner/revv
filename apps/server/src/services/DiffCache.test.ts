@@ -172,7 +172,7 @@ describe("getOrFetch writes", () => {
     expect(rows[0]?.patch).toBe("@@ second");
   });
 
-  it("record the stored row count, not the length of a list with repeats", async () => {
+  it("count the stored rows, not the length of a list with repeats", async () => {
     const db = freshDb();
     seedPr(db);
 
@@ -184,7 +184,6 @@ describe("getOrFetch writes", () => {
     ]);
 
     const pr = db.select().from(pullRequests).where(eq(pullRequests.id, "pr-1")).get();
-    expect(pr?.diffFilesCachedCount).toBe(2);
     expect(pr?.changedFiles).toBe(2);
     expect(pr?.additions).toBe(2);
   });
