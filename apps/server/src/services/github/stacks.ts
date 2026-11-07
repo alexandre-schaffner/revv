@@ -108,7 +108,7 @@ function allowedMethodsOf(repo: NonNullable<RawPrStackAnswer["repository"]>): Me
   return methods;
 }
 
-export function mapGitHubStack(answer: RawPrStackAnswer, fetchedAt: string): GitHubStack | null {
+function mapGitHubStack(answer: RawPrStackAnswer, fetchedAt: string): GitHubStack | null {
   const repo = answer.repository;
   const stack = repo?.pullRequest?.stack;
   if (!repo || !stack) return null;
@@ -127,13 +127,13 @@ export function mapGitHubStack(answer: RawPrStackAnswer, fetchedAt: string): Git
   };
 }
 
-export function layersToCompare(stack: GitHubStack): LayerComparison[] {
+function layersToCompare(stack: GitHubStack): LayerComparison[] {
   return stack.layers
     .filter(isOpenLayer)
     .map((l) => ({ number: l.number, baseRef: l.baseRef, headRef: l.headRef }));
 }
 
-export function withBehind(stack: GitHubStack, answer: RawLayerCompareAnswer): GitHubStack {
+function withBehind(stack: GitHubStack, answer: RawLayerCompareAnswer): GitHubStack {
   const repo = answer.repository;
   if (!repo) return stack;
   return {
