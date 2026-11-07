@@ -204,11 +204,13 @@ the scheduler restarts.
 `status(code, ApiErrorBody)`, so Eden types every error status a route can answer. A stream
 opens through `routes/sse.ts` (`openSse`, `pipeToSse`, `runStream` for a refusal before the
 stream starts). A router whose paths carry resource ids registers `ownedBy({ id: "pull request" })`
-(`routes/ownership.ts`) right after its auth plugin.
+(`routes/ownership.ts`) right after its auth plugin, or `.resolve(asOwner(…))` when its routes
+act on GitHub or address an account: that derives `owner`, the account that owns the
+repository, which the route acts as whatever host the user has active.
 
 **Why.** One table means a REST route, a stream refusal and the external agent's MCP route
 answer the same error the same way. A guard on the router, not each handler, is what keeps a
-new route from forgetting the ownership check.
+new route from forgetting the ownership check, or from acting as the wrong account.
 
 **Anti-pattern.** `try { await AppRuntime.runPromise(…) } catch (e) { … }` in a handler, a
 hand-written `ctx.set.status = 404` for a condition a domain error already names, or a
@@ -319,21 +321,21 @@ never derive authoritative display state exclusively from stream messages. This 
 invariant #8.
 
 <a id="event-scope-targeting"></a>
-### 3.4 Account-scoped by default; `toAll` only for server-global signals
+### 3.4 Every event is addressed to what it concerns
 
 **Rule.** Features send through `Realtime` (`services/Realtime.ts`), never `Broadcaster`
-(enforced by `check:import-boundaries`). Feature events carry per-account data and MUST be
-addressed to an account: `toAccount(accountId, msg)`, or `toRepo(repoId, msg)` /
-`toPr(prId, msg)`, which resolve the owning account in one place. `toAll(msg)` fans out to every
-connected client and is reserved for server-global signals; nothing sends one today (the PR
-sync's lifecycle and failure signals go to the accounts the cycle syncs).
+(enforced by `check:import-boundaries`). Every event is addressed to an account,
+repository or PR: `toAccount(accountId, msg)`, `toRepo(repoId, msg)` or `toPr(prId, msg)`.
+`Realtime` resolves the local user who owns it in one place, and every client of that user
+hears it: one stream carries all of the user's accounts. A full-state envelope that describes
+one account's list (`prs:updated`, `repos:updated`, `user:updated`) names that account's
+`host`, so a client showing another host's list ignores it. There is no send to every client.
 
-**Why.** A data-bearing envelope (`prs:updated`, recap, thread, walkthrough) sent with
-`toAll` leaks one account's data to every connected client. Scoping is a security
-boundary, not a perf optimization.
+**Why.** Scoping is a security boundary, not a perf optimization: several local users can
+share one install, and an event about one user's repository must not reach another's client.
 
-**Anti-pattern.** Routing `prs:updated` (carries a specific account's `PullRequest[]`) through
-`toAll`, or resolving the account at the call site (`getAccountIdForRepo` then a send).
+**Anti-pattern.** Resolving the owner at the call site (`getAccountIdForRepo` then a send), or
+a full-state list envelope without its `host`.
 
 **Backlog.** None — current canon is clean.
 
