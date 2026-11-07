@@ -82,6 +82,7 @@ export interface BridgeInstallInput {
 }
 
 const LOOPBACK = "127.0.0.1,localhost";
+const TOKEN_VARIABLE = "REVV_INTEGRATION_TOKEN";
 
 /**
  * Environment for the bridge process. `runtimeExecutable` is the server's own
@@ -92,7 +93,7 @@ const LOOPBACK = "127.0.0.1,localhost";
  */
 function bridgeEnvironment(input: BridgeInstallInput): Record<string, string> {
   return {
-    REVV_INTEGRATION_TOKEN: input.token,
+    [TOKEN_VARIABLE]: input.token,
     REVV_API_URL: input.apiUrl,
     NO_PROXY: LOOPBACK,
     no_proxy: LOOPBACK,
@@ -174,24 +175,13 @@ function bridgeFile(installDirectory: string): string {
   return join(installDirectory, "server", "revv-mcp.ts");
 }
 
-/**
- * Bring an installed bridge copy up to this Revv's: a fix to the bridge would
- * otherwise reach a user only when they reconnect. Only Revv's own install
- * directory is touched.
- */
-function refreshBridge(installDirectory: string, integrationsDirectory: string): void {
-  const installed = bridgeFile(installDirectory);
-  if (!existsSync(join(installDirectory, MANAGED_MARKER)) || !existsSync(installed)) return;
-  const bundled = readFileSync(bridgeSourceFile(integrationsDirectory));
-  if (readFileSync(installed).equals(bundled)) return;
-  writeFileSync(installed, bundled, { mode: 0o600 });
-}
-
 function readTextIfExists(file: string): string | null {
   return existsSync(file) ? readFileSync(file, "utf8") : null;
 }
 
 function writePrivateTextFile(file: string, content: string): void {
+  // A boot refresh rewrites every managed file: leave unchanged ones untouched.
+  if (readTextIfExists(file) === content) return;
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const staged = `${file}.staged-${randomUUID()}`;
   try {
@@ -222,7 +212,7 @@ function readManagedGuideBody(integrationsDirectory: string): string {
 function renderGuide(integrationsDirectory: string, frontMatter: readonly string[]): string {
   const body = readManagedGuideBody(integrationsDirectory);
   const header = frontMatter.length > 0 ? `---\n${frontMatter.join("\n")}\n---\n\n` : "";
-  return `${header}<!-- ${MANAGED_COMMENT} Reconnect from Revv Settings to refresh. -->\n\n${body}\n`;
+  return `${header}<!-- ${MANAGED_COMMENT} Revv rewrites this file when it starts. -->\n\n${body}\n`;
 }
 
 function writeManagedGuide(file: string, content: string): void {
@@ -425,6 +415,24 @@ function uninstallCodex(paths: CodexPaths, serverName: string): void {
   removeManagedDirectory(paths.installDir);
 }
 
+function codexToken(paths: CodexPaths, serverName: string): string | null {
+  const existing = readTextIfExists(paths.configFile);
+  if (existing === null) return null;
+  try {
+    const span = managedBlockSpan(existing, serverName);
+    if (!span) return null;
+    const block = existing.slice(span.begin, span.end);
+    return new RegExp(`^${TOKEN_VARIABLE} = "([^"\\\\]+)"$`, "m").exec(block)?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function claudeCodeToken(paths: ClaudeCodePaths): string | null {
+  if (!existsSync(join(paths.installDir, MANAGED_MARKER))) return null;
+  return jsonEntryToken(join(paths.installDir, ".mcp.json"), "mcpServers", "review");
+}
+
 function codexInstalled(paths: CodexPaths, serverName: string): boolean {
   const existing = readTextIfExists(paths.configFile);
   return existing?.includes(codexBlockBegin(serverName)) ?? false;
@@ -436,10 +444,30 @@ function isRevvManagedEntry(entry: unknown): boolean {
   for (const key of ["env", "environment"]) {
     const env = record[key];
     if (env !== null && typeof env === "object" && !Array.isArray(env)) {
-      if ("REVV_INTEGRATION_TOKEN" in (env as Record<string, unknown>)) return true;
+      if (TOKEN_VARIABLE in (env as Record<string, unknown>)) return true;
     }
   }
   return false;
+}
+
+function tokenIn(env: unknown): string | null {
+  if (env === null || typeof env !== "object" || Array.isArray(env)) return null;
+  const token = (env as Record<string, unknown>)[TOKEN_VARIABLE];
+  return typeof token === "string" && token !== "" ? token : null;
+}
+
+/** The credential in Revv's entry of a JSON MCP config, or null. */
+function jsonEntryToken(file: string, section: string, serverName: string): string | null {
+  try {
+    const servers = readJsonConfig(file)[section];
+    if (servers === null || typeof servers !== "object" || Array.isArray(servers)) return null;
+    const entry = (servers as Record<string, unknown>)[serverName];
+    if (!isRevvManagedEntry(entry)) return null;
+    const record = entry as Record<string, unknown>;
+    return tokenIn(record.env) ?? tokenIn(record.environment);
+  } catch {
+    return null;
+  }
 }
 
 function readJsonConfig(file: string): Record<string, unknown> {
@@ -617,13 +645,12 @@ export interface ExternalIntegrationInstaller {
   readonly clientName: string;
   /** What the user still has to do in the agent itself after connecting. */
   readonly activation: string;
-  /** Files and directories this install owns, shown to the user on connect. */
-  readonly locations: readonly string[];
+  /** Write every file Revv owns in the agent's config. Convergent: a re-install rewrites them. */
   readonly install: (input: BridgeInstallInput) => void;
   readonly uninstall: () => void;
   readonly installed: () => boolean;
-  /** Rewrite the installed bridge copy if it differs from the bundled one. */
-  readonly refreshBridge: (integrationsDirectory: string) => void;
+  /** The credential the installed bridge carries, or null when none is installed. */
+  readonly installedToken: () => string | null;
 }
 
 export function externalIntegrationInstaller(
@@ -639,11 +666,10 @@ export function externalIntegrationInstaller(
       return {
         clientName: serverName,
         activation: `Run /reload-plugins in an open session, or restart Claude Code. Server: ${serverName}.`,
-        locations: [paths.installDir],
         install: (input) => installClaudeCode(input, paths, serverName),
         uninstall: () => removeManagedDirectory(paths.installDir),
         installed: () => existsSync(join(paths.installDir, MANAGED_MARKER)),
-        refreshBridge: (dir) => refreshBridge(paths.installDir, dir),
+        installedToken: () => claudeCodeToken(paths),
       };
     }
     case "codex": {
@@ -651,11 +677,10 @@ export function externalIntegrationInstaller(
       return {
         clientName: serverName,
         activation: `Restart Codex, then use /${addressFeedbackCommand(accountKey)}.`,
-        locations: [paths.configFile, paths.promptFile],
         install: (input) => installCodex(input, paths, serverName),
         uninstall: () => uninstallCodex(paths, serverName),
         installed: () => codexInstalled(paths, serverName),
-        refreshBridge: (dir) => refreshBridge(paths.installDir, dir),
+        installedToken: () => codexToken(paths, serverName),
       };
     }
     case "opencode": {
@@ -663,11 +688,10 @@ export function externalIntegrationInstaller(
       return {
         clientName: serverName,
         activation: `Restart opencode, then use /${addressFeedbackCommand(accountKey)}.`,
-        locations: [paths.configFile, paths.commandFile],
         install: (input) => installOpenCode(input, paths, serverName),
         uninstall: () => uninstallOpenCode(paths, serverName),
         installed: () => jsonMcpEntryInstalled(paths.configFile, "mcp", serverName),
-        refreshBridge: (dir) => refreshBridge(paths.installDir, dir),
+        installedToken: () => jsonEntryToken(paths.configFile, "mcp", serverName),
       };
     }
     case "cursor": {
@@ -675,11 +699,10 @@ export function externalIntegrationInstaller(
       return {
         clientName: serverName,
         activation: `Reload the Cursor window, then enable “${serverName}” under Settings → MCP.`,
-        locations: [paths.configFile],
         install: (input) => installCursor(input, paths, serverName),
         uninstall: () => uninstallCursor(paths, serverName),
         installed: () => jsonMcpEntryInstalled(paths.configFile, "mcpServers", serverName),
-        refreshBridge: (dir) => refreshBridge(paths.installDir, dir),
+        installedToken: () => jsonEntryToken(paths.configFile, "mcpServers", serverName),
       };
     }
   }

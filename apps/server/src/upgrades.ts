@@ -76,4 +76,10 @@ export const LEGACY_UPGRADES = {
     carries:
       "clones and worktrees keyed on `owner/name`, which two accounts' rows of one repository shared: at boot each row gets its own clone and its worktrees move under `.worktrees/<row id>`",
   },
+  unpinnedBridge: {
+    introducedIn: "0.35.0",
+    sites: ["integrations/external-mcp-bridge/revv-mcp.ts", "scripts/check-desktop-contract.ts"],
+    carries:
+      "external-agent configs written before the bridge carried `REVV_API_URL`: the bridge probes both channels' ports until the boot refresh (`ExternalIntegrations.refreshInstalls`) pins the config",
+  },
 } as const satisfies Record<string, LegacyUpgrade>;

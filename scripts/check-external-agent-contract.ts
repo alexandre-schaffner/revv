@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { API_PORT, DEV_API_PORT, EXTERNAL_AGENT_SCOPES } from "@revv/shared";
+import { EXTERNAL_AGENT_SCOPES } from "@revv/shared";
 import {
   EXTERNAL_REVIEW_TOOL_SPECS,
   MAX_WAIT_SECONDS,
@@ -42,11 +42,20 @@ if (MAX_WAIT_SECONDS * 1000 >= Number(bridgeTimeout.replaceAll("_", ""))) {
   );
 }
 
-// Bridges installed before they carried `REVV_API_URL` probe Revv's two channels.
-const legacyPorts = /const LEGACY_PORTS = \[([\d_, ]+)\];/.exec(bridgeSource)?.[1];
-if (legacyPorts?.replaceAll(" ", "") !== `${API_PORT},${DEV_API_PORT}`) {
+// Installed guides name tools; a renamed tool would leave every install
+// pointing at one that doesn't exist. Every backticked name the guide starts
+// with a tool verb must be a tool.
+const guide = readFileSync(
+  join(import.meta.dir, "../integrations/external-agent-guides/address-feedback.md"),
+  "utf8",
+);
+const verbs = new Set(names.map((name) => name.split("_")[0]));
+const unknownGuideTools = [...guide.matchAll(/`([a-z]+(?:_[a-z]+)+)`/g)]
+  .map(([, name]) => name ?? "")
+  .filter((name) => verbs.has(name.split("_")[0]) && !names.includes(name));
+if (unknownGuideTools.length > 0) {
   throw new Error(
-    `The external MCP bridge's LEGACY_PORTS must be [${API_PORT}, ${DEV_API_PORT}] (API_PORT, DEV_API_PORT).`,
+    `The external agent guide names tools that don't exist: ${[...new Set(unknownGuideTools)].join(", ")}`,
   );
 }
 

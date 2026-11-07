@@ -82,7 +82,8 @@ const copies: readonly Copy[] = [
   },
   {
     file: "integrations/external-mcp-bridge/revv-mcp.ts",
-    // Pinned installs read REVV_API_URL; older copies probe these ports.
+    // Pinned installs read REVV_API_URL; older copies probe these ports
+    // (legacy-upgrade: unpinnedBridge).
     what: "legacy server ports (LEGACY_PORTS)",
     pattern: /(?<=LEGACY_PORTS = \[[^\]]*?)\b(\d{4,5})\b/g,
     expected: [apiPort, devApiPort],

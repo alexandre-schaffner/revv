@@ -45,6 +45,8 @@ describe("legacy upgrades ledger", () => {
       ...sourceFiles(join(repoRoot, "apps/desktop/src"), /\.rs$/),
       // The installer and the `revv` CLI carry installs forward too.
       ...sourceFiles(join(repoRoot, "scripts"), /^(revv|.*\.(ts|sh))$/),
+      // So do the files Revv installs into coding agents' configs.
+      ...sourceFiles(join(repoRoot, "integrations"), /\.ts$/),
     ]) {
       for (const [, key] of readFileSync(file, "utf8").matchAll(MARKER)) {
         if (!key) continue;
