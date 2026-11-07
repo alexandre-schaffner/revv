@@ -6,6 +6,7 @@ import {
   anchorThreadId,
   blockId,
   blockOrder,
+  decodeBlock,
   decodeTokenUsage,
   type FindingIdentity,
   isJourneyChapterText,
@@ -162,6 +163,32 @@ describe("normalizeProviderConfig", () => {
     expect(normalizeProviderConfig({ ...legacy, provider: "cursor" }, "m")?.provider).toBe(
       "cursor",
     );
+  });
+});
+
+describe("decodeBlock", () => {
+  it("takes the block's identity from its row, even when the stored JSON predates it", () => {
+    const block = decodeBlock({
+      data: JSON.stringify({ type: "markdown", id: "b-1", order: 20001, content: "hi" }),
+      phase: "diff_analysis",
+      semanticStepIndex: 2,
+      stepIndex: 1,
+    });
+    expect(block).toEqual({
+      type: "markdown",
+      id: "b-1",
+      order: 20001,
+      content: "hi",
+      phase: "diff_analysis",
+      semanticStepIndex: 2,
+      stepIndex: 1,
+    });
+  });
+
+  it("is null for a corrupt payload", () => {
+    expect(
+      decodeBlock({ data: "{", phase: "diff_analysis", semanticStepIndex: 0, stepIndex: 0 }),
+    ).toBeNull();
   });
 });
 

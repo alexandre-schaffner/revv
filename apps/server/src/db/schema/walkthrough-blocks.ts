@@ -1,3 +1,4 @@
+import type { WalkthroughBlockPhase } from "@revv/shared";
 import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { walkthroughs } from "./walkthroughs";
 
@@ -23,7 +24,7 @@ export const walkthroughBlocks = sqliteTable(
       .notNull()
       .references(() => walkthroughs.id, { onDelete: "cascade" }),
     /** Phase this block belongs to. Currently only `'diff_analysis'` is populated. */
-    phase: text("phase").notNull().default("diff_analysis"),
+    phase: text("phase").$type<WalkthroughBlockPhase>().notNull().default("diff_analysis"),
     /**
      * Foreign-key-style pointer to the parent `walkthrough_semantic_steps`
      * row (composite key (walkthroughId, semanticStepIndex)). Required for
