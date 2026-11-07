@@ -166,8 +166,8 @@ function errorMessage(error: unknown): string {
 				{/snippet}
 			</svelte:boundary>
 		</div>
-		<!-- Blocking re-auth gate: overlays the app (kept mounted) when the
-		     active account's GitHub token expired and couldn't be refreshed. -->
+		<!-- Re-sign-in modal over the app (kept mounted): it blocks for the
+		     shown host's account; another host's opens from the account menu. -->
 		<ReauthModal />
 	{:else if showPicker}
 		<AccountPicker onNewAccount={dismissAccountPicker} />

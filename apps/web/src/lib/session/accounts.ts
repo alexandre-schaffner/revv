@@ -67,7 +67,16 @@ export function withIdentity(
   return accounts.map((a) => (a === known ? next : a));
 }
 
-/** The first account that must sign in again. */
-export function reauthAsked(accounts: readonly Account[]): Account | null {
-  return accounts.find((a) => a.reauthRequired) ?? null;
+/**
+ * The accounts that must sign in again, split by the host the window shows:
+ * that host's account blocks the window, the others wait in the account menu.
+ * With no shown host, every host counts as shown.
+ */
+export function reauthAsked(
+  accounts: readonly Account[],
+  shownHost: string | null,
+): { readonly blocking: Account | null; readonly waiting: readonly Account[] } {
+  const flagged = accounts.filter((a) => a.reauthRequired);
+  const shown = (a: Account) => shownHost === null || sameGithubHost(a.host, shownHost);
+  return { blocking: flagged.find(shown) ?? null, waiting: flagged.filter((a) => !shown(a)) };
 }
