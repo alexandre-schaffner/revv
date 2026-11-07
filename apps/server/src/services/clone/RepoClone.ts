@@ -149,9 +149,11 @@ export class RepoCloneService extends Context.Service<
       scratchPath: (layout: CloneLayout) => string,
     ) => ScratchPlace | null;
     /**
-     * Remove every worktree Revv checked out of the clone, then the clone
+     * Remove everything Revv keeps on disk for the repository row, before the
+     * row goes: every worktree it checked out of the clone, then the clone
      * itself when Revv manages it; a linked checkout loses only Revv's
-     * branches and refs. What can't be removed safely stays, logged.
+     * branches and refs. What can't be removed safely stays, logged. The one
+     * entry point for forgetting a repository's files.
      */
     readonly deleteClone: (repoId: string) => Effect.Effect<void, DbError>;
     /**
@@ -316,12 +318,16 @@ export const repoCloneLayer = (base: string) =>
           });
         });
 
-      const failClone = (row: RepoRow, message: string) =>
+      /**
+       * Record the failure with the destination it was for, so a retry or a
+       * boot resume tries the same folder instead of falling back to Revv's base.
+       */
+      const failClone = (row: RepoRow, dest: string, message: string) =>
         Effect.gen(function* () {
           // Callers fork the clone and drop its error, so this is the only
           // server-side trace of the failure.
           logError("repo-clone", `clone failed for ${row.fullName}: ${message}`);
-          yield* setCloneState(row, { cloneStatus: "error", cloneError: message });
+          yield* setCloneState(row, { cloneStatus: "error", cloneError: message, clonePath: dest });
           return yield* Effect.fail(new CloneError({ message }));
         });
 
@@ -343,7 +349,11 @@ export const repoCloneLayer = (base: string) =>
           const token = yield* accounts.clientFor(row.accountId).pipe(
             Effect.map((client) => client.token),
             Effect.catch(() =>
-              failClone(row, "No GitHub credential for this repository's account — sign in again"),
+              failClone(
+                row,
+                dest,
+                "No GitHub credential for this repository's account — sign in again",
+              ),
             ),
           );
           debug("repo-clone", `starting clone for ${row.fullName} -> ${dest}`);
@@ -351,11 +361,11 @@ export const repoCloneLayer = (base: string) =>
           const state = yield* Effect.tryPromise({
             try: () => readCloneDestinationState(dest, row.githubHost, row.fullName),
             catch: toCloneError,
-          }).pipe(Effect.catch((err) => failClone(row, err.message)));
+          }).pipe(Effect.catch((err) => failClone(row, dest, err.message)));
           const decision = decideCloneDestination(state, pathIsUnder(dest, layout.base));
           switch (decision.action) {
             case "fail":
-              return yield* failClone(row, decision.message);
+              return yield* failClone(row, dest, decision.message);
             case "link":
               return yield* setCloneState(row, {
                 managed: false,
@@ -406,6 +416,7 @@ export const repoCloneLayer = (base: string) =>
             }).pipe(Effect.catch(() => Effect.void));
             return yield* failClone(
               row,
+              dest,
               cloned.timedOut
                 ? `git clone timed out after ${CLONE_TIMEOUT_MS / 1000}s; tail: ${cloned.stderr.slice(-512)}`
                 : `git clone failed: ${cloned.stderr}`,
@@ -525,6 +536,8 @@ export const repoCloneLayer = (base: string) =>
               await rm(clonePath, { recursive: true, force: true });
             } else {
               if (refusal) logError("repo-clone", refusal);
+              // A folder Revv never finished cloning into holds none of its branches.
+              if (row.managed && row.cloneStatus !== "ready") return;
               for (const ref of await listRefs(clonePath, ["refs/heads/revv/"])) {
                 if (agentBranchPr(ref) !== null) {
                   await deleteBranch(clonePath, ref.slice("refs/heads/".length));
@@ -542,13 +555,7 @@ export const repoCloneLayer = (base: string) =>
             ),
           );
 
-          yield* dbTry("repository clone reset", () =>
-            db
-              .update(repositories)
-              .set({ cloneStatus: "pending", clonePath: null, cloneError: null })
-              .where(eq(repositories.id, repoId))
-              .run(),
-          );
+          yield* setCloneState(row, { cloneStatus: "pending", clonePath: null, cloneError: null });
         });
 
       /**
@@ -556,13 +563,15 @@ export const repoCloneLayer = (base: string) =>
        * repository could share a clone. The earliest-added row keeps it; the
        * others get a managed clone of their own (legacy-upgrade: rowKeyedFolders).
        */
-      const unshareClones = dbTry("shared clone split", () => {
-        const rows = db
-          .select()
-          .from(repositories)
-          .where(isNotNull(repositories.clonePath))
-          .orderBy(asc(repositories.addedAt))
-          .all();
+      const unshareClones = Effect.gen(function* () {
+        const rows = yield* dbTry("clone paths read", () =>
+          db
+            .select()
+            .from(repositories)
+            .where(isNotNull(repositories.clonePath))
+            .orderBy(asc(repositories.addedAt))
+            .all(),
+        );
         const holders = new Set<string>();
         const split: RepoRow[] = [];
         for (const row of rows) {
@@ -572,10 +581,12 @@ export const repoCloneLayer = (base: string) =>
           else holders.add(key);
         }
         for (const row of split) {
-          db.update(repositories)
-            .set({ managed: true, clonePath: null, cloneStatus: "pending", cloneError: null })
-            .where(eq(repositories.id, row.id))
-            .run();
+          yield* setCloneState(row, {
+            managed: true,
+            clonePath: null,
+            cloneStatus: "pending",
+            cloneError: null,
+          });
         }
         return split;
       });
@@ -638,13 +649,15 @@ export const repoCloneLayer = (base: string) =>
 
       const recoverAtBoot = () =>
         Effect.gen(function* () {
-          yield* dbTry("interrupted clones reset", () =>
-            db
-              .update(repositories)
-              .set({ cloneStatus: "pending", cloneError: "Server restarted during clone" })
-              .where(eq(repositories.cloneStatus, "cloning"))
-              .run(),
+          const interrupted = yield* dbTry("interrupted clones read", () =>
+            db.select().from(repositories).where(eq(repositories.cloneStatus, "cloning")).all(),
           );
+          for (const row of interrupted) {
+            yield* setCloneState(row, {
+              cloneStatus: "pending",
+              cloneError: "Server restarted during clone",
+            });
+          }
           for (const row of yield* unshareClones) {
             logError(
               "repo-clone",
