@@ -618,7 +618,7 @@ export const GitHubAccountsLive = Layer.effect(
         const image = (yield* avatars.contents(host, [identity.login])).get(identity.login) ?? null;
         yield* realtime.toAccount(accountId, {
           type: "user:updated",
-          data: { ...userRow, avatarContent: image, githubLogin: identity.login },
+          data: { ...userRow, host, avatarContent: image, githubLogin: identity.login },
         });
       });
 

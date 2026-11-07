@@ -3,7 +3,12 @@
 // switch, end) lives in `$lib/session/lifecycle.svelte`; this store imports
 // no other store.
 
-import { type ApiErrorCode, isMaintainerLogin, type UserUpdatedEnvelope } from "@revv/shared";
+import {
+  type ApiErrorCode,
+  isMaintainerLogin,
+  sameGithubHost,
+  type UserUpdatedEnvelope,
+} from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
 import { ApiError, apiErrorCode, call } from "$lib/api/errors";
@@ -21,6 +26,8 @@ interface User {
   email: string;
   image?: string;
   githubLogin?: string | null;
+  /** The host of the account shown as the identity: the active host's. */
+  host?: string | null;
   onboardedAt?: string | null;
 }
 
@@ -380,6 +387,7 @@ export async function loadUser(): Promise<void> {
       name: data.name,
       email: data.email,
       githubLogin: data.login,
+      host: data.host,
       onboardedAt: data.onboardedAt,
       ...(data.avatarContent != null ? { image: data.avatarContent } : {}),
     };
@@ -409,8 +417,8 @@ export async function loadUser(): Promise<void> {
 
 /**
  * Mirror the server's identity: login, onboarding, avatar and whether the
- * account needs re-auth. The server refreshes `user.image` on each poll cycle,
- * so this carries a fresh avatar even after GitHub's signed URL expired.
+ * account needs re-auth. The avatar is the server's cached copy, fresh even
+ * after GitHub's signed URL expired.
  * Best-effort: a failed read keeps what's shown.
  */
 async function readIdentity(): Promise<void> {
@@ -420,6 +428,7 @@ async function readIdentity(): Promise<void> {
       const next: User = {
         ...user,
         githubLogin: data.login,
+        host: data.host,
         onboardedAt: data.onboardedAt ?? null,
       };
       if (data.avatarContent != null) next.image = data.avatarContent;
@@ -451,11 +460,16 @@ function holdCurrentSession(): void {
 
 export function onUserUpdated(data: UserUpdatedEnvelope["data"]): void {
   if (!user) return;
+  // The account switchers show every account's login and avatar.
+  void fetchLocalAccounts();
+  // Another host's account: the identity shown is the active host's.
+  if (user.host != null && !sameGithubHost(user.host, data.host)) return;
   const next: User = {
     id: user.id,
     name: data.name,
     email: data.email,
     githubLogin: data.githubLogin,
+    host: user.host ?? null,
     onboardedAt: user.onboardedAt ?? null,
   };
   const image = data.avatarContent ?? user.image;

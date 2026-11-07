@@ -209,7 +209,7 @@ describe("conversation account isolation", () => {
     }
   });
 
-  it("announces a write made elsewhere to its account even when GitHub can't be re-read", async () => {
+  it("announces a write made elsewhere to its account's user even when GitHub can't be re-read", async () => {
     const { db, run } = fixture();
     globalThis.fetch = Object.assign(
       async () => {
@@ -227,8 +227,8 @@ describe("conversation account isolation", () => {
       const result = await run(
         Effect.gen(function* () {
           const broadcaster = yield* Broadcaster;
-          yield* broadcaster.register("b-account", writer(owner));
-          yield* broadcaster.register("a-account", writer(other));
+          yield* broadcaster.register("b", writer(owner));
+          yield* broadcaster.register("a", writer(other));
           const ctx = yield* Effect.flatMap(PrContextService, (c) => c.forPr("b-pr", "b-account"));
           return yield* Effect.flatMap(PrConversationService, (s) =>
             s.afterWrite(ctx, "b-account"),
