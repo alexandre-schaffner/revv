@@ -53,7 +53,7 @@ Worth doing when adjacent code is being touched.
 
 Recorded so they are not re-raised in a future audit pass.
 
-- **[W6]** Per-user authorization scoping on SSE broadcasts — broadcasts are already account-scoped (`broadcastToAccount`), but single-user desktop means no second principal exists within an account. Revisit if Revv ever ships multi-tenant.
+- **[W6]** Per-user authorization scoping on SSE broadcasts — broadcasts are already addressed to the owning local user (`Realtime` → `Broadcaster.broadcastToUser`), but single-user desktop means no second principal exists within an account. Revisit if Revv ever ships multi-tenant.
 - **[W7]** Reconnect-backoff jitter — single client per server, no thundering-herd risk. Same revisit trigger as W6.
 - **[T1]** PR-scoped routing for `thread:*` broadcasts — same single-user reasoning.
 - **[T2]** Sequence numbers on the non-walkthrough envelopes — invariant #8 explicitly accepts dropped messages with DB reconciliation; sequence numbers would only add diagnostic value, not correctness. (Walkthrough envelopes already carry a `seq`.)

@@ -1,5 +1,5 @@
-// Who the signed-in user is on a PR: the PR's owning account's own GitHub
-// login (`GitHubAccounts.viewerLogin`), never the request's or the user's.
+// Who the signed-in user is on a PR: the GitHub login of the account that
+// owns the PR's repository, never the active host's.
 
 import { type AuthorRole, REVIEW_MODE, type ReviewMode, reviewModeFor } from "@revv/shared";
 import { eq } from "drizzle-orm";
