@@ -1,3 +1,4 @@
+import { normalizeGithubHost } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { InvalidGitHubClientIdError, NotFoundError } from "../domain/errors";
@@ -20,7 +21,7 @@ const signInTarget = (hostOverride: string | undefined, clientIdOverride: string
   Effect.gen(function* () {
     const settings = yield* SettingsService;
     const saved = yield* settings.getSettings();
-    const host = hostOverride?.trim() || (yield* settings.githubHost());
+    const host = normalizeGithubHost(hostOverride ?? "") || (yield* settings.githubHost());
     const clientId = yield* resolveClientId(host, saved, clientIdOverride);
     return { host, clientId };
   });
@@ -100,7 +101,7 @@ const deviceFlowRoutes = new Elysia()
 
           // The device code belongs to the client `/device/init` resolved, so
           // the poll uses exactly that host and client.
-          const target = { host: body.host, clientId: body.client_id };
+          const target = { host: normalizeGithubHost(body.host), clientId: body.client_id };
           const { data } = yield* exchangeDeviceCode(
             target.host,
             target.clientId,

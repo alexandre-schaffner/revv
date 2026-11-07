@@ -1,5 +1,5 @@
 import { dirname, join, resolve } from "node:path";
-import type { AppChannel } from "@revv/shared";
+import { type AppChannel, isPublicGitHub, normalizeGithubHost } from "@revv/shared";
 import { serverEnv } from "../../config";
 import type { Db } from "../../db";
 import { repositories, userSettings } from "../../db/schema";
@@ -27,7 +27,7 @@ export function configuredGitHubHosts(db: Db): string[] {
     ...repoHosts.map((r) => r.host),
     ...settingsHosts.map((r) => r.host),
   ]
-    .map((host) => host.trim().toLowerCase())
-    .filter((host) => host !== "" && host !== "github.com");
+    .map(normalizeGithubHost)
+    .filter((host) => host !== "" && !isPublicGitHub(host));
   return [...new Set(hosts)];
 }

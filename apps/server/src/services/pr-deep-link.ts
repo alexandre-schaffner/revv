@@ -1,4 +1,9 @@
-import type { PullRequest, PullRequestLocator, Repository } from "@revv/shared";
+import {
+  type PullRequest,
+  type PullRequestLocator,
+  type Repository,
+  sameGithubHost,
+} from "@revv/shared";
 import { Effect, Option } from "effect";
 import type { DbError, GitHubError } from "../domain/errors";
 import { asStored, localPrId, type ObservedPr } from "../domain/observed-pr";
@@ -25,7 +30,7 @@ export function resolvePullRequestLink<RRepository, RCached, RRemote, RWrite>(
   return Effect.gen(function* () {
     const repository = yield* operations.findRepository(locator.repositoryFullName);
     if (!repository) return { status: "repository_not_tracked" } as const;
-    if (repository.githubHost.toLowerCase() !== locator.githubHost) {
+    if (!sameGithubHost(repository.githubHost, locator.githubHost)) {
       return { status: "repository_not_tracked" } as const;
     }
 

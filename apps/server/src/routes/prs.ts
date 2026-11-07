@@ -1,4 +1,9 @@
-import { guessImageContentType, MERGE_METHODS } from "@revv/shared";
+import {
+  guessImageContentType,
+  MERGE_METHODS,
+  normalizeGithubHost,
+  sameGithubHost,
+} from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
@@ -64,13 +69,13 @@ const prListRoutes = new Elysia({ prefix: "/api/prs" })
   .post(
     "/resolve-link",
     async (ctx) => {
-      const expectedHost = ctx.body.githubHost.toLowerCase();
-      const activeHost = ctx.account.host.toLowerCase();
+      const expectedHost = normalizeGithubHost(ctx.body.githubHost);
+      const activeHost = ctx.account.host;
 
       // This branch must stay before AppRuntime/service access. A mismatched
       // account is a recovery state, not permission to probe another
       // account's database rows or GitHub token.
-      if (activeHost !== expectedHost) {
+      if (!sameGithubHost(activeHost, expectedHost)) {
         return { status: "account_mismatch" as const, activeHost, expectedHost };
       }
 

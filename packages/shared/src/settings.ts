@@ -23,7 +23,7 @@ import {
   UPDATE_CHANNELS,
   type UpdateChannel,
 } from "./constants";
-import { DEFAULT_GITHUB_HOST } from "./github-host";
+import { DEFAULT_GITHUB_HOST, normalizeGithubHost } from "./github-host";
 
 export const DIFF_VIEW_MODES = ["unified", "split"] as const;
 export type DiffViewMode = (typeof DIFF_VIEW_MODES)[number];
@@ -171,10 +171,21 @@ export function isSettingField(node: SettingsSpecNode): node is SettingField<unk
   return "wire" in node && typeof node.parse === "function";
 }
 
-const text = (fallback: string, opts: { nonEmpty?: boolean } = {}): SettingField<string> => ({
+const text = (fallback: string): SettingField<string> => ({
   default: fallback,
-  parse: (raw) => (typeof raw === "string" && (!opts.nonEmpty || raw.length > 0) ? raw : undefined),
-  wire: opts.nonEmpty ? { type: "string", minLength: 1 } : { type: "string" },
+  parse: (raw) => (typeof raw === "string" ? raw : undefined),
+  wire: { type: "string" },
+});
+
+/** A GitHub host, stored in its normalized form whatever form it arrived in. */
+const githubHostField = (fallback: string): SettingField<string> => ({
+  default: fallback,
+  parse: (raw) => {
+    if (typeof raw !== "string") return undefined;
+    const host = normalizeGithubHost(raw);
+    return host === "" ? undefined : host;
+  },
+  wire: { type: "string", minLength: 1 },
 });
 
 /** `aliases` maps retired stored values onto current ones. */
@@ -248,7 +259,7 @@ export const SETTINGS_SPEC: SettingsSpec<UserSettings> = {
     weeklyEnabled: flag(true),
     agent: oneOf(RECAP_AGENT_CHOICES, "auto", LEGACY_AGENT_ALIASES),
   },
-  githubHost: text(DEFAULT_GITHUB_HOST, { nonEmpty: true }),
+  githubHost: githubHostField(DEFAULT_GITHUB_HOST),
   githubClientId: text(""),
   cache: {
     enabled: flag(false),

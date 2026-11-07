@@ -11,9 +11,9 @@ export function normalizeGithubHost(raw: string): string {
     .toLowerCase();
 }
 
-/** Host names are case-insensitive. */
+/** Whether two hosts, however typed, name the same server. */
 export function sameGithubHost(a: string, b: string): boolean {
-  return a.trim().toLowerCase() === b.trim().toLowerCase();
+  return normalizeGithubHost(a) === normalizeGithubHost(b);
 }
 
 export function isPublicGitHub(host: string): boolean {

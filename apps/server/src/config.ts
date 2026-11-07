@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { API_PORT, type AppChannel, DEFAULT_APP_CHANNEL } from "@revv/shared";
+import { API_PORT, type AppChannel, DEFAULT_APP_CHANNEL, normalizeGithubHost } from "@revv/shared";
 import { DESKTOP_PID_ENV } from "@revv/shared/desktop-contract";
 import { Config, Effect } from "effect";
 
@@ -45,7 +45,10 @@ const EnvConfig = Config.all({
   githubAppClientId: Config.String("GITHUB_APP_CLIENT_ID").pipe(
     Config.withDefault("Iv23lixUYaPwtByygekJ"),
   ),
-  githubHost: Config.String("GITHUB_HOST").pipe(Config.withDefault("github.com")),
+  githubHost: Config.String("GITHUB_HOST").pipe(
+    Config.map(normalizeGithubHost),
+    Config.withDefault("github.com"),
+  ),
   // `REV_DEBUG` is the older spelling, still set by existing `.env` files
   // (legacy-upgrade: revDebugEnv).
   debug: Config.Boolean("REVV_DEBUG").pipe(

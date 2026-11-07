@@ -9,11 +9,7 @@ import {
   type GitHubRateLimitError,
   NotFoundError,
 } from "../../domain/errors";
-import {
-  hostFromProviderId,
-  providerIdForHost,
-  providerIdsForHost,
-} from "../../domain/github-host";
+import { hostFromProviderId, isAccountOnHost, providerIdForHost } from "../../domain/github-host";
 import { dbTry } from "../../effects/db-try";
 import { keyedSingleFlight } from "../../effects/keyed-single-flight";
 import { logError } from "../../logger";
@@ -429,10 +425,9 @@ export const GitHubAccountsLive = Layer.effect(
             .where(eq(account.userId, userId))
             .all(),
         );
-        const preferred = providerIdsForHost(host);
         const ordered = [
-          ...preferred.flatMap((pid) => rows.filter((r) => r.providerId === pid)),
-          ...rows.filter((r) => !preferred.includes(r.providerId)),
+          ...rows.filter((r) => isAccountOnHost(r.providerId, host)),
+          ...rows.filter((r) => !isAccountOnHost(r.providerId, host)),
         ];
         for (const row of ordered) {
           if (!(yield* tokensOf(row.id))?.accessToken) continue;
@@ -668,12 +663,16 @@ export const GitHubAccountsLive = Layer.effect(
       readonly tokens: IssuedTokens;
     }): Effect.Effect<string, DbError> =>
       dbTry("upsert account", () => {
-        const providerIds = providerIdsForHost(input.host);
         const onHost = db
-          .select({ id: account.id, accountId: account.accountId, userId: account.userId })
+          .select({
+            id: account.id,
+            accountId: account.accountId,
+            userId: account.userId,
+            providerId: account.providerId,
+          })
           .from(account)
-          .where(inArray(account.providerId, providerIds))
-          .all();
+          .all()
+          .filter((r) => isAccountOnHost(r.providerId, input.host));
         const existing =
           onHost.find((r) => r.accountId === input.githubUserId) ??
           onHost.find((r) => r.userId === input.userId);
@@ -901,14 +900,16 @@ export const GitHubAccountsLive = Layer.effect(
 
     const disconnect = (userId: string, host: string): Effect.Effect<void, DbError> =>
       Effect.gen(function* () {
-        const where = and(
-          inArray(account.providerId, providerIdsForHost(host)),
-          eq(account.userId, userId),
-        );
         const ids = yield* dbTry("disconnect account", () => {
-          const rows = db.select({ id: account.id }).from(account).where(where).all();
-          db.delete(account).where(where).run();
-          return rows.map((r) => r.id);
+          const ids = db
+            .select({ id: account.id, providerId: account.providerId })
+            .from(account)
+            .where(eq(account.userId, userId))
+            .all()
+            .filter((r) => isAccountOnHost(r.providerId, host))
+            .map((r) => r.id);
+          if (ids.length > 0) db.delete(account).where(inArray(account.id, ids)).run();
+          return ids;
         });
         yield* forgetAccounts(ids);
       });
