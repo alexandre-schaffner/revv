@@ -1,6 +1,5 @@
 import type {
   Activity,
-  ApiErrorCode,
   ChatAttachment,
   ChatSessionContext,
   ChatStreamFrame,
@@ -10,7 +9,7 @@ import type {
   StreamErrorBody,
 } from "@revv/shared";
 import { api } from "$lib/api/client";
-import { ApiError, call } from "$lib/api/errors";
+import { call } from "$lib/api/errors";
 import { sseError, streamSse } from "$lib/api/sse-stream";
 import type { EdenData } from "$lib/api/wire";
 
@@ -44,6 +43,7 @@ export function streamChatMessage(
     streamSse<ChatStreamFrame>({
       path: "/api/chat",
       method: "POST",
+      refused: AGENT_STREAM_REFUSED,
       body: {
         prId: params.prId,
         message: params.message,
@@ -96,6 +96,8 @@ function dispatchChatFrame(frame: ChatStreamFrame, callbacks: ChatCallbacks): vo
   }
 }
 
+const AGENT_STREAM_REFUSED = "The agent stream was refused";
+
 /**
  * Report an agent stream's end through the chat-style callbacks: `onDone`
  * when it closed cleanly, `onError` otherwise, nothing when the caller
@@ -111,7 +113,7 @@ async function settleAgentStream(
   try {
     await stream;
   } catch (err) {
-    const error = sseError(err, "The agent stream was refused");
+    const error = sseError(err);
     if (error) callbacks.onError(error);
     return;
   }
@@ -199,11 +201,6 @@ export type MergePushResult = EdenData<
   ReturnType<typeof chat>["proposed-changes"]["merge-and-push"]["post"]
 >;
 
-export interface MergePushError {
-  code: ApiErrorCode | "GENERIC_ERROR";
-  message: string;
-}
-
 export interface PushProposedOptions {
   /** Push the agent's commits to a brand-new branch instead of merging into the PR's source branch. */
   newBranchName?: string;
@@ -214,8 +211,7 @@ export interface PushProposedOptions {
 /**
  * Attempt to merge the agent's local commits into the PR's source branch
  * and push. Returns a tagged result on success-ish outcomes (including
- * conflict + remote-changed); throws a structured MergePushError on hard
- * failures.
+ * conflict + remote-changed); throws on a refusal (see `call`).
  *
  * When `options.newBranchName` is provided the server bypasses the merge
  * step and pushes the agent's local branch as-is to that new ref. If the
@@ -226,19 +222,13 @@ export async function pushProposedChanges(
   prId: string,
   options?: PushProposedOptions,
 ): Promise<MergePushResult> {
-  try {
-    return await call(
-      chat(prId)["proposed-changes"]["merge-and-push"].post({
-        ...(options?.newBranchName !== undefined ? { newBranchName: options.newBranchName } : {}),
-        ...(options?.force !== undefined ? { force: options.force } : {}),
-      }),
-      "Push failed",
-    );
-  } catch (e) {
-    if (!(e instanceof ApiError)) throw e;
-    const refusal: MergePushError = { code: e.code ?? "GENERIC_ERROR", message: e.message };
-    throw refusal;
-  }
+  return call(
+    chat(prId)["proposed-changes"]["merge-and-push"].post({
+      ...(options?.newBranchName !== undefined ? { newBranchName: options.newBranchName } : {}),
+      ...(options?.force !== undefined ? { force: options.force } : {}),
+    }),
+    "Push failed",
+  );
 }
 
 function notPushed(result: Exclude<MergePushResult, { status: "pushed" }>): Error {
@@ -338,6 +328,7 @@ export function resolveConflictsAndPush(
     streamSse<ResolvePushFrame>({
       path: `/api/chat/${prId}/proposed-changes/resolve-and-push`,
       method: "POST",
+      refused: AGENT_STREAM_REFUSED,
       signal: controller.signal,
       onEvent: (frame) => {
         switch (frame.kind) {

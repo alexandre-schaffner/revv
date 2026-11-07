@@ -10,7 +10,6 @@ import {
   cherryPickProposedCommit,
   discardProposedCommit,
   fetchProposedChanges,
-  type MergePushError,
   type MergePushResult,
   type ProposedChanges,
   type PushProposedOptions,
@@ -271,7 +270,7 @@ export async function pushProposed(
     }
     return result;
   } catch (e) {
-    toast.error((e as MergePushError).message ?? "Push failed");
+    toast.error(thrownMessage(e));
     return null;
   } finally {
     setBusy(prId, "push", false);

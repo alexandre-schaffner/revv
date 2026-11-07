@@ -37,11 +37,12 @@ export async function runAgentInstall(
   try {
     await streamSse<InstallEvent>({
       path: `/api/onboarding/install/stream?jobId=${encodeURIComponent(jobId)}`,
+      refused: "The installer stream was refused",
       signal,
       onEvent,
     });
   } catch (e) {
-    const message = sseErrorMessage(e, "The installer stream was refused");
+    const message = sseErrorMessage(e);
     throw message === null ? e : new Error(message);
   }
 }

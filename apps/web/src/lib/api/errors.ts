@@ -1,7 +1,7 @@
-import type { ApiErrorCode } from "@revv/shared";
+import { type ApiErrorCode, isApiErrorCode } from "@revv/shared";
 
-/** An Eden call's `error`: the refused status and its parsed body. */
-interface EdenError {
+/** A refused request: its status and its parsed body (Eden's `error`, or a raw fetch's). */
+interface Refusal {
   readonly status: unknown;
   readonly value?: unknown;
 }
@@ -15,7 +15,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * `error`, else `message` (Elysia's validator, and a stream refused before it
  * opened).
  */
-export function bodyMessage(body: unknown): string | undefined {
+function bodyMessage(body: unknown): string | undefined {
   if (!isRecord(body)) return undefined;
   if (typeof body.error === "string" && body.error) return body.error;
   if (typeof body.message === "string" && body.message) return body.message;
@@ -23,15 +23,11 @@ export function bodyMessage(body: unknown): string | undefined {
 }
 
 /**
- * The server's own wording for a refused request, else `fallback` with the
- * status. GitHub's refusals are only legible in that body: a bare "HTTP 405"
- * hides "Merge commits are not allowed on this repository."
+ * The server refused a request, REST or stream. `message` is its wording,
+ * else the caller's fallback with the status: GitHub's refusals are only
+ * legible in that body, a bare "HTTP 405" hides "Merge commits are not
+ * allowed on this repository."
  */
-export function apiErrorMessage(error: EdenError, fallback: string): string {
-  return bodyMessage(error.value) ?? `${fallback} (HTTP ${String(error.status)})`;
-}
-
-/** The server refused a request. `message` is its wording, else the caller's fallback with the status. */
 export class ApiError extends Error {
   override readonly name = "ApiError";
   readonly status: number;
@@ -42,16 +38,18 @@ export class ApiError extends Error {
   /** The server's own wording, when the body carries one. */
   readonly serverMessage: string | undefined;
 
-  constructor(error: EdenError, fallback: string) {
-    super(apiErrorMessage(error, fallback));
-    this.status = typeof error.status === "number" ? error.status : 0;
-    this.body = isRecord(error.value) ? error.value : null;
-    this.code = typeof this.body?.code === "string" ? (this.body.code as ApiErrorCode) : null;
-    this.serverMessage = bodyMessage(error.value);
+  constructor(refusal: Refusal, fallback: string) {
+    const serverMessage = bodyMessage(refusal.value);
+    super(serverMessage ?? `${fallback} (HTTP ${String(refusal.status)})`);
+    this.status = typeof refusal.status === "number" ? refusal.status : 0;
+    this.body = isRecord(refusal.value) ? refusal.value : null;
+    const code = this.body?.code;
+    this.code = isApiErrorCode(code) ? code : null;
+    this.serverMessage = serverMessage;
   }
 }
 
-type EdenResult = { readonly data: unknown; readonly error: EdenError | null };
+type EdenResult = { readonly data: unknown; readonly error: Refusal | null };
 
 /**
  * Await an Eden call and return its success body. A refusal throws

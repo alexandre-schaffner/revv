@@ -153,6 +153,7 @@ export async function streamRecap(recapId: string): Promise<void> {
   try {
     await streamSse<RecapStreamEvent>({
       path: `/api/recaps/${recapId}/stream`,
+      refused: "The recap stream was refused",
       signal: abortCtrl.signal,
       onEvent: (event) => {
         if (event.type === "restarted") restarted = true;
@@ -162,7 +163,7 @@ export async function streamRecap(recapId: string): Promise<void> {
   } catch (e) {
     const current = entries.get(recapId);
     if (!current) return;
-    const message = sseErrorMessage(e, "The recap stream was refused");
+    const message = sseErrorMessage(e);
     if (message !== null)
       setEntry(recapId, { ...current, isStreaming: false, streamError: message });
   } finally {

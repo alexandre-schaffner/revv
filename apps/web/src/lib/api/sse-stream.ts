@@ -5,13 +5,14 @@
 // read, so only a timer can notice it.
 
 import {
+  isApiErrorCode,
   SSE_DONE_DATA,
   SSE_ERROR_EVENT,
   type StreamErrorBody,
   type StreamErrorCode,
 } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
-import { bodyMessage } from "$lib/api/errors";
+import { ApiError } from "$lib/api/errors";
 import { authHeaders } from "$lib/session/token.svelte";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 90 * 1000;
@@ -21,28 +22,12 @@ interface SseStreamOptions<T> {
   readonly method?: "GET" | "POST";
   readonly body?: unknown;
   readonly signal?: AbortSignal;
+  /** Words a refusal whose body says nothing, like `call`'s fallback. */
+  readonly refused: string;
   /** Abort with {@link SseIdleError} after this long without a byte. */
   readonly idleTimeoutMs?: number;
   /** Awaited before the next frame is delivered when it returns a promise. */
   readonly onEvent: (event: T) => void | Promise<void>;
-}
-
-/** The server answered with a non-2xx status before streaming. */
-export class SseHttpError extends Error {
-  override readonly name = "SseHttpError";
-  readonly body: unknown;
-  readonly serverMessage: string | undefined;
-
-  constructor(
-    readonly status: number,
-    readonly statusText: string,
-    body: unknown,
-  ) {
-    const serverMessage = bodyMessage(body);
-    super(serverMessage ?? `HTTP ${status}`);
-    this.body = body;
-    this.serverMessage = serverMessage;
-  }
 }
 
 /** The server ended the stream with an `event: error` frame. */
@@ -68,9 +53,10 @@ export class SseIdleError extends Error {
 /**
  * Open the stream and deliver each `data:` frame to `onEvent`, in order.
  * Resolves when the server sends `data: [DONE]` or closes the stream; a frame
- * left unterminated at close is still delivered. Rejects with
- * {@link SseHttpError}, {@link SseFrameError}, {@link SseIdleError}, the
- * signal's `AbortError`, or the fetch's own network error.
+ * left unterminated at close is still delivered. Rejects with an
+ * {@link ApiError} when the server refused before streaming, an
+ * {@link SseFrameError}, an {@link SseIdleError}, the signal's `AbortError`,
+ * or the fetch's own network error.
  */
 export async function streamSse<T>(opts: SseStreamOptions<T>): Promise<void> {
   const controller = new AbortController();
@@ -102,7 +88,7 @@ export async function streamSse<T>(opts: SseStreamOptions<T>): Promise<void> {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new SseHttpError(res.status, res.statusText, parseJson(text));
+      throw new ApiError({ status: res.status, value: parseJson(text) }, opts.refused);
     }
     if (!res.body) throw new Error("No response body");
 
@@ -147,23 +133,16 @@ export async function streamSse<T>(opts: SseStreamOptions<T>): Promise<void> {
 const LOST_CONNECTION_MESSAGE =
   "Lost connection to the local server. The agent may have stopped — check the server logs and try again.";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 /**
  * How a {@link streamSse} call ended badly, as the server's `{ code, message }`
  * body: its refusal, its `event: error` frame, or the client's own transport
- * failure. Null when the caller aborted it. `fallback` words a refusal whose
- * body says nothing.
+ * failure. Null when the caller aborted it.
  */
-export function sseError(err: unknown, fallback: string): StreamErrorBody | null {
-  if (err instanceof SseHttpError) {
-    const code = isRecord(err.body) && typeof err.body.code === "string" ? err.body.code : null;
-    const message = err.serverMessage ?? `${fallback} (HTTP ${err.status})`;
-    return code !== null
-      ? { ...(err.body as Record<string, unknown>), code: code as StreamErrorCode, message }
-      : { code: "UNKNOWN", message };
+export function sseError(err: unknown): StreamErrorBody | null {
+  if (err instanceof ApiError) {
+    return err.code !== null
+      ? { ...err.body, code: err.code, message: err.message }
+      : { code: "UNKNOWN", message: err.message };
   }
   if (err instanceof SseFrameError) return { code: err.code, message: err.message };
   if (err instanceof SseIdleError)
@@ -179,17 +158,14 @@ export function sseError(err: unknown, fallback: string): StreamErrorBody | null
 }
 
 /** {@link sseError}'s message; null when the caller aborted the stream. */
-export function sseErrorMessage(err: unknown, fallback: string): string | null {
-  return sseError(err, fallback)?.message ?? null;
+export function sseErrorMessage(err: unknown): string | null {
+  return sseError(err)?.message ?? null;
 }
 
 function frameError(raw: string): SseFrameError {
   const payload = parseJson(raw) as { code?: unknown; message?: unknown } | null;
   return typeof payload?.message === "string"
-    ? new SseFrameError(
-        typeof payload.code === "string" ? (payload.code as StreamErrorCode) : "UNKNOWN",
-        payload.message,
-      )
+    ? new SseFrameError(isApiErrorCode(payload.code) ? payload.code : "UNKNOWN", payload.message)
     : new SseFrameError("PARSE_ERROR", "Failed to parse error");
 }
 

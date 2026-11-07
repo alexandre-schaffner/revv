@@ -551,7 +551,7 @@ async function heldLocalAccounts(): Promise<readonly LocalAccount[]> {
           ? { id: held.userId, name: held.name, email: held.email, image: held.image, accounts }
           : null;
       } catch (e) {
-        if (e instanceof ApiError && e.status === 401) releaseSession({ token: held.token });
+        if (apiErrorCode(e) === "UNAUTHORIZED") releaseSession({ token: held.token });
         return null;
       }
     }),

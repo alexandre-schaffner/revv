@@ -14,7 +14,6 @@ import Desktop from "phosphor-svelte/lib/Desktop";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
 import Warning from "phosphor-svelte/lib/Warning";
 import { untrack } from "svelte";
-import { expectedHeads } from "$lib/api/wire";
 import { Button } from "$lib/components/ui/button";
 import * as Dialog from "$lib/components/ui/dialog";
 import SegmentedControl, {
@@ -22,6 +21,7 @@ import SegmentedControl, {
 } from "$lib/components/ui/segmented-control/SegmentedControl.svelte";
 import { Shimmer } from "$lib/components/ui/shimmer";
 import { gsapFade, gsapFadeY, gsapPress, tokens } from "$lib/motion";
+import { expectedHeads } from "$lib/stacks/expected-heads";
 import { RequestState } from "$lib/stores/_types";
 import {
   cancelStackMerge,
