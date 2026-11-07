@@ -56,10 +56,15 @@ const CODE_GLYPHS: Record<string, string> = {
   ArrowRight: "\u2192",
 };
 
-/** macOS-order modifier glyphs (⌥⇧⌘) plus the key, e.g. "⇧⌘C". */
-export function shortcutLabel(keys: KeyBinding): string {
+/** macOS-order modifier glyphs (⌥⇧⌘) then the key, e.g. ["⇧", "⌘", "C"]. */
+export function shortcutGlyphs(keys: KeyBinding): string[] {
   const base = keys.code
     ? (CODE_GLYPHS[keys.code] ?? keys.code.replace(/^(Key|Digit)/, ""))
     : (keys.key ?? "").toUpperCase();
-  return `${keys.alt ? "\u2325" : ""}${keys.shift ? "\u21e7" : ""}\u2318${base}`;
+  return [...(keys.alt ? ["\u2325"] : []), ...(keys.shift ? ["\u21e7"] : []), "\u2318", base];
+}
+
+/** e.g. "⇧⌘C". */
+export function shortcutLabel(keys: KeyBinding): string {
+  return shortcutGlyphs(keys).join("");
 }

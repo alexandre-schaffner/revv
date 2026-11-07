@@ -7,6 +7,7 @@ import ThemeIcon from "$lib/components/shared/ThemeIcon.svelte";
 import { cycleThemePreference, themePreferenceLabel } from "$lib/components/shared/theme-cycle";
 import * as Tooltip from "$lib/components/ui/tooltip";
 import { gsapPop, gsapPress, tokens } from "$lib/motion";
+import { commandShortcut } from "$lib/stores/commands.svelte";
 import { copySelectedPrLink, getPrLinkCopied } from "$lib/stores/pr-link.svelte";
 import { getRepoById } from "$lib/stores/repos.svelte";
 import { getSelectedPr, getSelectedPrId } from "$lib/stores/route.svelte";
@@ -30,6 +31,12 @@ const selectedPrId = $derived(getSelectedPrId());
 const linkCopied = $derived(getPrLinkCopied());
 
 const isSyncing = $derived(getPrListSyncing());
+const copyLinkLabel = $derived(`Copy PR link (${commandShortcut("pr:copy-link").join("")})`);
+const panelLabel = $derived(
+  pr
+    ? `Toggle context panel (${commandShortcut("panel:toggle").join("")})`
+    : "Chat panel is only available when reviewing a PR",
+);
 
 function handleSyncPrs(): void {
   if (selectedPrId) {
@@ -67,7 +74,7 @@ function handleSyncPrs(): void {
 									{...props}
 									class="copy-link-btn"
 									onclick={() => void copySelectedPrLink()}
-									aria-label={linkCopied ? 'Link copied' : 'Copy PR link (\u21e7\u2318C)'}
+									aria-label={linkCopied ? 'Link copied' : copyLinkLabel}
 									use:gsapPress
 								>
 									{#key linkCopied}
@@ -87,7 +94,7 @@ function handleSyncPrs(): void {
 						     the click lands, so swapping its text mid-hover resizes and
 						     re-centers the surface. The icon carries the confirmation. -->
 						<Tooltip.Content side="bottom" sideOffset={6}>
-							Copy PR link (&#x21e7;&#x2318;C)
+							{copyLinkLabel}
 						</Tooltip.Content>
 					</Tooltip.Root>
 				{/if}
@@ -120,8 +127,8 @@ function handleSyncPrs(): void {
 			class="panel-btn"
 			class:panel-btn--open={rightPanelOpen}
 			onclick={onTogglePanel}
-			aria-label={pr ? 'Toggle context panel (⌘⌥B)' : 'Chat panel is only available when reviewing a PR'}
-			title={pr ? 'Toggle context panel (⌘⌥B)' : 'Chat panel is only available when reviewing a PR'}
+			aria-label={panelLabel}
+			title={panelLabel}
 			disabled={!pr}
 		>
 			<SidebarSimple size={14} mirrored weight={rightPanelOpen ? 'fill' : 'regular'} />

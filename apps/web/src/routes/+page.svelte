@@ -6,11 +6,22 @@
  */
 
 import RepoHomeSection from "$lib/components/repo/RepoHomeSection.svelte";
+import { commandShortcut } from "$lib/stores/commands.svelte";
 import { getReposFetchAttempted, getRepositories } from "$lib/stores/repos.svelte";
 
 const repos = $derived(getRepositories());
 const resolved = $derived(getReposFetchAttempted());
 </script>
+
+{#snippet hint(commandId: string, action: string)}
+	<span class="flex items-center gap-1">
+		{#each commandShortcut(commandId) as glyph, i (i)}
+			{#if i > 0}<span class="text-text-muted">+</span>{/if}
+			<kbd class="inline-flex items-center gap-0.5 rounded border border-border-subtle bg-bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-text-secondary">{glyph}</kbd>
+		{/each}
+		{action}
+	</span>
+{/snippet}
 
 {#if repos.length > 0}
 	<div class="feed-scroll">
@@ -25,8 +36,8 @@ const resolved = $derived(getReposFetchAttempted());
 		<h1 class="text-4xl font-bold tracking-tight text-text-primary">Revv</h1>
 		<p class="mt-2 text-sm text-text-secondary">AI-powered code review</p>
 		<p class="mt-4 flex flex-col items-center gap-1.5 text-xs text-text-muted">
-			<span class="flex items-center gap-1"><kbd class="inline-flex items-center gap-0.5 rounded border border-border-subtle bg-bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-text-secondary">⌘</kbd><span class="text-text-muted">+</span><kbd class="inline-flex items-center gap-0.5 rounded border border-border-subtle bg-bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-text-secondary">P</kbd> to open a pull request</span>
-			<span class="flex items-center gap-1"><kbd class="inline-flex items-center gap-0.5 rounded border border-border-subtle bg-bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-text-secondary">⌘</kbd><span class="text-text-muted">+</span><kbd class="inline-flex items-center gap-0.5 rounded border border-border-subtle bg-bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-text-secondary">⇧</kbd><span class="text-text-muted">+</span><kbd class="inline-flex items-center gap-0.5 rounded border border-border-subtle bg-bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-text-secondary">P</kbd> to open the command palette</span>
+			{@render hint("palette:search", "to open a pull request")}
+			{@render hint("palette:commands", "to open the command palette")}
 		</p>
 	</div>
 {/if}
