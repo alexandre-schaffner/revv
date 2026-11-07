@@ -3,7 +3,7 @@
 // switch, end) lives in `$lib/session/lifecycle.svelte`; this store imports
 // no other store.
 
-import { isMaintainerLogin, type UserUpdatedEnvelope } from "@revv/shared";
+import { isMaintainerLogin, type UserIdentity, type UserUpdatedEnvelope } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
 import { ApiError, apiErrorCode, call } from "$lib/api/errors";
@@ -373,19 +373,7 @@ export async function loadUser(): Promise<void> {
       "Could not restore your session. Revv will retry when the local server is available.",
     );
     resetLoadUserRetryState();
-    // `avatarContent` is the cached avatar bytes: GitHub Enterprise's signed
-    // avatar URLs expire.
-    user = {
-      id: data.id,
-      name: data.name,
-      email: data.email,
-      githubLogin: data.login,
-      onboardedAt: data.onboardedAt,
-      ...(data.avatarContent != null ? { image: data.avatarContent } : {}),
-    };
-    reauthRequired = data.reauthRequired
-      ? { host: data.host ?? null, githubLogin: data.login }
-      : null;
+    applyIdentity(data);
     accountPickerDismissed = false;
     holdCurrentSession();
     void fetchLocalAccounts();
@@ -408,26 +396,40 @@ export async function loadUser(): Promise<void> {
 }
 
 /**
- * Mirror the server's identity: login, onboarding, avatar and whether the
- * account needs re-auth. The server refreshes `user.image` on each poll cycle,
- * so this carries a fresh avatar even after GitHub's signed URL expired.
- * Best-effort: a failed read keeps what's shown.
+ * The signed-in user as the server describes it. `avatarContent` is the
+ * cached avatar bytes (GitHub Enterprise's signed avatar URLs expire); when
+ * there is none, the avatar already shown for this user stays.
  */
+function toUser(fields: {
+  readonly id: string;
+  readonly name: string;
+  readonly email: string;
+  readonly githubLogin: string | null;
+  readonly onboardedAt: string | null;
+  readonly avatarContent: string | null;
+}): User {
+  const image = fields.avatarContent ?? (user?.id === fields.id ? user.image : undefined);
+  return {
+    id: fields.id,
+    name: fields.name,
+    email: fields.email,
+    githubLogin: fields.githubLogin,
+    onboardedAt: fields.onboardedAt,
+    ...(image != null ? { image } : {}),
+  };
+}
+
+function applyIdentity(data: UserIdentity): void {
+  user = toUser({ ...data, githubLogin: data.login });
+  reauthRequired = data.reauthRequired ? { host: data.host, githubLogin: data.login } : null;
+}
+
+/** Re-read the identity a missed push would have changed. A failed read keeps what's shown. */
 async function readIdentity(): Promise<void> {
+  const shown = user?.id;
   try {
     const data = await call(api.api.user.identity.get(), "Identity read failed");
-    if (user) {
-      const next: User = {
-        ...user,
-        githubLogin: data.login,
-        onboardedAt: data.onboardedAt ?? null,
-      };
-      if (data.avatarContent != null) next.image = data.avatarContent;
-      user = next;
-    }
-    reauthRequired = data.reauthRequired
-      ? { host: data.host ?? null, githubLogin: data.login }
-      : null;
+    if (shown !== undefined && user?.id === shown) applyIdentity(data);
   } catch {}
 }
 
@@ -450,17 +452,8 @@ function holdCurrentSession(): void {
 }
 
 export function onUserUpdated(data: UserUpdatedEnvelope["data"]): void {
-  if (!user) return;
-  const next: User = {
-    id: user.id,
-    name: data.name,
-    email: data.email,
-    githubLogin: data.githubLogin,
-    onboardedAt: user.onboardedAt ?? null,
-  };
-  const image = data.avatarContent ?? user.image;
-  if (image != null) next.image = image;
-  user = next;
+  if (user?.id !== data.id) return;
+  user = toUser({ ...data, onboardedAt: user.onboardedAt ?? null });
   holdCurrentSession();
 }
 
