@@ -293,13 +293,10 @@ async function readSnapshot(prId: string, options?: HydrateOptions): Promise<boo
 
   try {
     const walkthrough = api.api.reviews({ id: prId }).walkthrough;
-    const { data: body, error } = await (reportId === null
-      ? walkthrough.current.get({ query: {} })
-      : walkthrough.report({ walkthroughId: reportId }).get());
-    if (error) {
-      wtTrace("lifecycle", `hydrateFromCache prId=${prId} httpStatus=${error.status} → false`);
-      return false;
-    }
+    const fallback = "Couldn't load the walkthrough";
+    const body = await (reportId === null
+      ? call(walkthrough.current.get({ query: {} }), fallback)
+      : call(walkthrough.report({ walkthroughId: reportId }).get(), fallback));
 
     if (body.status === "not_found") {
       wtTrace("lifecycle", `hydrateFromCache prId=${prId} status=not_found → false`);

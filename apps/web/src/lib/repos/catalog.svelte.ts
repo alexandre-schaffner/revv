@@ -79,9 +79,10 @@ async function fetchAvailablePrCounts(fullNames: string[]): Promise<void> {
 export async function fetchDefaultCloneBaseDir(): Promise<void> {
   if (defaultCloneBaseDir !== null) return;
   try {
-    const { data, error } = await api.api.repos["clone-base-dir"].get();
-    if (error) return;
-    defaultCloneBaseDir = data.path;
+    ({ path: defaultCloneBaseDir } = await call(
+      api.api.repos["clone-base-dir"].get(),
+      "Couldn't read the clone folder",
+    ));
   } catch {
     // Stays null: the add omits `basePath` and the server applies its default.
   }

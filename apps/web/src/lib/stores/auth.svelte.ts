@@ -6,7 +6,7 @@
 import { isMaintainerLogin, type UserUpdatedEnvelope } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
-import { ApiError, apiErrorMessage, call } from "$lib/api/errors";
+import { ApiError, apiErrorCode, call } from "$lib/api/errors";
 import { type EdenData, thrownMessage } from "$lib/api/wire";
 import { getHeldSessions, holdSession, releaseSession } from "$lib/session/held-sessions";
 import { clearToken, getToken, setToken } from "$lib/session/token.svelte";
@@ -194,16 +194,10 @@ function signInErrorMessage(e: unknown): string {
   return String(e);
 }
 
-function authErrorStatus(error: unknown): number | null {
-  if (typeof error !== "object" || error === null || !("status" in error)) return null;
-  const status = (error as { status: unknown }).status;
-  return typeof status === "number" ? status : null;
-}
-
-function shouldClearTokenAfterSessionMiss(error: unknown): boolean {
-  if (error === null) return true;
-  const status = authErrorStatus(error);
-  return status === 401 || status === 403;
+/** The server no longer accepts this session's token: signing out beats retrying. */
+function isSessionMiss(e: unknown): boolean {
+  const code = apiErrorCode(e);
+  return code === "UNAUTHORIZED" || code === "GITHUB_AUTH_ERROR" || code === "FORBIDDEN";
 }
 
 function clearLoadUserRetryTimer(): void {
@@ -374,37 +368,33 @@ export async function loadUser(): Promise<void> {
   if (!tokenSnapshot) return;
   isLoading = true;
   try {
-    const { data, error: refusal } = await api.api.user.identity.get();
-    if (data) {
-      resetLoadUserRetryState();
-      // `avatarContent` is the cached avatar bytes: GitHub Enterprise's signed
-      // avatar URLs expire.
-      user = {
-        id: data.id,
-        name: data.name,
-        email: data.email,
-        githubLogin: data.login,
-        onboardedAt: data.onboardedAt,
-        ...(data.avatarContent != null ? { image: data.avatarContent } : {}),
-      };
-      reauthRequired = data.reauthRequired
-        ? { host: data.host ?? null, githubLogin: data.login }
-        : null;
-      accountPickerDismissed = false;
-      holdCurrentSession();
-      void fetchLocalAccounts();
-    } else if (shouldClearTokenAfterSessionMiss(refusal)) {
+    const data = await call(
+      api.api.user.identity.get(),
+      "Could not restore your session. Revv will retry when the local server is available.",
+    );
+    resetLoadUserRetryState();
+    // `avatarContent` is the cached avatar bytes: GitHub Enterprise's signed
+    // avatar URLs expire.
+    user = {
+      id: data.id,
+      name: data.name,
+      email: data.email,
+      githubLogin: data.login,
+      onboardedAt: data.onboardedAt,
+      ...(data.avatarContent != null ? { image: data.avatarContent } : {}),
+    };
+    reauthRequired = data.reauthRequired
+      ? { host: data.host ?? null, githubLogin: data.login }
+      : null;
+    accountPickerDismissed = false;
+    holdCurrentSession();
+    void fetchLocalAccounts();
+  } catch (e) {
+    if (isSessionMiss(e)) {
       releaseSession({ token: tokenSnapshot });
       clearIdentity();
-    } else {
-      const message = apiErrorMessage(
-        refusal,
-        "Could not restore your session. Revv will retry when the local server is available.",
-      );
-      error = message;
-      scheduleLoadUserRetry(tokenSnapshot, message);
+      return;
     }
-  } catch (e) {
     // A freshly-updated desktop app can open while the restarted local API is
     // still booting. Treat that as a transient startup failure, not logout:
     // clearing the persisted token here makes OnboardingGate believe this is a

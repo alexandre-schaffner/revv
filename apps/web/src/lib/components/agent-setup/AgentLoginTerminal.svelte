@@ -5,7 +5,7 @@ import type { Terminal } from "@xterm/xterm";
 import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import { onDestroy, onMount } from "svelte";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
+import { call } from "$lib/api/errors";
 import { sseErrorMessage, streamSse } from "$lib/api/sse-stream";
 import { prefersReducedMotion } from "$lib/motion";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
@@ -137,13 +137,7 @@ function terminalTheme(el: HTMLElement) {
 
 onMount(async () => {
   try {
-    const { data, error } = await api.api.onboarding.login.post({ agent });
-    if (error) {
-      failed = true;
-      errorMsg = apiErrorMessage(error, "Failed to start sign-in");
-      return;
-    }
-    jobId = data.jobId;
+    ({ jobId } = await call(api.api.onboarding.login.post({ agent }), "Failed to start sign-in"));
   } catch (e) {
     failed = true;
     errorMsg = e instanceof Error ? e.message : "Failed to start sign-in";
