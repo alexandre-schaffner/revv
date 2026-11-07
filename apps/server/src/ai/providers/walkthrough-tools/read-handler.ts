@@ -1,4 +1,4 @@
-import { STACK_CITATION_FORMAT } from "@revv/shared";
+import { type RecapPeriod, STACK_CITATION_FORMAT } from "@revv/shared";
 import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import { projectRecaps } from "../../../db/schema/project-recaps";
 import { pullRequests } from "../../../db/schema/pull-requests";
@@ -109,7 +109,7 @@ export const getCommitHistoryHandler: WalkthroughToolHandler<GetCommitHistoryInp
 
 interface RecapForAgent {
   readonly id: string;
-  readonly period: "daily" | "weekly";
+  readonly period: RecapPeriod;
   readonly periodStart: string;
   readonly periodEnd: string;
   readonly completedAt: string | null;
@@ -187,7 +187,7 @@ export const getRepoContextHandler: WalkthroughToolHandler<GetRepoContextInput> 
     }
     return {
       id: r.id,
-      period: r.period as "daily" | "weekly",
+      period: r.period as RecapPeriod,
       periodStart: r.periodStart,
       periodEnd: r.periodEnd,
       completedAt: r.completedAt ?? null,

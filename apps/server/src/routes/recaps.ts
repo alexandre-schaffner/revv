@@ -1,4 +1,4 @@
-import { canonicalWindow } from "@revv/shared";
+import { canonicalWindow, RECAP_PERIODS, type RecapPeriod } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { ValidationError } from "../domain/errors";
@@ -8,9 +8,8 @@ import { errorResponse, runRoute, withAuth } from "./middleware";
 import { ownedBy } from "./ownership";
 import { recapStreamHandler } from "./recaps/stream";
 
-function parsePeriod(value: string | undefined): "daily" | "weekly" | undefined {
-  if (value === "daily" || value === "weekly") return value;
-  return undefined;
+function parsePeriod(value: string | undefined): RecapPeriod | undefined {
+  return RECAP_PERIODS.find((period) => period === value);
 }
 
 const repoRecapRoutes = new Elysia({ prefix: "/api/repos" })
@@ -20,7 +19,7 @@ const repoRecapRoutes = new Elysia({ prefix: "/api/repos" })
     "/:id/recaps",
     async (ctx) => {
       const params: {
-        period?: "daily" | "weekly";
+        period?: RecapPeriod;
         cursor?: string;
         limit?: number;
         includeSuperseded?: boolean;

@@ -10,6 +10,7 @@ import {
   type AcpAgentId,
   type CommentThread,
   type Confidence,
+  type DiffSide,
   type IssueSeverity,
   isAcpAgentId,
   isExternalAgentProvider,
@@ -89,7 +90,7 @@ export function anchorThreadId(
   filePath: string,
   startLine: number,
   endLine: number,
-  diffSide: "old" | "new",
+  diffSide: DiffSide,
 ): string {
   return sha256Hex(
     `${walkthroughId}\0${issue}\0${filePath}\0${startLine}\0${endLine}\0${diffSide}`,
@@ -698,7 +699,7 @@ export function upsertIssueComment(
     readonly filePath: string;
     readonly startLine: number;
     readonly endLine: number;
-    readonly diffSide: "old" | "new";
+    readonly diffSide: DiffSide;
     readonly body: string;
   },
 ): ThreadWrite<{ readonly thread: CommentThread; readonly message: ThreadMessage }> {

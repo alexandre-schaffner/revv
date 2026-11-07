@@ -1,3 +1,4 @@
+import { DIFF_SIDES, REVIEW_ACTIONS } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { ReviewService } from "../services/Review";
@@ -5,6 +6,7 @@ import { humanAuthor, viewerOnPr } from "../services/review-mode";
 import { submitReview } from "../services/review-submit";
 import { runRoute, withAccount } from "./middleware";
 import { ownedBy } from "./ownership";
+import { literalUnion } from "./schemas";
 import { threadMessageBody } from "./thread-message";
 
 /** Review routes: `:id` and `:prId` name the pull request. */
@@ -36,7 +38,7 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
         filePath: t.String(),
         startLine: t.Number(),
         endLine: t.Number(),
-        diffSide: t.Union([t.Literal("old"), t.Literal("new")]),
+        diffSide: literalUnion(DIFF_SIDES),
         message: threadMessageBody,
       }),
     },
@@ -44,7 +46,7 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
 
   .post("/:id/github-submit", (ctx) => runRoute(submitReview(ctx.params.id, ctx.body)), {
     body: t.Object({
-      action: t.Union([t.Literal("approve"), t.Literal("request_changes"), t.Literal("comment")]),
+      action: literalUnion(REVIEW_ACTIONS),
       threadIds: t.Optional(t.Array(t.String())),
       issueIds: t.Optional(t.Array(t.String())),
     }),

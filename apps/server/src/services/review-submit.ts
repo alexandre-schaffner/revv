@@ -1,6 +1,7 @@
 import {
   ISSUE_SEVERITY_TAG,
   issueLocation,
+  type ReviewAction,
   unpublishedReplies,
   type WalkthroughIssue,
 } from "@revv/shared";
@@ -20,7 +21,7 @@ import { SyncService } from "./Sync";
 import { WalkthroughService } from "./walkthrough/Walkthrough";
 
 export interface SubmitReviewInput {
-  action: "approve" | "request_changes" | "comment";
+  action: ReviewAction;
   /**
    * The draft threads the reviewer is posting. Each one still not on GitHub
    * becomes one review comment; any other id is ignored.

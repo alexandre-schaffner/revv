@@ -3,7 +3,7 @@
 // (`{{RISK_TIERS}}`) tells it what each tier commits it to. Changing a tier
 // here changes both.
 
-import type { RiskLevel } from "@revv/shared";
+import { RISK_LEVELS, type RiskLevel } from "@revv/shared";
 
 interface RiskTier {
   readonly title: string;
@@ -65,8 +65,6 @@ const RISK_TIERS: Readonly<Record<RiskLevel, RiskTier>> = {
   },
 };
 
-const LEVELS: readonly RiskLevel[] = ["low", "medium", "high"];
-
 function range([from, to]: readonly [number, number | string], dash: string): string {
   return `${from}${dash}${to}`;
 }
@@ -77,7 +75,7 @@ export function riskCriteria(): Record<
   { readonly what: string; readonly not_for?: string; readonly expect: string }
 > {
   return Object.fromEntries(
-    LEVELS.map((level) => {
+    RISK_LEVELS.map((level) => {
       const tier = RISK_TIERS[level];
       return [
         level,
@@ -96,7 +94,7 @@ export function riskCriteria(): Record<
 
 /** The tiers as the agent's system prompt states them. */
 export function renderRiskTiers(): string {
-  return LEVELS.map((level) => {
+  return RISK_LEVELS.map((level) => {
     const tier = RISK_TIERS[level];
     const chapters = range(tier.chapters, "–");
     const issues = range(tier.issues, "–");

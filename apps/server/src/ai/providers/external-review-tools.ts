@@ -5,7 +5,12 @@ import type {
   WalkthroughGenerationMode,
   WalkthroughStatus,
 } from "@revv/shared";
-import { SHA_PATTERN } from "@revv/shared";
+import {
+  ISSUE_RESOLUTION_STATUSES,
+  SHA_PATTERN,
+  THREAD_STATUSES,
+  WALKTHROUGH_GENERATION_MODES,
+} from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { commentThreads } from "../../db/schema/comment-threads";
@@ -87,7 +92,7 @@ const recordIssueResolutionSchema = z
   .object({
     issue_id: z.string().min(1),
     expected_head_sha: shaSchema,
-    status: z.enum(["open", "addressed", "wont_fix"]),
+    status: z.enum(ISSUE_RESOLUTION_STATUSES),
     explanation: z.string().trim().min(1).nullable(),
     evidence: z.array(z.string().trim().min(1)).max(20),
     resolving_commit_sha: shaSchema.nullable(),
@@ -265,7 +270,7 @@ const replyToCommentSpec = scoped(
 const updateCommentStatusSchema = z.object({
   thread_id: z.string().min(1),
   expected_head_sha: shaSchema,
-  status: z.enum(["open", "pending_coder", "pending_reviewer", "resolved", "wont_fix"]),
+  status: z.enum(THREAD_STATUSES),
   publish_to_github: z.boolean(),
 });
 
@@ -315,7 +320,7 @@ const updateCommentStatusSpec = scoped(
 
 const requestWalkthroughSchema = z.object({
   head_sha: shaSchema,
-  generation_mode: z.enum(["incremental", "full"]).default("incremental"),
+  generation_mode: z.enum(WALKTHROUGH_GENERATION_MODES).default("incremental"),
 });
 
 function describeRefusal(outcome: WalkthroughRequestRefusal, requestedHeadSha: string): string {

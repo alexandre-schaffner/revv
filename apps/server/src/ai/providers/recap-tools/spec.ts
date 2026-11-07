@@ -1,7 +1,7 @@
 // Agents never write `status` (CLAUDE.md invariants 2 and 11): `complete_recap`
 // only validates, and the orchestrator marks the recap complete after the run.
 
-import type { ProjectRecap, RecapStreamEvent } from "@revv/shared";
+import { type ProjectRecap, RECAP_PERIODS, type RecapStreamEvent } from "@revv/shared";
 import type { Effect } from "effect";
 import { z } from "zod";
 import type { Db } from "../../../db";
@@ -94,7 +94,7 @@ export const listOpenPrsSchema = z.object({
 });
 
 export const getRepoContextSchema = z.object({
-  period: z.enum(["daily", "weekly"]).nullable().optional(),
+  period: z.enum(RECAP_PERIODS).nullable().optional(),
   limit: z.coerce.number().int().positive().max(10).nullable().optional(),
 });
 

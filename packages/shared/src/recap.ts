@@ -1,6 +1,7 @@
 import type { Activity } from "./activity";
 
-export type RecapPeriod = "daily" | "weekly";
+export const RECAP_PERIODS = ["daily", "weekly"] as const;
+export type RecapPeriod = (typeof RECAP_PERIODS)[number];
 
 /**
  * The most summaries one `GET /repos/:id/recaps` page holds. A calendar

@@ -6,6 +6,7 @@
 import type {
   AuthorRole,
   CommentThread,
+  DiffSide,
   MessageType,
   ThreadEventMessage,
   ThreadMessage,
@@ -28,7 +29,7 @@ export interface ThreadAnchor {
   filePath: string;
   startLine: number;
   endLine: number;
-  diffSide: "old" | "new";
+  diffSide: DiffSide;
 }
 
 /** Set when the thread mirrors a comment that is already on GitHub. */
