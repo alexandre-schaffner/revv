@@ -546,9 +546,9 @@ async function heldLocalAccounts(): Promise<readonly LocalAccount[]> {
         );
         const accounts = data
           .filter((a) => a.connected)
-          .map(({ host, githubLogin, avatarUrl }) => ({ host, githubLogin, avatarUrl }));
+          .map(({ host, githubLogin, avatarContent }) => ({ host, githubLogin, avatarContent }));
         return accounts.length > 0
-          ? { id: held.userId, name: held.name, email: held.email, image: held.image, accounts }
+          ? { id: held.userId, name: held.name, email: held.email, accounts }
           : null;
       } catch (e) {
         if (e instanceof ApiError && e.status === 401) releaseSession({ token: held.token });

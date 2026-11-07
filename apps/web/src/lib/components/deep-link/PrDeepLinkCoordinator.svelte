@@ -185,7 +185,7 @@ async function handleConnect(): Promise<void> {
                   aria-label={`${account.login}, ${account.email}, ${account.hostLabel}`}
                 >
                   <span class="account-avatar">
-                    <Avatar src={account.avatarUrl} size={24}>
+                    <Avatar src={account.avatarContent} size={24}>
                       {#snippet fallback()}<User size={15} />{/snippet}
                     </Avatar>
                   </span>

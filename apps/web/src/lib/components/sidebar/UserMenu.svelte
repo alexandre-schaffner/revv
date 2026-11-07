@@ -96,7 +96,7 @@ function handleSignOut(): void {
 				aria-pressed={active}
 			>
 				<span class="acct-avatar-wrap">
-					<Avatar src={entry.avatarUrl} size={18}>
+					<Avatar src={entry.avatarContent} size={18}>
 						{#snippet fallback()}
 							<User size={13} class="acct-icon" />
 						{/snippet}

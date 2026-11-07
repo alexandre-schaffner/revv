@@ -407,6 +407,43 @@ describe("GitHubAccounts.viewerLogin", () => {
   });
 });
 
+describe("GitHubAccounts.recordIdentity", () => {
+  const signed = (sig: string) => `https://${HOST}/avatars/u/7?v=4&token=${sig}`;
+
+  it("treats a re-signed avatar URL as the same image: no write, no push", async () => {
+    const db = createDb(":memory:");
+    seedAccount(db, { id: "acc" });
+    db.update(account).set({ avatarUrl: signed("a") }).where(eq(account.id, "acc")).run();
+    const hub = makeFakeHub();
+
+    await run(db, makeFakeStore(), hub, (a) =>
+      a.recordIdentity("acc", { login: "login-acc", avatarUrl: signed("b") }),
+    );
+
+    expect(hub.events).toEqual([]);
+    const row = db.select().from(account).where(eq(account.id, "acc")).get();
+    expect(row?.avatarUrl).toBe(signed("a"));
+  });
+
+  it("records a moved login on the account row only, and announces it", async () => {
+    const db = createDb(":memory:");
+    seedAccount(db, { id: "acc" });
+    const hub = makeFakeHub();
+
+    await run(db, makeFakeStore(), hub, (a) =>
+      a.recordIdentity("acc", { login: "renamed", avatarUrl: signed("a") }),
+    );
+
+    expect(db.select().from(account).where(eq(account.id, "acc")).get()?.githubLogin).toBe(
+      "renamed",
+    );
+    const mirror = db.select().from(user).where(eq(user.id, "user-acc")).get();
+    expect(mirror?.githubLogin ?? null).toBeNull();
+    expect(mirror?.image ?? null).toBeNull();
+    expect(hub.events.map((e) => e.msg.type)).toEqual(["user:updated"]);
+  });
+});
+
 describe("GitHubAccounts.sessionUser", () => {
   const seedSession = (db: Db, expiresAt: Date) => {
     const now = new Date();

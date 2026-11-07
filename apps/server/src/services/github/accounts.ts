@@ -16,7 +16,7 @@ import { logError } from "../../logger";
 import { DbService } from "../Db";
 import { Realtime } from "../Realtime";
 import { SecretStore, type TokenPair } from "../SecretStore";
-import { AvatarCache } from "./avatars";
+import { AvatarCache, avatarIdentity } from "./avatars";
 import {
   clientIdForHost,
   clientIdIsGitHubApp,
@@ -67,23 +67,22 @@ export interface AccountProfile {
   readonly githubUserId: string;
 }
 
+/** An account's identity as every account list shows it; the avatar is the cached data URL. */
+interface AccountFace {
+  readonly host: string;
+  readonly githubLogin: string | null;
+  readonly avatarContent: string | null;
+}
+
 export interface LocalUser {
   readonly id: string;
   readonly name: string;
   readonly email: string;
-  readonly image: string | null;
-  readonly accounts: ReadonlyArray<{
-    readonly host: string;
-    readonly githubLogin: string | null;
-    readonly avatarUrl: string | null;
-  }>;
+  readonly accounts: readonly AccountFace[];
 }
 
-export interface ConnectedHost {
-  readonly host: string;
+export interface ConnectedHost extends AccountFace {
   readonly connected: boolean;
-  readonly githubLogin: string | null;
-  readonly avatarUrl: string | null;
 }
 
 export interface UserProfile {
@@ -170,8 +169,8 @@ export class GitHubAccounts extends Context.Service<
     readonly signsInWithGitHubApp: (accountId: string) => Effect.Effect<boolean>;
     /**
      * Record what GitHub says the account's login and avatar are now, and
-     * cache the avatar. When either moved, the user mirror (`user.github_login`
-     * / `user.image`) follows and `user:updated` goes out.
+     * cache the avatar. When the login, the image or its cached bytes moved,
+     * `user:updated` goes out.
      */
     readonly recordIdentity: (
       accountId: string,
@@ -583,51 +582,37 @@ export const GitHubAccountsLive = Layer.effect(
         if (!row) return;
         const host = hostFromProviderId(row.providerId);
         const avatar = yield* avatars.ensure(host, identity.login, identity.avatarUrl);
-        const moved = row.githubLogin !== identity.login || row.avatarUrl !== identity.avatarUrl;
+        // GitHub Enterprise signs the avatar URL afresh on every answer: the
+        // image is the same while its identity is.
+        const moved =
+          row.githubLogin !== identity.login ||
+          avatarIdentity(row.avatarUrl) !== avatarIdentity(identity.avatarUrl);
         if (!moved && !avatar.changed) return;
-        const now = new Date();
         if (moved) {
           yield* dbTry("record account identity", () =>
             db
               .update(account)
-              .set({ githubLogin: identity.login, avatarUrl: identity.avatarUrl, updatedAt: now })
+              .set({
+                githubLogin: identity.login,
+                avatarUrl: identity.avatarUrl,
+                updatedAt: new Date(),
+              })
               .where(eq(account.id, accountId))
               .run(),
           );
         }
         const userRow = yield* dbTry("read user", () =>
           db
-            .select({
-              id: user.id,
-              name: user.name,
-              email: user.email,
-              image: user.image,
-              githubLogin: user.githubLogin,
-            })
+            .select({ id: user.id, name: user.name, email: user.email })
             .from(user)
             .where(eq(user.id, row.userId))
             .get(),
         );
         if (!userRow) return;
-        if (userRow.image !== identity.avatarUrl || userRow.githubLogin !== identity.login) {
-          yield* dbTry("mirror identity to user", () =>
-            db
-              .update(user)
-              .set({ image: identity.avatarUrl, githubLogin: identity.login, updatedAt: now })
-              .where(eq(user.id, row.userId))
-              .run(),
-          );
-        }
         const image = (yield* avatars.contents(host, [identity.login])).get(identity.login) ?? null;
         yield* realtime.toAccount(accountId, {
           type: "user:updated",
-          data: {
-            id: userRow.id,
-            name: userRow.name,
-            email: userRow.email,
-            avatarContent: image,
-            githubLogin: identity.login,
-          },
+          data: { ...userRow, avatarContent: image, githubLogin: identity.login },
         });
       });
 
@@ -708,8 +693,6 @@ export const GitHubAccountsLive = Layer.effect(
     const upsertUserByEmail = (input: {
       readonly email: string;
       readonly name: string;
-      readonly login: string;
-      readonly avatarUrl: string | null;
     }): Effect.Effect<string, DbError> =>
       dbTry("upsert user", () => {
         const now = new Date();
@@ -720,12 +703,7 @@ export const GitHubAccountsLive = Layer.effect(
           .get();
         if (existing) {
           db.update(user)
-            .set({
-              name: input.name,
-              image: input.avatarUrl,
-              githubLogin: input.login,
-              updatedAt: now,
-            })
+            .set({ name: input.name, updatedAt: now })
             .where(eq(user.id, existing.id))
             .run();
           return existing.id;
@@ -737,8 +715,6 @@ export const GitHubAccountsLive = Layer.effect(
             name: input.name,
             email: input.email,
             emailVerified: true,
-            image: input.avatarUrl,
-            githubLogin: input.login,
             createdAt: now,
             updatedAt: now,
           })
@@ -758,12 +734,7 @@ export const GitHubAccountsLive = Layer.effect(
           if (!email) {
             return yield* Effect.fail(authFailure("No email address found on GitHub account"));
           }
-          userId = yield* upsertUserByEmail({
-            email,
-            name: viewer.name ?? viewer.login,
-            login: viewer.login,
-            avatarUrl: viewer.avatarUrl,
-          });
+          userId = yield* upsertUserByEmail({ email, name: viewer.name ?? viewer.login });
         }
         const accountId = yield* upsertAccount({
           userId,
@@ -815,71 +786,75 @@ export const GitHubAccountsLive = Layer.effect(
         return yield* mintSession(targetUserId);
       });
 
-    const localUsers: Effect.Effect<LocalUser[], DbError> = dbTry("list local users", () => {
-      const userIds = [
-        ...new Set(
-          db
-            .select({ userId: session.userId })
-            .from(session)
-            .where(gt(session.expiresAt, new Date()))
-            .all()
-            .map((s) => s.userId),
+    /** Each account row as the account lists show it, its avatar read from the cache. */
+    const accountFaces = (
+      rows: ReadonlyArray<{
+        readonly providerId: string;
+        readonly githubLogin: string | null;
+      }>,
+    ): Effect.Effect<AccountFace[]> =>
+      Effect.forEach(rows, (row) =>
+        Effect.gen(function* () {
+          const host = hostFromProviderId(row.providerId);
+          const login = row.githubLogin ?? null;
+          const avatarContent =
+            login === null ? null : ((yield* avatars.contents(host, [login])).get(login) ?? null);
+          return { host, githubLogin: login, avatarContent };
+        }),
+      );
+
+    const localUsers: Effect.Effect<LocalUser[], DbError> = Effect.gen(function* () {
+      const { users, accounts } = yield* dbTry("list local users", () => {
+        const userIds = [
+          ...new Set(
+            db
+              .select({ userId: session.userId })
+              .from(session)
+              .where(gt(session.expiresAt, new Date()))
+              .all()
+              .map((s) => s.userId),
+          ),
+        ];
+        if (userIds.length === 0) return { users: [], accounts: [] };
+        return {
+          users: db
+            .select({ id: user.id, name: user.name, email: user.email })
+            .from(user)
+            .where(inArray(user.id, userIds))
+            .all(),
+          accounts: db
+            .select({
+              userId: account.userId,
+              providerId: account.providerId,
+              githubLogin: account.githubLogin,
+            })
+            .from(account)
+            .where(inArray(account.userId, userIds))
+            .all(),
+        };
+      });
+      return yield* Effect.forEach(users, (u) =>
+        accountFaces(accounts.filter((a) => a.userId === u.id)).pipe(
+          Effect.map((faces) => ({ ...u, accounts: faces })),
         ),
-      ];
-      if (userIds.length === 0) return [];
-      const users = db
-        .select({ id: user.id, name: user.name, email: user.email, image: user.image })
-        .from(user)
-        .where(inArray(user.id, userIds))
-        .all();
-      const accounts = db
-        .select({
-          userId: account.userId,
-          providerId: account.providerId,
-          githubLogin: account.githubLogin,
-          avatarUrl: account.avatarUrl,
-        })
-        .from(account)
-        .where(inArray(account.userId, userIds))
-        .all();
-      return users.map((u) => ({
-        ...u,
-        accounts: accounts
-          .filter((a) => a.userId === u.id)
-          .map((a) => ({
-            host: hostFromProviderId(a.providerId),
-            githubLogin: a.githubLogin ?? null,
-            avatarUrl: a.avatarUrl ?? null,
-          })),
-      }));
+      );
     });
 
     const connectedHosts = (userId: string): Effect.Effect<ConnectedHost[], DbError> =>
-      dbTry("list connected hosts", () => {
-        const rows = db
-          .select({
-            providerId: account.providerId,
-            githubLogin: account.githubLogin,
-            avatarUrl: account.avatarUrl,
-          })
-          .from(account)
-          .where(eq(account.userId, userId))
-          .all();
-        const byHost = new Map<string, { githubLogin: string | null; avatarUrl: string | null }>();
-        for (const r of rows) {
-          byHost.set(hostFromProviderId(r.providerId), {
-            githubLogin: r.githubLogin ?? null,
-            avatarUrl: r.avatarUrl ?? null,
-          });
-        }
+      Effect.gen(function* () {
+        const rows = yield* dbTry("list connected hosts", () =>
+          db
+            .select({ providerId: account.providerId, githubLogin: account.githubLogin })
+            .from(account)
+            .where(eq(account.userId, userId))
+            .all(),
+        );
+        const byHost = new Map((yield* accountFaces(rows)).map((face) => [face.host, face]));
         return [...new Set<string>([...BUNDLED_HOSTS, ...byHost.keys()])].map((host) => {
-          const connected = byHost.get(host);
-          return {
-            host,
-            connected: connected !== undefined,
-            githubLogin: connected?.githubLogin ?? null,
-            avatarUrl: connected?.avatarUrl ?? null,
-          };
+          const face = byHost.get(host);
+          return face
+            ? { ...face, connected: true }
+            : { host, connected: false, githubLogin: null, avatarContent: null };
         });
       });
 
