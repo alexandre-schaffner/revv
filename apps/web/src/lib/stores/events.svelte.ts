@@ -8,7 +8,11 @@
 //
 // Auth: `?token=` query param. `EventSource` cannot set custom headers.
 
-import type { ServerEventMessage } from "@revv/shared";
+import {
+  type ServerEventMessage,
+  SSE_HEARTBEAT_EVENT,
+  SSE_HEARTBEAT_INTERVAL_MS,
+} from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import * as hunkScan from "$lib/hunk-scan/store.svelte";
 import { onRecapAdded, onRecapStatusChanged } from "$lib/recaps/store.svelte";
@@ -53,7 +57,7 @@ const ON_FOREGROUND: ReadonlyArray<(streamOpen: boolean) => void> = [
   repos.onWindowForeground,
 ];
 
-const DEAD_CONNECTION_THRESHOLD_MS = 60_000;
+const DEAD_CONNECTION_THRESHOLD_MS = 4 * SSE_HEARTBEAT_INTERVAL_MS;
 const KEEPALIVE_CHECK_INTERVAL_MS = 30_000;
 const RECONNECT_RECONCILE_DEBOUNCE_MS = 4_000;
 const RECOVER_BASE_MS = 1_000;
@@ -273,7 +277,7 @@ function open(): void {
     // up on needs us.
     if (source === es && es.readyState === EventSource.CLOSED) scheduleRecover();
   });
-  es.addEventListener("heartbeat", () => {
+  es.addEventListener(SSE_HEARTBEAT_EVENT, () => {
     lastEventTime = Date.now();
   });
   es.addEventListener("message", (event: MessageEvent<string>) => {

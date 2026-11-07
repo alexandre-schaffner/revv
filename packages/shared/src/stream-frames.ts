@@ -12,6 +12,14 @@ export const SSE_ERROR_EVENT = "error";
 
 export const SSE_DONE_FRAME = `data: ${SSE_DONE_DATA}\n\n`;
 
+/**
+ * Every stream heartbeats this often. The browser's `EventSource` never
+ * surfaces `:` comments, so the global stream heartbeats with a named event;
+ * its client counts a connection dead after a few missed beats.
+ */
+export const SSE_HEARTBEAT_INTERVAL_MS = 15_000;
+export const SSE_HEARTBEAT_EVENT = "heartbeat";
+
 export function sseErrorFrame(body: StreamErrorBody): string {
   return `event: ${SSE_ERROR_EVENT}\ndata: ${JSON.stringify(body)}\n\n`;
 }

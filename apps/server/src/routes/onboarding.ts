@@ -6,12 +6,12 @@ import { invalidateAgentProbes } from "../ai/acp/agents";
 import { user } from "../db/schema";
 import { ValidationError } from "../domain/errors";
 import { tryDb } from "../effects/db-try";
-import { AppRuntime } from "../runtime";
+import type { AppServices } from "../runtime";
 import { AgentLoginService } from "../services/AgentLogin";
 import { OnboardingService } from "../services/Onboarding";
-import { type ApiErrorResponse, errorResponse, runRoute, withAuth } from "./middleware";
+import { runRoute, withAuth } from "./middleware";
 import { literalUnion } from "./schemas";
-import { openSse } from "./sse";
+import { openSse, runStream } from "./sse";
 
 const agentBody = t.Object({ agent: literalUnion(ACP_AGENT_IDS) });
 const jobIdField = t.String({ minLength: 1 });
@@ -21,35 +21,28 @@ const jobIdField = t.String({ minLength: 1 });
  * far, then forwards live events until the terminal `done`. Shared by the
  * install and login streams.
  */
-async function streamJobEvents<E extends { type: string }>(
-  ctx: { query: Record<string, string | undefined> },
-  resolve: (
+function streamJobEvents<E extends { type: string }>(
+  jobId: string | undefined,
+  subscribe: (
     jobId: string,
     send: (event: E) => void,
-  ) => Promise<{ found: boolean; unsubscribe: () => void }>,
+  ) => Effect.Effect<{ found: boolean; unsubscribe: () => void }, never, AppServices>,
   notFoundEvent: E,
-): Promise<Response | ApiErrorResponse> {
-  const jobId = ctx.query?.jobId;
-  if (typeof jobId !== "string" || jobId.length === 0) {
-    return errorResponse(new ValidationError({ message: "Missing jobId" }));
-  }
-
-  const { response, channel } = openSse();
-  const send = (event: E): void => {
-    channel.send(event);
-    if (event.type === "done") channel.done();
-  };
-
-  try {
-    const sub = await resolve(jobId, send);
-    if (sub.found) channel.onClose(sub.unsubscribe);
-    else send(notFoundEvent);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Subscription failed";
-    channel.send({ type: "done", success: false, error: message });
-    channel.done();
-  }
-  return response;
+): Promise<Response> {
+  return runStream(
+    Effect.gen(function* () {
+      if (!jobId) return yield* new ValidationError({ message: "Missing jobId" });
+      const { response, channel } = openSse<E>();
+      const send = (event: E): void => {
+        channel.send(event);
+        if (event.type === "done") channel.done();
+      };
+      const sub = yield* subscribe(jobId, send);
+      if (sub.found) channel.onClose(sub.unsubscribe);
+      else send(notFoundEvent);
+      return response;
+    }),
+  );
 }
 
 /**
@@ -119,9 +112,8 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
   )
   .get("/install/stream", (ctx) =>
     streamJobEvents<InstallEvent>(
-      ctx,
-      (jobId, send) =>
-        AppRuntime.runPromise(Effect.flatMap(OnboardingService, (s) => s.subscribe(jobId, send))),
+      ctx.query?.jobId,
+      (jobId, send) => Effect.flatMap(OnboardingService, (s) => s.subscribe(jobId, send)),
       { type: "done", success: false, error: "Unknown install job" },
     ),
   )
@@ -159,9 +151,8 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
   )
   .get("/login/stream", (ctx) =>
     streamJobEvents<LoginEvent>(
-      ctx,
-      (jobId, send) =>
-        AppRuntime.runPromise(Effect.flatMap(AgentLoginService, (s) => s.subscribe(jobId, send))),
+      ctx.query?.jobId,
+      (jobId, send) => Effect.flatMap(AgentLoginService, (s) => s.subscribe(jobId, send)),
       { type: "done", success: false, error: "Unknown login job" },
     ),
   );

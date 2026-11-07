@@ -2,7 +2,7 @@ import type { ApiErrorBody } from "@revv/shared";
 import { Cause, Effect, Exit } from "effect";
 import { Elysia, type ElysiaCustomStatusResponse, status } from "elysia";
 import { auth } from "../auth";
-import { GitHubAuthError, type HttpErrorStatus, httpErrorOf } from "../domain/errors";
+import { type HttpErrorStatus, httpErrorOf } from "../domain/errors";
 import { logError } from "../logger";
 import { AppRuntime, type AppServices } from "../runtime";
 import { GitHubAccounts } from "../services/github/accounts";
@@ -56,14 +56,7 @@ export const withAccount = new Elysia({ name: "with-account" }).derive(
       requestAccount(session.user.id, ctx.query as Record<string, unknown>),
     );
     if (Exit.isSuccess(exit)) return { session, account: exit.value };
-    const error = Cause.squash(exit.cause);
-    if (error instanceof GitHubAuthError) return errorResponse(error);
-    logError(
-      "withAccount",
-      "account resolution failed:",
-      error instanceof Error ? error.message : String(error),
-    );
-    return unauthorized();
+    return errorResponse(Cause.squash(exit.cause));
   },
 );
 
@@ -82,24 +75,12 @@ export function errorResponse(error: unknown): ApiErrorResponse {
 }
 
 /**
- * Run a route's work and answer with its value, or with the HTTP meaning of
- * whatever it failed with. Takes the work as an Effect on the app runtime, or
- * as an async function for handlers that still await promises of their own.
+ * Run a route's work on the app runtime and answer with its value, or with
+ * the HTTP meaning of whatever it failed with.
  */
-export function runRoute<A, E>(
-  work: Effect.Effect<A, E, AppServices>,
-): Promise<A | ApiErrorResponse>;
-export function runRoute<A>(work: () => Promise<A>): Promise<A | ApiErrorResponse>;
 export async function runRoute<A, E>(
-  work: Effect.Effect<A, E, AppServices> | (() => Promise<A>),
+  work: Effect.Effect<A, E, AppServices>,
 ): Promise<A | ApiErrorResponse> {
-  if (Effect.isEffect(work)) {
-    const exit = await AppRuntime.runPromiseExit(work);
-    return Exit.isSuccess(exit) ? exit.value : errorResponse(Cause.squash(exit.cause));
-  }
-  try {
-    return await work();
-  } catch (e) {
-    return errorResponse(e);
-  }
+  const exit = await AppRuntime.runPromiseExit(work);
+  return Exit.isSuccess(exit) ? exit.value : errorResponse(Cause.squash(exit.cause));
 }

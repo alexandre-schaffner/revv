@@ -15,8 +15,8 @@
 // suppress or misdirect an update, not install one.
 //
 // The GitHub stable manifest stays in the endpoint list as a second entry.
-// The plugin walks endpoints in order and skips any that error, so a stopped
-// LaunchAgent degrades to stable-channel checks instead of failing outright.
+// The plugin walks endpoints in order and skips any that error, so a server
+// that isn't running degrades to stable-channel checks instead of failing outright.
 // A 204 from this route ends the walk (the plugin reads it as "no update"),
 // so this handler only ever returns 204 for a genuinely resolved "no release
 // published for this asset" (the final upstream 404) — every other
@@ -37,7 +37,6 @@ import { REPO_SLUG } from "@revv/shared/desktop-contract";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { serverEnv } from "../config";
-import { AppRuntime } from "../runtime";
 import { SettingsService } from "../services/Settings";
 import { runRoute } from "./middleware";
 import { literalUnion } from "./schemas";
@@ -124,52 +123,46 @@ async function resolveNightlyManifestUrl(): Promise<NightlyResolution> {
   return resolution;
 }
 
+const badGateway = () => new Response(null, { status: 502 });
+
+const manifestResponse = Effect.gen(function* () {
+  // A package manager owns this install (see nix/home-manager.nix): end the
+  // plugin's endpoint walk with "no update" rather than falling through to
+  // GitHub and replacing a bundle the manager pins.
+  if (serverEnv.updatesManagedBy) return new Response(null, { status: 204 });
+
+  const { updateChannel } = yield* Effect.flatMap(SettingsService, (s) => s.getSettings());
+
+  let target = STABLE_MANIFEST_URL;
+  if (updateChannel === "nightly") {
+    const resolved = yield* Effect.tryPromise(resolveNightlyManifestUrl);
+    // Both "no nightly published yet" and "couldn't resolve one" return 502
+    // (not 204): a 204 ends the plugin's endpoint walk right here, so a
+    // nightly user would never fall through to check the stable endpoint,
+    // and — since this route is unauthenticated on loopback — any process
+    // that beat the real server to the port could otherwise suppress every
+    // update by always answering 204.
+    if (resolved.kind !== "ok") return badGateway();
+    target = resolved.url;
+  }
+
+  const upstream = yield* Effect.tryPromise(() =>
+    fetch(target, { redirect: "follow", signal: AbortSignal.timeout(10_000) }),
+  );
+  // A 404 here means no release has been published yet (fresh clone / no
+  // tags cut) — a legitimate absence, so end the walk quietly with 204
+  // rather than surfacing a hard error toast on a manual check. Any other
+  // non-2xx is a genuine failure (broken pipeline, GitHub outage): 502, so
+  // the plugin falls through / a manual check can report it.
+  if (!upstream.ok) {
+    return upstream.status === 404 ? new Response(null, { status: 204 }) : badGateway();
+  }
+  const manifest = yield* Effect.tryPromise(() => upstream.text());
+  return new Response(manifest, { status: 200, headers: { "Content-Type": "application/json" } });
+}).pipe(Effect.catch(() => Effect.succeed(badGateway())));
+
 export const updateManifestRoute = new Elysia()
-  .get("/api/update-manifest", async () => {
-    // A package manager owns this install (see nix/home-manager.nix): end the
-    // plugin's endpoint walk with "no update" rather than falling through to
-    // GitHub and replacing a bundle the manager pins.
-    if (serverEnv.updatesManagedBy) return new Response(null, { status: 204 });
-
-    const { updateChannel: channel } = await AppRuntime.runPromise(
-      Effect.flatMap(SettingsService, (settings) => settings.getSettings()),
-    );
-
-    let target: string;
-    if (channel === "nightly") {
-      const resolved = await resolveNightlyManifestUrl();
-      // Both "no nightly published yet" and "couldn't resolve one" return 502
-      // (not 204): a 204 ends the plugin's endpoint walk right here, so a
-      // nightly user would never fall through to check the stable endpoint,
-      // and — since this route is unauthenticated on loopback — any process
-      // that beat the real server to the port could otherwise suppress every
-      // update by always answering 204.
-      if (resolved.kind === "none" || resolved.kind === "error") {
-        return new Response(null, { status: 502 });
-      }
-      target = resolved.url;
-    } else {
-      target = STABLE_MANIFEST_URL;
-    }
-
-    const upstream = await fetch(target, {
-      redirect: "follow",
-      signal: AbortSignal.timeout(10_000),
-    });
-    // A 404 here means no release has been published yet (fresh clone / no
-    // tags cut) — a legitimate absence, so end the walk quietly with 204
-    // rather than surfacing a hard error toast on a manual check. Any other
-    // non-2xx is a genuine failure (broken pipeline, GitHub outage): 502, so
-    // the plugin falls through / a manual check can report it.
-    if (!upstream.ok) {
-      return new Response(null, { status: upstream.status === 404 ? 204 : 502 });
-    }
-
-    return new Response(await upstream.text(), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  })
+  .get("/api/update-manifest", () => runRoute(manifestResponse))
   .put(
     "/api/update-channel",
     (ctx) =>
