@@ -56,15 +56,42 @@ function foreignKeysOf(sqlite: Database, table: string): ForeignKeyInfo[] {
   return sqlite.query(`PRAGMA foreign_key_list(\`${table}\`)`).all() as ForeignKeyInfo[];
 }
 
-function migrationPrefix(count: number): string {
-  const folder = join(scratch, `prefix-${count}`);
+/**
+ * A copy of the DB a fresh install of the build that shipped the first `count`
+ * migrations left behind. One in-memory DB advances a migration at a time, so
+ * the replay costs no disk I/O; journal `when`s strictly increase
+ * (`scripts/check-migrations.ts`), so entry k on top of 1..k-1 runs exactly the
+ * SQL a fresh install of that build ran.
+ */
+const olderBuild = (() => {
+  const folder = join(scratch, "journal-prefix");
   mkdirSync(join(folder, "meta"), { recursive: true });
-  const entries = journal.entries.slice(0, count);
-  writeFileSync(join(folder, "meta", "_journal.json"), JSON.stringify({ entries }));
-  for (const entry of entries) {
-    copyFileSync(join(migrationsDirectory, `${entry.tag}.sql`), join(folder, `${entry.tag}.sql`));
-  }
-  return folder;
+  let sqlite = new Database(":memory:");
+  let applied = 0;
+  return (count: number): Database => {
+    if (count < applied) {
+      sqlite.close();
+      sqlite = new Database(":memory:");
+      applied = 0;
+    }
+    for (; applied < count; applied++) {
+      const entries = journal.entries.slice(0, applied + 1);
+      const entry = entries[applied];
+      if (!entry) throw new Error(`no journal entry at ${applied}`);
+      copyFileSync(join(migrationsDirectory, `${entry.tag}.sql`), join(folder, `${entry.tag}.sql`));
+      writeFileSync(join(folder, "meta", "_journal.json"), JSON.stringify({ entries }));
+      migrate(drizzle(sqlite), { migrationsFolder: folder });
+    }
+    return Database.deserialize(sqlite.serialize());
+  };
+})();
+
+/** Persist an in-memory DB where `createDb` will open it, the way an install's file sits on disk. */
+function writeInstall(sqlite: Database, name: string): string {
+  const path = join(scratch, `${name}.db`);
+  writeFileSync(path, sqlite.serialize());
+  sqlite.close();
+  return path;
 }
 
 function placeholderFor(column: ColumnInfo, table: string): string | number {
@@ -130,12 +157,9 @@ function whenOf(tag: string): number {
   return entry.when;
 }
 
-/** A file DB migrated through `tag` (inclusive), the way an older build left it. */
-function migratedThrough(name: string, tag: string): Database {
-  const count = journal.entries.findIndex((e) => e.tag === tag) + 1;
-  const sqlite = new Database(join(scratch, `${name}.db`), { create: true });
-  migrate(drizzle(sqlite), { migrationsFolder: migrationPrefix(count) });
-  return sqlite;
+/** A DB migrated through `tag` (inclusive), the way an older build left it. */
+function migratedThrough(tag: string): Database {
+  return olderBuild(journal.entries.findIndex((e) => e.tag === tag) + 1);
 }
 
 const migrations = readMigrations(migrationsDirectory);
@@ -184,34 +208,23 @@ describe("database upgrades", () => {
     }
   });
 
-  it("upgrades a populated database from every earlier migration without losing rows", () => {
-    const latestWhens = journal.entries.map((entry) => entry.when);
-
-    for (let applied = 1; applied < journal.entries.length; applied++) {
-      const path = join(scratch, `upgrade-${applied}.db`);
-      const before = new Database(path, { create: true });
-      migrate(drizzle(before), { migrationsFolder: migrationPrefix(applied) });
+  // One case per starting point: each install upgrades from wherever its build
+  // stopped, and a single case replaying them all grew quadratically.
+  const latestWhens = journal.entries.map((entry) => entry.when);
+  for (const [index, from] of journal.entries.slice(0, -1).entries()) {
+    it(`upgrades a populated database from ${from.tag} without losing rows`, () => {
+      const before = olderBuild(index + 1);
       const tables = seedEveryTable(before);
-      before.close();
+      const after = createDb(writeInstall(before, `upgrade-${from.tag}`)).$client;
 
-      const after = createDb(path).$client;
-      expect({ from: journal.entries[applied - 1]?.tag, ledger: ledgerWhens(after) }).toEqual({
-        from: journal.entries[applied - 1]?.tag,
-        ledger: latestWhens,
-      });
+      expect(ledgerWhens(after)).toEqual(latestWhens);
       const survivingTables = new Set(userTables(after));
       for (const table of tables.filter((name) => survivingTables.has(name))) {
-        expect({
-          from: journal.entries[applied - 1]?.tag,
-          table,
-          rows: rowCount(after, table),
-        }).toEqual({ from: journal.entries[applied - 1]?.tag, table, rows: 1 });
+        expect({ table, rows: rowCount(after, table) }).toEqual({ table, rows: 1 });
       }
       after.close();
-    }
-    // Replays every prefix of the journal, so cost grows quadratically with the
-    // migration count and outgrew bun's 5s default on CI runners.
-  }, 60_000);
+    });
+  }
 
   it("applies a migration that landed behind a newer one instead of skipping it", () => {
     const path = join(scratch, "skipped.db");
@@ -246,25 +259,23 @@ describe("schema applied outside the journal", () => {
   const allWhens = journal.entries.map((entry) => entry.when);
 
   it("records a migration whose column an older build already added", () => {
-    const before = migratedThrough("ahead-column", "0200_linked_clones");
+    const before = migratedThrough("0200_linked_clones");
     before.run("ALTER TABLE `user_settings` ADD `github_client_id` text DEFAULT '' NOT NULL");
-    before.close();
 
-    const after = createDb(join(scratch, "ahead-column.db")).$client;
+    const after = createDb(writeInstall(before, "ahead-column")).$client;
     expect(ledgerWhens(after)).toEqual(allWhens);
     after.close();
   });
 
   it("finishes a partly applied migration and the unrecorded ones behind it", () => {
-    const before = migratedThrough("partial", "0210_github_client_id");
+    const before = migratedThrough("0210_github_client_id");
     // Review rounds started landing outside the journal, without the modes.
     before.run("ALTER TABLE `walkthroughs` ADD `mode` text DEFAULT 'reviewer' NOT NULL");
     before.run(
       "ALTER TABLE `walkthroughs` ADD `parent_walkthrough_id` text REFERENCES `walkthroughs`(`id`) ON DELETE set null",
     );
-    before.close();
 
-    const after = createDb(join(scratch, "partial.db")).$client;
+    const after = createDb(writeInstall(before, "partial")).$client;
     expect(ledgerWhens(after)).toEqual(allWhens);
     expect(columnNames(after, "walkthroughs")).toEqual(
       expect.arrayContaining(["mode", "base_head_sha", "generation_mode"]),
@@ -444,10 +455,9 @@ describe("one review session per pull request (0490)", () => {
   }
 
   function upgraded(name: string): Database {
-    const before = migratedThrough(name, "0480_recap_stopped_status");
+    const before = migratedThrough("0480_recap_stopped_status");
     seedSplitReviews(before);
-    before.close();
-    return createDb(join(scratch, `${name}.db`)).$client;
+    return createDb(writeInstall(before, name)).$client;
   }
 
   const pairs = (sqlite: Database, sql: string) =>
