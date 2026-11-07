@@ -224,6 +224,8 @@ export interface StackMergePlanLayer {
    * carry one too: what it's still waiting on (checks auto-merge will wait out).
    */
   readonly reasons: readonly string[];
+  /** Why a merge can't run through this layer (it merged, or it or a layer below is blocked); null when it can. */
+  readonly refusal: string | null;
 }
 
 export interface StackMergePlan {

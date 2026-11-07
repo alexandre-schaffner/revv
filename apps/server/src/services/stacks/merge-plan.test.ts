@@ -192,6 +192,21 @@ describe("planLayers / defaultThrough", () => {
     expect(defaultThrough(layers)).toBe(3);
   });
 
+  test("names why a merge can't run through each layer", () => {
+    const stack = stackOf([
+      layer(1, { status: "merged" }),
+      layer(2, { baseRef: "main", mergeStateStatus: "CLEAN" }),
+      layer(3, { reviewDecision: "review_required" }),
+      layer(4),
+    ]);
+    expect(planLayers(stack, new Map()).map((l) => l.refusal)).toEqual([
+      "Already merged",
+      null,
+      "Review required",
+      "#103 below can't merge yet",
+    ]);
+  });
+
   test("null when the lowest open layer can't merge, or nothing is open", () => {
     const blocked = planLayers(stackOf([layer(1, { status: "draft" }), layer(2)]), new Map());
     expect(defaultThrough(blocked)).toBeNull();

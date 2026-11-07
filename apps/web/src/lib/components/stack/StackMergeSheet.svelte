@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { MergeMethod, StackMergePlan, StackMergePlanLayer, StackMergeRun } from "@revv/shared";
+import type { MergeMethod, StackMergePlan, StackMergeRun } from "@revv/shared";
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import CheckCircle from "phosphor-svelte/lib/CheckCircle";
 import CircleNotch from "phosphor-svelte/lib/CircleNotch";
@@ -100,28 +100,10 @@ $effect(() => {
 const bottomUp = $derived(plan ? [...plan.layers].sort((a, b) => a.position - b.position) : []);
 const topFirst = $derived([...bottomUp].reverse());
 
-const pickRefusal = $derived.by(() => {
-  const refusals = new Map<number, string>();
-  let blocker: StackMergePlanLayer | null = null;
-  for (const layer of bottomUp) {
-    if (layer.readiness === "merged") {
-      refusals.set(layer.position, "Already merged");
-      continue;
-    }
-    if (blocker) {
-      refusals.set(layer.position, `#${blocker.number} below can't merge yet`);
-      continue;
-    }
-    if (layer.readiness === "blocked") {
-      blocker = layer;
-      refusals.set(layer.position, layer.reasons[0] ?? "Can't merge yet");
-    }
-  }
-  return refusals;
-});
-
 const target = $derived(
-  through !== null && !pickRefusal.has(through) ? through : (plan?.defaultThrough ?? null),
+  through !== null && bottomUp.find((l) => l.position === through)?.refusal === null
+    ? through
+    : (plan?.defaultThrough ?? null),
 );
 const toMerge = $derived(
   bottomUp.filter((l) => target !== null && l.position <= target && l.readiness !== "merged"),
@@ -286,7 +268,6 @@ function onOpenChange(open: boolean): void {
 					{:else}
 						<MergePickerRow
 							{layer}
-							refusal={pickRefusal.get(layer.position) ?? null}
 							inRange={target !== null && layer.position <= target}
 							isTarget={layer.position === target}
 							onpick={() => (through = layer.position)}

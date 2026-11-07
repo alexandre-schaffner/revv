@@ -1,15 +1,11 @@
-import type { CiRollupState, MergeEligibility, PrConversation, ReviewDecision } from "@revv/shared";
-import { isMergeStateSettling } from "@revv/shared";
+import type { MergeEligibility } from "@revv/shared";
+import { isMergeStateSettling, loginsMatch } from "@revv/shared";
+import { untrack } from "svelte";
 import { api } from "$lib/api/client";
+import { getCurrentUserLogin } from "./auth.svelte";
+import { getConversation } from "./conversation.svelte";
+import { getPrById } from "./prs.svelte";
 import { createResource } from "./resource";
-
-/** Everything a mergeability answer depends on that Revv observes. Equal questions share one answer. */
-export interface MergeQuestion {
-  readonly prId: string;
-  readonly headSha: string | null;
-  readonly reviewDecision: ReviewDecision | null;
-  readonly ciState: CiRollupState | null;
-}
 
 /**
  * Per PR, versioned by the question: a different question supersedes the
@@ -31,33 +27,53 @@ const answers = createResource<void, MergeEligibility>({
 });
 
 /**
- * The question for a PR as Revv currently sees it. Everyone who asks about
- * the same PR builds it here, so equal views share one GitHub call.
+ * Everything a mergeability answer depends on that Revv observes, as a
+ * version: equal views of a PR share one GitHub call, and a new head, review
+ * decision or CI state asks again. Null until the PR's conversation has
+ * loaded (or failed to), so the first ask already carries it.
  */
-export function mergeQuestionFor(
-  prId: string,
-  headSha: string | null,
-  conversation: PrConversation | null,
-): MergeQuestion {
-  return {
-    prId,
-    headSha,
-    reviewDecision: conversation?.reviewDecision ?? null,
-    ciState: conversation?.ci?.state ?? null,
-  };
+function questionVersion(prId: string): string | null {
+  const pr = getPrById(prId);
+  const request = getConversation(prId).request;
+  if (!pr || (request.status !== "ok" && request.status !== "error")) return null;
+  const conversation = request.status === "ok" ? request.data : null;
+  return `${pr.headSha}|${conversation?.reviewDecision ?? null}|${conversation?.ci?.state ?? null}`;
 }
 
-function questionVersion(q: MergeQuestion): string {
-  return `${q.headSha}|${q.reviewDecision}|${q.ciState}`;
+/**
+ * Ask GitHub whether the PR can merge, unless the same question is in flight,
+ * retrying, or answered recently. Call from an effect: it follows the PR's
+ * head, review decision and CI state.
+ */
+export function askMergeEligibility(prId: string): void {
+  const version = questionVersion(prId);
+  if (version !== null) untrack(() => void answers.load(prId, undefined, version));
 }
 
-export function getMergeAnswer(question: MergeQuestion | null): MergeEligibility | null {
-  return question ? answers.data(question.prId) : null;
+/** The PR's last answer; it stays up while a newer question is asked. */
+export function getMergeEligibility(prId: string): MergeEligibility | null {
+  return answers.data(prId);
 }
 
-/** Asks GitHub unless an equal question is in flight, retrying, or answered recently. */
-export function askMergeEligibility(question: MergeQuestion): void {
-  void answers.load(question.prId, undefined, questionVersion(question));
+/**
+ * Revv offers merging to the PR's author and to a reviewer who approved it;
+ * whether GitHub lets them is `getMergeEligibility(prId).canMerge`.
+ */
+export function viewerMayMerge(prId: string): boolean {
+  const pr = getPrById(prId);
+  if (!pr) return false;
+  if (loginsMatch(pr.authorLogin, getCurrentUserLogin())) return true;
+  const request = getConversation(prId).request;
+  if (request.status !== "ok") return false;
+  const { reviewers, viewerLogin } = request.data;
+  return reviewers.some(
+    (r) => r.kind === "user" && loginsMatch(r.actor.login, viewerLogin) && r.verdict === "approved",
+  );
+}
+
+/** The viewer may merge the PR, and GitHub says they can. The one gate for the PR and its stack. */
+export function canViewerMerge(prId: string): boolean {
+  return viewerMayMerge(prId) && getMergeEligibility(prId)?.canMerge === true;
 }
 
 export function onPrMergeEligibility(data: { prId: string; eligibility: MergeEligibility }): void {
