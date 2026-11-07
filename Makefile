@@ -130,5 +130,4 @@ clean-all: clean ## Remove build artifacts AND node_modules
 reset-db: ## Delete the local dev database (will be recreated on next server start)
 	rm -f revv-dev.db revv-dev.db-shm revv-dev.db-wal
 	rm -f apps/server/revv-dev.db apps/server/revv-dev.db-shm apps/server/revv-dev.db-wal
-	rm -f ~/.revv/settings.json
-	@printf "Dev database and settings deleted. Both will be recreated on next server start.\n"
+	@printf "Dev database deleted. It will be recreated on next server start.\n"
