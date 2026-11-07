@@ -17,11 +17,17 @@ export function fireAndForgetThreadEventBroadcast(
   msg: ThreadEventMessage,
   accountId?: string,
 ): void {
-  void AppRuntime.runPromise(
+  AppRuntime.runPromise(
     Effect.flatMap(Realtime, (realtime) =>
       accountId !== undefined ? realtime.toAccount(accountId, msg) : realtime.toPr(prId, msg),
     ),
-  );
+  ).catch((err: unknown) => {
+    logError(
+      "mcp-thread",
+      `broadcasting ${msg.type} for ${prId} failed:`,
+      err instanceof Error ? err.message : String(err),
+    );
+  });
 }
 
 export function fireAndForgetWalkthroughEdit(

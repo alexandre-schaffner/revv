@@ -222,9 +222,11 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
                   `signature verification failed in permissive mode key=${key}: ${detail} — accepting anyway`,
                 );
               } else {
-                const eligible = yield* eligibility
-                  .isSignerEligible(repoFullName, signerHost, signerLogin)
-                  .pipe(Effect.catch(() => Effect.succeed(false)));
+                const eligible = yield* eligibility.isSignerEligible(
+                  repoFullName,
+                  signerHost,
+                  signerLogin,
+                );
 
                 if (!eligible) {
                   if (signingMode === "strict") {
