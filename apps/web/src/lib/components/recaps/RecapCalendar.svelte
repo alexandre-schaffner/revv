@@ -122,14 +122,12 @@ const weekdayLabels = $derived(
 
 /**
  * `slotKey → recap`, holding daily *and* weekly rows at once so toggling the
- * period costs nothing and triggers no refetch. Superseded rows are skipped —
- * the server excludes them but the merged store cache keeps them around — and
- * when two rows share a slot the newest generation wins.
+ * period costs nothing and triggers no refetch. When two rows share a slot
+ * the newest generation wins.
  */
 const slotIndex = $derived.by(() => {
   const map = new Map<string, ProjectRecapSummary>();
   for (const r of recaps) {
-    if (r.status === "superseded") continue;
     const key = recapSlotKey(r);
     const existing = map.get(key);
     if (!existing || r.generatedAt > existing.generatedAt) map.set(key, r);
