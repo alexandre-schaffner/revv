@@ -96,34 +96,10 @@ build-server: ## Build the API server only
 	cd apps/server && bun run build
 
 dist: ## Build the Revv.app bundle used by the source installer
-	@printf "\n\033[1m\033[36m▸ Building Revv distribution package...\033[0m\n\n"
-	@printf "  Step 1/3: Building shared package\n"
-	cd packages/shared && bun run typecheck
-	@printf "  Step 2/3: Building web frontend + API server\n"
-	bun run build
-	@printf "  Step 3/3: Building Tauri desktop bundle (.app only)\n"
-	@if ! command -v cargo >/dev/null 2>&1; then \
-		if command -v bash >/dev/null 2>&1 && [ -f scripts/lib/common.sh ]; then \
-			bash -c 'set -euo pipefail; source scripts/lib/common.sh; detect_platform; ensure_xcode_clt; ensure_rust'; \
-		else \
-			printf "\n\033[0;31m  ✗ cargo not found.\033[0m\n"; \
-			printf "  Install Rust/Cargo, then rerun this command:\n"; \
-			printf "    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\n\n"; \
-			printf "  If Rust is already installed, refresh this shell first:\n"; \
-			printf "    source $$HOME/.cargo/env\n\n"; \
-			exit 1; \
-		fi; \
-	fi
-	@# tauri.conf.json sets createUpdaterArtifacts for CI-signed releases. This
-	@# target runs on machines without TAURI_SIGNING_PRIVATE_KEY (install.sh,
-	@# `revv update`'s local-build fallback), where the bundler would hard-fail
-	@# with "public key has been found, but no private key".
-	@export PATH="$$HOME/.cargo/bin:$$PATH"; cd apps/desktop && bunx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
-	@printf "\n\033[1m\033[32m  Build complete!\033[0m\n"
-	@printf "  Bundle located in: apps/desktop/target/release/bundle/macos/\n\n"
+	@bash -c 'set -euo pipefail; source scripts/lib/common.sh; build_local_app "$$PWD"; success "Built $$REVV_BUILT_APP"'
 
 dist-debug: ## Build a debug distribution (faster, larger binary)
-	cd apps/desktop && bunx tauri build --debug --config '{"bundle":{"createUpdaterArtifacts":false}}'
+	bun run dist:debug
 
 typecheck: ## Run TypeScript type checking across all packages
 	bun run typecheck
