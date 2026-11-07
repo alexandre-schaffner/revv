@@ -126,16 +126,11 @@ async function onLoginDone(): Promise<void> {
 						<div>
 							<Button size="sm" onclick={() => startAgentInstall(agent.id)}>Install {agent.label}</Button>
 						</div>
-					{:else if s && !s.authed && status?.embeddedLoginSupported}
+					{:else if s && !s.authed}
 						<div>
 							<Button size="sm" onclick={() => startAgentSignIn(agent.id)}>Sign in to {agent.label}</Button>
 						</div>
-					{:else if s && !s.authed}
-						<div class="provider-manual">
-							<span>Run this in a terminal, then check again:</span>
-							<code>{s.loginCommand ?? `${agent.id} login`}</code>
-						</div>
-					{:else if s?.installed && s.authed && status?.embeddedLoginSupported}
+					{:else if s?.installed && s.authed}
 						<div>
 							<Button size="sm" variant="secondary" onclick={() => startAgentSignIn(agent.id)}>
 								Reconnect {agent.label}
@@ -303,26 +298,6 @@ async function onLoginDone(): Promise<void> {
 
 	.provider-log-line--error {
 		color: var(--color-danger);
-	}
-
-	.provider-manual {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 8px;
-		font-size: 12px;
-		color: var(--color-text-secondary);
-	}
-
-	.provider-manual code {
-		padding: 3px 6px;
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 6px;
-		background: var(--color-bg-secondary);
-		color: var(--color-text-primary);
-		font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-		font-size: 11.5px;
-		overflow-wrap: anywhere;
 	}
 
 	.provider-login-terminal {

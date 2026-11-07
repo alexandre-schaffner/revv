@@ -310,7 +310,14 @@ export const PrMirrorLive = Layer.effect(
           observed.push(
             Option.isSome(live) && live.value.headSha === newTip
               ? live.value
-              : { ...pr, stack: STACK_UNSEEN, headSha: newTip, updatedAt: now, fetchedAt: now },
+              : {
+                  ...pr,
+                  authorAvatarUrl: null,
+                  stack: STACK_UNSEEN,
+                  headSha: newTip,
+                  updatedAt: now,
+                  fetchedAt: now,
+                },
           );
         }
         yield* apply(observed, { prior });

@@ -21,10 +21,13 @@ export function localPrId(repositoryId: string, number: number): string {
  * A PR as one GitHub read saw it. `stack` is required: every producer states
  * what it saw. `statsHeadSha` is the head its additions/deletions/changed
  * files describe; absent when the read carried no diff size (the open lists).
+ * `authorAvatarUrl` is GitHub's raw avatar URL, which sync caches as bytes
+ * (`remote_users`); it never reaches the wire.
  */
 export type ObservedPr = Omit<PullRequest, "stack"> & {
   readonly stack: StackSighting;
   readonly statsHeadSha?: string;
+  readonly authorAvatarUrl: string | null;
 };
 
 /** The row `upsertPrs([observed])` leaves behind over `prior`. */
@@ -32,7 +35,7 @@ export function asStored(
   observed: ObservedPr,
   prior: Pick<PullRequest, "stack"> | undefined,
 ): PullRequest {
-  const { statsHeadSha: _, ...pr } = observed;
+  const { statsHeadSha: _, authorAvatarUrl: __, ...pr } = observed;
   return {
     ...pr,
     stack: observed.stack.kind === "seen" ? observed.stack.place : (prior?.stack ?? null),

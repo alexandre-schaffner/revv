@@ -43,9 +43,6 @@ let selected = $state<AcpAgentId>(getSettings().aiAgent);
 
 const selectedReadiness = $derived(agentReadiness(status?.agents[selected]));
 const selectedLabel = $derived(ACP_AGENTS.find((a) => a.id === selected)?.label ?? selected);
-const selectedLoginCommand = $derived(
-  status?.agents[selected]?.loginCommand ?? `${selected} login`,
-);
 // True once detection resolved and nothing is installed — we advertise opencode
 // (pre-selected, free / no sign-in) as the zero-config option.
 const noneInstalled = $derived(
@@ -58,7 +55,6 @@ type CtaState =
   | { kind: "install-failed" }
   | { kind: "ready" }
   | { kind: "needs-login" }
-  | { kind: "needs-login-manual" }
   | { kind: "needs-install" };
 
 const cta = $derived.by((): CtaState => {
@@ -67,9 +63,7 @@ const cta = $derived.by((): CtaState => {
   if (install.kind === "failed") return { kind: "install-failed" };
   if (selectedReadiness.ready) return { kind: "ready" };
   if (selectedReadiness.needs !== "sign-in") return { kind: "needs-install" };
-  // Embedded PTY login where the host supports it (the server is the
-  // authority), else a manual-command hint.
-  return status?.embeddedLoginSupported ? { kind: "needs-login" } : { kind: "needs-login-manual" };
+  return { kind: "needs-login" };
 });
 
 onMount(async () => {
@@ -219,21 +213,6 @@ function handleSkip(): void {
 					<span>Continue</span>
 					<ContinueArrow />
 				</button>
-			</div>
-		{:else if cta.kind === 'needs-login-manual'}
-			<div class="win-hint">
-				<p class="win-hint-text">
-					Signing in from inside Revv isn't available on this platform yet. Open a
-					terminal and run this to sign in to <em>{selectedLabel}</em>, then come
-					back and continue:
-				</p>
-				<code class="win-hint-cmd">{selectedLoginCommand}</code>
-			</div>
-			<div class="install-actions" use:gsapEnter={ACTIONS_IN}>
-				<button class="primary" onclick={handleContinue} disabled={isSaving}>
-					<span>Continue</span>
-				</button>
-				<button class="secondary" onclick={handleSkip}>Skip for now</button>
 			</div>
 		{:else if cta.kind === 'needs-login'}
 			<div class="install-actions" use:gsapEnter={ACTIONS_IN}>
@@ -545,36 +524,5 @@ function handleSkip(): void {
 
 	.log-error {
 		color: var(--ob-text-italic);
-	}
-
-	.win-hint {
-		display: flex;
-		flex-direction: column;
-		gap: 12px;
-	}
-
-	.win-hint-text {
-		font-family: 'Newsreader', Georgia, serif;
-		font-size: 15px;
-		line-height: 1.6;
-		color: var(--ob-text-body);
-		margin: 0;
-	}
-
-	.win-hint-text em {
-		font-style: italic;
-		color: var(--ob-text-italic);
-	}
-
-	.win-hint-cmd {
-		align-self: flex-start;
-		padding: 10px 14px;
-		border: 1px solid var(--ob-border);
-		border-radius: 2px;
-		background: var(--ob-hover-subtle);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 12.5px;
-		color: var(--ob-text-heading);
-		user-select: all;
 	}
 </style>

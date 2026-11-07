@@ -102,7 +102,7 @@ async function applyInstallEvent(event: InstallEvent, agent: AcpAgentId): Promis
 
   const status = await fetchAgentStatus();
   install = { kind: "idle" };
-  if (status?.agents[agent]?.authed === false && status.embeddedLoginSupported) {
+  if (status?.agents[agent]?.authed === false) {
     signingInAgent = agent;
   }
 }

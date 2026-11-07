@@ -1,4 +1,4 @@
-import { isMaintainerLogin, type UserIdentity } from "@revv/shared";
+import type { UserIdentity } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
 import { NotFoundError } from "../domain/errors";
@@ -35,7 +35,6 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
           email: profile.email,
           login,
           avatarContent,
-          isMaintainer: isMaintainerLogin(login),
           reauthRequired,
           host: active?.host ?? null,
           onboardedAt: profile.onboardedAt?.toISOString() ?? null,

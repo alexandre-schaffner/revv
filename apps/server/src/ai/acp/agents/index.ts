@@ -71,18 +71,10 @@ export function invalidateAgentProbes(): void {
 
 export function detectAgentStatus(): AgentStatusReport {
   const agents = Object.fromEntries(
-    ACP_AGENT_IDS.map((id) => {
-      const { cli } = getAcpAgent(id);
-      return [
-        id,
-        {
-          installed: isAgentInstalled(id),
-          ...agentAdapter(id).authStatus(),
-          loginCommand: cli.loginArgs ? [cli.bin, ...cli.loginArgs].join(" ") : null,
-        } satisfies AgentStatus,
-      ];
-    }),
+    ACP_AGENT_IDS.map((id) => [
+      id,
+      { installed: isAgentInstalled(id), ...agentAdapter(id).authStatus() } satisfies AgentStatus,
+    ]),
   ) as Record<AcpAgentId, AgentStatus>;
-  // Revv is macOS-only, so the embedded PTY login is always available.
-  return { embeddedLoginSupported: true, agents };
+  return { agents };
 }

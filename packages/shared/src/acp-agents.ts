@@ -397,12 +397,9 @@ export function getAgentKeychainAuth(id: AcpAgentId): AcpAgentKeychainAuth | und
  * Per-agent onboarding setup status, resolved in one detection call so the UI
  * never races two endpoints:
  *   - `installed` — the agent's CLI is present on PATH (or pinned via the
- *     LaunchAgent `REVV_*_BIN` env vars).
+ *     `REVV_*_BIN` env vars in desktop-server.json).
  *   - `authed` — usable credentials are configured. opencode needs no login,
  *     so it always reports `true`.
- * `loginCommand` is the agent's official interactive login command (joined
- * argv), surfaced so the UI can show a manual hint where the embedded PTY login
- * isn't available; `null` for agents that need no login (opencode).
  */
 export interface AgentStatus {
   installed: boolean;
@@ -423,16 +420,9 @@ export interface AgentStatus {
     | "unknown";
   authLabel: string;
   authWarning: string | null;
-  loginCommand: string | null;
 }
 
-/**
- * `embeddedLoginSupported`: whether this host can drive an agent's CLI login
- * inside an embedded pseudo-terminal. Revv is macOS-only, so it is always
- * `true`; the per-agent `loginCommand` hint remains as a manual fallback.
- */
 export interface AgentStatusReport {
-  embeddedLoginSupported: boolean;
   agents: Record<AcpAgentId, AgentStatus>;
 }
 

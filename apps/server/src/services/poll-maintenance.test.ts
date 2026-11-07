@@ -62,7 +62,6 @@ describe("backfillArchive", () => {
                   requestedReviewers: [],
                   mentionedUsers: [],
                   status: "merged",
-                  reviewStatus: "pending",
                   isDraft: false,
                   sourceBranch: "f",
                   targetBranch: "main",

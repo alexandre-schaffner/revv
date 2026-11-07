@@ -65,7 +65,6 @@ function toObservedPr(
     // GitHub's PR payloads have no mentions field; they're parsed out of the
     // body and comments during sync.
     mentionedUsers: [],
-    reviewStatus: "pending",
     fetchedAt: new Date().toISOString(),
     stack,
   };

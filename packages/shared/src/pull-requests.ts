@@ -1,12 +1,5 @@
 export type PullRequestStatus = "open" | "closed" | "merged";
 
-export type ReviewStatus =
-  | "pending"
-  | "in_progress"
-  | "walkthrough_ready"
-  | "reviewed"
-  | "changes_proposed";
-
 export type CloneStatus = "pending" | "cloning" | "ready" | "error";
 
 export interface Repository {
@@ -34,8 +27,6 @@ export interface PullRequest {
   authorLogin: string;
   /** Base64 data URL of the author's avatar (e.g. "data:image/png;base64,..."). */
   authorAvatarContent: string | null;
-  /** Raw avatar URL from the provider — used internally during sync to populate remote_users. */
-  authorAvatarUrl: string | null;
   requestedReviewers: string[];
   /**
    * Logins @-mentioned in the PR body or any of its review comments. GitHub
@@ -44,7 +35,6 @@ export interface PullRequest {
    */
   mentionedUsers: string[];
   status: PullRequestStatus;
-  reviewStatus: ReviewStatus;
   isDraft: boolean;
   sourceBranch: string;
   targetBranch: string;

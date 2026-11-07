@@ -33,7 +33,6 @@ const remotePr: ObservedPr = {
   requestedReviewers: [],
   mentionedUsers: [],
   status: "open",
-  reviewStatus: "pending",
   isDraft: false,
   sourceBranch: "feature",
   targetBranch: "main",
