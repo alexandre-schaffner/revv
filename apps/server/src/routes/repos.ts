@@ -69,7 +69,7 @@ const repoListRoutes = new Elysia({ prefix: "/api/repos" })
                 ),
               ),
             );
-          const saved = yield* repoSvc.addRepo(
+          const { repo: saved, added } = yield* repoSvc.addRepo(
             {
               provider: "github",
               owner: repoData.owner,
@@ -86,6 +86,9 @@ const repoListRoutes = new Elysia({ prefix: "/api/repos" })
 
           yield* Effect.forkDetach(scheduler.syncNow(accountId));
 
+          // A repository already tracked (the client's list was stale) keeps
+          // its clone: Retry is the way to redo one.
+          if (!added) return saved;
           // The outcome is the repo's clone status, so the add never fails on it.
           if (isLink) {
             yield* cloneSvc
