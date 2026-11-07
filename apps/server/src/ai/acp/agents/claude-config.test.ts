@@ -11,22 +11,14 @@ import {
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { serverEnv } from "../../../config";
-import { ensureClaudeConfigDir, resolveClaudeConfigDir } from "./claude-config";
-
-describe("resolveClaudeConfigDir", () => {
-  it("follows serverEnv.claudeConfigIsolation", () => {
-    const expected = serverEnv.claudeConfigIsolation ? serverEnv.claudeConfigDir : undefined;
-    expect(resolveClaudeConfigDir()).toBe(expected);
-  });
-});
+import { ensureClaudeConfigDir } from "./claude-config";
 
 describe("ensureClaudeConfigDir", () => {
   it("creates the dir (mode 0700) and seeds an onboarding-only .claude.json", async () => {
     const base = mkdtempSync(join(tmpdir(), "revv-claude-config-"));
     const dir = join(base, "claude");
     try {
-      ensureClaudeConfigDir(dir);
+      ensureClaudeConfigDir(dir, join(base, "global"));
 
       expect(existsSync(dir)).toBe(true);
       expect(lstatSync(dir).mode & 0o777).toBe(0o700);
@@ -45,7 +37,7 @@ describe("ensureClaudeConfigDir", () => {
     const base = mkdtempSync(join(tmpdir(), "revv-claude-config-"));
     const dir = join(base, "claude");
     try {
-      ensureClaudeConfigDir(dir);
+      ensureClaudeConfigDir(dir, join(base, "global"));
       const onboardingPath = join(dir, ".claude.json");
       // Simulate the CLI having since rewritten its own state into the file —
       // a second `ensureClaudeConfigDir` call must not clobber it.
@@ -54,7 +46,7 @@ describe("ensureClaudeConfigDir", () => {
         JSON.stringify({ hasCompletedOnboarding: true, extra: "cli-state" }),
       );
 
-      ensureClaudeConfigDir(dir);
+      ensureClaudeConfigDir(dir, join(base, "global"));
 
       expect(JSON.parse(readFileSync(onboardingPath, "utf8"))).toEqual({
         hasCompletedOnboarding: true,
@@ -65,9 +57,15 @@ describe("ensureClaudeConfigDir", () => {
     }
   });
 
-  it("never throws when the parent dir doesn't exist", () => {
-    const dir = join(tmpdir(), "revv-claude-config-missing-parent", "nested", "claude");
-    expect(() => ensureClaudeConfigDir(dir)).not.toThrow();
+  it("never throws when the dir can't be created", async () => {
+    const base = mkdtempSync(join(tmpdir(), "revv-claude-config-"));
+    const file = join(base, "not-a-dir");
+    try {
+      writeFileSync(file, "");
+      expect(() => ensureClaudeConfigDir(join(file, "claude"), join(base, "global"))).not.toThrow();
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
   });
 
   // Revv's `/` menu must offer the same skills as the user's `claude` in a

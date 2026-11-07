@@ -138,10 +138,12 @@ describe("runAcpTurn", () => {
 
   it("ends on the idle deadline by cancelling the session, retiring only an agent that ignores it", async () => {
     const agent = fakeAgent({ prompt: () => new Promise(() => {}) });
-    const startedAt = Date.now();
     const result = await turn(agent, { deadlines: { idleMs: 30, ceilingMs: 5_000 } });
-    expect(Date.now() - startedAt).toBeLessThan(1_000);
-    expect(result.end).toMatchObject({ kind: "timeout" });
+    // The idle deadline, not the ceiling, ended it.
+    expect(result.end).toMatchObject({
+      kind: "timeout",
+      reason: expect.stringContaining("stopped responding"),
+    });
     expect(agent.calls).toContain("cancel:fresh-1");
     expect(agent.calls).not.toContain("retire");
     expect(agent.refcount).toBe(0);

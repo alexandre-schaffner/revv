@@ -1,8 +1,8 @@
-import { describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ACP_AGENTS, getAcpAgent } from "@revv/shared";
+import { ACP_AGENTS } from "@revv/shared";
 import { serverEnv } from "../../config";
 import { resolveAgentProcess } from "./launch";
 
@@ -19,15 +19,8 @@ function withPathExecutable(command: string, fn: (path: string) => void): void {
 }
 
 describe("ACP agent registry", () => {
-  it("gives every agent a launch, a CLI, and a catalog holding its default model", () => {
-    expect(getAcpAgent("cursor")).toMatchObject({
-      id: "cursor",
-      command: "npx",
-      args: ["-y", "cursor-agent-acp"],
-      cli: { bin: "cursor-agent" },
-    });
+  it("gives every agent an install path and a catalog holding its default models", () => {
     for (const def of ACP_AGENTS) {
-      expect(typeof def.command).toBe("string");
       expect(def.cli.install.length).toBeGreaterThan(0);
       if (def.capabilities.models !== "dynamic") {
         const values = def.capabilities.models.map((model) => model.value);
@@ -39,8 +32,16 @@ describe("ACP agent registry", () => {
 });
 
 describe("resolveAgentProcess", () => {
+  // A developer's REVV_ACP_COMMAND override bypasses the registry launch.
+  const override = serverEnv.acpCommand;
+  beforeAll(() => {
+    Object.assign(serverEnv, { acpCommand: "" });
+  });
+  afterAll(() => {
+    Object.assign(serverEnv, { acpCommand: override });
+  });
+
   it("keeps npx when the PATH provides it, layering the routed env over the given one", () => {
-    if (serverEnv.acpCommand) return;
     withPathExecutable("npx", (path) => {
       const launch = resolveAgentProcess(
         "claude-code",
@@ -59,7 +60,6 @@ describe("resolveAgentProcess", () => {
   });
 
   it("falls back from npx to bunx and removes npx's yes flag", () => {
-    if (serverEnv.acpCommand) return;
     withPathExecutable("bunx", (path) => {
       const launch = resolveAgentProcess("claude-code", {}, { PATH: path });
       expect(launch.command).toBe("bunx");
@@ -69,7 +69,6 @@ describe("resolveAgentProcess", () => {
   });
 
   it("falls back from npx to bun x when only bun is available", () => {
-    if (serverEnv.acpCommand) return;
     withPathExecutable("bun", (path) => {
       const launch = resolveAgentProcess("codex", { model: "gpt-6-sol" }, { PATH: path });
       expect(launch.command).toBe("bun");
@@ -80,7 +79,6 @@ describe("resolveAgentProcess", () => {
   });
 
   it("runs an agent with its own binary outside the package runner", () => {
-    if (serverEnv.acpCommand) return;
     const launch = resolveAgentProcess(
       "opencode",
       { model: "opencode/big-pickle" },
