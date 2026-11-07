@@ -231,7 +231,7 @@ export const SyncServiceLive = Layer.effect(
 
     const pullCommentsFromGitHub = (prId: string): Effect.Effect<PullResult, SyncFailure> =>
       Effect.gen(function* () {
-        const { pr, repo, accountId } = yield* prContext.forPr(prId);
+        const { pr, repo, accountId } = yield* prContext.readPr(prId);
         const client = yield* accounts.backgroundClient(accountId, "core");
         if (client === null) {
           return yield* Effect.fail(

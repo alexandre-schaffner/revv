@@ -315,7 +315,7 @@ export const PollSchedulerLive = Layer.effect(
 
     const refreshPr = (prId: string) =>
       Effect.gen(function* () {
-        const { pr, repo, accountId } = yield* prContext.forPr(prId);
+        const { pr, repo, accountId } = yield* prContext.readPr(prId);
         const client = yield* accounts.backgroundClient(accountId, "core");
         if (client === null) {
           return yield* Effect.fail(
