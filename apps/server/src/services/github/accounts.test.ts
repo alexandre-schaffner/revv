@@ -396,6 +396,24 @@ describe("GitHubAccounts.signIn records the issuing client", () => {
   });
 });
 
+describe("GitHubAccounts.issuedClientIdOn", () => {
+  it("is the client the user's account on that host was issued to, else null", async () => {
+    const db = createDb(":memory:");
+    seedAccount(db, { id: "acc", clientId: "Iv1byoclientid" });
+    seedAccount(db, { id: "old", clientId: null });
+
+    const [own, otherHost, legacy] = await run(db, makeFakeStore(), makeFakeHub(), (a) =>
+      Effect.all([
+        a.issuedClientIdOn("user-acc", "GHE.example.com"),
+        a.issuedClientIdOn("user-acc", "github.com"),
+        a.issuedClientIdOn("user-old", HOST),
+      ]),
+    );
+
+    expect([own, otherHost, legacy]).toEqual(["Iv1byoclientid", null, null]);
+  });
+});
+
 describe("GitHubAccounts.viewerLogin", () => {
   it("is the account's own login, not the user mirror's", async () => {
     const db = createDb(":memory:");
