@@ -74,7 +74,8 @@ describe("recap stopped-status migration", () => {
       "INSERT INTO repositories (id, owner, name, full_name, added_at, account_id) VALUES (?, ?, ?, ?, ?, ?)",
       ["repo-1", "acme", "web", "acme/web", new Date(now).toISOString(), "account-1"],
     );
-    const today = new Date(now).toISOString();
+    // Far ahead of any run, so the window stays open even if the test straddles midnight UTC.
+    const stillOpen = "2999-01-01T00:00:00.000Z";
     const insert = (id: string, period: string, start: string, message: string | null) =>
       db.$client.run(
         `INSERT INTO project_recaps
@@ -85,7 +86,7 @@ describe("recap stopped-status migration", () => {
     insert("stopped", "daily", "2026-06-03T00:00:00.000Z", "Cancelled by user");
     insert("quiet-day", "daily", "2026-06-03T00:00:00.000Z", EMPTY);
     insert("quiet-week", "weekly", "2026-06-01T00:00:00.000Z", EMPTY);
-    insert("open-day", "daily", today, EMPTY);
+    insert("open-day", "daily", stillOpen, EMPTY);
     insert("failed", "daily", "2026-06-03T00:00:00.000Z", "Agent crashed");
 
     db.$client.run(migration);

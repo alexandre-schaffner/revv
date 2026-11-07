@@ -92,25 +92,27 @@ class Artifacts(unittest.TestCase):
             archive(self.directory / f"Revv_{arch}.app.tar.gz", arch=cpu)
         self.assertEqual(len(validate_set(self.directory, "1.2.3")), 4)
 
-    def test_installer_rejects_missing_dmg(self):
+    def build_installer(self):
         root = self.directory / "source"
         (root / "scripts/release").mkdir(parents=True)
         for name in ["scripts/release/build-installer.sh", "scripts/release/install.sh.tmpl", "install.sh"]:
             shutil.copyfile(ROOT / name, root / name)
-        env = dict(os.environ, RELEASE_TAG="v1.2.3", REVV_VERSION="1.2.3", BUNDLE_DIR=str(self.directory))
-        result = subprocess.run(["bash", str(root / "scripts/release/build-installer.sh")], env=env, capture_output=True)
+        # Only PATH from the caller: a RELEASE_VERSION left in a release shell would override REVV_VERSION.
+        env = {"PATH": os.environ["PATH"], "RELEASE_TAG": "v1.2.3", "REVV_VERSION": "1.2.3", "BUNDLE_DIR": str(self.directory)}
+        result = subprocess.run(["bash", str(root / "scripts/release/build-installer.sh")], env=env, capture_output=True, text=True)
+        return root, result
+
+    def test_installer_rejects_missing_dmg(self):
+        root, result = self.build_installer()
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Missing required DMG", result.stderr)
         self.assertFalse((root / "dist/install.sh").exists())
 
     def test_installer_contains_both_checksums(self):
-        root = self.directory / "source"
-        (root / "scripts/release").mkdir(parents=True)
-        for name in ["scripts/release/build-installer.sh", "scripts/release/install.sh.tmpl", "install.sh"]:
-            shutil.copyfile(ROOT / name, root / name)
         for arch in ["aarch64", "x64"]:
             (self.directory / f"Revv_1.2.3_{arch}.dmg").write_bytes(arch.encode())
-        env = dict(os.environ, RELEASE_TAG="v1.2.3", REVV_VERSION="1.2.3", BUNDLE_DIR=str(self.directory))
-        subprocess.run(["bash", str(root / "scripts/release/build-installer.sh")], env=env, check=True)
+        root, result = self.build_installer()
+        self.assertEqual(result.returncode, 0, result.stderr)
         sums = (root / "dist/SHA256SUMS").read_text()
         self.assertIn("Revv_1.2.3_aarch64.dmg", sums)
         self.assertIn("Revv_1.2.3_x64.dmg", sums)
