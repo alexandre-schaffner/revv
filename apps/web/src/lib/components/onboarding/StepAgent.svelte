@@ -1,30 +1,22 @@
 <script lang="ts">
-import {
-  ACP_AGENTS,
-  type AcpAgentId,
-  type AgentStatusReport,
-  type InstallEvent,
-} from "@revv/shared";
+import { ACP_AGENTS, type AcpAgentId } from "@revv/shared";
 import CaretLeft from "phosphor-svelte/lib/CaretLeft";
 import { onDestroy, onMount } from "svelte";
+import { agentReadiness } from "$lib/agent-setup/readiness";
 import {
-  type AgentInstallState,
-  agentInstallLog,
-  appendAgentInstallLog,
-  runAgentInstall,
-} from "$lib/agent-setup/install";
+  endAgentSignIn,
+  getAgentInstall,
+  getSigningInAgent,
+  resetAgentSetup,
+  selectAgent,
+  startAgentInstall,
+  startAgentSignIn,
+} from "$lib/agent-setup/store.svelte";
+import AgentLoginTerminal from "$lib/components/agent-setup/AgentLoginTerminal.svelte";
 import { acpAgentIcon } from "$lib/components/icons/acpAgentIcon";
 import Dotmatrix from "$lib/components/ui/dotmatrix/Dotmatrix.svelte";
 import { gsapEnter } from "$lib/motion";
-import {
-  agentChange,
-  fetchAgentStatus,
-  fetchModels,
-  getAgentStatus,
-  getSettings,
-  updateSettings,
-} from "$lib/stores/settings.svelte";
-import AgentLoginTerminal from "./AgentLoginTerminal.svelte";
+import { fetchAgentStatus, getAgentStatus, getSettings } from "$lib/stores/settings.svelte";
 import ContinueArrow from "./ContinueArrow.svelte";
 import { ACTIONS_IN, MARK_POP, OPTION_IN } from "./motion";
 
@@ -40,20 +32,16 @@ let { onContinue, onBack, onSkip }: Props = $props();
 const OPENCODE: AcpAgentId = "opencode";
 
 let mode = $state<"loading" | "picker">("loading");
-let status = $state<AgentStatusReport | null>(null);
-let install = $state<AgentInstallState>({ kind: "idle" });
-let signingIn = $state<AcpAgentId | null>(null);
 let isSaving = $state(false);
-let installAbort: AbortController | null = null;
+const status = $derived(getAgentStatus());
+const install = $derived(getAgentInstall());
+const signingIn = $derived(getSigningInAgent());
 
 // Picker selection: pre-select the current chat agent, falling back to opencode
 // if the settings haven't loaded or the saved agent isn't installed.
 let selected = $state<AcpAgentId>(getSettings().aiAgent);
 
-const selectedInstalled = $derived(status?.agents[selected]?.installed ?? false);
-// When detection hasn't resolved (null) treat the selection as authed so a
-// probe failure never blocks Continue.
-const selectedAuthed = $derived(status ? (status.agents[selected]?.authed ?? false) : true);
+const selectedReadiness = $derived(agentReadiness(status?.agents[selected]));
 const selectedLabel = $derived(ACP_AGENTS.find((a) => a.id === selected)?.label ?? selected);
 const selectedLoginCommand = $derived(
   status?.agents[selected]?.loginCommand ?? `${selected} login`,
@@ -77,16 +65,15 @@ const cta = $derived.by((): CtaState => {
   if (signingIn !== null) return { kind: "signing-in", agent: signingIn };
   if (install.kind === "running") return { kind: "installing" };
   if (install.kind === "failed") return { kind: "install-failed" };
-  if (!selectedInstalled) return { kind: "needs-install" };
-  if (selectedAuthed) return { kind: "ready" };
-  // Installed but not authed: embedded PTY login where the host supports it
-  // (the server is the authority), else a manual-command hint.
+  if (selectedReadiness.ready) return { kind: "ready" };
+  if (selectedReadiness.needs !== "sign-in") return { kind: "needs-install" };
+  // Embedded PTY login where the host supports it (the server is the
+  // authority), else a manual-command hint.
   return status?.embeddedLoginSupported ? { kind: "needs-login" } : { kind: "needs-login-manual" };
 });
 
 onMount(async () => {
   const data = getAgentStatus() ?? (await fetchAgentStatus());
-  status = data;
   if (!data) {
     // Detection failed — fall back to picker so the user isn't stuck.
     mode = "picker";
@@ -104,88 +91,26 @@ onMount(async () => {
   mode = "picker";
 });
 
-onDestroy(() => {
-  installAbort?.abort();
-});
+// Leaving the step abandons an install; unmounting the terminal kills a sign-in.
+onDestroy(resetAgentSetup);
 
 async function handleContinue(): Promise<void> {
   isSaving = true;
   try {
-    // opencode's catalog is dynamic — kick off a fetch so the cascade can pick a
-    // real default model. Other agents have static catalogs in the registry.
-    if (selected === OPENCODE) void fetchModels("opencode");
-    await updateSettings(agentChange(selected));
+    await selectAgent(selected);
     onContinue();
   } finally {
     isSaving = false;
   }
 }
 
-async function handleInstall(agent: AcpAgentId): Promise<void> {
-  install = { kind: "running", agent, log: [] };
-  try {
-    const ctrl = new AbortController();
-    installAbort = ctrl;
-    await runAgentInstall(agent, ctrl.signal, (event) => applyInstallEvent(event, agent));
-  } catch (err) {
-    if ((err as Error)?.name === "AbortError") return;
-    install = {
-      kind: "failed",
-      agent,
-      log: currentLog(),
-      error: err instanceof Error ? err.message : "Install failed",
-    };
-  } finally {
-    installAbort = null;
-  }
-}
-
-/** Lines accumulated so far, preserved across a running → failed transition. */
-function currentLog(): string[] {
-  return agentInstallLog(install);
-}
-
-function applyInstallEvent(event: InstallEvent, agent: AcpAgentId): void {
-  if (event.type === "log") {
-    install = appendAgentInstallLog(install, agent, event.line);
-    return;
-  }
-  if (!event.success) {
-    install = { kind: "failed", agent, log: currentLog(), error: event.error ?? "Install failed" };
-    return;
-  }
-  // Success — refresh detection so the just-installed agent shows the Installed
-  // tag. If it still needs a login and the host supports the embedded PTY,
-  // advance straight to sign-in; otherwise the CTA flips to Continue (or the
-  // manual hint where the embedded login isn't available).
-  void (async () => {
-    const data = await fetchAgentStatus();
-    status = data;
-    install = { kind: "idle" };
-    if (data && data.agents[agent]?.authed === false && data.embeddedLoginSupported) {
-      signingIn = agent;
-    }
-  })();
-}
-
-function handleSignIn(agent: AcpAgentId): void {
-  signingIn = agent;
-}
-
 async function onLoginDone(): Promise<void> {
-  // The CLI reported a verified login — refresh the snapshot so the CTA flips to
-  // Continue, then drop the terminal.
-  status = await fetchAgentStatus();
-  signingIn = null;
-}
-
-function onLoginSkip(): void {
-  // Unmounting the terminal triggers its onDestroy, which kills the server PTY.
-  signingIn = null;
+  await fetchAgentStatus();
+  endAgentSignIn();
 }
 
 function handleSkip(): void {
-  installAbort?.abort();
+  resetAgentSetup();
   if (onSkip) onSkip();
   else onContinue();
 }
@@ -259,7 +184,7 @@ function handleSkip(): void {
 				agent={cta.agent}
 				agentLabel={ACP_AGENTS.find((a) => a.id === cta.agent)?.label ?? cta.agent}
 				onDone={onLoginDone}
-				onSkip={onLoginSkip}
+				onSkip={endAgentSignIn}
 			/>
 		{:else if cta.kind === 'installing'}
 			<div class="installing">
@@ -283,7 +208,7 @@ function handleSkip(): void {
 				<div class="log-line log-error">{install.error}</div>
 			</div>
 			<div class="install-actions" use:gsapEnter={ACTIONS_IN}>
-				<button class="primary" onclick={() => handleInstall(selected)}>
+				<button class="primary" onclick={() => startAgentInstall(selected)}>
 					<span>Retry</span>
 				</button>
 				<button class="secondary" onclick={handleSkip}>Skip for now</button>
@@ -312,14 +237,14 @@ function handleSkip(): void {
 			</div>
 		{:else if cta.kind === 'needs-login'}
 			<div class="install-actions" use:gsapEnter={ACTIONS_IN}>
-				<button class="primary" onclick={() => handleSignIn(selected)}>
+				<button class="primary" onclick={() => startAgentSignIn(selected)}>
 					<span>Sign in to {selectedLabel}</span>
 				</button>
 				<button class="secondary" onclick={handleSkip}>Skip for now</button>
 			</div>
 		{:else}
 			<div class="install-actions" use:gsapEnter={ACTIONS_IN}>
-				<button class="primary" onclick={() => handleInstall(selected)}>
+				<button class="primary" onclick={() => startAgentInstall(selected)}>
 					<span>Install {selectedLabel}</span>
 				</button>
 				<button class="secondary" onclick={handleSkip}>Skip for now</button>
@@ -330,6 +255,18 @@ function handleSkip(): void {
 
 <style>
 	.agent {
+		--terminal-bg: var(--ob-bg);
+		--terminal-surface: var(--ob-hover-subtle);
+		--terminal-border: var(--ob-border);
+		--terminal-error-border: var(--ob-text-label);
+		--terminal-fg: var(--ob-text);
+		--terminal-heading: var(--ob-text-heading);
+		--terminal-body: var(--ob-text-body);
+		--terminal-muted: var(--ob-text-muted);
+		--terminal-dim: var(--ob-text-dimmed);
+		--terminal-accent: var(--ob-text-italic);
+		--terminal-danger: var(--ob-error);
+		--terminal-selection: var(--ob-row-highlight);
 		display: flex;
 		flex-direction: column;
 		gap: 32px;

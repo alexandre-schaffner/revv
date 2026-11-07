@@ -1,5 +1,6 @@
 <script module lang="ts">
 import Robot from "phosphor-svelte/lib/Robot";
+import { agentReadiness } from "$lib/agent-setup/readiness";
 import { fetchAgentStatus, getAgentStatus, getSettings } from "$lib/stores/settings.svelte";
 import { defineSettingsPane } from "../settings-panes";
 
@@ -34,7 +35,7 @@ export const pane = defineSettingsPane({
   },
   badge: () => {
     const status = getAgentStatus()?.agents[getSettings().aiAgent];
-    if (!status || (status.installed && status.authed)) return null;
+    if (!status || agentReadiness(status).ready) return null;
     return { kind: "attention", title: "The selected agent needs setup" };
   },
   onModalOpen: () => void fetchAgentStatus(),
@@ -46,6 +47,7 @@ import type { AgentCheckResult } from "@revv/shared";
 import {
   ACP_AGENTS,
   type AcpAgentId,
+  AI_MAX_TURNS,
   AUTO_SENTINEL,
   type BaseConflictStrategy,
   type ThinkingEffortSetting,
@@ -55,9 +57,8 @@ import Spinner from "phosphor-svelte/lib/Spinner";
 import { Button } from "$lib/components/ui/button/index.js";
 import { SegmentedControl, type SegmentedOption } from "$lib/components/ui/segmented-control";
 import * as Select from "$lib/components/ui/select";
-import { resetAgentSetup } from "$lib/agent-setup/store.svelte";
+import { selectAgent } from "$lib/agent-setup/store.svelte";
 import {
-  agentChange,
   fetchModels,
   getAvailableModels,
   getReviewModelOptions,
@@ -74,9 +75,6 @@ import SettingsRow from "../primitives/SettingsRow.svelte";
 import StatusDot from "../primitives/StatusDot.svelte";
 import Stepper from "../primitives/Stepper.svelte";
 import AgentProviderList from "./AgentProviderList.svelte";
-
-const MAX_TURNS_MIN = 10;
-const MAX_TURNS_MAX = 500;
 
 const conflictStrategy = $derived<BaseConflictStrategy>(
   getSettings().baseConflictStrategy,
@@ -116,31 +114,17 @@ $effect(() => {
 });
 
 let agentChecking = $state(false);
-let agentCheck = $state<AgentCheckResult | null>(null);
+let lastCheck = $state<{ agent: AcpAgentId; result: AgentCheckResult } | null>(null);
+const agentCheck = $derived(lastCheck?.agent === aiAgent ? lastCheck.result : null);
 
 async function handleRunAgentCheck(): Promise<void> {
+  const agent = aiAgent;
   agentChecking = true;
   try {
-    agentCheck = await runAgentCheck(aiAgent);
+    lastCheck = { agent, result: await runAgentCheck(agent) };
   } finally {
     agentChecking = false;
   }
-}
-
-// An install or sign-in belongs to the agent it started for. Switching agents
-// from anywhere (here, or the chat bottom bar) drops it.
-let lastAgent: AcpAgentId | null = null;
-$effect(() => {
-  const agent = aiAgent;
-  if (lastAgent !== null && lastAgent !== agent) resetAgentSetup();
-  lastAgent = agent;
-  agentCheck = null;
-});
-
-async function handleSelectAgent(agent: AcpAgentId): Promise<void> {
-  await updateSettings(agentChange(agent));
-  void fetchModels(agent);
-  void refreshStatus();
 }
 
 const AUTO_LABEL = "Auto (sized per pull request)";
@@ -195,7 +179,7 @@ function labelIn(options: readonly { label: string; value: string }[], value: st
 			selected={aiAgent}
 			status={getAgentStatus()}
 			loading={statusLoading}
-			onSelect={handleSelectAgent}
+			onSelect={selectAgent}
 		/>
 	</SettingsGroup>
 
@@ -273,15 +257,15 @@ function labelIn(options: readonly { label: string; value: string }[], value: st
 		<SettingsRow
 			row={pane.rows.maxTurns}
 			label="Max turns"
-			hint="Most tool round trips the agent may take in one review or chat reply ({MAX_TURNS_MIN}–{MAX_TURNS_MAX})."
+			hint="Most tool round trips the agent may take in one review or chat reply ({AI_MAX_TURNS.min}–{AI_MAX_TURNS.max})."
 		>
 			{#snippet control()}
 				<Stepper
 					id="ai-max-turns-input"
 					aria-label="Max turns"
 					value={getSettings().aiMaxTurns}
-					min={MAX_TURNS_MIN}
-					max={MAX_TURNS_MAX}
+					min={AI_MAX_TURNS.min}
+					max={AI_MAX_TURNS.max}
 					step={10}
 					onCommit={(n) => void updateSettings({ aiMaxTurns: n })}
 				/>

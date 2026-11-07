@@ -27,11 +27,9 @@ let open = $state(false);
 
 let currentId = $derived(getSettings().aiAgent);
 let caps = $derived(getAgentCapabilities(currentId));
-// opencode is the only agent whose catalog is fetched live; everything else
-// uses the curated static list baked into the registry.
 let isDynamic = $derived(caps.models === "dynamic");
 let fetchedModels = $derived<ModelOption[]>(getReviewModelOptions(currentId));
-let fetchDone = $derived(caps.models === "dynamic" ? areModelsLoaded("opencode") : true);
+let fetchDone = $derived(isDynamic ? areModelsLoaded(currentId) : true);
 let currentModel = $derived(getSettings().aiModel);
 let autoModelOffered = $derived(isAutoModelOffered(currentId));
 let isAuto = $derived(currentModel === AUTO_SENTINEL);
@@ -93,12 +91,9 @@ let currentLabel = $derived(
           (currentModel || "Select model")),
 );
 
-// Cache-miss fallback for opencode's dynamic catalog: if the bootstrap prefetch
-// hasn't populated it yet, kick off a single (de-duped) fetch.
+// The boot prefetch may not have landed yet; asks are de-duped.
 $effect(() => {
-  if (caps.models === "dynamic" && !areModelsLoaded("opencode")) {
-    void fetchModels("opencode");
-  }
+  if (isDynamic && !areModelsLoaded(currentId)) void fetchModels(currentId);
 });
 
 function getProvider(value: string): string | null {

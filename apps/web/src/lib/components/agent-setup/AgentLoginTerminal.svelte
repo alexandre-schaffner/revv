@@ -14,6 +14,8 @@ import { cssTokens, openXterm, xtermTheme } from "$lib/utils/xterm";
 // never runs during SSR / prerender.
 import "@xterm/xterm/css/xterm.css";
 
+// Themed by the --terminal-* properties each host maps onto its own palette.
+
 interface Props {
   /** Agent whose login command runs in the spawned PTY. */
   agent: AcpAgentId;
@@ -123,17 +125,17 @@ function onResize(): void {
 
 function terminalTheme(el: HTMLElement) {
   const token = cssTokens(el);
-  const danger = token("--ob-error", "#b5494b");
+  const danger = token("--terminal-danger", "#b5494b");
   return xtermTheme({
-    foreground: token("--ob-text", "#2a2825"),
-    muted: token("--ob-text-muted", "#9a958c"),
-    dim: token("--ob-text-dimmed", "#c4bfb6"),
-    accent: token("--ob-text-italic", "#6b5d3e"),
+    foreground: token("--terminal-fg", "#2a2825"),
+    muted: token("--terminal-muted", "#9a958c"),
+    dim: token("--terminal-dim", "#c4bfb6"),
+    accent: token("--terminal-accent", "#6b5d3e"),
     danger,
-    heading: token("--ob-text-heading", "#1a1816"),
-    cursor: token("--ob-text-italic", "#6b5d3e"),
-    cursorAccent: token("--ob-bg", "#faf9f6"),
-    selection: token("--ob-row-highlight", "rgba(107, 93, 62, 0.18)"),
+    heading: token("--terminal-heading", "#1a1816"),
+    cursor: token("--terminal-accent", "#6b5d3e"),
+    cursorAccent: token("--terminal-bg", "#faf9f6"),
+    selection: token("--terminal-selection", "rgba(107, 93, 62, 0.18)"),
   });
 }
 
@@ -175,7 +177,7 @@ $effect(() => {
   const resolved = getResolvedTheme();
   if (!term) return;
   // The `.dark` class on <html> is toggled synchronously before this effect
-  // runs, so the --ob-* tokens already resolve to the new theme.
+  // runs, so the --terminal-* tokens already resolve to the new theme.
   void resolved;
   term.options.theme = terminalTheme(container);
 });
@@ -229,13 +231,13 @@ onDestroy(() => {
 		font-family: 'Newsreader', Georgia, serif;
 		font-size: 16px;
 		line-height: 1.6;
-		color: var(--ob-text-body);
+		color: var(--terminal-body);
 		margin: 0;
 	}
 
 	.lede em {
 		font-style: italic;
-		color: var(--ob-text-italic);
+		color: var(--terminal-accent);
 	}
 
 	.auth-url {
@@ -246,7 +248,7 @@ onDestroy(() => {
 		background: none;
 		border: 0;
 		padding: 0;
-		color: var(--ob-text-muted);
+		color: var(--terminal-muted);
 		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 		font-size: 10.5px;
 		letter-spacing: 0.14em;
@@ -256,20 +258,20 @@ onDestroy(() => {
 	}
 
 	.auth-url:hover {
-		color: var(--ob-text-italic);
+		color: var(--terminal-accent);
 	}
 
 	.terminal-frame {
 		padding: 12px;
-		border: 1px solid var(--ob-border);
+		border: 1px solid var(--terminal-border);
 		border-radius: 2px;
-		background: var(--ob-hover-subtle);
+		background: var(--terminal-surface);
 		height: 280px;
 		overflow: hidden;
 	}
 
 	.terminal-frame.error {
-		border-color: var(--ob-text-label);
+		border-color: var(--terminal-error-border);
 	}
 
 	.terminal {
@@ -282,7 +284,7 @@ onDestroy(() => {
 	.login-error {
 		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 		font-size: 11.5px;
-		color: var(--ob-text-italic);
+		color: var(--terminal-accent);
 	}
 
 	.login-actions {
@@ -294,7 +296,7 @@ onDestroy(() => {
 		background: none;
 		border: 0;
 		padding: 8px 4px;
-		color: var(--ob-text-muted);
+		color: var(--terminal-muted);
 		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 		font-size: 10.5px;
 		letter-spacing: 0.14em;
@@ -304,6 +306,6 @@ onDestroy(() => {
 	}
 
 	.secondary:hover {
-		color: var(--ob-text-italic);
+		color: var(--terminal-accent);
 	}
 </style>

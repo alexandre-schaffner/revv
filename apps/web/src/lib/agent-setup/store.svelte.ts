@@ -1,11 +1,19 @@
-// In-flight agent install / sign-in from Settings → AI agent.
+// Choosing the agent, and its in-flight install / sign-in, for every picker
+// (onboarding, Settings → AI agent, the bottom bar).
 //
 // Module-scoped rather than component state: settings panes mount one at a
 // time, and switching panes (or closing the modal) mid-install must not abort
 // the installer. Reopening the pane picks the running log back up.
 
-import type { AcpAgentId, InstallEvent } from "@revv/shared";
-import { fetchAgentStatus } from "$lib/stores/settings.svelte";
+import { type AcpAgentId, getAgentCapabilities, type InstallEvent } from "@revv/shared";
+import {
+  agentChange,
+  areModelsLoaded,
+  fetchAgentStatus,
+  fetchModels,
+  getSettings,
+  updateSettings,
+} from "$lib/stores/settings.svelte";
 import {
   type AgentInstallState,
   agentInstallLog,
@@ -25,7 +33,22 @@ export function getSigningInAgent(): AcpAgentId | null {
   return signingInAgent;
 }
 
-/** Drop any install or sign-in in progress, e.g. when the selected agent changes. */
+/**
+ * Make `agent` the selected one. A live-catalog agent's default model is its
+ * first fetched model, so the patch waits for the catalog. An install or
+ * sign-in belongs to the agent it started for, so it is dropped.
+ */
+export async function selectAgent(agent: AcpAgentId): Promise<void> {
+  if (agent === getSettings().aiAgent) return;
+  if (getAgentCapabilities(agent).models === "dynamic" && !areModelsLoaded(agent)) {
+    await fetchModels(agent);
+  }
+  resetAgentSetup();
+  await updateSettings(agentChange(agent));
+  void fetchAgentStatus();
+}
+
+/** Drop any install or sign-in in progress. */
 export function resetAgentSetup(): void {
   installAbort?.abort();
   installAbort = null;
