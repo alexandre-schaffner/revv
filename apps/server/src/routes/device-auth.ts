@@ -179,10 +179,7 @@ const sessionRoutes = new Elysia()
   )
   .post(
     "/api/auth/accounts/disconnect",
-    (ctx) =>
-      runRoute(
-        forgetAccount(ctx.userId, ctx.body.host).pipe(Effect.as({ ok: true })),
-      ),
+    (ctx) => runRoute(forgetAccount(ctx.userId, ctx.body.host).pipe(Effect.as({ ok: true }))),
     { body: t.Object({ host: t.String() }) },
   );
 

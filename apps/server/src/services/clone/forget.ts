@@ -21,7 +21,10 @@ export const forgetRepositories = (repoIds: readonly string[]) =>
     const { db } = yield* DbService;
     for (const id of repoIds) yield* clones.deleteClone(id);
     yield* dbTry("forget repositories", () =>
-      db.delete(repositories).where(inArray(repositories.id, [...repoIds])).run(),
+      db
+        .delete(repositories)
+        .where(inArray(repositories.id, [...repoIds]))
+        .run(),
     );
   });
 

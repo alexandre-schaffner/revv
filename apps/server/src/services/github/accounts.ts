@@ -273,7 +273,10 @@ export const GitHubAccountsLive = Layer.effect(
     const authFailure = (message: string) => new GitHubAuthError({ message });
 
     /** The client the account's token was issued to; rows from before `client_id` resolve the bundled/env one. */
-    const issuedClientId = (row: { readonly providerId: string; readonly clientId: string | null }) =>
+    const issuedClientId = (row: {
+      readonly providerId: string;
+      readonly clientId: string | null;
+    }) =>
       row.clientId === null
         ? clientIdForHost(hostFromProviderId(row.providerId))
         : Effect.succeed(row.clientId);

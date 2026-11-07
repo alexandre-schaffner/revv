@@ -44,8 +44,4 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
       }),
     ),
   )
-  .delete("/account", (ctx) =>
-    runRoute(
-      forgetUser(ctx.userId).pipe(Effect.as({ deleted: true })),
-    ),
-  );
+  .delete("/account", (ctx) => runRoute(forgetUser(ctx.userId).pipe(Effect.as({ deleted: true }))));

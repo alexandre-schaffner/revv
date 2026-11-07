@@ -61,17 +61,13 @@ export const stackRoutes = new Elysia({ prefix: "/api/prs" })
   )
 
   .get("/:id/stack/merge-plan", (ctx) =>
-    runRoute(
-      Effect.flatMap(StackMergeService, (s) => s.plan(ctx.params.id, ctx.owner)),
-    ),
+    runRoute(Effect.flatMap(StackMergeService, (s) => s.plan(ctx.params.id, ctx.owner))),
   )
   .post(
     "/:id/stack/merge",
     (ctx) =>
       runRoute(
-        Effect.flatMap(StackMergeService, (s) =>
-          s.start(ctx.params.id, ctx.owner, ctx.body),
-        ),
+        Effect.flatMap(StackMergeService, (s) => s.start(ctx.params.id, ctx.owner, ctx.body)),
       ),
     {
       body: t.Object({
@@ -97,9 +93,9 @@ export const repoStackRoutes = new Elysia({ prefix: "/api/repos" })
   .resolve(asOwner({ id: "repository" }))
   .get("/:id/stack-headlines", (ctx) =>
     runRoute(
-      Effect.flatMap(StackHeadlineService, (s) =>
-        s.forRepo(ctx.params.id, ctx.owner),
-      ).pipe(Effect.map((headlines) => ({ headlines }))),
+      Effect.flatMap(StackHeadlineService, (s) => s.forRepo(ctx.params.id, ctx.owner)).pipe(
+        Effect.map((headlines) => ({ headlines })),
+      ),
     ),
   );
 
@@ -107,12 +103,8 @@ export const stackMergeRunRoutes = new Elysia({ prefix: "/api/stack-merges" })
   .use(withAuth)
   .resolve(asOwner({ id: "stack merge" }))
   .post("/:id/cancel", (ctx) =>
-    runRoute(
-      Effect.flatMap(StackMergeService, (s) => s.cancel(ctx.params.id, ctx.owner)),
-    ),
+    runRoute(Effect.flatMap(StackMergeService, (s) => s.cancel(ctx.params.id, ctx.owner))),
   )
   .post("/:id/continue", (ctx) =>
-    runRoute(
-      Effect.flatMap(StackMergeService, (s) => s.continueRun(ctx.params.id, ctx.owner)),
-    ),
+    runRoute(Effect.flatMap(StackMergeService, (s) => s.continueRun(ctx.params.id, ctx.owner))),
   );

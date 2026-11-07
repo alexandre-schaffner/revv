@@ -22,8 +22,8 @@ export const stackReviewRoutes = new Elysia({ prefix: "/api/prs" })
   )
   .post("/:id/stack/brief", (ctx) =>
     runRoute(
-      Effect.flatMap(StackBriefJobs, (jobs) =>
-        jobs.ensure(ctx.params.id, ctx.owner),
-      ).pipe(Effect.map((briefId) => ({ briefId }))),
+      Effect.flatMap(StackBriefJobs, (jobs) => jobs.ensure(ctx.params.id, ctx.owner)).pipe(
+        Effect.map((briefId) => ({ briefId })),
+      ),
     ),
   );

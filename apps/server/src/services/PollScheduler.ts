@@ -5,7 +5,6 @@ import {
   type DbError,
   type GitHubAuthError,
   type GitHubError,
-  httpErrorOf,
   type NotFoundError,
   SyncError,
 } from "../domain/errors";

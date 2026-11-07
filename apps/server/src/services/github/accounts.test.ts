@@ -413,7 +413,10 @@ describe("GitHubAccounts.recordIdentity", () => {
   it("treats a re-signed avatar URL as the same image: no write, no push", async () => {
     const db = createDb(":memory:");
     seedAccount(db, { id: "acc" });
-    db.update(account).set({ avatarUrl: signed("a") }).where(eq(account.id, "acc")).run();
+    db.update(account)
+      .set({ avatarUrl: signed("a") })
+      .where(eq(account.id, "acc"))
+      .run();
     const hub = makeFakeHub();
 
     await run(db, makeFakeStore(), hub, (a) =>

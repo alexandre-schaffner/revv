@@ -43,17 +43,15 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
   .use(withAuth)
   .resolve(asOwner({ id: "pull request" }))
   .get("/:id/conversation", (ctx) =>
-    runRoute(
-      Effect.flatMap(PrConversationService, (s) => s.load(ctx.params.id, ctx.owner)),
-    ),
+    runRoute(Effect.flatMap(PrConversationService, (s) => s.load(ctx.params.id, ctx.owner))),
   )
 
   // The cached snapshot only, for an instant first paint; null on a miss.
   .get("/:id/conversation/cached", (ctx) =>
     runRoute(
-      Effect.flatMap(PrConversationService, (s) =>
-        s.cached(ctx.params.id, ctx.owner),
-      ).pipe(Effect.map((conversation) => ({ conversation }))),
+      Effect.flatMap(PrConversationService, (s) => s.cached(ctx.params.id, ctx.owner)).pipe(
+        Effect.map((conversation) => ({ conversation })),
+      ),
     ),
   )
 
@@ -62,18 +60,14 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
     async (ctx) => {
       const body = ctx.body;
       return runRoute(
-        Effect.flatMap(PrConversationService, (s) =>
-          s.write(ctx.params.id, ctx.owner, body),
-        ),
+        Effect.flatMap(PrConversationService, (s) => s.write(ctx.params.id, ctx.owner, body)),
       );
     },
     { body: writeBody },
   )
 
   .get("/:id/checks", (ctx) =>
-    runRoute(
-      Effect.flatMap(PrConversationService, (s) => s.checks(ctx.params.id, ctx.owner)),
-    ),
+    runRoute(Effect.flatMap(PrConversationService, (s) => s.checks(ctx.params.id, ctx.owner))),
   )
 
   .get(
@@ -89,9 +83,7 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
 
   .get("/:id/label-options", (ctx) =>
     runRoute(
-      Effect.flatMap(PrConversationService, (s) =>
-        s.labelOptions(ctx.params.id, ctx.owner),
-      ),
+      Effect.flatMap(PrConversationService, (s) => s.labelOptions(ctx.params.id, ctx.owner)),
     ),
   )
 

@@ -1,10 +1,6 @@
 // A GitHub-submitted issue and its comments are immutable (invariant 7).
 
-import {
-  canUserModifyComment,
-  type ThreadEventMessage,
-  type WalkthroughRating,
-} from "@revv/shared";
+import { canUserModifyComment, type WalkthroughRating } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import type { Db } from "../../../db";
 import { commentThreads } from "../../../db/schema/comment-threads";

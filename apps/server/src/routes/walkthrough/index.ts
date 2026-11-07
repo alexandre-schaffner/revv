@@ -170,12 +170,10 @@ const userWalkthroughRoutes = new Elysia({ prefix: "/api/walkthroughs" })
   .use(withAuth)
   .get("/active", (ctx) =>
     runRoute(
-      Effect.flatMap(WalkthroughService, (wts) =>
-        wts.listActiveForUser(ctx.userId),
-      ).pipe(Effect.map((walkthroughs) => ({ walkthroughs }))),
+      Effect.flatMap(WalkthroughService, (wts) => wts.listActiveForUser(ctx.userId)).pipe(
+        Effect.map((walkthroughs) => ({ walkthroughs })),
+      ),
     ),
   );
 
-export const walkthroughRoutes = new Elysia()
-  .use(prWalkthroughRoutes)
-  .use(userWalkthroughRoutes);
+export const walkthroughRoutes = new Elysia().use(prWalkthroughRoutes).use(userWalkthroughRoutes);

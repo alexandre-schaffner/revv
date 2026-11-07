@@ -172,12 +172,10 @@ export const StackMergeServiceLive = Layer.effect(
 
     const portFor = (ctx: PrContextBasic, accountId: string): MergeDriverPort => {
       // A run outlives a token refresh: every step asks for the current one.
-      const current = accounts
-        .clientFor(ctx.accountId)
-        .pipe(
-          Effect.catchTag("DbError", Effect.die),
-          Effect.map((client): PrContextBasic => ({ ...ctx, client })),
-        );
+      const current = accounts.clientFor(ctx.accountId).pipe(
+        Effect.catchTag("DbError", Effect.die),
+        Effect.map((client): PrContextBasic => ({ ...ctx, client })),
+      );
       const withCurrent = <A, E, R>(f: (c: PrContextBasic) => Effect.Effect<A, E, R>) =>
         Effect.flatMap(current, f);
       const stackError = (e: StackError): Effect.Effect<never, GitHubError> =>
