@@ -10,11 +10,13 @@ import {
   type WalkthroughStackSnapshot,
 } from "@revv/shared";
 import type { PrFileMeta } from "../../services/github/pulls";
+import { renderCompletionRequirements } from "../../services/walkthrough/completion";
 import { journeyKeywordList } from "../../services/walkthrough/content";
 import {
   type PromptDiffSource,
   REVERTED_FILE_STATUS,
 } from "../../services/walkthrough-prompt-files";
+import { fillTemplate } from "./fill-template";
 import { renderRiskTiers } from "./risk-tiers";
 import WALKTHROUGH_ARTIFACTS_PROMPT from "./walkthrough-artifacts.md" with { type: "text" };
 import WALKTHROUGH_AUTHOR_PROMPT from "./walkthrough-author.md" with { type: "text" };
@@ -40,25 +42,26 @@ export interface WalkthroughReviewMode {
   readonly diffSource?: PromptDiffSource;
 }
 
-// The common system prompt carries this marker right after its intro, before
-// the pipeline rules, so the mode prompt frames the whole document instead of
-// trailing it.
-const REVIEW_PERSPECTIVE_MARKER = "{{REVIEW_PERSPECTIVE}}";
+// The common system prompt carries `{{REVIEW_PERSPECTIVE}}` right after its
+// intro, before the pipeline rules, so the mode prompt frames the whole
+// document instead of trailing it.
 
 // The artifact craft spec is single-sourced in `walkthrough-artifacts.md`
 // because the chat agent's edit tools write artifact blocks too.
 export const WALKTHROUGH_ARTIFACT_SPEC: string = WALKTHROUGH_ARTIFACTS_PROMPT.trim();
 
-const CONTRACT_FRAGMENTS: ReadonlyArray<readonly [marker: string, value: string]> = [
-  ["{{ARTIFACT_SPEC}}", WALKTHROUGH_ARTIFACT_SPEC],
-  ["{{RISK_TIERS}}", renderRiskTiers()],
-  ["{{JOURNEY_KEYWORDS}}", journeyKeywordList("`")],
-];
+const CONTRACT_FRAGMENTS: Readonly<Record<string, string>> = {
+  ARTIFACT_SPEC: WALKTHROUGH_ARTIFACT_SPEC,
+  RISK_TIERS: renderRiskTiers(),
+  JOURNEY_KEYWORDS: journeyKeywordList("`"),
+  COMPLETION_GATE: renderCompletionRequirements(),
+};
 
 for (const [file, prompt, marker] of [
-  ["walkthrough-system-common.md", WALKTHROUGH_SYSTEM_COMMON_PROMPT, REVIEW_PERSPECTIVE_MARKER],
+  ["walkthrough-system-common.md", WALKTHROUGH_SYSTEM_COMMON_PROMPT, "{{REVIEW_PERSPECTIVE}}"],
   ["walkthrough-system-common.md", WALKTHROUGH_SYSTEM_COMMON_PROMPT, "{{ARTIFACT_SPEC}}"],
   ["walkthrough-system-common.md", WALKTHROUGH_SYSTEM_COMMON_PROMPT, "{{RISK_TIERS}}"],
+  ["walkthrough-system-common.md", WALKTHROUGH_SYSTEM_COMMON_PROMPT, "{{COMPLETION_GATE}}"],
   ["walkthrough-system-reviewer.md", WALKTHROUGH_SYSTEM_REVIEWER_PROMPT, "{{JOURNEY_KEYWORDS}}"],
 ] as const) {
   if (!prompt.includes(marker)) throw new Error(`${file} is missing the ${marker} marker`);
@@ -70,13 +73,10 @@ export function buildWalkthroughSystemPrompt(mode: WalkthroughMode = REVIEW_MODE
       ? WALKTHROUGH_SYSTEM_AUTHOR_PROMPT
       : WALKTHROUGH_SYSTEM_REVIEWER_PROMPT;
 
-  // Replacer functions, not replacement strings: a `$&` or `$'` in a prompt
-  // file is a substitution pattern and would splice the surrounding prompt
-  // into itself.
-  return CONTRACT_FRAGMENTS.reduce(
-    (prompt, [marker, value]) => prompt.replace(marker, () => value),
-    WALKTHROUGH_SYSTEM_COMMON_PROMPT.replace(REVIEW_PERSPECTIVE_MARKER, () => modePrompt.trim()),
-  );
+  return fillTemplate(WALKTHROUGH_SYSTEM_COMMON_PROMPT, {
+    ...CONTRACT_FRAGMENTS,
+    REVIEW_PERSPECTIVE: fillTemplate(modePrompt.trim(), CONTRACT_FRAGMENTS),
+  });
 }
 
 function tierLabel(tier: number | null): string {

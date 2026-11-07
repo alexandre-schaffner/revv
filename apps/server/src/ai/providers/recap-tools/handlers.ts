@@ -88,17 +88,7 @@ export const getRecapStateHandler: RecapToolHandler<GetRecapStateInput> = async 
     priorThemeSummaries,
     priorLede: priorLede || null,
     instructions:
-      `Read the archived PRs above (the \`prs\` array). Each row has author, title, branches, +/- stats, body excerpt, and (when available) a walkthrough summary + sentiment + risk. For PRs without a walkthrough, use \`diffDigest\` — raw patches are not needed. The open-PR list (via list_open_prs) follows the same shape, including \`diffDigest\` for open PRs that lack walkthroughs. Workflow:
-
-      1. Call get_repo_context to see prior recaps for this repo.
-      2. Call set_lede ONCE with a tight 1–3 sentence editorial summary of the period (covers shipped headline first, in-flight tail second). Plain text plus optional <strong>/<em>. No markdown.
-      3. For each ARCHIVED PR worth including, call add_pr_entry once. Shipped work is the recap's primary record — if the period had archived PRs, you MUST write at least one merged entry per dominant theme. When many archived PRs are similar (e.g. a repeated migration), surface 5–10 representative entries spanning the variety; do NOT skip the cluster. "Skip pure chores" is for typo fixes and version bumps only.
-      4. Call list_open_prs and, for each OPEN PR worth surfacing as active work, call add_pr_entry. Reuse the same theme labels as shipped entries when relevant — the UI renders open entries as an "In progress" subgroup inside the matching theme chapter.
-      5. add_pr_entry arguments: pr_id, position (your render order, starting at 0, archived entries first), theme (short reusable lowercase noun), verb (past tense for shipped, present tense for open), description (one sentence in matching tense, may use \`backticks\` for code/file paths, NO other markdown), lines_added, lines_removed. The server records whether the PR was archived or open from the source bundle — you don't pass that.
-      6. After all add_pr_entry calls, call set_theme_summary ONCE per distinct theme you used — a 1–2 sentence chapter lede that frames what landed in that area. Reuse the same lowercase theme label you passed to add_pr_entry. Keep summaries short (≤ ~35 words) and human; backtick-wrapped code spans are allowed but no other markdown.
-      7. Call complete_recap to finalize. The orchestrator then transitions status.
-
-      Do NOT emit visible prose between tool calls — there is no streaming text buffer in this pipeline. All content flows through tool arguments.` +
+      "Read the archived PRs above (the `prs` array). Each row has author, title, branches, +/- stats, body excerpt, and (when available) a walkthrough summary + sentiment + risk. For PRs without a walkthrough, use `diffDigest` — raw patches are not needed. The open-PR list (via list_open_prs) follows the same shape. Continue with the workflow in your system prompt." +
       rerunInstructions,
   };
   return ok(JSON.stringify(payload));

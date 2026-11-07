@@ -302,9 +302,7 @@ const resolveLeadSchema = z.object({
 const setSentimentSchema = z.object({
   markdown: z
     .string()
-    .describe(
-      `GitHub-flavored markdown. ${SENTIMENT_CONTRACT} ${PROSE_VOICE_CONTRACT} Replaces the old convention of emitting a '## Overall Sentiment' markdown block.`,
-    ),
+    .describe(`GitHub-flavored markdown. ${SENTIMENT_CONTRACT} ${PROSE_VOICE_CONTRACT}`),
 });
 
 const rateAxisSchema = z.object({

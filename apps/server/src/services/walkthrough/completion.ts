@@ -1,8 +1,8 @@
 // The one journal check behind both `complete_walkthrough` (the agent's gate)
-// and the orchestrator's decision to mark a row `complete` (invariant 12).
-// Every blocker refuses the gate. The orchestrator ignores the `gate-only`
-// ones: a first-pass lead is a hint, and a skipped hint shouldn't cost the
-// whole review.
+// and the orchestrator's decision to mark a row `complete` (invariant 12),
+// declared as a list of requirements so the text the agent reads about the
+// gate renders from the same list the gate checks. Every unmet requirement
+// refuses the gate; the orchestrator ignores the `gate-only` ones.
 
 import { RATING_AXES } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
@@ -18,6 +18,7 @@ import {
   journeyKeywordList,
   loadWalkthroughRow,
   renderMissingInlineCommentError,
+  type WalkthroughRow,
 } from "./content";
 
 export interface CompletionBlocker {
@@ -27,112 +28,189 @@ export interface CompletionBlocker {
   readonly message: string;
 }
 
-/** Why the walkthrough isn't finished, in the order the agent should fix them. Empty when it is. */
+interface Journal {
+  readonly db: Db;
+  readonly row: WalkthroughRow;
+  readonly blocks: ReadonlyArray<{ readonly semanticStepIndex: number }>;
+  readonly chapters: ReadonlyArray<{
+    readonly semanticStepIndex: number;
+    readonly title: string;
+    readonly summary: string | null;
+  }>;
+}
+
+function journalOf(db: Db, row: WalkthroughRow): Journal {
+  let blocks: Journal["blocks"] | undefined;
+  let chapters: Journal["chapters"] | undefined;
+  return {
+    db,
+    row,
+    get blocks() {
+      blocks ??= db
+        .select({ semanticStepIndex: walkthroughBlocks.semanticStepIndex })
+        .from(walkthroughBlocks)
+        .where(
+          and(
+            eq(walkthroughBlocks.walkthroughId, row.id),
+            eq(walkthroughBlocks.phase, "diff_analysis"),
+          ),
+        )
+        .all();
+      return blocks;
+    },
+    get chapters() {
+      chapters ??= db
+        .select({
+          semanticStepIndex: walkthroughSemanticSteps.semanticStepIndex,
+          title: walkthroughSemanticSteps.title,
+          summary: walkthroughSemanticSteps.summary,
+        })
+        .from(walkthroughSemanticSteps)
+        .where(eq(walkthroughSemanticSteps.walkthroughId, row.id))
+        .all();
+      return chapters;
+    },
+  };
+}
+
+interface CompletionRequirement {
+  /** The requirement as the agent is told it, in `complete_walkthrough`'s description and the system prompt. */
+  readonly statement: string;
+  readonly scope: CompletionBlocker["scope"];
+  /** What to do when the journal doesn't meet it, or null when it does. */
+  readonly blocker: (journal: Journal) => string | null;
+}
+
+/** Everything `complete_walkthrough` checks, in the order it checks it. */
+const COMPLETION_REQUIREMENTS: readonly CompletionRequirement[] = [
+  {
+    statement: `Phase D reached (all ${RATING_AXES.length} axes rated)`,
+    scope: "hard",
+    blocker: ({ row }) =>
+      row.lastCompletedPhase === "D"
+        ? null
+        : `Error: complete_walkthrough requires Phase D complete (all ${RATING_AXES.length} axes rated). Current phase: '${row.lastCompletedPhase}'.`,
+  },
+  {
+    statement: "summary (Phase A) and sentiment (Phase C) non-empty",
+    scope: "hard",
+    blocker: ({ row }) =>
+      row.summary && row.sentiment
+        ? null
+        : "Error: complete_walkthrough requires both summary (Phase A) and sentiment (Phase C) to be non-empty.",
+  },
+  {
+    statement: "at least one diff step",
+    scope: "hard",
+    blocker: ({ blocks }) =>
+      blocks.length > 0 ? null : "Error: complete_walkthrough requires at least one diff step.",
+  },
+  {
+    statement: "at least one chapter",
+    scope: "hard",
+    blocker: ({ chapters }) =>
+      chapters.length > 0
+        ? null
+        : "Error: complete_walkthrough requires at least one semantic step (chapter). Call add_semantic_step before any add_diff_step.",
+  },
+  {
+    statement: `in reviewer mode, chapter 0 is the 'How we got here' journey chapter, its title or summary containing one of ${journeyKeywordList("'")}`,
+    scope: "hard",
+    blocker: ({ row, chapters }) => {
+      if (row.mode === "author") return null;
+      // Chapters carry no type, so the journey chapter is recognized by the
+      // keywords the prompt tells the agent to title it with.
+      const first = chapters.find((r) => r.semanticStepIndex === 0);
+      if (!first) {
+        return "Error: complete_walkthrough requires a journey chapter at semantic_step_index 0. Open it with add_semantic_step({ semantic_step_index: 0, title: 'How we got here', initial_block: { markdown: { content: '...' } } }) — see the prompt's 'How we got here' guidance.";
+      }
+      return isJourneyChapterText(first.title, first.summary)
+        ? null
+        : `Error: the chapter at semantic_step_index 0 is required to be the 'How we got here' journey chapter, but its title ('${first.title}') and summary do not name the journey. Re-call add_semantic_step with semantic_step_index 0 and a title (or summary) that includes one of: ${journeyKeywordList("'")}. The chapter should narrate the commit history get_commit_history returns — not commit-by-commit, but the shape of the work.`;
+    },
+  },
+  {
+    statement: "every block in a chapter opened by add_semantic_step",
+    scope: "hard",
+    blocker: ({ blocks, chapters }) => {
+      const known = new Set(chapters.map((r) => r.semanticStepIndex));
+      const orphans = [
+        ...new Set(blocks.map((b) => b.semanticStepIndex).filter((i) => !known.has(i))),
+      ];
+      return orphans.length === 0
+        ? null
+        : `Error: blocks reference unknown semantic_step_index values [${orphans.join(", ")}]. Each block must belong to a chapter opened by add_semantic_step.`;
+    },
+  },
+  {
+    statement: "every chapter holding at least one block",
+    scope: "hard",
+    blocker: ({ blocks, chapters }) => {
+      const filled = new Set(blocks.map((b) => b.semanticStepIndex));
+      const empty = chapters.map((r) => r.semanticStepIndex).filter((i) => !filled.has(i));
+      return empty.length === 0
+        ? null
+        : `Error: semantic_step(s) [${empty.join(", ")}] have no atomic blocks. Each chapter needs ≥1 add_diff_step call.`;
+    },
+  },
+  {
+    statement: `all ${RATING_AXES.length} axes rated with a rationale`,
+    scope: "hard",
+    blocker: ({ db, row }) => {
+      const rated = new Set(
+        db
+          .select({ axis: walkthroughRatings.axis, rationale: walkthroughRatings.rationale })
+          .from(walkthroughRatings)
+          .where(eq(walkthroughRatings.walkthroughId, row.id))
+          .all()
+          .filter(isRatedAxis)
+          .map((r) => r.axis),
+      );
+      const missing = RATING_AXES.filter((a) => !rated.has(a));
+      return missing.length === 0
+        ? null
+        : `Error: missing ratings for [${missing.join(", ")}]. Call rate_axis for each before complete_walkthrough.`;
+    },
+  },
+  {
+    // flag_issue writes the sidebar card, add_issue_comment the inline note;
+    // without it a line-anchored concern is invisible to the coder.
+    statement: "every line-anchored concern with at least one add_issue_comment thread",
+    scope: "hard",
+    blocker: ({ db, row }) => {
+      const uncommented = findIssuesMissingInlineComment(db, row.id);
+      return uncommented.length === 0 ? null : renderMissingInlineCommentError(uncommented);
+    },
+  },
+  {
+    // A first-pass lead is a hint; a skipped hint shouldn't cost the review.
+    statement: "every first-pass lead given a resolve_lead verdict",
+    scope: "gate-only",
+    blocker: ({ db, row }) => {
+      const unresolved = findUnresolvedLeads(db, row.id);
+      return unresolved.length === 0 ? null : renderUnresolvedLeadsError(unresolved);
+    },
+  },
+];
+
+/** The requirements as a markdown list, for the system prompt. */
+export function renderCompletionRequirements(): string {
+  return COMPLETION_REQUIREMENTS.map((r) => `- ${r.statement}`).join("\n");
+}
+
+/** The requirements as one sentence, for `complete_walkthrough`'s description. */
+export function completionRequirementsSentence(): string {
+  return COMPLETION_REQUIREMENTS.map((r) => r.statement).join("; ");
+}
+
+/** Why the walkthrough isn't finished: the first unmet requirement, or empty when it is. */
 export function walkthroughCompletionBlockers(db: Db, walkthroughId: string): CompletionBlocker[] {
-  const hard = (message: string): CompletionBlocker[] => [{ scope: "hard", message }];
   const row = loadWalkthroughRow(db, walkthroughId);
-  if (!row) return hard(`Walkthrough ${walkthroughId} not found.`);
-  if (row.lastCompletedPhase !== "D") {
-    return hard(
-      `Error: complete_walkthrough requires Phase D complete (all 9 axes rated). Current phase: '${row.lastCompletedPhase}'.`,
-    );
-  }
-  if (!row.summary || !row.sentiment) {
-    return hard(
-      "Error: complete_walkthrough requires both summary (Phase A) and sentiment (Phase C) to be non-empty.",
-    );
-  }
-
-  const blockRows = db
-    .select({ semanticStepIndex: walkthroughBlocks.semanticStepIndex })
-    .from(walkthroughBlocks)
-    .where(
-      and(
-        eq(walkthroughBlocks.walkthroughId, walkthroughId),
-        eq(walkthroughBlocks.phase, "diff_analysis"),
-      ),
-    )
-    .all();
-  if (blockRows.length === 0) {
-    return hard("Error: complete_walkthrough requires at least one diff step.");
-  }
-
-  const semanticRows = db
-    .select({
-      semanticStepIndex: walkthroughSemanticSteps.semanticStepIndex,
-      title: walkthroughSemanticSteps.title,
-      summary: walkthroughSemanticSteps.summary,
-    })
-    .from(walkthroughSemanticSteps)
-    .where(eq(walkthroughSemanticSteps.walkthroughId, walkthroughId))
-    .all();
-  if (semanticRows.length === 0) {
-    return hard(
-      "Error: complete_walkthrough requires at least one semantic step (chapter). Call add_semantic_step before any add_diff_step.",
-    );
-  }
-  if (row.mode !== "author") {
-    // Chapters carry no type, so the journey chapter is recognized by the
-    // keywords the prompt tells the agent to title it with.
-    const firstChapter = semanticRows.find((r) => r.semanticStepIndex === 0);
-    if (!firstChapter) {
-      return hard(
-        "Error: complete_walkthrough requires a journey chapter at semantic_step_index 0. Open it with add_semantic_step({ semantic_step_index: 0, title: 'How we got here', initial_block: { markdown: { content: '...' } } }) — see the prompt's 'How we got here' guidance.",
-      );
-    }
-    if (!isJourneyChapterText(firstChapter.title, firstChapter.summary)) {
-      return hard(
-        `Error: the chapter at semantic_step_index 0 is required to be the 'How we got here' journey chapter, but its title ('${firstChapter.title}') and summary do not name the journey. Re-call add_semantic_step with semantic_step_index 0 and a title (or summary) that includes one of: ${journeyKeywordList("'")}. The chapter should narrate the commit-history narrative surfaced in the user prompt's Commit history section — not commit-by-commit, but the shape of the work.`,
-      );
-    }
-  }
-  const knownSections = new Set(semanticRows.map((r) => r.semanticStepIndex));
-  const orphanIndices = [
-    ...new Set(
-      blockRows
-        .filter((b) => !knownSections.has(b.semanticStepIndex))
-        .map((b) => b.semanticStepIndex),
-    ),
-  ];
-  if (orphanIndices.length > 0) {
-    return hard(
-      `Error: blocks reference unknown semantic_step_index values [${orphanIndices.join(", ")}]. Each block must belong to a chapter opened by add_semantic_step.`,
-    );
-  }
-  const blockSections = new Set(blockRows.map((b) => b.semanticStepIndex));
-  const emptySections = semanticRows
-    .map((r) => r.semanticStepIndex)
-    .filter((i) => !blockSections.has(i));
-  if (emptySections.length > 0) {
-    return hard(
-      `Error: semantic_step(s) [${emptySections.join(", ")}] have no atomic blocks. Each chapter needs ≥1 add_diff_step call.`,
-    );
-  }
-
-  const ratedSet = new Set(
-    db
-      .select({ axis: walkthroughRatings.axis, rationale: walkthroughRatings.rationale })
-      .from(walkthroughRatings)
-      .where(eq(walkthroughRatings.walkthroughId, walkthroughId))
-      .all()
-      .filter(isRatedAxis)
-      .map((r) => r.axis),
-  );
-  const missing = RATING_AXES.filter((a) => !ratedSet.has(a));
-  if (missing.length > 0) {
-    return hard(
-      `Error: missing ratings for [${missing.join(", ")}]. Call rate_axis for each before complete_walkthrough.`,
-    );
-  }
-
-  // flag_issue writes the sidebar card, add_issue_comment the inline note;
-  // without it a line-anchored concern is invisible to the coder.
-  const uncommented = findIssuesMissingInlineComment(db, walkthroughId);
-  if (uncommented.length > 0) return hard(renderMissingInlineCommentError(uncommented));
-
-  const unresolved = findUnresolvedLeads(db, walkthroughId);
-  if (unresolved.length > 0) {
-    return [{ scope: "gate-only", message: renderUnresolvedLeadsError(unresolved) }];
+  if (!row) return [{ scope: "hard", message: `Walkthrough ${walkthroughId} not found.` }];
+  const journal = journalOf(db, row);
+  for (const requirement of COMPLETION_REQUIREMENTS) {
+    const message = requirement.blocker(journal);
+    if (message !== null) return [{ scope: requirement.scope, message }];
   }
   return [];
 }

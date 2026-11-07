@@ -9,6 +9,7 @@ import CHAT_RESOLVE_BASE_MERGE_TEMPLATE from "./chat-resolve-base-merge.md" with
 import CHAT_RESOLVE_BASE_REBASE_TEMPLATE from "./chat-resolve-base-rebase.md" with { type: "text" };
 import CHAT_RESOLVE_CONFLICTS_TEMPLATE from "./chat-resolve-conflicts.md" with { type: "text" };
 import CHAT_SYSTEM_TEMPLATE from "./chat-system.md" with { type: "text" };
+import { fillTemplate } from "./fill-template";
 import { WALKTHROUGH_ARTIFACT_SPEC } from "./walkthrough";
 
 const ARTIFACT_SPEC_MARKER = "{{ARTIFACT_SPEC}}";
@@ -94,20 +95,16 @@ export function buildChatSystemPrompt(params: ChatSystemPromptParams): string {
     walkthroughSection = wtLines.join("\n");
   }
 
-  // Every substitution goes through a replacer function, never a replacement
-  // string: `$&`, `$'` and `` $` `` are substitution patterns, and every value
-  // here is externally authored — the PR title and body, a branch name, the
-  // walkthrough's own prose. A PR titled "fix: escape $' in the parser" would
-  // otherwise splice the rest of the system prompt into itself.
-  let prompt = CHAT_SYSTEM_TEMPLATE.replace("{{PR_SECTION}}", () => prSection)
-    .replace("{{BRANCH_NAME}}", () => params.branchName)
-    .replace(ARTIFACT_SPEC_MARKER, () => WALKTHROUGH_ARTIFACT_SPEC);
-
-  if (walkthroughSection) {
-    prompt = prompt.replace("{{WALKTHROUGH_SECTION}}", () => walkthroughSection);
-  } else {
-    prompt = prompt.replace("\n\n{{WALKTHROUGH_SECTION}}", "");
-  }
+  // No walkthrough: the section goes, blank line and all.
+  const template = walkthroughSection
+    ? CHAT_SYSTEM_TEMPLATE
+    : CHAT_SYSTEM_TEMPLATE.replace("\n\n{{WALKTHROUGH_SECTION}}", "");
+  let prompt = fillTemplate(template, {
+    PR_SECTION: prSection,
+    BRANCH_NAME: params.branchName,
+    ARTIFACT_SPEC: WALKTHROUGH_ARTIFACT_SPEC,
+    WALKTHROUGH_SECTION: walkthroughSection,
+  });
 
   prompt = prompt.replace(/\n{3,}/g, "\n\n");
 
@@ -194,18 +191,22 @@ export function buildResolveConflictsPrompt(
       : conflictFiles.map((f) => `- \`${f}\``).join("\n");
 
   if (task.kind === "push-merge") {
-    return CHAT_RESOLVE_CONFLICTS_TEMPLATE.replace("{{AGENT_BRANCH}}", task.agentBranch)
-      .replace("{{SOURCE_BRANCH}}", task.sourceBranch)
-      .replace("{{CONFLICT_FILES}}", fileLines);
+    return fillTemplate(CHAT_RESOLVE_CONFLICTS_TEMPLATE, {
+      AGENT_BRANCH: task.agentBranch,
+      SOURCE_BRANCH: task.sourceBranch,
+      CONFLICT_FILES: fileLines,
+    });
   }
-  const template =
+  return fillTemplate(
     task.kind === "base-merge"
       ? CHAT_RESOLVE_BASE_MERGE_TEMPLATE
-      : CHAT_RESOLVE_BASE_REBASE_TEMPLATE;
-  return template
-    .replaceAll("{{BASE_BRANCH}}", task.baseBranch)
-    .replaceAll("{{SOURCE_BRANCH}}", task.sourceBranch)
-    .replace("{{CONFLICT_FILES}}", fileLines);
+      : CHAT_RESOLVE_BASE_REBASE_TEMPLATE,
+    {
+      BASE_BRANCH: task.baseBranch,
+      SOURCE_BRANCH: task.sourceBranch,
+      CONFLICT_FILES: fileLines,
+    },
+  );
 }
 
 export function buildResolveConflictsUserMessage(task: ResolveConflictsTask): string {

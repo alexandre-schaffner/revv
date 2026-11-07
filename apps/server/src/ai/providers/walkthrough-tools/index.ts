@@ -4,7 +4,10 @@ import { and, eq } from "drizzle-orm";
 import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
-import { walkthroughCompletionBlockers } from "../../../services/walkthrough/completion";
+import {
+  completionRequirementsSentence,
+  walkthroughCompletionBlockers,
+} from "../../../services/walkthrough/completion";
 import {
   isRatedAxis,
   renderUnknownBlockRefs,
@@ -399,7 +402,7 @@ export const TOOL_SPECS: ReadonlyArray<WalkthroughToolSpec> = [
     name: "complete_walkthrough",
     description: phaseDescription(
       "complete_walkthrough",
-      `Signal that the walkthrough is complete. Fails unless Phase D is reached with all ${RATING_AXES.length} axes rated, summary + sentiment non-empty, ≥1 diff step, every line-anchored issue commented, and every first-pass lead resolved. The orchestrator performs the final status transition when your turn ends.`,
+      `Signal that the walkthrough is complete. Fails unless: ${completionRequirementsSentence()}. The orchestrator performs the final status transition when your turn ends.`,
     ),
     activity: "Finalizing walkthrough...",
     inputSchema: completeWalkthroughSchema,

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import type { WalkthroughLead, WalkthroughStackSnapshot } from "@revv/shared";
 import type { PrFileMeta } from "../../services/github/pulls";
-import { JOURNEY_CHAPTER_KEYWORDS } from "../../services/walkthrough/content";
+import { renderCompletionRequirements } from "../../services/walkthrough/completion";
+import { isJourneyChapterText, JOURNEY_CHAPTER_KEYWORDS } from "../../services/walkthrough/content";
 import { buildWalkthroughPrompt, buildWalkthroughSystemPrompt } from "./walkthrough";
 
 const BASE = {
@@ -222,5 +223,18 @@ describe("buildWalkthroughSystemPrompt contract fragments", () => {
     for (const word of Object.keys(JOURNEY_CHAPTER_KEYWORDS)) {
       expect(prompt).toContain(`\`${word}\``);
     }
+  });
+
+  it("offers only journey-chapter titles the completion gate accepts", () => {
+    const prompt = buildWalkthroughSystemPrompt("reviewer");
+    const line = prompt.split("\n").find((l) => l.startsWith("- Title with one of:")) ?? "";
+    const titles = [...line.matchAll(/"([^"]+)"/g)].map((m) => m[1] ?? "");
+    expect(titles.length).toBeGreaterThan(0);
+    for (const title of titles)
+      expect([title, isJourneyChapterText(title, null)]).toEqual([title, true]);
+  });
+
+  it("states the completion gate the gate checks", () => {
+    expect(buildWalkthroughSystemPrompt("reviewer")).toContain(renderCompletionRequirements());
   });
 });

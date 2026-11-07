@@ -65,7 +65,7 @@ In-place update (resuming a partial run):
 - Don't mention you're resuming.
 
 Tool-use rules (critical):
-- Call tools in this order: get_recap_state → (optional: list_open_prs, get_repo_context) → set_lede → add_pr_entry × N → set_theme_summary × M (one per distinct theme) → complete_recap.
+- Follow the workflow above, in its order.
 - Do NOT emit visible text between tool calls. The system prompt is the only contract for prose; everything the user sees comes from your tool arguments.
 - complete_recap will REJECT if the lede is empty or no entries were added. The orchestrator marks the row complete only on successful validation.
 
@@ -102,7 +102,5 @@ export function buildRecapUserMessage(
     priorHint,
     nothingShippedHint,
     openPrHint,
-    "",
-    `Order of operations: get_recap_state → get_repo_context → set_lede → add_pr_entry × N for the ARCHIVED PRs (shipped first, this is the recap's main record) → list_open_prs → add_pr_entry × M for the OPEN PRs you want to surface as active work → set_theme_summary × K for each distinct theme → complete_recap. All content flows through tool arguments — do not emit visible text between calls.`,
   ].join("\n");
 }

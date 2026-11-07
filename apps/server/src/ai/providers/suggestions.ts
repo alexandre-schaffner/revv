@@ -41,7 +41,7 @@ export interface GenerateSuggestionsInput {
 
 const SYSTEM_PROMPT = `You are helping a code reviewer skim a pull request. \
 Given the PR metadata and (when present) the AI walkthrough below, generate \
-exactly 3 short prompts the reviewer would find most useful to ask an AI \
+exactly ${CHAT_SUGGESTION_COUNT} short prompts the reviewer would find most useful to ask an AI \
 assistant about THIS specific PR.
 
 Rules:
