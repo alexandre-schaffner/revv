@@ -143,7 +143,7 @@ export class ReviewService extends Context.Service<
       messageId: string,
       actorLogin: string | null,
     ) => Effect.Effect<void, Refusal | DbError>;
-    /** Drop a thread unconditionally. Announces `thread:deleted`. */
+    /** Drop a thread GitHub doesn't have after all (submit couldn't link it). Announces `thread:deleted`. */
     readonly dropThread: (threadId: string) => Effect.Effect<void, DbError>;
 
     // GitHub bookkeeping: announces nothing; readers reconcile on their next read.
@@ -326,11 +326,23 @@ export interface ThreadWrite<T> {
 }
 
 /**
+ * Who made a change: someone in Revv, or GitHub (the pull applying a remote
+ * edit, submit dropping a comment it couldn't link). What is on GitHub is
+ * GitHub's: only a change GitHub made may alter it.
+ */
+type ChangeOrigin = "revv" | "github";
+
+const onGitHub = (what: string) =>
+  new ForbiddenError({
+    message: `Cannot change ${what} that is already on GitHub; change it there instead`,
+  });
+
+/**
  * The thread writes, as plain functions of a transaction. `ReviewService`
  * runs them for routes and the GitHub sync; agent tool handlers, which write
  * in their own synchronous transactions, call them directly. Nothing else
- * writes `comment_threads` / `thread_messages` (deletes cascading from a PR
- * or a walkthrough issue aside).
+ * writes or deletes `comment_threads` / `thread_messages` (a PR's own
+ * deletion cascading aside).
  */
 export const threadWrites = {
   /** A thread with its first message. */
@@ -364,7 +376,7 @@ export const threadWrites = {
   /**
    * Revv's comment on a walkthrough issue, keyed on the caller's
    * deterministic ids: created once, its text replaced on a replay with a new
-   * body, untouched on a replay with the same one.
+   * body (unless it is on GitHub), untouched on a replay with the same one.
    */
   upsertIssueComment(
     tx: Db | Tx,
@@ -406,7 +418,11 @@ export const threadWrites = {
         },
         messageId,
       );
-    } else if (before.body !== params.body) {
+    }
+    // A replay never rewrites a comment already on GitHub.
+    const rewrites =
+      before !== undefined && before.externalId === null && before.body !== params.body;
+    if (rewrites) {
       tx.update(threadMessages)
         .set({ body: params.body, editedAt: now })
         .where(eq(threadMessages.id, messageId))
@@ -421,7 +437,7 @@ export const threadWrites = {
     const envelopes: ThreadEventMessage[] =
       inserted.length > 0
         ? [{ type: "thread:created", data: { prId, thread, message } }]
-        : before?.body !== params.body
+        : rewrites
           ? [{ type: "thread:message:edited", data: { threadId, message } }]
           : [];
     return { prId, value: { thread, message }, envelopes };
@@ -494,13 +510,18 @@ export const threadWrites = {
     tx: Db | Tx,
     messageId: string,
     body: string,
-    editedAt: string = new Date().toISOString(),
-  ): ThreadWrite<ThreadMessage> | NotFoundError {
-    tx.update(threadMessages).set({ body, editedAt }).where(eq(threadMessages.id, messageId)).run();
-    const message = readMessage(tx, messageId);
-    if (!message) return messageNotFound(messageId);
-    const thread = readThreadOnPr(tx, message.threadId);
-    if (!thread) return threadNotFound(message.threadId);
+    options: { readonly origin?: ChangeOrigin; readonly editedAt?: string } = {},
+  ): ThreadWrite<ThreadMessage> | NotFoundError | ForbiddenError {
+    const before = readMessage(tx, messageId);
+    if (!before) return messageNotFound(messageId);
+    if (before.externalId !== null && options.origin !== "github") return onGitHub("a message");
+    const thread = readThreadOnPr(tx, before.threadId);
+    if (!thread) return threadNotFound(before.threadId);
+    tx.update(threadMessages)
+      .set({ body, editedAt: options.editedAt ?? new Date().toISOString() })
+      .where(eq(threadMessages.id, messageId))
+      .run();
+    const message = readMessage(tx, messageId) ?? before;
     return {
       prId: thread.prId,
       value: message,
@@ -513,10 +534,13 @@ export const threadWrites = {
     tx: Db | Tx,
     threadId: string,
     messageId: string,
-  ): ThreadWrite<void> | NotFoundError {
+  ): ThreadWrite<void> | NotFoundError | ForbiddenError {
     const found = readThreadOnPr(tx, threadId);
     if (!found) return threadNotFound(threadId);
     if (firstMessageId(tx, threadId) === messageId) return threadWrites.removeThread(tx, threadId);
+    const message = readMessage(tx, messageId);
+    if (!message || message.threadId !== threadId) return messageNotFound(messageId);
+    if (message.externalId !== null) return onGitHub("a reply");
     tx.delete(threadMessages).where(eq(threadMessages.id, messageId)).run();
     return {
       prId: found.prId,
@@ -525,15 +549,67 @@ export const threadWrites = {
     };
   },
 
-  removeThread(tx: Db | Tx, threadId: string): ThreadWrite<void> | NotFoundError {
+  removeThread(
+    tx: Db | Tx,
+    threadId: string,
+    origin: ChangeOrigin = "revv",
+  ): ThreadWrite<void> | NotFoundError | ForbiddenError {
     const found = readThreadOnPr(tx, threadId);
     if (!found) return threadNotFound(threadId);
+    if (found.row.externalCommentId !== null && origin !== "github") return onGitHub("a thread");
     tx.delete(commentThreads).where(eq(commentThreads.id, threadId)).run();
     return {
       prId: found.prId,
       value: undefined,
       envelopes: [{ type: "thread:deleted", data: { threadId } }],
     };
+  },
+
+  /**
+   * Retire Revv's threads on walkthrough issues that are going away (a
+   * superseded review, a deleted concern). One not on GitHub goes; one on
+   * GitHub stays, detached from its issue, because the comment still exists
+   * there and its replies keep arriving. Call before the issues are deleted:
+   * their deletion would cascade to every thread still linked.
+   */
+  retireAiThreads(tx: Db | Tx, issueIds: readonly string[]): ThreadWrite<void>[] {
+    if (issueIds.length === 0) return [];
+    const rows = tx
+      .select({
+        id: commentThreads.id,
+        externalCommentId: commentThreads.externalCommentId,
+        prId: reviewSessions.pullRequestId,
+      })
+      .from(commentThreads)
+      .innerJoin(reviewSessions, eq(reviewSessions.id, commentThreads.reviewSessionId))
+      .where(inArray(commentThreads.walkthroughIssueId, [...issueIds]))
+      .all();
+    const posted = rows.filter((r) => r.externalCommentId !== null).map((r) => r.id);
+    if (posted.length > 0) {
+      tx.update(commentThreads)
+        .set({ walkthroughIssueId: null })
+        .where(inArray(commentThreads.id, posted))
+        .run();
+    }
+    const drafts = rows.filter((r) => r.externalCommentId === null);
+    if (drafts.length > 0) {
+      tx.delete(commentThreads)
+        .where(
+          inArray(
+            commentThreads.id,
+            drafts.map((r) => r.id),
+          ),
+        )
+        .run();
+    }
+    const byPr = new Map<string, ThreadEventMessage[]>();
+    for (const { id, prId } of drafts) {
+      byPr.set(prId, [
+        ...(byPr.get(prId) ?? []),
+        { type: "thread:deleted", data: { threadId: id } },
+      ]);
+    }
+    return [...byPr].map(([prId, envelopes]) => ({ prId, value: undefined, envelopes }));
   },
 };
 
@@ -725,8 +801,8 @@ export const ReviewServiceLive = Layer.effect(
 
       applyRemoteEdit: (messageId, body, editedAt) =>
         commit("apply a GitHub edit", (tx) =>
-          threadWrites.editMessage(tx, messageId, body, editedAt),
-        ).pipe(Effect.asVoid),
+          threadWrites.editMessage(tx, messageId, body, { origin: "github", editedAt }),
+        ).pipe(Effect.catchTag("ForbiddenError", Effect.die), Effect.asVoid),
 
       discardThread: (threadId, actorLogin) =>
         commit("discard a thread", (tx) => {
@@ -743,8 +819,9 @@ export const ReviewServiceLive = Layer.effect(
         }),
 
       dropThread: (threadId) =>
-        commit("drop a thread", (tx) => threadWrites.removeThread(tx, threadId)).pipe(
+        commit("drop a thread", (tx) => threadWrites.removeThread(tx, threadId, "github")).pipe(
           Effect.catchTag("NotFoundError", () => Effect.void),
+          Effect.catchTag("ForbiddenError", () => Effect.void),
         ),
 
       linkThread: (threadId, ids) =>

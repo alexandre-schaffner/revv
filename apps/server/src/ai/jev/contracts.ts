@@ -1,4 +1,4 @@
-import type { IssueSeverity, WalkthroughStreamEvent } from "@revv/shared";
+import type { IssueSeverity, ThreadEventMessage, WalkthroughStreamEvent } from "@revv/shared";
 
 /** Neutral DTO shared by the Phase-B tool surface and Jev hooks. */
 export interface IssueCandidate {
@@ -21,7 +21,7 @@ export interface IssueJudgment {
 /** What a background judgment needs to tell the active walkthrough. */
 export interface JudgmentSink {
   readonly emit: (event: WalkthroughStreamEvent) => void;
-  readonly broadcastThread: (threadId: string) => void;
+  readonly broadcastThread: (msg: ThreadEventMessage) => void;
   /** Lets `add_issue_comment` answer a retracted id with an explanation. */
   readonly markRetracted: (issueId: string) => void;
 }

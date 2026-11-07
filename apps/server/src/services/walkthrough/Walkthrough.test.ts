@@ -2,7 +2,13 @@ import { describe, expect, it } from "bun:test";
 import { eq } from "drizzle-orm";
 import { Cause, type Context, Effect, Layer } from "effect";
 import { createDb, type Db } from "../../db/index";
-import { commentThreads, reviewRounds, walkthroughIssues, walkthroughs } from "../../db/schema";
+import {
+  commentThreads,
+  reviewRounds,
+  reviewSessions,
+  walkthroughIssues,
+  walkthroughs,
+} from "../../db/schema";
 import { DbService } from "../Db";
 import { Realtime } from "../Realtime";
 import { WalkthroughService, WalkthroughServiceLive } from "./Walkthrough";
@@ -285,6 +291,9 @@ describe("supersede", () => {
   /** `wt-old` at `head-1` with one AI thread on its only issue. */
   function seedAiThread(db: Db): void {
     insertWalkthroughs(db, { id: "wt-old", status: "complete", mode: "reviewer" });
+    db.insert(reviewSessions)
+      .values({ id: "session-1", pullRequestId: "pr-1", startedAt: "2026-01-01T00:00:00Z" })
+      .run();
     db.insert(walkthroughIssues)
       .values({
         id: "issue-1",
@@ -359,6 +368,24 @@ describe("supersede", () => {
     expect(sent).toEqual([
       { prId: "pr-1", type: "thread:deleted", data: { threadId: "thread-ai" } },
     ]);
+  });
+
+  it("keeps an AI thread already on GitHub, detached from its retired issue", async () => {
+    const db = createDb(":memory:");
+    seedAiThread(db);
+    db.update(commentThreads)
+      .set({ externalCommentId: "gh-1" })
+      .where(eq(commentThreads.id, "thread-ai"))
+      .run();
+    const sent: Sent = [];
+    await runWalkthrough(db, (service) => service.supersedeAllForPr("pr-1", "head-2"), sent);
+    expect(sent).toEqual([]);
+    expect(
+      db
+        .select({ id: commentThreads.id, issueId: commentThreads.walkthroughIssueId })
+        .from(commentThreads)
+        .all(),
+    ).toEqual([{ id: "thread-ai", issueId: null }]);
   });
 });
 

@@ -16,6 +16,8 @@ import { walkthroughs } from "../../db/schema/walkthroughs";
 import { ImportError } from "../../domain/errors";
 import { debug } from "../../logger";
 import { DbService } from "../Db";
+import { Realtime } from "../Realtime";
+import { threadWrites } from "../Review";
 import type { WalkthroughSnapshotV2 } from "./cache-format";
 import { blockId, blockOrder, issueId, normalizeProviderConfig, semanticStepId } from "./content";
 import { validateSnapshot } from "./snapshot";
@@ -40,6 +42,7 @@ export const WalkthroughSnapshotImporterLive = Layer.effect(
   WalkthroughSnapshotImporter,
   Effect.gen(function* () {
     const { db } = yield* DbService;
+    const realtime = yield* Realtime;
     return WalkthroughSnapshotImporter.of({
       import: ({ walkthroughId, snapshot }) =>
         Effect.gen(function* () {
@@ -53,7 +56,7 @@ export const WalkthroughSnapshotImporterLive = Layer.effect(
             );
           }
 
-          yield* Effect.try({
+          const retiredThreads = yield* Effect.try({
             try: () =>
               db.transaction(() => {
                 // Only a `generating` row is filled: a complete one is immutable
@@ -74,6 +77,15 @@ export const WalkthroughSnapshotImporterLive = Layer.effect(
 
                 // Wipe any partial child rows so a re-imported snapshot doesn't
                 // collide with leftovers from an interrupted agent run.
+                const retired = threadWrites.retireAiThreads(
+                  db,
+                  db
+                    .select({ id: walkthroughIssues.id })
+                    .from(walkthroughIssues)
+                    .where(eq(walkthroughIssues.walkthroughId, walkthroughId))
+                    .all()
+                    .map((r) => r.id),
+                );
                 db.delete(walkthroughBlocks)
                   .where(eq(walkthroughBlocks.walkthroughId, walkthroughId))
                   .run();
@@ -202,6 +214,7 @@ export const WalkthroughSnapshotImporterLive = Layer.effect(
                     })
                     .run();
                 }
+                return retired;
               }),
             catch: (cause) =>
               new ImportError({
@@ -210,6 +223,10 @@ export const WalkthroughSnapshotImporterLive = Layer.effect(
                 cause,
               }),
           });
+
+          for (const { prId, envelopes } of retiredThreads) {
+            for (const msg of envelopes) yield* realtime.toPr(prId, msg);
+          }
 
           debug(
             "snapshot-importer",

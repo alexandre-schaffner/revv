@@ -621,18 +621,14 @@ export function upsertIssue(
 }
 
 /**
- * Delete a concern. Its inline-comment threads go with it by FK cascade; their
- * ids are returned so the deletions can be announced.
+ * Delete a concern. Its inline-comment threads are retired first (see
+ * `threadWrites.retireAiThreads`); the writes are returned for the caller to
+ * announce once committed.
  */
-export function deleteIssue(db: Db, id: string): string[] {
-  const threadIds = db
-    .select({ id: commentThreads.id })
-    .from(commentThreads)
-    .where(eq(commentThreads.walkthroughIssueId, id))
-    .all()
-    .map((t) => t.id);
+export function deleteIssue(db: Db, id: string): ThreadWrite<void>[] {
+  const retired = threadWrites.retireAiThreads(db, [id]);
   db.delete(walkthroughIssues).where(eq(walkthroughIssues.id, id)).run();
-  return threadIds;
+  return retired;
 }
 
 /** A block named by its position, as the agent addresses it. */

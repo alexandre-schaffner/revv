@@ -2,6 +2,7 @@ import type { IssueSeverity, WalkthroughIssue } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import type { Db } from "../../db";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
+import type { ThreadWrite } from "../../services/Review";
 import { decodeIssue, deleteIssue } from "../../services/walkthrough/content";
 import type { IssueCandidate, IssueJudgment, JudgmentSink } from "./contracts";
 
@@ -15,7 +16,7 @@ export function applyJudgment(
   sink: JudgmentSink,
 ): void {
   const now = new Date().toISOString();
-  let retractedThreads: string[] = [];
+  let retractedThreads: ThreadWrite<void>[] = [];
   let retractedIssue = false;
   let updated: WalkthroughIssue | null = null;
 
@@ -47,7 +48,7 @@ export function applyJudgment(
 
   if (retractedIssue) {
     sink.markRetracted(issueId);
-    for (const threadId of retractedThreads) sink.broadcastThread(threadId);
+    for (const msg of retractedThreads.flatMap((w) => w.envelopes)) sink.broadcastThread(msg);
     sink.emit({ type: "issue:deleted", data: { id: issueId } });
   } else if (updated !== null) {
     sink.emit({ type: "issue", data: updated });

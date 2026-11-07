@@ -72,8 +72,7 @@ export function makeWalkthroughRunContext(input: {
                   : Effect.sync(() =>
                       applyJudgment(db, walkthroughId, issueId, candidate, judgment, {
                         emit,
-                        broadcastThread: (threadId) =>
-                          broadcastThreadEvent({ type: "thread:deleted", data: { threadId } }),
+                        broadcastThread: broadcastThreadEvent,
                         markRetracted: judgments.markRetracted,
                       }),
                     ),
