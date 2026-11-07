@@ -3,7 +3,8 @@ import ArrowDown from "phosphor-svelte/lib/ArrowDown";
 import ArrowUp from "phosphor-svelte/lib/ArrowUp";
 import Star from "phosphor-svelte/lib/Star";
 import { isChatStreaming } from "$lib/chat/timeline.svelte";
-import GenActionBar, { type GenActionState } from "$lib/components/shared/GenActionBar.svelte";
+import GenActionBar from "$lib/components/shared/GenActionBar.svelte";
+import type { GenActionCopy, GenActionState } from "$lib/components/shared/gen-action";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import { getIsPullingCommit, reviewLatestCommit } from "$lib/review/pull-latest";
@@ -88,6 +89,15 @@ const selectedMode = $derived(getSelectedMode(prId));
 const hasUnreviewedCommits = $derived(getHasUnreviewedCommits(prId));
 const reviewNewCommitsLabel = "Review new commits";
 
+const GEN_COPY: GenActionCopy = {
+  regenerate: "Refresh this report using the current review as context",
+  stale: "Review only what changed since the last reviewed commit",
+  fromScratch: {
+    complete: "Generate a fresh review without using the prior report",
+    stale: "Generate a fresh review for the latest commit",
+  },
+};
+
 const genActionState = $derived.by((): GenActionState | null => {
   switch (walkthroughUiState.kind) {
     case "absent":
@@ -120,12 +130,10 @@ const genActionState = $derived.by((): GenActionState | null => {
 // the identity-derived session either way.
 const perspective = $derived({ value: selectedMode, options: WALKTHROUGH_PERSPECTIVE_OPTIONS });
 
-/** A streaming chat or a commit pull counts as an in-flight action, so the
- *  destructive buttons disable with a contextual tooltip. */
+/** A streaming chat or a commit pull blocks the destructive buttons, with a
+ *  contextual tooltip. */
 const pullingCommit = $derived(getIsPullingCommit(prId));
-const combinedPendingAction = $derived(
-  chatStreaming ? "chat" : pullingCommit ? "regenerate" : walkthroughPendingAction,
-);
+const combinedPendingAction = $derived(pullingCommit ? "regenerate" : walkthroughPendingAction);
 const combinedDisabledTitle = $derived(
   chatStreaming
     ? "Chat edit in progress. Wait for it to finish before regenerating."
@@ -170,6 +178,7 @@ function handleRegenerate(): void {
         uiState={genActionState}
         pendingAction={combinedPendingAction}
         disabledTitle={combinedDisabledTitle}
+        copy={GEN_COPY}
         onStop={() => abortWalkthrough(prId)}
         onResume={() => resumeWalkthrough(prId, selectedMode)}
         onGenerate={(next) => generateWalkthrough(prId, next ?? selectedMode)}
