@@ -658,13 +658,8 @@ function handleResume(): void {
 		color: var(--color-text-secondary);
 	}
 
-	/* Below the rail breakpoint the blocks stack with no gap between them,
-	   and the issues sit 20px above the blocks. */
+	/* Below the rail breakpoint the issues sit 20px above the blocks. */
 	@container review (max-width: 1335px) {
-		.blocks {
-			row-gap: 0;
-		}
-
 		.issues-section {
 			margin-bottom: 0;
 		}

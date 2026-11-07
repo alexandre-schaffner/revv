@@ -336,15 +336,13 @@ $effect(() => {
 		overflow-wrap: anywhere;
 	}
 
-	/* Rail items stack under their block (see review-columns.css). */
+	/* Rail items stack under their block (see review-columns.css), in rows of
+	   their own: an annotation reaches up into the blocks' row gap to sit
+	   10px under the block it annotates. */
 	@container review (max-width: 1335px) {
 		.block-annotation {
 			padding: 0;
-			margin-top: 10px;
-		}
-
-		.section-margin {
-			margin: 0 0 18px;
+			margin-top: -10px;
 		}
 	}
 </style>
