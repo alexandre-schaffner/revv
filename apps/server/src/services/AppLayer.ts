@@ -57,9 +57,11 @@ const ReviewServiceWithDeps = ReviewServiceLive.pipe(Layer.provide(RealtimeWithD
 
 const SettingsServiceWithDeps = SettingsServiceLive.pipe(Layer.provide(DbServiceLive));
 
+const AvatarCacheWithDeps = AvatarCacheLive.pipe(Layer.provide(DbServiceLive));
+
 const GitHubAccountsWithDeps = GitHubAccountsLive.pipe(
   Layer.provide(
-    Layer.mergeAll(DbServiceLive, SecretStoreLive, RealtimeWithDeps, SettingsServiceWithDeps),
+    Layer.mergeAll(DbServiceLive, SecretStoreLive, RealtimeWithDeps, AvatarCacheWithDeps),
   ),
 );
 
@@ -72,8 +74,6 @@ const GitHubGatewayWithDeps = GitHubGatewayLive.pipe(
 const ChatSessionServiceWithDeps = ChatSessionServiceLive.pipe(Layer.provide(DbServiceLive));
 
 const ExternalIntegrationsWithDeps = ExternalIntegrationsLive.pipe(Layer.provide(DbServiceLive));
-
-const AvatarCacheWithDeps = AvatarCacheLive.pipe(Layer.provide(DbServiceLive));
 
 const DiffCacheServiceWithDeps = DiffCacheServiceLive.pipe(
   Layer.provide(Layer.mergeAll(DbServiceLive, GitHubGatewayWithDeps, RealtimeWithDeps)),

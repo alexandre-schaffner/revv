@@ -1,13 +1,14 @@
 // Test support for the poll phases and PrMirror: a real GitHubAccounts and a
 // real PrMirror over an in-memory DB, with everything they talk to faked and
 // recorded. Imported by tests only.
-import { DEFAULT_USER_SETTINGS, type Repository, type ServerEventMessage } from "@revv/shared";
-import { type Context, Effect, Layer, Stream } from "effect";
+import type { Repository, ServerEventMessage } from "@revv/shared";
+import { type Context, Effect, Layer } from "effect";
 import { createDb, type Db } from "../db/index";
 import { account, user } from "../db/schema/auth";
 import { repositories } from "../db/schema/repositories";
 import { DbService } from "./Db";
 import { GitHubAccounts, GitHubAccountsLive } from "./github/accounts";
+import { AvatarCacheLive } from "./github/avatars";
 import { GitHubGateway } from "./github/gateway";
 import { PrMirror, PrMirrorLive } from "./PrMirror";
 import { PullRequestService, PullRequestServiceLive } from "./PullRequest";
@@ -15,7 +16,6 @@ import { Realtime } from "./Realtime";
 import { RepoCloneService } from "./RepoClone";
 import { RepositoryServiceLive } from "./Repository";
 import { SecretStore } from "./SecretStore";
-import { SettingsService } from "./Settings";
 import { StackService } from "./stacks/StackService";
 import { WalkthroughJobs } from "./WalkthroughJobs";
 
@@ -118,14 +118,6 @@ export async function makeHarness(
     getSecret: () => Effect.succeed(null),
     deleteSecret: () => Effect.void,
   });
-  const settings = Layer.succeed(SettingsService, {
-    getSettings: () => Effect.succeed(DEFAULT_USER_SETTINGS),
-    updateSettings: () => Effect.succeed(DEFAULT_USER_SETTINGS),
-    githubHost: () => Effect.succeed("github.com"),
-    watch: () => Stream.empty,
-    resolveAgent: () => Effect.succeed("opencode" as const),
-    resolveRecapAgent: () => Effect.succeed("opencode" as const),
-  } as unknown as Context.Service.Shape<typeof SettingsService>);
   const fakes = Layer.mergeAll(
     Layer.succeed(WalkthroughJobs, {
       supersedeForPr: (prId: string, exceptHeadSha?: string) =>
@@ -159,7 +151,14 @@ export async function makeHarness(
   );
   const layer = Layer.mergeAll(
     GitHubAccountsLive.pipe(
-      Layer.provide(Layer.mergeAll(dbLayer, realtime, secretStore, settings)),
+      Layer.provide(
+        Layer.mergeAll(
+          dbLayer,
+          realtime,
+          secretStore,
+          AvatarCacheLive.pipe(Layer.provide(dbLayer)),
+        ),
+      ),
     ),
     PrMirrorLive.pipe(Layer.provide(deps)),
     PullRequestServiceLive,

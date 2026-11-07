@@ -7,7 +7,7 @@ import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { apiErrorMessage } from "$lib/api/errors";
 import { reasonFor } from "$lib/prs/tagged-prs";
-import { getCurrentUserLogin, hasAttemptedIdentityLoad } from "$lib/stores/auth.svelte";
+import { getCurrentUserLogin, isIdentityLoaded } from "$lib/stores/auth.svelte";
 
 let pullRequests = $state<PullRequest[]>([]);
 // Set once `fetchPrs` has settled (success or failure). Lets callers tell
@@ -97,7 +97,7 @@ export function getTaggedPrs(repoId: string): PullRequest[] {
  * "nothing needs your attention" on every cold start.
  */
 export function getTaggedPrsResolved(): boolean {
-  return hasAttemptedIdentityLoad() && prsFetchAttempted;
+  return isIdentityLoaded() && prsFetchAttempted;
 }
 
 /**

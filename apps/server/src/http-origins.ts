@@ -11,12 +11,6 @@ const TAURI_ORIGINS = [
   "https://tauri.localhost",
 ] as const;
 
-export const AUTH_TRUSTED_ORIGINS = [
-  ...WEB_DEV_ORIGINS,
-  ...API_CHANNEL_ORIGINS,
-  ...TAURI_ORIGINS,
-] as const;
-
 export const CORS_ORIGINS = [
   ...WEB_DEV_ORIGINS,
   "http://[::1]:5173",

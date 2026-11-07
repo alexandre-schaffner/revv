@@ -1,10 +1,9 @@
 import { Effect } from "effect";
 import { RepoNotAccessibleError } from "../domain/errors";
-import { clientIdIsGitHubApp, resolveClientId } from "../github-oauth";
+import { GitHubAccounts } from "./github/accounts";
 import { GitHubGateway } from "./github/gateway";
 import type { AppInstallation } from "./github/repos";
 import type { GitHubClient } from "./github/transport";
-import { SettingsService } from "./Settings";
 
 /**
  * Explain an add-repo 404.
@@ -61,13 +60,13 @@ export function explainRepoNotFound(
 export const diagnoseRepoNotFound = (
   fullName: string,
   client: GitHubClient,
-): Effect.Effect<RepoNotAccessibleError, never, GitHubGateway | SettingsService> =>
+): Effect.Effect<RepoNotAccessibleError, never, GitHubGateway | GitHubAccounts> =>
   Effect.gen(function* () {
     const github = yield* GitHubGateway;
-    const settings = yield* Effect.flatMap(SettingsService, (s) => s.getSettings());
-    const signsInWithApp = yield* Effect.try(() =>
-      clientIdIsGitHubApp(resolveClientId(client.host, settings)),
-    ).pipe(Effect.orElseSucceed(() => false));
+    const accountId = client.accountId;
+    const signsInWithApp =
+      accountId !== null &&
+      (yield* Effect.flatMap(GitHubAccounts, (a) => a.signsInWithGitHubApp(accountId)));
     const installations = signsInWithApp
       ? yield* github.repos.appInstallationsForUser(client).pipe(Effect.orElseSucceed(() => null))
       : null;

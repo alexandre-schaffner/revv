@@ -7,11 +7,13 @@ export function loginsMatch(a: string | null | undefined, b: string | null | und
   return a.toLowerCase() === b.toLowerCase();
 }
 
-export type UserRole = "reviewer" | "coder" | "unknown";
-
+/** The signed-in local user and the GitHub account the request acts as (the active host's). */
 export interface UserIdentity {
+  id: string;
+  name: string;
+  email: string;
+  /** The active account's own GitHub login: who "me" is on that host. */
   login: string | null;
-  role: UserRole;
   /**
    * Base64 data URL resolved from `remote_users`: GitHub Enterprise avatar
    * URLs are signed and expire, so the raw URL is never sent.
@@ -32,6 +34,8 @@ export interface UserIdentity {
    */
   reauthRequired: boolean;
   host: string | null;
+  /** ISO time the user finished onboarding, or null. */
+  onboardedAt: string | null;
 }
 
 export interface Team {

@@ -29,7 +29,7 @@ export const externalIntegrationRoutes = new Elysia({ prefix: "/api/integrations
       Effect.flatMap(ExternalIntegrations, (integrations) =>
         integrations.connect({
           accountId: ctx.account.accountId,
-          userId: ctx.session.user.id,
+          userId: ctx.userId,
           provider,
         }),
       ),

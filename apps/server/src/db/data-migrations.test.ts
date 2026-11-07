@@ -149,3 +149,49 @@ describe("walkthrough end-reason migration", () => {
     db.$client.close();
   });
 });
+
+describe("account client_id migration", () => {
+  // Only the backfill: the column itself is already on a booted DB.
+  const backfill = readFileSync(
+    join(import.meta.dir, "migrations/0530_account_client_id.sql"),
+    "utf8",
+  )
+    .split("--> statement-breakpoint")
+    .at(-1);
+
+  it("gives accounts on the settings' GitHub Enterprise host the saved client ID, and no one else", () => {
+    const db = createDb(":memory:");
+    const columns = db.$client
+      .query(
+        "SELECT name, type, \"notnull\" AS required, dflt_value AS dflt FROM pragma_table_info('user_settings')",
+      )
+      .all() as Array<{ name: string; type: string; required: number; dflt: string | null }>;
+    const filled = columns.filter((c) => c.name !== "id" && c.required && c.dflt === null);
+    db.$client.run(
+      `INSERT INTO user_settings (id, github_host, github_client_id${filled.map((c) => `, ${c.name}`).join("")})
+       VALUES ('default', ' GHE.example.com ', 'Ov23byoclientid'${filled.map((c) => (c.type === "integer" ? ", 0" : ", ''")).join("")})`,
+    );
+    db.$client.run(
+      "INSERT INTO user (id, name, email, email_verified, created_at, updated_at) VALUES ('u', 'U', 'u@x', 1, 0, 0)",
+    );
+    const insert = (id: string, providerId: string) =>
+      db.$client.run(
+        "INSERT INTO account (id, account_id, provider_id, user_id, created_at, updated_at) VALUES (?, ?, ?, 'u', 0, 0)",
+        [id, id, providerId],
+      );
+    insert("ghe", "github:ghe.example.com");
+    insert("dotcom", "github:github.com");
+    insert("other", "github:other.example.com");
+
+    db.$client.run(backfill ?? "");
+
+    expect(
+      db.$client.query("SELECT id, client_id AS clientId FROM account ORDER BY id").all(),
+    ).toEqual([
+      { id: "dotcom", clientId: null },
+      { id: "ghe", clientId: "Ov23byoclientid" },
+      { id: "other", clientId: null },
+    ]);
+    db.$client.close();
+  });
+});

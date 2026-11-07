@@ -1,6 +1,8 @@
 import { Effect } from "effect";
 import { serverEnv } from "../../config";
-import { JEV_API_KEY_SECRET, SecretStore } from "../../services/SecretStore";
+import { SecretStore } from "../../services/SecretStore";
+
+const JEV_API_KEY_SECRET = "jev-api-key";
 
 /**
  * TypeSafe System One API key storage. Route modules can't import `SecretStore`

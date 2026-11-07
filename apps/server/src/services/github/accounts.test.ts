@@ -1,15 +1,15 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { DEFAULT_USER_SETTINGS, type ServerEventMessage, type UserSettings } from "@revv/shared";
+import type { ServerEventMessage } from "@revv/shared";
 import { eq } from "drizzle-orm";
-import { Effect, Layer, Stream } from "effect";
+import { Effect, Layer } from "effect";
 import { createDb, type Db } from "../../db/index";
 import { account, session, user } from "../../db/schema";
 import { GitHubRateLimitError } from "../../domain/errors";
 import { DbService } from "../Db";
 import { Realtime } from "../Realtime";
 import { SecretStore, type TokenPair } from "../SecretStore";
-import { SettingsService } from "../Settings";
 import { GitHubAccounts, GitHubAccountsLive } from "./accounts";
+import { AvatarCache } from "./avatars";
 import { githubClient } from "./transport";
 
 const HOST = "ghe.example.com";
@@ -49,20 +49,9 @@ function makeFakeHub() {
   return { layer, events };
 }
 
-const settings: UserSettings = {
-  ...DEFAULT_USER_SETTINGS,
-  githubHost: HOST,
-  githubClientId: "Iv1testclientid",
-};
-
-const settingsLayer = Layer.succeed(SettingsService, {
-  getSettings: () => Effect.succeed(settings),
-  updateSettings: () => Effect.succeed(settings),
-  settingsChanges: () => Stream.empty,
-  githubHost: () => Effect.succeed(HOST),
-  watch: () => Stream.empty,
-  resolveAgent: () => Effect.succeed("opencode" as const),
-  resolveRecapAgent: () => Effect.succeed("opencode" as const),
+const avatarLayer = Layer.succeed(AvatarCache, {
+  ensure: () => Effect.succeed({ id: null, changed: false }),
+  contents: () => Effect.succeed(new Map<string, string>()),
 });
 
 function seedAccount(
@@ -73,6 +62,7 @@ function seedAccount(
     accessTokenExpiresAt?: Date | null;
     refreshTokenExpiresAt?: Date | null;
     reauthRequiredAt?: Date | null;
+    clientId?: string | null;
   },
 ) {
   const now = new Date();
@@ -96,6 +86,7 @@ function seedAccount(
       accessTokenExpiresAt: opts.accessTokenExpiresAt ?? null,
       refreshTokenExpiresAt: opts.refreshTokenExpiresAt ?? null,
       reauthRequiredAt: opts.reauthRequiredAt ?? null,
+      clientId: opts.clientId === undefined ? "Iv1testclientid" : opts.clientId,
       createdAt: now,
       updatedAt: now,
     })
@@ -135,7 +126,7 @@ function run<A, E>(
 ): Promise<A> {
   const layer = GitHubAccountsLive.pipe(
     Layer.provide(
-      Layer.mergeAll(Layer.succeed(DbService, { db }), store.layer, hub.layer, settingsLayer),
+      Layer.mergeAll(Layer.succeed(DbService, { db }), store.layer, hub.layer, avatarLayer),
     ),
   );
   return Effect.runPromise(Effect.flatMap(GitHubAccounts, body).pipe(Effect.provide(layer)));
@@ -161,10 +152,11 @@ describe("GitHubAccounts.clientFor", () => {
     expect(calls.grant).toBe(0);
   });
 
-  it("refreshes a near-expiry token first, with the client ID saved for the host", async () => {
+  it("refreshes a near-expiry token first, with the client ID the token was issued to", async () => {
     const db = createDb(":memory:");
     seedAccount(db, {
       id: "acc",
+      clientId: "Iv1testclientid",
       accessTokenExpiresAt: new Date(Date.now() + 60_000),
       refreshTokenExpiresAt: new Date(Date.now() + HOUR),
     });
@@ -224,6 +216,20 @@ describe("GitHubAccounts.observer.unauthorized", () => {
     seedAccount(db, { id: "acc" });
     const store = makeFakeStore({ acc: { accessToken: "tok", refreshToken: null } });
     const calls = stubGitHub({ userStatus: 200 });
+
+    await run(db, store, makeFakeHub(), (a) =>
+      a.observer.unauthorized(githubClient(HOST, "tok", "acc")),
+    );
+
+    expect(calls.user).toBe(1);
+    expect(reauthAt(db, "acc")).toBeNull();
+  });
+
+  it("leaves the account alone when the probe can't reach a verdict", async () => {
+    const db = createDb(":memory:");
+    seedAccount(db, { id: "acc", refreshTokenExpiresAt: new Date(Date.now() + HOUR) });
+    const store = makeFakeStore({ acc: { accessToken: "tok", refreshToken: "r1" } });
+    const calls = stubGitHub({ userStatus: 403 });
 
     await run(db, store, makeFakeHub(), (a) =>
       a.observer.unauthorized(githubClient(HOST, "tok", "acc")),
@@ -353,6 +359,108 @@ describe("GitHubAccounts.signIn", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ id: "acc", accountId: "7", githubLogin: "octo" });
     expect(store.map.get("acc")).toEqual({ accessToken: "new", refreshToken: null });
+  });
+});
+
+describe("GitHubAccounts.signIn records the issuing client", () => {
+  it("stores the client ID, so the refresh grant doesn't depend on the active host", async () => {
+    const db = createDb(":memory:");
+    stubGitHub({ userStatus: 200 });
+    globalThis.fetch = ((orig) =>
+      (async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input instanceof Request ? input.url : input);
+        if (url.endsWith("/user/emails")) {
+          return new Response(JSON.stringify([{ email: "octo@example.com", primary: true }]));
+        }
+        return orig(input, init);
+      }) as unknown as typeof fetch)(globalThis.fetch);
+
+    await run(db, makeFakeStore(), makeFakeHub(), (a) =>
+      a.signIn({
+        host: HOST,
+        clientId: "Iv1byoclientid",
+        tokens: {
+          accessToken: "tok",
+          refreshToken: "r1",
+          accessTokenExpiresAt: null,
+          refreshTokenExpiresAt: null,
+        },
+        linkToUserId: null,
+      }),
+    );
+
+    expect(db.select().from(account).get()).toMatchObject({
+      clientId: "Iv1byoclientid",
+      scope: null,
+    });
+  });
+});
+
+describe("GitHubAccounts.viewerLogin", () => {
+  it("is the account's own login, not the user mirror's", async () => {
+    const db = createDb(":memory:");
+    seedAccount(db, { id: "acc" });
+    db.update(user).set({ githubLogin: "other-host-login" }).run();
+
+    const login = await run(db, makeFakeStore(), makeFakeHub(), (a) => a.viewerLogin("acc"));
+
+    expect(login).toBe("login-acc");
+  });
+});
+
+describe("GitHubAccounts.sessionUser", () => {
+  const seedSession = (db: Db, expiresAt: Date) => {
+    const now = new Date();
+    db.insert(session)
+      .values({ id: "s", token: "t", userId: "user-a", expiresAt, createdAt: now, updatedAt: now })
+      .run();
+  };
+  const expiry = (db: Db) => db.select().from(session).get()?.expiresAt.getTime() ?? 0;
+
+  it("extends a session used a day or more after it was last extended", async () => {
+    const db = createDb(":memory:");
+    seedAccount(db, { id: "a" });
+    seedSession(db, new Date(Date.now() + 2 * 24 * HOUR));
+
+    const userId = await run(db, makeFakeStore(), makeFakeHub(), (a) => a.sessionUser("t"));
+
+    expect(userId).toBe("user-a");
+    expect(expiry(db)).toBeGreaterThan(Date.now() + 29 * 24 * HOUR);
+  });
+
+  it("answers null for an expired session", async () => {
+    const db = createDb(":memory:");
+    seedAccount(db, { id: "a" });
+    seedSession(db, new Date(Date.now() - 1000));
+
+    const userId = await run(db, makeFakeStore(), makeFakeHub(), (a) => a.sessionUser("t"));
+
+    expect(userId).toBeNull();
+  });
+});
+
+describe("GitHubAccounts.migrateLegacyTokens", () => {
+  it("moves plaintext tokens into the store, nulls the columns, and is idempotent", async () => {
+    const db = createDb(":memory:");
+    seedAccount(db, { id: "acc-1" });
+    seedAccount(db, { id: "acc-2" });
+    db.update(account)
+      .set({ accessToken: "gho_plain", refreshToken: "ghr_plain" })
+      .where(eq(account.id, "acc-1"))
+      .run();
+    const store = makeFakeStore();
+
+    const [migrated, again] = await run(db, store, makeFakeHub(), (a) =>
+      Effect.all([a.migrateLegacyTokens, a.migrateLegacyTokens]),
+    );
+
+    expect([migrated, again]).toEqual([1, 0]);
+    expect(store.map.get("acc-1")).toEqual({ accessToken: "gho_plain", refreshToken: "ghr_plain" });
+    expect(store.map.has("acc-2")).toBe(false);
+    expect(db.select().from(account).where(eq(account.id, "acc-1")).get()).toMatchObject({
+      accessToken: null,
+      refreshToken: null,
+    });
   });
 });
 

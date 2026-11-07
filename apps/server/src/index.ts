@@ -2,7 +2,6 @@ import { cors } from "@elysiajs/cors";
 import { SPAN, SPAN_ATTR } from "@revv/shared/telemetry";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
-import { auth } from "./auth";
 import { serverEnv } from "./config";
 import { resolveDbPath } from "./db/index";
 import { watchDesktopParent } from "./desktop-parent";
@@ -120,7 +119,6 @@ const app = new Elysia()
         : { name: "Error", message: String(err) },
     );
   })
-  .mount(auth.handler)
   .use(chatRoute)
   .use(repoRoutes)
   .use(githubRoutes)

@@ -50,9 +50,11 @@ const EnvConfig = Config.all({
     Config.orElse(() => Config.Boolean("REV_DEBUG")),
     Config.withDefault(false),
   ),
-  // Escape hatch for dev/CI/containers; otherwise the secret is generated on
-  // first run and persisted under the app-data dir.
-  betterAuthSecret: Config.String("BETTER_AUTH_SECRET").pipe(Config.withDefault("")),
+  // Keys the encrypted-file token store (`SecretStore`) when the OS keyring is
+  // unavailable; otherwise a key is generated on first run under the app-data
+  // dir. The name is from when better-auth signed sessions with it: renaming it
+  // would make existing fallback stores unreadable.
+  secretStoreSecret: Config.String("BETTER_AUTH_SECRET").pipe(Config.withDefault("")),
   // `0` disables, `1` writes beside the DB, any other value is a file path.
   // Empty means "on in the dev channel only".
   githubLedger: Config.String("REVV_GITHUB_LEDGER").pipe(Config.withDefault("")),

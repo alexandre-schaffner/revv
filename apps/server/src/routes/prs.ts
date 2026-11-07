@@ -409,7 +409,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
         db
           .select({ prId: pinnedPullRequests.prId })
           .from(pinnedPullRequests)
-          .where(eq(pinnedPullRequests.userId, ctx.session.user.id))
+          .where(eq(pinnedPullRequests.userId, ctx.userId))
           .orderBy(pinnedPullRequests.createdAt)
           .all(),
       ).pipe(Effect.map((rows) => rows.map((r) => r.prId))),
@@ -421,10 +421,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     (ctx) =>
       runRoute(
         tryDb("pin PR", (db) =>
-          db
-            .insert(pinnedPullRequests)
-            .values({ userId: ctx.session.user.id, prId: ctx.body.prId })
-            .run(),
+          db.insert(pinnedPullRequests).values({ userId: ctx.userId, prId: ctx.body.prId }).run(),
         ).pipe(Effect.as({ success: true })),
       ),
     { body: t.Object({ prId: t.String() }) },
@@ -437,7 +434,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
           .delete(pinnedPullRequests)
           .where(
             and(
-              eq(pinnedPullRequests.userId, ctx.session.user.id),
+              eq(pinnedPullRequests.userId, ctx.userId),
               eq(pinnedPullRequests.prId, ctx.params.prId),
             ),
           )
