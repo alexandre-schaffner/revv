@@ -212,14 +212,9 @@ function onRightHandleDblClick(): void {
 			</div>
 		{/if}
 		<div class="main-content">
-			<!--
-				Re-mounts on every navigation so the page transition fires without
-				touching the persistent .main-content (hiding it would hide every
-				fixed chrome child). page-transitions.ts finds it by data-page-root
-				for Flip morphs.
-			-->
+			<!-- Re-mounts on every navigation so the page transition fires. -->
 			{#key page.url.pathname}
-				<div class="page-slot" data-page-root in:pageEnter>
+				<div class="page-slot" in:pageEnter>
 					{@render children()}
 				</div>
 			{/key}
