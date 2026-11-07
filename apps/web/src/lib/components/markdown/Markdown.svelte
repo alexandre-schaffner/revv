@@ -4,6 +4,7 @@ import type { HTMLAttributes } from "svelte/elements";
 import { isHighlighterReady } from "$lib/markdown/highlighter.svelte";
 import { prlensDiagrams } from "$lib/markdown/prlens-diagrams";
 import { createFadeRenderer, type MarkdownTrust, renderMarkdownBlocks } from "$lib/markdown/render";
+import { prefersReducedMotion } from "$lib/motion";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import { cn } from "$lib/utils";
 import { interceptExternalLinks } from "$lib/utils/open-external";
@@ -36,7 +37,9 @@ const renderFade = createFadeRenderer();
 const blocks = $derived.by(() => {
   // A render before Shiki loads holds plain `<pre>`; re-render once it has.
   void isHighlighterReady();
-  return fade ? [renderFade(source)] : renderMarkdownBlocks(source, trust);
+  return fade && !prefersReducedMotion()
+    ? [renderFade(source)]
+    : renderMarkdownBlocks(source, trust);
 });
 
 function handleClick(event: MouseEvent & { currentTarget: EventTarget & HTMLDivElement }): void {

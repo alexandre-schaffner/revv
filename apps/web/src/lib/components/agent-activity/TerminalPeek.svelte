@@ -20,6 +20,7 @@ let container: HTMLDivElement;
 let term: Terminal | null = null;
 let fit: FitAddon | null = null;
 let resizeObserver: ResizeObserver | null = null;
+let destroyed = false;
 
 const MAX_ROWS = 20;
 const FONT_SIZE = 12;
@@ -80,7 +81,7 @@ onMount(async () => {
   // Claim exactly the rows the content needs, so it scrolls only past MAX_ROWS.
   container.style.height = `${rows * ROW_PX + PADDING_PX}px`;
 
-  ({ term, fit } = await openXterm(container, {
+  const opened = await openXterm(container, {
     convertEol: true,
     disableStdin: true,
     cursorBlink: false,
@@ -88,7 +89,13 @@ onMount(async () => {
     lineHeight: LINE_HEIGHT,
     scrollback: 5000,
     theme: theme(container),
-  }));
+  });
+  // Collapsed while xterm was still loading.
+  if (destroyed) {
+    opened.term.dispose();
+    return;
+  }
+  ({ term, fit } = opened);
   refit();
   term.write(buildText());
   // The chat panel and the walkthrough column both resize.
@@ -104,6 +111,7 @@ $effect(() => {
 });
 
 onDestroy(() => {
+  destroyed = true;
   resizeObserver?.disconnect();
   term?.dispose();
   term = null;
