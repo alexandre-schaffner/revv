@@ -130,11 +130,7 @@ export function readStackFacts(
             )
             .orderBy(desc(walkthroughs.generatedAt))
             .all();
-    const finished = latestFinishedReviews(
-      db,
-      prIds,
-      new Map(layers.map((pr) => [pr.id, pr.perspective])),
-    );
+    const finished = latestFinishedReviews(db, prIds);
     const filesByPr = readCurrentHeadFiles(db, prIds);
 
     const tracked = new Map<number, TrackedLayer>();

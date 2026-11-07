@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { RecapStreamEvent, ServerEventMessage } from "@revv/shared";
+import { eq } from "drizzle-orm";
 import { Effect, Exit, Layer } from "effect";
 import { createDb, type Db } from "../../db/index";
 import { account, projectRecaps, repositories, user } from "../../db/schema";
@@ -113,6 +114,39 @@ describe("ProjectRecapJobs rerun", () => {
     );
     // Only the final cancel stops anything.
     expect(statuses).toEqual(["stopped"]);
+  });
+});
+
+describe("ProjectRecapJobs settle", () => {
+  it("ends a live run's stream on a row deleted under it without announcing a status", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+    const { layer, broadcasts } = recapJobs(db);
+
+    const streamed = await Effect.runPromise(
+      Effect.gen(function* () {
+        const jobs = yield* ProjectRecapJobs;
+        const recap = yield* jobs.requestRecap({
+          repoId: REPO_ID,
+          period: "daily",
+          intent: "manual",
+        });
+        if (!recap) throw new Error("a manual request always gets a row");
+        const events: RecapStreamEvent[] = [];
+        const sub = yield* jobs.subscribe(recap.recapId, (e) => void events.push(e));
+        if (!sub.found) throw new Error("the run should be live");
+        sub.flush();
+        db.delete(projectRecaps).where(eq(projectRecaps.id, recap.recapId)).run();
+        broadcasts.length = 0;
+        yield* jobs.cancel(recap.recapId);
+        return events;
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(streamed).toEqual([
+      { type: "error", data: { code: "NOT_FOUND", message: "This recap was deleted." } },
+    ]);
+    expect(broadcasts).toEqual([]);
   });
 });
 

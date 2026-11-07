@@ -52,7 +52,8 @@ export interface AgentAdapter {
   readonly launchNeedsCli: boolean;
   /** Credentials the adapter can use without the CLI installed (an auth file, an API key). */
   readonly hasCredentialsWithoutCli: () => boolean;
-  readonly authStatus: () => AgentAuthStatus;
+  /** Runs the vendor CLI's own status check, so it never blocks the event loop. */
+  readonly authStatus: () => Promise<AgentAuthStatus>;
   /** The ACP auth method to request from those the agent advertises. */
   readonly authMethod: (methods: readonly { readonly id: string }[]) => string | undefined;
   readonly listModels: () => Promise<AgentModelOption[]>;

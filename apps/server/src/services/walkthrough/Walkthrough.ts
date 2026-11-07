@@ -16,7 +16,7 @@ import type {
   WalkthroughStatus,
   WalkthroughTokenUsage,
 } from "@revv/shared";
-import { and, asc, desc, eq, inArray, ne, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, ne, type SQL } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import type { Db } from "../../db";
 import { account } from "../../db/schema/auth";
@@ -269,6 +269,15 @@ export class WalkthroughService extends Context.Service<
         readonly generationMode: WalkthroughGenerationMode;
         readonly resumeAttempts: number;
       }>,
+      DbError
+    >;
+
+    /**
+     * PRs holding a walkthrough not yet superseded at a head other than the
+     * PR's stored one, with that head: the supersedes a head move still owes.
+     */
+    readonly staleHeads: () => Effect.Effect<
+      ReadonlyArray<{ readonly prId: string; readonly headSha: string }>,
       DbError
     >;
 
@@ -713,6 +722,23 @@ export const WalkthroughServiceLive = Layer.effect(
             resumeAttempts: r.resumeAttempts,
           }));
         }),
+
+      staleHeads: () =>
+        dbTry("staleHeads", () =>
+          db
+            .selectDistinct({ prId: pullRequests.id, headSha: pullRequests.headSha })
+            .from(walkthroughs)
+            .innerJoin(pullRequests, eq(pullRequests.id, walkthroughs.pullRequestId))
+            .where(
+              and(
+                ne(walkthroughs.status, "superseded"),
+                isNotNull(pullRequests.headSha),
+                ne(walkthroughs.prHeadSha, pullRequests.headSha),
+              ),
+            )
+            .all()
+            .flatMap(({ prId, headSha }) => (headSha === null ? [] : [{ prId, headSha }])),
+        ),
 
       findResumable: (prId, mode) =>
         dbTry("findResumable", () => {

@@ -232,12 +232,6 @@ export class GitHubAccounts extends Context.Service<
      */
     readonly removeUser: (userId: string) => Effect.Effect<void, DbError>;
     readonly userProfile: (userId: string) => Effect.Effect<UserProfile | null, DbError>;
-    /**
-     * legacy-upgrade: plaintextTokens. Copy any plaintext tokens still in the
-     * `account.access_token` / `refresh_token` columns into the secure store,
-     * then null the columns. Idempotent. Resolves the number of accounts moved.
-     */
-    readonly migrateLegacyTokens: Effect.Effect<number, DbError>;
   }
 >()("GitHubAccounts") {}
 
@@ -269,6 +263,49 @@ export const GitHubAccountsLive = Layer.effect(
       secretStore
         .deleteTokens(accountId)
         .pipe(Effect.tap(() => Effect.sync(() => tokenCache.delete(accountId))));
+
+    // legacy-upgrade: plaintextTokens. Tokens still in the `account` columns
+    // move into the secure store while the layer is built, before anything
+    // can read a token. Idempotent.
+    const migrateLegacyTokens: Effect.Effect<number, DbError> = Effect.gen(function* () {
+      const rows = yield* dbTry("read plaintext tokens", () =>
+        db
+          .select({
+            id: account.id,
+            accessToken: account.accessToken,
+            refreshToken: account.refreshToken,
+          })
+          .from(account)
+          .all(),
+      );
+      let migrated = 0;
+      for (const r of rows) {
+        if (!r.accessToken && !r.refreshToken) continue;
+        yield* storeTokens(r.id, {
+          accessToken: r.accessToken ?? null,
+          refreshToken: r.refreshToken ?? null,
+        });
+        yield* dbTry("null plaintext tokens", () =>
+          db
+            .update(account)
+            .set({ accessToken: null, refreshToken: null, updatedAt: new Date() })
+            .where(eq(account.id, r.id))
+            .run(),
+        );
+        migrated++;
+      }
+      return migrated;
+    });
+    yield* migrateLegacyTokens.pipe(
+      Effect.tap((n) =>
+        Effect.sync(() => {
+          if (n > 0) logError("secret-store", `migrated ${n} GitHub token(s) into secure storage`);
+        }),
+      ),
+      Effect.catchTag("DbError", (e) =>
+        Effect.sync(() => logError("secret-store", `token migration failed: ${e.message}`)),
+      ),
+    );
 
     const readRow = (accountId: string) =>
       dbTry("read account", () =>
@@ -979,36 +1016,6 @@ export const GitHubAccountsLive = Layer.effect(
           .get(),
       ).pipe(Effect.map((row) => row ?? null));
 
-    const migrateLegacyTokens: Effect.Effect<number, DbError> = Effect.gen(function* () {
-      const rows = yield* dbTry("read plaintext tokens", () =>
-        db
-          .select({
-            id: account.id,
-            accessToken: account.accessToken,
-            refreshToken: account.refreshToken,
-          })
-          .from(account)
-          .all(),
-      );
-      let migrated = 0;
-      for (const r of rows) {
-        if (!r.accessToken && !r.refreshToken) continue;
-        yield* storeTokens(r.id, {
-          accessToken: r.accessToken ?? null,
-          refreshToken: r.refreshToken ?? null,
-        });
-        yield* dbTry("null plaintext tokens", () =>
-          db
-            .update(account)
-            .set({ accessToken: null, refreshToken: null, updatedAt: new Date() })
-            .where(eq(account.id, r.id))
-            .run(),
-        );
-        migrated++;
-      }
-      return migrated;
-    });
-
     return {
       clientFor,
       accountForUser,
@@ -1030,7 +1037,6 @@ export const GitHubAccountsLive = Layer.effect(
       disconnect,
       removeUser,
       userProfile,
-      migrateLegacyTokens,
     };
   }),
 );

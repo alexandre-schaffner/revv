@@ -11,7 +11,6 @@ import { logError } from "../../logger";
 import { withGitHubOrigin } from "../../observability/github-ledger/origin";
 import { DbService } from "../Db";
 import { makeStartJobMutex } from "../job-mutex";
-import { PrContextService } from "../PrContext";
 import { perspectiveOf } from "../walkthrough/perspective";
 import { WalkthroughJobs } from "../walkthrough/WalkthroughJobs";
 import { StackBriefJobs } from "./StackBriefJobs";
@@ -73,7 +72,6 @@ export const StackReviewServiceLive = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* DbService;
     const stacks = yield* StackService;
-    const prContext = yield* PrContextService;
     const walkthroughJobs = yield* WalkthroughJobs;
     const briefJobs = yield* StackBriefJobs;
     const scope = yield* Effect.scope;
@@ -200,7 +198,6 @@ export const StackReviewServiceLive = Layer.effect(
     const start = (prId: string, reviewScope: StackReviewScope) =>
       Effect.gen(function* () {
         const detail = yield* stacks.detail(prId);
-        const { accountId } = yield* prContext.readPr(prId);
         if (!detail) return yield* Effect.fail(new NotFoundError({ resource: "stack", id: prId }));
 
         const plan = planStackReview(detail.layers, reviewScope);
@@ -233,7 +230,6 @@ export const StackReviewServiceLive = Layer.effect(
                   repositoryId: detail.repositoryId,
                   stackNumber: detail.number,
                   prId,
-                  accountId,
                   status: "running",
                   layers: [...plan.queue],
                   awaiting: [...plan.watching],

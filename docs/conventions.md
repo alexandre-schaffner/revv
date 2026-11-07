@@ -95,7 +95,7 @@ plain callbacks (`emit`, `broadcastThreadEvent`, `runJudgment`) with `Effect.run
 are NOT violations — they are the interop boundary with Promise-based handlers. The rule is "no `runPromise` inside an Effect-returning
 method" — wrapping a callback that the caller will invoke later is fine.
 
-**Backlog.** [`E-007`](./conventions-backlog.md#e-007). [`E-001`, `E-002`](./conventions-backlog.md#closed) are closed.
+**Backlog.** None open. [`E-001`, `E-002`, `E-007`](./conventions-backlog.md#closed) are closed.
 
 <a id="effect-tagged-errors"></a>
 ### 2.3 Tagged errors live in `domain/errors.ts`

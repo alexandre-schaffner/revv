@@ -8,30 +8,15 @@ default sort.
 
 | Domain | Open | Severity mix |
 |---|---|---|
-| Server (Effect) | 1 | low |
+| Server (Effect) | 0 | — |
 | Server (layout) | 1 | low |
 | Web stores | 0 | — |
 | UI / motion | 1 | low |
-| **Total** | **3** | |
+| **Total** | **2** | |
 
 ---
 
 ## Open
-
-<a id="e-007"></a>
-### E-007 — `CacheService.getOrFetch` runs its fetcher with `Effect.runPromiseWith`
-
-**Rule violated:** [§2.2 — Stay inside Effect](./conventions.md#effect-stay-inside).
-
-**Where:** `apps/server/src/services/Cache.ts`, `getOrFetch`. The single-flight entry is a
-Promise started with `Effect.runPromiseWith(runtime)` over the caller's context, so joiners can
-await it and the fetch outlives an interrupted owner.
-
-**Fix shape.** Keep the in-flight map, but hold a `Deferred<Exit<T, E>>` per key, filled by the
-fetcher forked with `Effect.forkDetach`; joiners `Deferred.await` it. Same semantics (detached
-fetch, typed failures for every caller, the entry dropped on settle) without leaving Effect.
-
-**Severity:** Low.
 
 <a id="s-006"></a>
 ### S-006 — Feature files still flat beside (or instead of) a `services/<feature>/` folder
@@ -93,6 +78,7 @@ other dialog titles first.
 - E-004 — Wrapped all 7 raw Drizzle calls in Cache.ts with `Effect.try({ try, catch })`; added `DbError` to `domain/errors.ts`; updated service interface error channels from `never` to `DbError`
 - E-006 — DB-backed services (`Repository`, `PullRequest`, `Review`, `Walkthrough`, `WalkthroughSnapshotImporter`, `ProjectRecap`, `Cache`) capture `DbService` when their Layer is built; `effects/with-db.ts`, `tryDb` and the hand-written `provideService(DbService, …)` bridges are gone
 - E-005 — Wrapped all raw Drizzle calls in Cache.ts (7 sites, E-004), Review.ts (12 sites), and PullRequest.ts (2 sites) using the `dbTry` helper (failing with `DbError`); `Repository.ts` followed in round 2 (its `addRepo` no longer turns DB faults into `ValidationError`)
+- E-007 — `CacheService.getOrFetch` single-flights through `effects/keyed-single-flight.ts` (its `detach` option forks the fetch with `Effect.forkDetach`; joiners await its `Deferred`), no `Effect.runPromiseWith`
 - S-001 — Migrated `review.svelte.ts` per-PR view state from plain `Map` + `$state` mirrors to single reactive `$state` store (`store = $state({ entries: Map, activePrId })`); derived `getActiveTab`/`getActiveFilePath` from the active entry; all mutations follow reactive-Map idiom
 - S-002 — Audited chat.svelte.ts: all 42 Map/Set mutation sites consistently follow the reactive-Map idiom (§4.3); unifying to a single mutation surface is future refactoring, not a convention violation
 - S-003 — Created `RequestState<T>` tagged union in `stores/_types.ts`; migrated `review.svelte.ts` repo file state from enum + error string to `RequestState<RepoFileData>`; updated `ReviewLayout.svelte` consumer

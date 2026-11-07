@@ -195,17 +195,27 @@ export const ProjectRecapJobsLive = Layer.effect(
           ...(run?.context.modelUsed ? { modelUsed: run.context.modelUsed } : {}),
           ...(outcome.kind === "failed" ? { errorMessage: outcome.failure } : {}),
         });
-        const end = recapTerminalEvent({
-          id: recapId,
-          status,
-          errorMessage: outcome.kind === "failed" ? outcome.failure : null,
-        });
-        if (run && end) subscribers.fanOut(recapId, run.context, end);
-        if (!moved) return;
         const fresh = yield* recapService
           .getById(recapId)
           .pipe(Effect.catch(() => Effect.succeed(null)));
-        if (!fresh) return;
+        if (run) {
+          // A row this didn't move ends its run's streams on what it holds; a
+          // row deleted under its run (its repository was removed) still ends them.
+          const end = moved
+            ? recapTerminalEvent({
+                id: recapId,
+                status,
+                errorMessage: outcome.kind === "failed" ? outcome.failure : null,
+              })
+            : fresh
+              ? recapTerminalEvent(fresh)
+              : ({
+                  type: "error",
+                  data: { code: "NOT_FOUND", message: "This recap was deleted." },
+                } as const);
+          if (end) subscribers.fanOut(recapId, run.context, end);
+        }
+        if (!moved || !fresh) return;
         // completedAt and errorMessage go out even when null, so a client
         // cache drops the values of an earlier status.
         yield* realtime.toRepo(fresh.repositoryId, {

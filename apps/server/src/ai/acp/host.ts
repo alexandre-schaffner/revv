@@ -164,18 +164,16 @@ export function hostEnv(
   return env;
 }
 
-export function commandSucceeds(
+/** Whether `command` exits 0 within 5 seconds. */
+export async function commandSucceeds(
   command: string,
   args: readonly string[],
   env: Record<string, string>,
-): boolean {
+): Promise<boolean> {
   try {
-    execFileSync(command, args, {
-      encoding: "utf-8",
-      timeout: 5000,
-      stdio: ["ignore", "pipe", "ignore"],
-      env,
-    });
+    const pending = execFileAsync(command, [...args], { encoding: "utf-8", timeout: 5000, env });
+    pending.child.stdin?.end();
+    await pending;
     return true;
   } catch {
     return false;

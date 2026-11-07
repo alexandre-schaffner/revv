@@ -48,8 +48,8 @@ export function isAgentInstalled(id: AcpAgentId): boolean {
 }
 
 /** Whether the agent is signed in, in the context its subprocess will run in. */
-export function detectAgentAuth(id: AcpAgentId): boolean {
-  return agentAdapter(id).authStatus().authed;
+export async function detectAgentAuth(id: AcpAgentId): Promise<boolean> {
+  return (await agentAdapter(id).authStatus()).authed;
 }
 
 /** The interactive login argv with its binary resolved, or `null` when the agent needs none. */
@@ -69,12 +69,17 @@ export function invalidateAgentProbes(): void {
   forgetClaudeAuthProbe();
 }
 
-export function detectAgentStatus(): AgentStatusReport {
+export async function detectAgentStatus(): Promise<AgentStatusReport> {
   const agents = Object.fromEntries(
-    ACP_AGENT_IDS.map((id) => [
-      id,
-      { installed: isAgentInstalled(id), ...agentAdapter(id).authStatus() } satisfies AgentStatus,
-    ]),
+    await Promise.all(
+      ACP_AGENT_IDS.map(async (id) => [
+        id,
+        {
+          installed: isAgentInstalled(id),
+          ...(await agentAdapter(id).authStatus()),
+        } satisfies AgentStatus,
+      ]),
+    ),
   ) as Record<AcpAgentId, AgentStatus>;
   return { agents };
 }

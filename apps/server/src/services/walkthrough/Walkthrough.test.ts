@@ -4,6 +4,7 @@ import { Cause, type Context, Effect, Layer } from "effect";
 import { createDb, type Db } from "../../db/index";
 import {
   commentThreads,
+  pullRequests,
   reviewRounds,
   reviewSessions,
   walkthroughIssues,
@@ -388,6 +389,46 @@ describe("supersede", () => {
         .from(commentThreads)
         .all(),
     ).toEqual([{ id: "thread-ai", issueId: null }]);
+  });
+});
+
+describe("staleHeads", () => {
+  it("names each PR with a live row at a head other than its stored one", async () => {
+    const db = createDb(":memory:");
+    db.$client.run("PRAGMA foreign_keys = OFF");
+    const pr = (id: string, headSha: string | null) =>
+      db
+        .insert(pullRequests)
+        .values({
+          id,
+          repositoryId: "repo-1",
+          externalId: 1,
+          title: "t",
+          authorLogin: "a",
+          sourceBranch: "s",
+          targetBranch: "t",
+          url: "u",
+          headSha,
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+          fetchedAt: "2026-01-01T00:00:00Z",
+        })
+        .run();
+    pr("pr-1", "head-2");
+    pr("pr-2", "head-1");
+    pr("pr-3", null);
+    insertWalkthroughs(
+      db,
+      { id: "moved-a", status: "complete", mode: "reviewer" },
+      { id: "moved-b", status: "generating", mode: "author" },
+      { id: "current", status: "complete", prHeadSha: "head-2" },
+      { id: "retired", status: "superseded", pullRequestId: "pr-2", prHeadSha: "head-0" },
+      { id: "at-head", status: "complete", pullRequestId: "pr-2" },
+      { id: "no-head", status: "complete", pullRequestId: "pr-3" },
+    );
+    expect(await runWalkthrough(db, (service) => service.staleHeads())).toEqual([
+      { prId: "pr-1", headSha: "head-2" },
+    ]);
   });
 });
 

@@ -57,7 +57,7 @@ export const opencodeAdapter: AgentAdapter = {
   launchNeedsCli: true,
   hasCredentialsWithoutCli: () => false,
   // A local engine: nothing to sign in to.
-  authStatus: () => ({
+  authStatus: async () => ({
     authed: true,
     verified: true,
     authSource: "not-required",

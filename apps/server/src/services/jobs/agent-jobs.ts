@@ -18,6 +18,7 @@
 //     row over the budget fails (invariant 9). An attempt that can't be
 //     counted isn't run. It runs under the pipeline's own lock on the row
 //     (`exclusive`), so it can't race the pipeline's other decisions about it.
+//     So does a user Stop that finds no live run and settles the row itself.
 //   • The pipeline's `settle` writes the terminal status — only from
 //     `generating` — and announces it after the commit (invariant 8).
 
@@ -259,22 +260,40 @@ export const makeAgentJobs = <C, F>(
     const running = (id: string) =>
       Effect.map(Ref.get(registry), (map) => map.get(id)?.run ?? null);
 
-    const stop = (id: string, reason: StopReason): Effect.Effect<void> =>
+    const exclusive =
+      spec.exclusive ??
+      (<A, E>(id: string, effect: Effect.Effect<A, E>) =>
+        Effect.flatMap(resumeMutex.acquire(id), (mutex) => mutex.withPermits(1)(effect)));
+
+    const stopLive = (live: Live<C>, reason: StopReason): Effect.Effect<void> =>
       Effect.gen(function* () {
-        const live = (yield* Ref.get(registry)).get(id);
-        if (!live) {
-          if (reason === "user") yield* settle(id, { kind: "stopped" }, null);
-          return;
-        }
         live.stopReason ??= reason;
         if (!live.run.abort.signal.aborted) live.run.abort.abort(new Error(`Run ${reason}`));
         if (live.fiber) yield* Fiber.interrupt(live.fiber);
       });
 
-    const exclusive =
-      spec.exclusive ??
-      (<A, E>(id: string, effect: Effect.Effect<A, E>) =>
-        Effect.flatMap(resumeMutex.acquire(id), (mutex) => mutex.withPermits(1)(effect)));
+    const stop = (id: string, reason: StopReason): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const live = (yield* Ref.get(registry)).get(id);
+        if (live) return yield* stopLive(live, reason);
+        if (reason !== "user") return;
+        // A run launched while this waited for the lock is stopped outside
+        // it: the run's own exit may need the lock.
+        const launched = yield* exclusive(
+          id,
+          Effect.gen(function* () {
+            const now = (yield* Ref.get(registry)).get(id);
+            if (now) return now;
+            yield* settle(id, { kind: "stopped" }, null);
+            return null;
+          }),
+        );
+        if (launched) yield* stopLive(launched, reason);
+      }).pipe(
+        Effect.catchTag("DbError", (err) =>
+          Effect.sync(() => logError(spec.name, `stopping ${id} failed:`, err.message)),
+        ),
+      );
 
     const resumeDecision = (id: string): Effect.Effect<ResumeDecision, DbError> =>
       Effect.gen(function* () {

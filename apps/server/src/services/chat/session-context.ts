@@ -28,9 +28,11 @@ const slashCommandCache = new Map<string, ReadonlyArray<ChatSessionContext["comm
 /**
  * The menus for a PR. The plain read fires on every PR selection, so it
  * touches nothing: no GitHub call, no worktree, no agent spawn; it serves a
- * warm agent's commands or the cached ones. `warm` (composer focus) brings
- * the worktree up and the agent with it, and harvests the commands. Missing
- * pieces give empty menus, never an error.
+ * warm agent's commands or the cached ones, and missing pieces give empty
+ * menus. `warm` (composer focus) brings the worktree up and the agent with
+ * it, and harvests the commands; it needs GitHub, so an account that must
+ * sign in again refuses with `GitHubAuthError` (401 `GITHUB_AUTH_ERROR`).
+ * The web keeps the plain read's menus and warms again on the next focus.
  */
 export const resolveChatSessionContext = (prId: string, warm: boolean) =>
   Effect.gen(function* () {

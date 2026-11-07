@@ -5,7 +5,6 @@
 
 import { Cause, Effect } from "effect";
 import { type AgentLaunch, resolveAgentLaunch } from "../../ai/acp/agent-launch";
-import { projectlessAgentCwd } from "../../ai/acp/package-runner-dir";
 import { makeTurnSettle, type TurnSettle } from "../../ai/acp/run-turn";
 import type { McpAgentRunError } from "../../ai/providers/mcp-agent-acp";
 import type { SettingsService } from "../Settings";
@@ -65,7 +64,6 @@ export function runToolGatedTurn<C extends ToolGate>(input: {
   readonly purpose: "recap" | "brief";
   readonly turn: (agent: {
     readonly launch: AgentLaunch;
-    readonly workingDir: string;
     readonly calledAnyTool: () => boolean;
     readonly completion: TurnSettle;
   }) => Promise<McpAgentRunError>;
@@ -79,7 +77,6 @@ export function runToolGatedTurn<C extends ToolGate>(input: {
     const error = yield* Effect.promise(() =>
       input.turn({
         launch,
-        workingDir: projectlessAgentCwd(),
         calledAnyTool: () => run.context.calledAnyTool,
         completion: run.context.completion,
       }),

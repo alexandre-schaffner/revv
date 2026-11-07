@@ -418,7 +418,7 @@ export async function runAcpTurn(
     const early = turn.ended();
     if (early) return early;
     if (err instanceof AgentNotLaunchable) return { kind: "not_configured", message: err.message };
-    return { kind: "failed", failure: agentTurnFailure(launch.agent, err) };
+    return { kind: "failed", failure: await agentTurnFailure(launch.agent, err) };
   } finally {
     turn.dispose();
     release();
