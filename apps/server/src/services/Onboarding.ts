@@ -141,7 +141,7 @@ export const OnboardingServiceLive = Layer.effect(
     };
 
     return {
-      detectAgentStatus: () => Effect.sync(detectAgentStatus),
+      detectAgentStatus: () => Effect.promise(detectAgentStatus),
 
       startInstall: (agent) => Effect.sync(() => jobs.start(agent, () => ({}), spawnInstall)),
 

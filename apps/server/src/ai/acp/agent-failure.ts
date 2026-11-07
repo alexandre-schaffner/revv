@@ -60,16 +60,16 @@ function notLoggedInMessage(agent: AcpAgentId): string {
  * @param isLoggedIn Test seam; production leaves it at `detectAgentAuth`,
  * which probes in the same `CLAUDE_CONFIG_DIR` the failing spawn used.
  */
-export function agentFailureGuidance(
+export async function agentFailureGuidance(
   agent: AcpAgentId,
   rawMessage: string,
-  isLoggedIn: (agent: AcpAgentId) => boolean = detectAgentAuth,
-): string | null {
+  isLoggedIn: (agent: AcpAgentId) => Promise<boolean> = detectAgentAuth,
+): Promise<string | null> {
   if (!looksLikeAuthFailure(rawMessage)) return null;
 
   const keychainAuth = getAgentKeychainAuth(agent);
 
-  if (!isLoggedIn(agent)) {
+  if (!(await isLoggedIn(agent))) {
     const fallbackHint = keychainAuth ? `\n\nAlready signed in? ${keychainAuth.remediation}` : "";
     return `${notLoggedInMessage(agent)}${fallbackHint}`;
   }
@@ -89,11 +89,14 @@ export interface AgentTurnFailure {
   readonly cause: unknown;
 }
 
-export function agentTurnFailure(agent: AcpAgentId, err: unknown): AgentTurnFailure {
+export async function agentTurnFailure(
+  agent: AcpAgentId,
+  err: unknown,
+): Promise<AgentTurnFailure> {
   const raw = err instanceof Error ? err.message : String(err);
   const auth =
     (err instanceof RequestError && err.code === ACP_AUTH_REQUIRED) || looksLikeAuthFailure(raw);
-  const guidance = agentFailureGuidance(agent, raw);
+  const guidance = await agentFailureGuidance(agent, raw);
   return {
     kind: auth ? "auth" : "other",
     message: guidance ? `${raw}\n\n${guidance}` : raw,

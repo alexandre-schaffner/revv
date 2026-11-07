@@ -128,7 +128,7 @@ export const AgentLoginServiceLive = Layer.effect(
         // The CLI just wrote credentials to disk — drop the cached PATH/auth
         // probe so the re-check sees them.
         invalidateAgentProbes();
-        const success = detectAgentAuth(job.agentId);
+        const success = await detectAgentAuth(job.agentId);
         if (success) {
           broadcast({ type: "done", success: true });
         } else {

@@ -1,7 +1,8 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { clampThinkingEffort, type ThinkingEffort } from "@revv/shared";
 import { serverEnv } from "../../../config";
 import { HOST_PROBE_TTL_MS, hostEnv, resolveCommandPath } from "../host";
@@ -14,6 +15,8 @@ import {
   firstAuthMethod,
   NOT_SIGNED_IN,
 } from "./types";
+
+const execFileAsync = promisify(execFile);
 
 // Revv tier → `CLAUDE_CODE_EFFORT_LEVEL`. Effort controls adaptive reasoning on
 // every model Revv offers (`MAX_THINKING_TOKENS` only applies to a fixed
@@ -46,19 +49,20 @@ let subscriptionProbe: { value: boolean; expiresAt: number } | null = null;
  * enough: logout can leave files and Keychain records behind while launches
  * fail with "Authentication required".
  */
-function probeSubscription(): boolean {
+function subscriptionStatusCommand() {
+  const env = claudeProcessEnv(hostEnv(), "status", { subscriptionVerified: false });
+  delete env.ANTHROPIC_API_KEY;
+  delete env.ANTHROPIC_AUTH_TOKEN;
+  return { file: bin() ?? "claude", args: ["auth", "status", "--json"], env };
+}
+
+function recordSubscription(out: string | null): boolean {
   let value = false;
   try {
-    const env = claudeProcessEnv(hostEnv(), "status", { subscriptionVerified: false });
-    delete env.ANTHROPIC_API_KEY;
-    delete env.ANTHROPIC_AUTH_TOKEN;
-    const out = execFileSync(bin() ?? "claude", ["auth", "status", "--json"], {
-      encoding: "utf-8",
-      timeout: 5000,
-      stdio: ["ignore", "pipe", "ignore"],
-      env,
-    }).trim();
-    value = !out || (JSON.parse(out) as { loggedIn?: unknown }).loggedIn === true;
+    const trimmed = out?.trim() ?? null;
+    value =
+      trimmed !== null &&
+      (!trimmed || (JSON.parse(trimmed) as { loggedIn?: unknown }).loggedIn === true);
   } catch {
     value = false;
   }
@@ -66,10 +70,38 @@ function probeSubscription(): boolean {
   return value;
 }
 
-/** The spawn path reads the last probe while it is fresh: it runs on the event loop. */
+async function probeSubscription(): Promise<boolean> {
+  const { file, args, env } = subscriptionStatusCommand();
+  try {
+    const pending = execFileAsync(file, args, { encoding: "utf-8", timeout: 5000, env });
+    pending.child.stdin?.end();
+    return recordSubscription((await pending).stdout);
+  } catch {
+    return recordSubscription(null);
+  }
+}
+
+/**
+ * The last probe while it is fresh. `processEnv` and `hasCredentialsWithoutCli`
+ * answer synchronously (the spawn env is built synchronously, and "installed"
+ * is read by synchronous callers), so a stale or cold cache probes here with
+ * `execFileSync`; `authStatus` refreshes the cache without blocking.
+ */
 function subscriptionVerifiedCached(): boolean {
   if (subscriptionProbe && Date.now() < subscriptionProbe.expiresAt) return subscriptionProbe.value;
-  return probeSubscription();
+  const { file, args, env } = subscriptionStatusCommand();
+  try {
+    return recordSubscription(
+      execFileSync(file, args, {
+        encoding: "utf-8",
+        timeout: 5000,
+        stdio: ["ignore", "pipe", "ignore"],
+        env,
+      }),
+    );
+  } catch {
+    return recordSubscription(null);
+  }
 }
 
 export function forgetClaudeAuthProbe(): void {
@@ -82,24 +114,27 @@ export function forgetClaudeAuthProbe(): void {
  * service name: an isolated dir's item has an unpublished suffix, so a miss
  * here only makes the wording less precise.
  */
-function subscriptionHint(): boolean {
+async function subscriptionHint(): Promise<boolean> {
   if (process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) return true;
   const dir = resolveClaudeConfigDir() ?? join(homedir(), ".claude");
   if (existsSync(join(dir, ".credentials.json"))) return true;
   try {
     // Existence probe only (no `-w`): it doesn't print the secret.
-    execFileSync("security", ["find-generic-password", "-s", "Claude Code-credentials"], {
-      timeout: 3000,
-      stdio: "ignore",
-    });
+    const pending = execFileAsync(
+      "security",
+      ["find-generic-password", "-s", "Claude Code-credentials"],
+      { timeout: 3000 },
+    );
+    pending.child.stdin?.end();
+    await pending;
     return true;
   } catch {
     return false;
   }
 }
 
-function authStatus(): AgentAuthStatus {
-  const verified = probeSubscription();
+async function authStatus(): Promise<AgentAuthStatus> {
+  const verified = await probeSubscription();
   const apiCredentials = apiCredentialsConfigured();
   if (verified) {
     return {
@@ -114,7 +149,7 @@ function authStatus(): AgentAuthStatus {
         : null,
     };
   }
-  const hint = subscriptionHint();
+  const hint = await subscriptionHint();
   if (apiCredentials) {
     return {
       authed: true,

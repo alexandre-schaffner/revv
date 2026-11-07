@@ -23,8 +23,8 @@ function credentialFileExists(): boolean {
   ].some((p) => existsSync(p));
 }
 
-function authStatus(): AgentAuthStatus {
-  const verified = commandSucceeds(
+async function authStatus(): Promise<AgentAuthStatus> {
+  const verified = await commandSucceeds(
     resolveCommandPath("cursor-agent") ?? "cursor-agent",
     ["status"],
     hostEnv(),

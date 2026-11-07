@@ -56,10 +56,10 @@ function loggedIn(): boolean {
   return existsSync(join(home, "auth.json"));
 }
 
-function authStatus(): AgentAuthStatus {
+async function authStatus(): Promise<AgentAuthStatus> {
   const hasLogin = loggedIn();
   const hasApiKey = !!process.env.OPENAI_API_KEY?.trim();
-  const verified = commandSucceeds(bin() ?? "codex", ["login", "status"], hostEnv());
+  const verified = await commandSucceeds(bin() ?? "codex", ["login", "status"], hostEnv());
   if (hasLogin && hasApiKey) {
     return {
       authed: true,
