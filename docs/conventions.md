@@ -561,17 +561,21 @@ declaring the interface of a route's response.
 ## 5. UI & Motion Conventions
 
 The motion rules in CLAUDE.md are the authoritative summary. This section restates them with
-examples and records the decision on the onboarding's parallel motion scale (see §5.2).
+examples and records the decision on the onboarding's former parallel motion scale (see §5.2).
 
 <a id="motion-tokens"></a>
 ### 5.1 Use canonical motion tokens, never hand-typed values
 
 **Rule.** All `transition` and `animation` durations come from the `@theme` block in
-`apps/web/src/app.css`:
+`apps/web/src/app.css` (`src/lib/motion/tokens.ts` is generated from it):
 
+- `--duration-instant: 80ms` — hover, focus rings, micro-state
 - `--duration-snap: 120ms` — chevrons, badges, small surfaces
 - `--duration-quick: 160ms` — default UI motion
 - `--duration-smooth: 220ms` — panels, sidebars, larger reveals
+- `--duration-slow: 320ms` — dialogs, sheets, big surfaces
+- `--duration-page: 480ms` — route / shared-element morphs
+- `--duration-pulse: 1400ms` — decorative infinite loops
 - *(ceremonial tier — see §5.2)*
 
 Easings come from:
@@ -580,17 +584,22 @@ Easings come from:
 - `--ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1)` — enter / appearance
 - `--ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1)` — enter without the snap, for motion the eye follows end to end (a hover lift, cards being dealt)
 - `--ease-standard: cubic-bezier(0.22, 0.61, 0.36, 1)` — walkthrough chapters
+- `--ease-anticipate: cubic-bezier(0.68, -0.55, 0.27, 1.55)` — playful overshoot, reserved for delight moments
 
-Reference them in CSS as `var(--duration-quick) var(--ease-out-expo)` or via Tailwind
-utilities (`duration-quick`, `ease-out-expo`). No literal `cubic-bezier(...)`, no
-`220ms`/`300ms`/`0.55s` magic numbers, no `ease-in` shorthand.
+Entrances, exits and interaction motion go through `$lib/motion` (GSAP). A CSS `transition`
+is fine for a state change the browser can crossfade (hover colours, a handle widening, a
+panel sliding to a new resting place) as long as it uses these tokens. Reference them in CSS as
+`var(--duration-quick) var(--ease-out-expo)` or via Tailwind utilities (`duration-quick`,
+`ease-out-expo`). No literal `cubic-bezier(...)`, no `220ms`/`300ms`/`0.55s` magic numbers, no
+`ease-in` shorthand.
 
 **Why.** The motion language is a shipped product surface. Bespoke easings drift away from the
 brand voice; bespoke durations make screens feel uneven. Canonical tokens also collapse
 correctly under `prefers-reduced-motion` (see CLAUDE.md).
 
-**Canonical example.** `apps/web/src/lib/components/layout/Sidebar.svelte:605–608` uses
-`transition: opacity var(--duration-quick) var(--ease-out-expo) 60ms, transform var(--duration-quick) var(--ease-out-expo) 60ms`.
+**Canonical example.** The sidebar resize handle in `apps/web/src/lib/components/layout/AppShell.svelte`
+(`.resize-handle::after`) uses
+`transition: width var(--duration-snap) var(--ease-soft), left var(--duration-snap) var(--ease-soft), background-color var(--duration-snap) var(--ease-soft)`.
 
 **Anti-pattern.** IssueCard's old entrance (closed as M-029):
 `animation: issue-card-enter 0.55s cubic-bezier(0.22, 0.61, 0.36, 1) both;` — both the
@@ -605,18 +614,16 @@ duration has no canonical equivalent.
 **Rule.** Onboarding's deliberately slow, theatrical motion uses three ceremonial tokens added
 to the SAME `@theme` block in `app.css`:
 
-- `--duration-ceremonial-quick: 280ms` — current `--ob-dur-quick`
-- `--duration-ceremonial-medium: 480ms` — current `--ob-dur-medium`
-- `--duration-ceremonial-slow: 720ms` — current `--ob-dur-slow`
+- `--duration-ceremonial-quick: 280ms`
+- `--duration-ceremonial-medium: 480ms`
+- `--duration-ceremonial-slow: 720ms`
 
-The eases reuse the existing canonical tokens (`--ease-out-expo` and `--ease-standard` are
-already byte-identical to the onboarding's `--ob-ease-out` and `--ob-ease` respectively).
+The eases reuse the canonical tokens (`--ease-out-expo`, `--ease-standard`). The onboarding's
+old parallel `--ob-dur-*` / `--ob-ease*` scale is retired; the `--ob-*` variables left in
+`OnboardingShell.svelte` are its colour palette.
 
-The parallel `--ob-*` scale in `apps/web/src/lib/components/onboarding/OnboardingShell.svelte:144–148`
-is retired. Onboarding components migrate to the ceremonial tokens.
-
-**Why.** A parallel scale was tried and failed: `--ob-*` exists, but most onboarding components
-hand-type unrelated values (`800ms`, `1200ms`, `760ms`, `540ms`, `600ms`) that don't reference
+**Why.** A parallel scale was tried and failed: `--ob-*` existed, but most onboarding components
+hand-typed unrelated values (`800ms`, `1200ms`, `760ms`, `540ms`, `600ms`) that don't reference
 the scale at all. Folding ceremonial into the main scale gives a single source of truth and
 removes the temptation to mix-and-match.
 
@@ -629,14 +636,14 @@ no observable benefit. The eases are already shared; only the durations needed a
 slow and intentional — empty-state illustrations, success-celebration moments, hero reveals.
 They are not a fallback for "I want this longer" — that's almost always `--duration-smooth`.
 
-**Canonical example.** Will exist once the §5.2 fix PR lands. Today, the closest legal
-approximation is `apps/web/src/lib/components/onboarding/StepRepo.svelte:531` which uses the
-canonical `var(--duration-smooth, ...) var(--ease-out-expo, ...)` with literal fallbacks — the
-fallbacks are violations, but the primary reference is correct.
+**Canonical example.** `apps/web/src/lib/components/onboarding/OnboardingShell.svelte` reveals
+each step's title with `gsapEnter` at `tokens.ceremonialSlow`; in CSS,
+`review/spec-panel/RatingsFooter.svelte` runs its bump at
+`var(--duration-ceremonial-medium) var(--ease-out-expo)`.
 
-**Anti-pattern.** `apps/web/src/lib/components/onboarding/StepDone.svelte:73, 96`:
-`animation: scene-in 800ms cubic-bezier(...)`, `animation: fin-in 1200ms cubic-bezier(...) 600ms backwards`.
-Hand-typed durations that match no token, in the same file as 1200ms which also matches none.
+**Anti-pattern.** Hand-typed durations that match no token, such as onboarding's old
+`animation: fin-in 1200ms cubic-bezier(...) 600ms backwards` in `StepDone.svelte` (since moved to
+`gsapEnter` with `tokens.ceremonialSlow`).
 
 **Backlog.** [`M-008`](./conventions-backlog.md#m-008) through
 [`M-014`](./conventions-backlog.md#m-014).
