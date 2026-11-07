@@ -1,10 +1,10 @@
 <script lang="ts">
 import PencilLine from "phosphor-svelte/lib/PencilLine";
+import { baseName, type ChangedAbove, type StackPlace } from "$lib/stacks/stack-margin";
 import { plural } from "$lib/utils/plural";
 import Joined from "./Joined.svelte";
 import LayerChip from "./LayerChip.svelte";
 import MarginNote from "./MarginNote.svelte";
-import { baseName, type ChangedAbove, type StackPlace } from "./stack-margin";
 
 interface Props {
   note: ChangedAbove;

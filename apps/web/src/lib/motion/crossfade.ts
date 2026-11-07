@@ -3,7 +3,6 @@ import { gsap } from "./gsap";
 import { prefersReducedMotion } from "./reduced-motion";
 import { tokens } from "./tokens";
 
-/** The crossfade holding the page (root class, frozen glass). A newer one takes it over. */
 let holder: symbol | null = null;
 
 const CROSSFADE = "document-crossfade";
@@ -99,7 +98,6 @@ export async function crossfadeDocument(update: () => void | Promise<void>): Pro
 
 type Look = Readonly<Record<string, string | number>>;
 
-/** A look change on its way in. */
 interface Turn {
   /** Put the end state up now, started or not. Idempotent. */
   land(): void;

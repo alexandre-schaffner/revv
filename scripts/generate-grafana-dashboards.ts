@@ -1,11 +1,12 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: Grafana expands these template variables at query time.
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { COLLECTOR_PORT } from "../packages/shared/src/constants";
 
 // Provisioned dashboards are generated from the collector's field contract.
 // Run this after changing panels; the generated JSON is checked in alongside it.
 const datasource = { type: "yesoreyeram-infinity-datasource", uid: "revv-sessions" };
-const base = "http://host.docker.internal:45680/api/";
+const base = `http://host.docker.internal:${COLLECTOR_PORT}/api/`;
 const range = "from=${__from}&to=${__to}&service=${service:percentencode}";
 type Column = { selector: string; text: string; type: string };
 const col = (selector: string, text = selector, type = "string"): Column => ({

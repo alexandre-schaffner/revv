@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { GitHubStack, GitHubStackLayer } from "./map";
-import { planStackRebase } from "./rebase-plan";
+import type { GitHubStack, GitHubStackLayer } from "../github/stacks";
 import { membershipAfterRetarget } from "./unverified-github";
 
 function layer(position: number, over: Partial<GitHubStackLayer> = {}): GitHubStackLayer {
@@ -42,12 +41,6 @@ const stackOf = (layers: readonly GitHubStackLayer[], number = 7): GitHubStack =
 
 describe("membershipAfterRetarget", () => {
   const before = stackOf([layer(1, { status: "merged" }), layer(2), layer(3)]);
-  const planned = planStackRebase(before);
-  const retarget = planned.ok ? planned.plan.retarget : null;
-
-  test("the rebase retargets the layer above a merged bottom", () => {
-    expect(retarget).toBe(102);
-  });
 
   test("the retargeted layer still in its stack is no contradiction", () => {
     const after = stackOf([

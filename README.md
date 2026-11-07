@@ -156,7 +156,7 @@ cd revv
 make dev
 ```
 
-Already have the toolchain? Run `bun install` followed by `make dev`. No `.env` setup is required for the default flow: the GitHub OAuth app is bundled, and the local auth secret is generated on first launch.
+Already have the toolchain? Run `bun install` followed by `make dev`. No `.env` setup is required for the default flow: the GitHub OAuth app is bundled, and tokens live in the macOS keychain.
 
 `make dev` uses a separate development database and API port (`45679`), alongside the frontend at `5173`, so it can run beside an installed Revv instance.
 
@@ -180,7 +180,7 @@ make dist             # build the macOS app bundle
 bun run typecheck && bun run lint && bun run knip && bun run build
 ```
 
-Read the [agent and contributor guide](AGENTS.md), [code conventions](docs/conventions.md), and [product roadmap](docs/prds/README.md) before making changes. Open pull requests against `main`.
+Read the [agent and contributor guide](CLAUDE.md), [code conventions](docs/conventions.md), and [product roadmap](docs/prds/README.md) before making changes. Open pull requests against `main`.
 
 </details>
 

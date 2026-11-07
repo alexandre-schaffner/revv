@@ -22,8 +22,8 @@ export interface StepperChapter {
 </script>
 
 <script lang="ts">
+import ToolCallTicker from "$lib/components/agent-activity/ToolCallTicker.svelte";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix/index.js";
-import { gsapFadeY, tokens } from "$lib/motion";
 
 /**
  * The walkthrough's chapter index. While generating, the active cell carries
@@ -43,8 +43,13 @@ interface Props {
 let { chapters, activeId, isStreaming, toolCalls, onjump }: Props = $props();
 
 const activeIndex = $derived(chapters.findIndex((c) => c.id === activeId));
-
-const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
+const tickerRows = $derived(
+  toolCalls.map(({ step, ordinal }) => ({
+    key: ordinal,
+    label: step.toolName,
+    detail: step.summary,
+  })),
+);
 </script>
 
 <div
@@ -85,19 +90,7 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 					<div class="chapter-active-row">
 						<Dotmatrix variant={chapter.spinner} {active} />
 						{#if toolCalls.length > 0}
-							<div class="chapter-tool-calls">
-								{#each toolCalls.slice(-2) as { step, ordinal }, row (ordinal)}
-									<div
-										class="chapter-tool-call"
-										style="top: {row * TOOL_CALL_ROW_H}px"
-										in:gsapFadeY={{ y: TOOL_CALL_ROW_H, duration: tokens.smooth }}
-										out:gsapFadeY={{ y: -TOOL_CALL_ROW_H, duration: tokens.quick }}
-									>
-										<span class="chapter-tool-call-tool">{step.toolName}</span>
-										<span class="chapter-tool-call-desc">{step.summary}</span>
-									</div>
-								{/each}
-							</div>
+							<ToolCallTicker rows={tickerRows} />
 						{:else}
 							<span class="chapter-active-blurb">{chapter.activeBlurb}</span>
 						{/if}
@@ -122,13 +115,6 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 </div>
 
 <style>
-	/* ── Chapters stepper ────────────────────────────────────────────────
-	   One cell per chapter, side by side. Active cell: 2px accent top rule, italic
-	   serif eyebrow, big serif title, body row of {dot-matrix spinner +
-	   "reading" verb + live mono file path}. Past/queued cells: same title
-	   with a static blurb under it — no "done" affordance, just absence of
-	   the active treatment. */
-
 	.chapter-stepper {
 		display: grid;
 		grid-template-columns: repeat(var(--chapter-count, 4), minmax(0, 1fr));
@@ -136,10 +122,6 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 	}
 
 	.chapter-cell {
-		/* Reset button defaults — the cell is rendered as a <button> so it can
-		   participate in tab order and fire onclick when clickable. Inheriting
-		   the surrounding type styles keeps the visual output identical to the
-		   prior <div>-based markup. */
 		appearance: none;
 		background: transparent;
 		border: none;
@@ -189,11 +171,8 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 		opacity: 0.35;
 	}
 
-	/* ── Navigation mode (post-streaming) ─────────────────────────────────
-	   Once generation finishes, the stepper persists as a chapter index for
-	   quick jumps to any section. Chapters whose content was written get a
-	   highlighted top rule + clickable hover/focus treatment; chapters that
-	   never wrote (e.g., generation aborted before Phase D) stay muted. */
+	/* Once generation finishes the stepper stays as a chapter index; chapters
+	   that never wrote (generation aborted early) stay muted. */
 
 	.chapter-cell--available {
 		border-top-color: var(--color-accent);
@@ -207,9 +186,6 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 		cursor: pointer;
 	}
 
-	/* Done cells (already-completed phases during streaming) drop to 0.5
-	   opacity by default to read as "past." Bump opacity on hover so the
-	   click affordance is unambiguous when the user reaches for one. */
 	.chapter-cell--clickable.chapter-cell--done:hover :is(.chapter-eyebrow, .chapter-title-row) {
 		opacity: 1;
 	}
@@ -259,7 +235,6 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 
 	}
 
-	/* inactive path only */
 	.chapter-title-row {
 		display: flex;
 		align-items: center;
@@ -287,7 +262,6 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 		min-height: 32px;
 	}
 
-	/* A chapter's own content under its body (the first pass's ribbon). */
 	.chapter-extra {
 		margin-top: 6px;
 	}
@@ -307,42 +281,6 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 		font-size: 10px;
 		color: var(--color-accent);
 		min-width: 0;
-	}
-
-	.chapter-tool-calls {
-		position: relative;
-		flex: 1;
-		height: 28px; /* 2 × 14px rows, fixed — prevents layout shift during transitions */
-		min-width: 0;
-		overflow: hidden;
-	}
-
-	.chapter-tool-call {
-		position: absolute;
-		left: 0;
-		right: 0;
-		display: flex;
-		gap: 6px;
-		min-width: 0;
-		/* `top` is deliberate over `transform: translateY`: Svelte's `fly` enter
-		   transition (used inline) writes inline `transform`, and a base-class
-		   transform would compose unpredictably with it. The animated property
-		   is bounded to ±14px so the layout cost is trivial. */
-		transition: top var(--duration-smooth) var(--ease-standard);
-	}
-
-	.chapter-tool-call-tool {
-		color: var(--color-accent);
-		font-weight: 500;
-		flex-shrink: 0;
-	}
-
-	.chapter-tool-call-desc {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		min-width: 0;
-		color: var(--color-text-muted);
 	}
 
 	.chapter-blurb {

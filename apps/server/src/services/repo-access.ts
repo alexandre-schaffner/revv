@@ -1,9 +1,9 @@
 import { Effect } from "effect";
 import { RepoNotAccessibleError } from "../domain/errors";
-import { clientIdForHost, clientIdIsGitHubApp } from "../github-oauth";
-import { type AppInstallation, GitHubGateway } from "./GitHub";
-import { apiBaseForHost } from "./github-rest";
-import { SettingsService } from "./Settings";
+import { GitHubAccounts } from "./github/accounts";
+import { GitHubGateway } from "./github/gateway";
+import type { AppInstallation } from "./github/repos";
+import type { GitHubClient } from "./github/transport";
 
 /**
  * Explain an add-repo 404.
@@ -54,29 +54,21 @@ export function explainRepoNotFound(
 }
 
 /**
- * Diagnose why `fullName` 404'd for this token on `host`. Never fails: a
- * lookup that can't complete degrades to the plain "not found" explanation.
+ * Diagnose why `fullName` 404'd for this client. Never fails: a lookup that
+ * can't complete degrades to the plain "not found" explanation.
  */
 export const diagnoseRepoNotFound = (
   fullName: string,
-  host: string,
-  token: string,
-): Effect.Effect<RepoNotAccessibleError, never, GitHubGateway | SettingsService> =>
+  client: GitHubClient,
+): Effect.Effect<RepoNotAccessibleError, never, GitHubGateway | GitHubAccounts> =>
   Effect.gen(function* () {
     const github = yield* GitHubGateway;
-    const settings = yield* Effect.flatMap(SettingsService, (s) => s.getSettings()).pipe(
-      Effect.orElseSucceed(() => null),
-    );
-    // The settings row's client ID belongs to the settings host only — the
-    // same pairing `TokenProvider` uses to refresh this token.
-    const customClientId = settings?.githubHost === host ? settings.githubClientId : null;
-    const signsInWithApp = yield* Effect.try(() =>
-      clientIdIsGitHubApp(clientIdForHost(host, customClientId)),
-    ).pipe(Effect.orElseSucceed(() => false));
+    const accountId = client.accountId;
+    const signsInWithApp =
+      accountId !== null &&
+      (yield* Effect.flatMap(GitHubAccounts, (a) => a.signsInWithGitHubApp(accountId)));
     const installations = signsInWithApp
-      ? yield* github.repos
-          .appInstallationsForUser(token, apiBaseForHost(host))
-          .pipe(Effect.orElseSucceed(() => null))
+      ? yield* github.repos.appInstallationsForUser(client).pipe(Effect.orElseSucceed(() => null))
       : null;
-    return explainRepoNotFound(fullName, host, installations);
+    return explainRepoNotFound(fullName, client.host, installations);
   });

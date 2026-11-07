@@ -1,4 +1,3 @@
-// ── Auto-continuation adjudication ───────────────────────────────────────────
 // Two small hooks on the budget-exhaustion path: decline to spend an auto-
 // continuation when the next turn clearly won't finish, and name the probable
 // failure cause for the user-facing message. Neither can change a terminal
@@ -22,7 +21,6 @@ export type ContinuationVerdict =
 
 const PROCEED: ContinuationVerdict = { kind: "proceed" };
 
-/** Budget for the call. Counters only, so the request is tiny. */
 export const CONTINUATION_TIMEOUT_MS = 6_000;
 
 /** Confidence floor for a stop; both answers must clear it. "Stop" costs the user a walkthrough; "proceed" only costs one turn the budget already bounds. */
@@ -42,16 +40,10 @@ const FINISH_CRITERIA = {
     "The run looks stuck rather than slow: another turn would repeat what the last one did.",
 } as const;
 
-export interface AdjudicateInput extends ContinuationInput {
-  /** Kill switch. Off returns `proceed` without a call. */
-  readonly enabled: boolean;
-}
-
 /** Decides whether to spend the next auto-continuation. Asymmetric: stops only on "no progress AND unlikely to finish", both above the confidence floor; every other answer or failure mode is `proceed`. */
 export function adjudicateContinuation(
-  input: AdjudicateInput,
+  input: ContinuationInput,
 ): Effect.Effect<ContinuationVerdict, never, JevService> {
-  if (!input.enabled) return Effect.succeed(PROCEED);
   return Effect.gen(function* () {
     const jev = yield* JevService;
     const result = yield* optionalJev(
@@ -109,15 +101,12 @@ const FAILURE_CRITERIA = {
   unknown: "None of the above fits, or there is not enough signal to tell.",
 } as const;
 
-/** Budget for the enrichment. Strictly cosmetic, so it gets very little. */
 export const FAILURE_CLASSIFY_TIMEOUT_MS = 5_000;
 
 /** Guesses why a run failed, for the user-facing message. Strictly cosmetic: changes a string, never a status. Returns `null` when it can't help. */
-export function classifyFailure(input: {
-  readonly enabled: boolean;
-  readonly state: ContinuationInput;
-}): Effect.Effect<string | null, never, JevService> {
-  if (!input.enabled) return Effect.succeed(null);
+export function classifyFailure(
+  state: ContinuationInput,
+): Effect.Effect<string | null, never, JevService> {
   return Effect.gen(function* () {
     const jev = yield* JevService;
     const result = yield* optionalJev(
@@ -125,7 +114,7 @@ export function classifyFailure(input: {
       jev.ask({
         label: "continuation",
         timeoutMs: FAILURE_CLASSIFY_TIMEOUT_MS,
-        state: buildContinuationState(input.state),
+        state: buildContinuationState(state),
         questions: {
           cause: {
             type: "choice",

@@ -1,29 +1,21 @@
 <script lang="ts">
-import { HUNK_SMELL_META, type HunkSmell, type WalkthroughIssue } from "@revv/shared";
+import {
+  HUNK_SMELL_META,
+  type HunkSmell,
+  ISSUE_SEVERITY_LABEL,
+  issueResolutionLabel,
+  type WalkthroughIssue,
+} from "@revv/shared";
 import Waveform from "phosphor-svelte/lib/Waveform";
-import { Checkbox } from "$lib/components/ui/checkbox";
-import FileBadge from "$lib/components/ui/FileBadge.svelte";
+import { type EnterParams, enterOnce } from "$lib/motion";
 
 interface Props {
   issue: WalkthroughIssue;
   clickable?: boolean;
   onclick?: () => void;
-  checkable?: boolean;
-  checked?: boolean;
-  disabled?: boolean;
-  oncheck?: (checked: boolean) => void;
-  submitted?: boolean;
-  animationDelay?: string;
-  /**
-   * When true, suppress the entrance animation entirely. Used on tab
-   * revisits where the card has already animated once — browsers otherwise
-   * restart CSS animations when a subtree re-enters the render tree after
-   * `display: none`.
-   */
-  noAnim?: boolean;
-  onfileclick?: (filePath: string, line: number) => void;
+  /** The card's one-shot entrance; none when absent. */
+  entrance?: EnterParams | undefined;
   stepTag?: string | null;
-  hideFileBadge?: boolean;
   /** Smells the first pass flagged on this issue's hunk, before the review ran. */
   firstPassSmells?: readonly HunkSmell[] | undefined;
 }
@@ -32,16 +24,8 @@ let {
   issue,
   clickable = false,
   onclick,
-  checkable = false,
-  checked = false,
-  disabled = false,
-  oncheck,
-  submitted = false,
-  animationDelay = "0ms",
-  noAnim = false,
-  onfileclick,
+  entrance,
   stepTag = null,
-  hideFileBadge = false,
   firstPassSmells,
 }: Props = $props();
 
@@ -51,113 +35,39 @@ const firstPassLabel = $derived(
     : null,
 );
 
-const severityLabels: Record<string, string> = {
-  info: "Info",
-  warning: "Warning",
-  critical: "Critical",
-};
-
-const resolutionLabel = $derived(
-  issue.resolutionStatus === "addressed"
-    ? "Addressed"
-    : issue.resolutionStatus === "wont_fix"
-      ? "Won't fix"
-      : null,
-);
+const resolutionLabel = $derived(issueResolutionLabel(issue.resolutionStatus));
 const resolved = $derived(resolutionLabel !== null);
-
-// Once the entrance animation completes (or if the parent tells us to skip
-// it), lock the card into its final visual state by applying `--no-anim`.
-// Without this, browsers restart CSS animations on elements that re-enter
-// the render tree after `display: none` — so every tab switch back to the
-// Walkthrough would replay the card's fade-in.
-let animEnded = $state(false);
-const animLocked = $derived(noAnim || animEnded);
-
-function onAnimEnd(event: AnimationEvent): void {
-  // Only react to the card's own animation, not descendants bubbling up.
-  if (event.target !== event.currentTarget) return;
-  if (event.animationName === "issue-card-enter") {
-    animEnded = true;
-  }
-}
 </script>
 
 {#if clickable}
 	<button
 		type="button"
-		class="issue-card issue-card--{issue.severity}"
-		class:issue-card--submitted={submitted}
+		class="issue-card"
 		class:issue-card--resolved={resolved}
-		class:issue-card--no-anim={animLocked}
-		style:--issue-delay={animationDelay}
-		onanimationend={onAnimEnd}
+		data-severity={issue.severity}
+		use:enterOnce={entrance}
 		{onclick}
 	>
 		{@render cardContent()}
 	</button>
-{:else if checkable}
-	<!-- The Checkbox inside is the real interactive control (keyboard-accessible);
-	     this label is just a wider click target. -->
-	<!-- svelte-ignore a11y_click_events_have_key_events -->
-	<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-	<label
-		class="issue-card issue-card--{issue.severity}"
-		class:issue-card--submitted={submitted}
-		class:issue-card--resolved={resolved}
-		class:issue-card--checked={checked}
-		class:issue-card--no-anim={animLocked}
-		style:--issue-delay={animationDelay}
-		onanimationend={onAnimEnd}
-		onclick={(e) => {
-			// The bits-ui Checkbox is a button, not an input, so the native
-			// label→input forward we used to rely on no longer fires. Forward
-			// here, but skip clicks that already hit the checkbox itself so
-			// we don't toggle twice.
-			if (submitted || resolved || disabled) return;
-			const target = e.target as HTMLElement | null;
-			if (target?.closest('[data-slot="checkbox"]')) return;
-			oncheck?.(!checked);
-		}}
-	>
-		{@render cardContent()}
-	</label>
 {:else}
 	<div
-		class="issue-card issue-card--{issue.severity}"
-		class:issue-card--submitted={submitted}
+		class="issue-card"
 		class:issue-card--resolved={resolved}
-		class:issue-card--no-anim={animLocked}
-		style:--issue-delay={animationDelay}
-		onanimationend={onAnimEnd}
+		data-severity={issue.severity}
+		use:enterOnce={entrance}
 	>
 		{@render cardContent()}
 	</div>
 {/if}
 
 {#snippet cardContent()}
-	{#if checkable && !resolved}
-		<Checkbox
-			class="issue-card-checkbox"
-			aria-label="Select issue"
-			{checked}
-			{disabled}
-			onCheckedChange={(v) => oncheck?.(v === true)}
-		/>
-	{/if}
 	<div class="issue-card-body">
-		<!-- Three grid slots: marks / title / step tag. The badges are wrapped in
-		     a single `.issue-card-marks` cell so the row stays exactly three
-		     columns whether or not the Posted badge is present — see the grid
-		     rules in the stylesheet for why that matters. -->
 		<div class="issue-card-top" class:issue-card-top--tagged={!!stepTag}>
 			<span class="issue-card-marks">
-				<span class="issue-badge issue-badge--{issue.severity}">
-					{severityLabels[issue.severity] ?? issue.severity}
+				<span class="issue-badge" data-severity={issue.severity}>
+					{ISSUE_SEVERITY_LABEL[issue.severity]}
 				</span>
-				{#if submitted}
-					<span class="issue-card-posted-badge">Posted</span>
-				{/if}
 				{#if resolutionLabel}
 					<span class="issue-card-resolution-badge">{resolutionLabel}</span>
 				{/if}
@@ -172,79 +82,35 @@ function onAnimEnd(event: AnimationEvent): void {
 				<span class="issue-step-tag">{stepTag}</span>
 			{/if}
 		</div>
-		{#if issue.filePath && !hideFileBadge}
-			<div
-				class="issue-card-location"
-				onclick={(e) => e.stopPropagation()}
-				role="presentation"
-			>
-				<FileBadge
-					filePath={issue.filePath}
-					startLine={issue.startLine}
-					endLine={issue.endLine}
-					onclick={onfileclick && issue.filePath ? () => onfileclick(issue.filePath as string, issue.startLine ?? 1) : undefined}
-				/>
-			</div>
-		{/if}
 		<p class="issue-card-description">{issue.description}</p>
 	</div>
 {/snippet}
 
 <style>
-	/* ── Base card ──────────────────────────────────────────────────── */
 	.issue-card {
 		padding: 10px 14px;
 		border-radius: 8px;
-		background: color-mix(in srgb, var(--severity-color, transparent) 5%, var(--color-bg-secondary));
+		background: color-mix(in srgb, var(--severity-color, transparent) 4%, var(--color-bg-secondary));
 		border: 1px solid color-mix(in srgb, var(--severity-color, transparent) 35%, var(--color-border));
 		display: flex;
 		flex-direction: row;
 		align-items: flex-start;
 		gap: 10px;
-		animation: issue-card-enter var(--duration-ceremonial-medium) var(--ease-standard) both;
-		animation-delay: var(--issue-delay, 0ms);
 		text-align: left;
 		font: inherit;
 		color: inherit;
 		width: 100%;
 		box-sizing: border-box;
 		cursor: default;
-		/* The card is its own query container: its width is set by whichever
-		   list embeds it (the walkthrough content column caps at 820px, the
-		   per-file list is the diff pane minus 64px), and neither tracks
-		   `.review-content` — the nearest ancestor container — closely enough
-		   to drive the header layout. `width: 100%` above is what keeps
-		   inline-size containment from collapsing the card to zero intrinsic
-		   width. No positioned-fixed descendants live in here, so the
+		/* Its own query container: its width comes from whichever list embeds
+		   it, which `.review-content` (the nearest container) doesn't track.
+		   `width: 100%` above keeps inline-size containment from collapsing it
+		   to zero. No position:fixed descendants live here, so the
 		   containing-block side effect is inert. */
 		container-type: inline-size;
 		container-name: issue-card;
 	}
 
-	/* Suppress the entrance animation on tab revisits. Browsers restart CSS
-	   animations when an element re-enters the render tree after `display:
-	   none`, which would otherwise replay issue-card-enter on every hop back
-	   to the Walkthrough tab. */
-	.issue-card--no-anim {
-		animation: none;
-		opacity: 1;
-	}
-
-	/* Severity left-border + hover shadow color */
-.issue-card--info {
-    --severity-color: var(--color-accent);
-    background: color-mix(in srgb, var(--color-accent) 4%, var(--color-bg-secondary));
-}
-.issue-card--warning {
-    --severity-color: var(--color-warning);
-    background: color-mix(in srgb, var(--color-warning) 4%, var(--color-bg-secondary));
-}
-.issue-card--critical {
-    --severity-color: var(--color-danger);
-    background: color-mix(in srgb, var(--color-danger) 4%, var(--color-bg-secondary));
-}
-
-	/* ── Clickable (button) variant ─────────────────────────────────── */
 	button.issue-card {
 		cursor: pointer;
 		transition:
@@ -273,58 +139,11 @@ function onAnimEnd(event: AnimationEvent): void {
 		outline-offset: 2px;
 	}
 
-	/* ── Checkable (label) variant ──────────────────────────────────── */
-	label.issue-card {
-		cursor: pointer;
-		transition:
-			border-color var(--duration-snap) var(--ease-soft),
-			background var(--duration-snap) var(--ease-soft);
-	}
-
-	.issue-card--checked {
-		border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
-		background: color-mix(in srgb, var(--color-accent) 6%, var(--color-bg-secondary));
-	}
-
-	/* When severity AND checked, blend both bg tints */
-	.issue-card--info.issue-card--checked {
-		background: color-mix(
-			in srgb,
-			var(--color-accent) 8%,
-			color-mix(in srgb, var(--color-accent) 4%, var(--color-bg-secondary))
-		);
-	}
-	.issue-card--warning.issue-card--checked {
-		background: color-mix(
-			in srgb,
-			var(--color-accent) 6%,
-			color-mix(in srgb, var(--color-warning) 4%, var(--color-bg-secondary))
-		);
-	}
-	.issue-card--critical.issue-card--checked {
-		background: color-mix(
-			in srgb,
-			var(--color-accent) 6%,
-			color-mix(in srgb, var(--color-danger) 4%, var(--color-bg-secondary))
-		);
-	}
-
-	/* ── Submitted state ─────────────────────────────────────────────── */
-	.issue-card--submitted {
-		opacity: 0.55;
-	}
-
 	.issue-card--resolved {
 		--severity-color: var(--color-success);
 		background: color-mix(in srgb, var(--color-success) 5%, var(--color-bg-secondary));
 	}
 
-	/* ── Checkbox ────────────────────────────────────────────────────── */
-	:global(.issue-card-checkbox) {
-		margin-top: 2px;
-	}
-
-	/* ── Body ────────────────────────────────────────────────────────── */
 	.issue-card-body {
 		display: flex;
 		flex-direction: column;
@@ -333,16 +152,10 @@ function onAnimEnd(event: AnimationEvent): void {
 		min-width: 0;
 	}
 
-	/* Header row. A wrapping flexbox is wrong here: the title is a single
-	   flex item with no room to shrink, so as soon as badge + title + tag
-	   exceed the card the *tag* is what wraps — landing on its own line,
-	   pushed right by `margin-left: auto`, floating between the title and
-	   the description with nothing to anchor it. That happens at every card
-	   width, including the 820px maximum, whenever a title runs long.
-
-	   Grid instead: the title owns a `minmax(0, 1fr)` track so it wraps
-	   inside its own column while the badges and the tag stay pinned to the
-	   first baseline. Nothing ever orphans. */
+	/* Grid, not a wrapping flexbox: with flex, a long title makes the *tag*
+	   wrap onto its own line, orphaned. The title's `minmax(0, 1fr)` track
+	   wraps inside its column while the badges and the tag stay pinned to the
+	   first baseline. */
 	.issue-card-top {
 		display: grid;
 		grid-template-columns: auto minmax(0, 1fr);
@@ -404,14 +217,6 @@ function onAnimEnd(event: AnimationEvent): void {
 		overflow-wrap: anywhere;
 	}
 
-	.issue-card-location {
-		display: flex;
-		align-items: center;
-		gap: 2px;
-		font-family: var(--font-mono, monospace);
-	}
-
-	/* ── Step tag ────────────────────────────────────────────────────── */
 	.issue-step-tag {
 		justify-self: end;
 		font-size: 10px;
@@ -424,22 +229,6 @@ function onAnimEnd(event: AnimationEvent): void {
 		background: var(--color-bg-tertiary);
 		white-space: nowrap;
 		transition: color var(--duration-snap) var(--ease-soft);
-	}
-
-	/* ── Posted badge ─────────────────────────────────────────────────── */
-	.issue-card-posted-badge {
-		display: inline-flex;
-		align-items: center;
-		border-radius: 9999px;
-		padding: 1px 7px;
-		font-size: 10px;
-		font-weight: 700;
-		letter-spacing: 0.04em;
-		text-transform: uppercase;
-		flex-shrink: 0;
-		background: color-mix(in srgb, var(--color-success) 15%, transparent);
-		color: var(--color-success);
-		border: 1px solid color-mix(in srgb, var(--color-success) 30%, transparent);
 	}
 
 	.issue-card-resolution-badge {
@@ -457,7 +246,6 @@ function onAnimEnd(event: AnimationEvent): void {
 		border: 1px solid color-mix(in srgb, var(--color-success) 30%, transparent);
 	}
 
-	/* ── First-pass mark ─────────────────────────────────────────────── */
 	/* Corroboration, not a status: an icon in the card's own tone, quiet
 	   enough to skim past and specific enough on hover. */
 	.issue-card-first-pass {
@@ -466,7 +254,6 @@ function onAnimEnd(event: AnimationEvent): void {
 		color: color-mix(in srgb, var(--severity-color, var(--color-text-muted)) 70%, var(--color-text-muted));
 	}
 
-	/* ── Severity badge ──────────────────────────────────────────────── */
 	.issue-badge {
 		font-size: 10px;
 		font-weight: 600;
@@ -477,49 +264,14 @@ function onAnimEnd(event: AnimationEvent): void {
 		border: 1px solid transparent;
 		flex-shrink: 0;
 		white-space: nowrap;
+		background: color-mix(in srgb, var(--severity-color) 12%, transparent);
+		color: var(--severity-color);
+		border-color: color-mix(in srgb, var(--severity-color) 30%, transparent);
 	}
 
-	.issue-badge--info {
-		background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+	/* The accent is a step lighter as text than as a fill. */
+	.issue-badge[data-severity="info"] {
 		color: var(--color-accent-hover);
-		border-color: color-mix(in srgb, var(--color-accent) 30%, transparent);
 	}
 
-	.issue-badge--warning {
-		background: color-mix(in srgb, var(--color-warning) 12%, transparent);
-		color: var(--color-warning);
-		border-color: color-mix(in srgb, var(--color-warning) 30%, transparent);
-	}
-
-	.issue-badge--critical {
-		background: color-mix(in srgb, var(--color-danger) 12%, transparent);
-		color: var(--color-danger);
-		border-color: color-mix(in srgb, var(--color-danger) 30%, transparent);
-	}
-
-	/* ── Animation ───────────────────────────────────────────────────── */
-	@keyframes issue-card-enter {
-		from {
-			opacity: 0;
-			transform: translateY(4px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-		}
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.issue-card {
-			animation-duration: 0.01ms !important;
-			animation-delay: 0ms !important;
-		}
-		button.issue-card,
-		label.issue-card {
-			transition: none !important;
-		}
-		button.issue-card:hover {
-			transform: none;
-		}
-	}
 </style>

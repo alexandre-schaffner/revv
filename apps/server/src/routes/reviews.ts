@@ -1,460 +1,54 @@
-import { and, eq } from "drizzle-orm";
+import { DIFF_SIDES, REVIEW_ACTIONS } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { pullRequests, repositories } from "../db/schema";
-import { NotFoundError } from "../domain/errors";
-import { AppRuntime } from "../runtime";
-import { Broadcaster } from "../services/Broadcaster";
-import { DbService } from "../services/Db";
-import { PrContextService } from "../services/PrContext";
 import { ReviewService } from "../services/Review";
-import { SyncService } from "../services/Sync";
-import { WalkthroughService } from "../services/Walkthrough";
-import { WalkthroughJobs } from "../services/WalkthroughJobs";
-import { handleAppError, withAccount } from "./middleware";
-import { activeSessionHandler, coerceReviewMode } from "./reviews/handlers/active-session";
-import { submitGithubReviewHandler } from "./reviews/handlers/github-submit";
-import { ensureHunkScanHandler } from "./reviews/handlers/hunk-scan";
-import {
-  coerceWalkthroughMode,
-  getCachedWalkthroughHandler,
-  regenerateWalkthroughHandler,
-  resumeWalkthroughHandler,
-} from "./reviews/handlers/walkthrough-cache";
-import { getCurrentWalkthroughHandler } from "./reviews/handlers/walkthrough-current";
-import { getWalkthroughSizingHandler } from "./reviews/handlers/walkthrough-sizing";
+import { humanAuthor, viewerOnPr } from "../services/review-mode";
+import { submitReview } from "../services/review-submit";
+import { runRoute, withAuth } from "./middleware";
+import { ownedBy } from "./ownership";
+import { literalUnion } from "./schemas";
+import { threadMessageBody } from "./thread-message";
 
-/**
- * Review routes — thin Elysia router. Handler bodies live in
- * `routes/reviews/handlers/*` to keep each file single-purpose.
- *
- * Small CRUD endpoints (threads, hunks, session lifecycle) stay inline here
- * because they're trivial Effect one-liners and extracting them adds more
- * import noise than it removes. Anything non-trivial — notably the SSE
- * walkthrough stream (formerly 370 lines inline) — lives in a handler file.
- */
+/** Review routes: `:id` and `:prId` name the pull request. */
 export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
-  .use(withAccount)
-
-  // ── Session lifecycle ──────────────────────────────────────────────────
-  .get("/active/:prId", async (ctx) => {
-    try {
-      return await activeSessionHandler(ctx.params.prId, coerceReviewMode(ctx.query.mode));
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  .post(
-    "/",
-    async (ctx) => {
-      try {
-        return await AppRuntime.runPromise(
-          Effect.flatMap(ReviewService, (s) =>
-            s.getOrCreateActiveSession(ctx.body.pullRequestId, coerceReviewMode(ctx.body.mode)),
-          ),
-        );
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
-    { body: t.Object({ pullRequestId: t.String(), mode: t.Optional(t.String()) }) },
+  .use(withAuth)
+  .onBeforeHandle(ownedBy({ id: "pull request", prId: "pull request" }))
+  // Every thread on the PR with its messages, for a cold render in one round trip.
+  .get("/active/:prId", (ctx) =>
+    runRoute(Effect.flatMap(ReviewService, (review) => review.getConversation(ctx.params.prId))),
   )
-
-  .patch(
-    "/:id",
-    async (ctx) => {
-      try {
-        await AppRuntime.runPromise(
-          Effect.flatMap(ReviewService, (s) => s.completeSession(ctx.params.id, ctx.body.status)),
-        );
-        return { success: true };
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
-    { body: t.Object({ status: t.Union([t.Literal("completed"), t.Literal("abandoned")]) }) },
-  )
-
-  // ── Threads ────────────────────────────────────────────────────────────
-  .get(
-    "/:id/threads",
-    async (ctx) => {
-      try {
-        return await AppRuntime.runPromise(
-          Effect.gen(function* () {
-            const reviewService = yield* ReviewService;
-            if (ctx.query.filePath) {
-              return yield* reviewService.getThreadsForFile(ctx.params.id, ctx.query.filePath);
-            }
-            return yield* reviewService.getThreadsForSession(ctx.params.id);
-          }),
-        );
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
-    { query: t.Object({ filePath: t.Optional(t.String()) }) },
-  )
-
   .post(
     "/:id/threads",
-    async (ctx) => {
-      try {
-        const result = await AppRuntime.runPromise(
-          Effect.gen(function* () {
-            const reviewService = yield* ReviewService;
-            const broadcaster = yield* Broadcaster;
-            // SyncService is kept as a dependency so future auto-push
-            // from thread creation can be wired up without changing
-            // this handler's shape.
-            yield* SyncService;
-
-            const thread = yield* reviewService.createThread(ctx.params.id, {
-              filePath: ctx.body.filePath,
-              startLine: ctx.body.startLine,
-              endLine: ctx.body.endLine,
-              diffSide: ctx.body.diffSide,
-            });
-
-            const message = yield* reviewService.addMessage(thread.id, {
-              authorRole: ctx.body.message.authorRole,
-              authorName: ctx.body.message.authorName,
-              ...(ctx.body.message.authorLogin !== undefined
-                ? { authorLogin: ctx.body.message.authorLogin }
-                : {}),
-              body: ctx.body.message.body,
-              messageType: ctx.body.message.messageType,
-              ...(ctx.body.message.codeSuggestion !== undefined
-                ? { codeSuggestion: ctx.body.message.codeSuggestion }
-                : {}),
-            });
-
-            // Auto-transition based on author role.
-            const transitioned = yield* reviewService
-              .transitionStatus(thread.id, ctx.body.message.authorRole)
-              .pipe(Effect.catch(() => Effect.succeed(null)));
-
-            yield* broadcaster.broadcastToAccount(ctx.account.accountId, {
-              type: "thread:created",
-              data: {
-                sessionId: ctx.params.id,
-                thread: transitioned ?? thread,
-                message,
-              },
-            });
-
-            return { thread: transitioned ?? thread, message };
-          }),
-        );
-
-        ctx.set.status = 201;
-        return result;
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
+    (ctx) =>
+      runRoute(
+        Effect.gen(function* () {
+          const review = yield* ReviewService;
+          const { message, ...anchor } = ctx.body;
+          const author = humanAuthor(yield* viewerOnPr(ctx.params.id));
+          const created = yield* review.startThread(ctx.params.id, anchor, {
+            ...message,
+            ...author,
+            messageType: "comment",
+          });
+          ctx.set.status = 201;
+          return created;
+        }),
+      ),
     {
       body: t.Object({
         filePath: t.String(),
         startLine: t.Number(),
         endLine: t.Number(),
-        diffSide: t.Union([t.Literal("old"), t.Literal("new")]),
-        message: t.Object({
-          authorRole: t.Union([t.Literal("reviewer"), t.Literal("coder"), t.Literal("ai_agent")]),
-          authorName: t.String(),
-          authorLogin: t.Optional(t.String()),
-          body: t.String(),
-          messageType: t.Union([
-            t.Literal("comment"),
-            t.Literal("reply"),
-            t.Literal("suggestion"),
-            t.Literal("resolution"),
-          ]),
-          codeSuggestion: t.Optional(t.String()),
-        }),
+        diffSide: literalUnion(DIFF_SIDES),
+        message: threadMessageBody,
       }),
     },
   )
 
-  // ── Hunk decisions ─────────────────────────────────────────────────────
-  .get("/:id/hunks", async (ctx) => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.flatMap(ReviewService, (s) => s.getHunkDecisions(ctx.params.id)),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  .put(
-    "/:id/hunks",
-    async (ctx) => {
-      try {
-        await AppRuntime.runPromise(
-          Effect.flatMap(ReviewService, (s) =>
-            s.setHunkDecision(
-              ctx.params.id,
-              ctx.body.filePath,
-              ctx.body.hunkIndex,
-              ctx.body.decision,
-            ),
-          ),
-        );
-        return { success: true };
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
-    {
-      body: t.Object({
-        filePath: t.String(),
-        hunkIndex: t.Number(),
-        decision: t.Union([t.Literal("accepted"), t.Literal("rejected")]),
-      }),
-    },
-  )
-
-  .delete("/:id/hunks/:filePath/:hunkIndex", async (ctx) => {
-    try {
-      await AppRuntime.runPromise(
-        Effect.flatMap(ReviewService, (s) =>
-          s.clearHunkDecision(
-            ctx.params.id,
-            decodeURIComponent(ctx.params.filePath),
-            Number(ctx.params.hunkIndex),
-          ),
-        ),
-      );
-      return { success: true };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  // ── Walkthrough ────────────────────────────────────────────────────────
-  //
-  // Generation events stream over the global SSE bus at `/api/events`;
-  // these REST endpoints handle the trigger/hydrate/lifecycle side. The
-  // legacy per-PR SSE (`GET /:id/walkthrough`) was deleted when walkthrough
-  // events moved to the unified bus.
-  .post("/:id/walkthrough/start", async (ctx) => {
-    try {
-      const body = ctx.body as { generationMode?: "full" | "incremental" } | undefined;
-      const result = await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const jobs = yield* WalkthroughJobs;
-          // `mode` is the walkthrough's perspective, which the user picks. The
-          // review session is the identity-derived one; `startJob` owns it.
-          const mode = coerceWalkthroughMode((ctx.body as { mode?: unknown } | undefined)?.mode);
-          const existing = yield* jobs.findActiveByPr(ctx.params.id, mode);
-          if (existing !== null) {
-            return { walkthroughId: existing.walkthroughId };
-          }
-          return yield* jobs.startJob({
-            prId: ctx.params.id,
-            userId: ctx.session.user.id,
-            trigger: "user",
-            mode,
-            generationMode: body?.generationMode ?? "full",
-          });
-        }),
-      );
-      return { success: true, walkthroughId: result.walkthroughId };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  .get("/:id/walkthrough/current", async (ctx) => {
-    try {
-      // No `mode` → the server picks the perspective (see the handler).
-      return await getCurrentWalkthroughHandler(
-        ctx.params.id,
-        ctx.session.user.id,
-        ctx.query.mode === undefined ? undefined : coerceWalkthroughMode(ctx.query.mode),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  // Sizes the PR ahead of generation (risk tier, "Auto" model pick). Shares
-  // its cached answer with the generation path — same TypeSafe call, moved earlier.
-  .get("/:id/walkthrough/sizing", async (ctx) => {
-    try {
-      return await getWalkthroughSizingHandler(ctx.params.id, ctx.session.user.id);
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  // The first pass for the PR's current head, started on first ask. Owned by
-  // the PR head, not a walkthrough, so the Diff tab has it before Generate.
-  .post("/:id/hunk-scan", async (ctx) => {
-    try {
-      return await ensureHunkScanHandler(ctx.params.id, ctx.session.user.id);
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  .get("/:id/walkthrough/rounds", async (ctx) => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const { db } = yield* DbService;
-          const walkthroughService = yield* WalkthroughService;
-          const pr = db
-            .select({ id: pullRequests.id, headSha: pullRequests.headSha })
-            .from(pullRequests)
-            .innerJoin(repositories, eq(repositories.id, pullRequests.repositoryId))
-            .where(
-              and(
-                eq(pullRequests.id, ctx.params.id),
-                eq(repositories.accountId, ctx.account.accountId),
-              ),
-            )
-            .get();
-          if (!pr) {
-            return yield* Effect.fail(
-              new NotFoundError({ resource: "pull_request", id: ctx.params.id }),
-            );
-          }
-          // No PR context or live GitHub commit fetch here: round focus titles
-          // derive from the commit list persisted per walkthrough
-          // (`walkthroughs.prCommits`), so this high-frequency endpoint stays
-          // DB-only. The client refreshes it for every active PR on each
-          // `prs:updated`, so GitHub calls here add avoidable rate-limit pressure.
-          return yield* walkthroughService.listReviewRounds(pr.id, pr.headSha);
-        }),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  .get("/:id/walkthrough/report/:walkthroughId", async (ctx) => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const prContext = yield* PrContextService;
-          const walkthroughService = yield* WalkthroughService;
-          const { pr } = yield* prContext.resolveBasic(ctx.params.id, ctx.session.user.id);
-          const report = yield* walkthroughService.getReport(pr.id, ctx.params.walkthroughId);
-          if (!report) return { status: "not_found" as const };
-          const seqAt = yield* walkthroughService.getSeqAt(report.walkthrough.id);
-          return {
-            status: report.status as "complete" | "generating" | "error" | "superseded",
-            walkthrough: report.walkthrough,
-            snapshotAt: new Date().toISOString(),
-            seqAt,
-            stale:
-              report.status === "superseded" ||
-              (pr.headSha !== null && report.walkthrough.prHeadSha !== pr.headSha),
-            historical: true as const,
-          };
-        }),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  .get("/:id/walkthrough/cached", async (ctx) => {
-    try {
-      return await getCachedWalkthroughHandler(
-        ctx.params.id,
-        ctx.session.user.id,
-        coerceWalkthroughMode(ctx.query.mode),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  .post("/:id/walkthrough/regenerate", async (ctx) => {
-    try {
-      // `mode` / `generationMode` still ride along in the body — it is the
-      // *start* call that consumes them. Regenerate itself sweeps every
-      // perspective: only one is active per PR (see `startJobBody`).
-      await regenerateWalkthroughHandler(ctx.params.id);
-      return { success: true };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  .post("/:id/walkthrough/resume", async (ctx) => {
-    try {
-      const result = await resumeWalkthroughHandler(
-        ctx.params.id,
-        (ctx.body as { mode?: unknown } | undefined)?.mode === undefined
-          ? undefined
-          : coerceWalkthroughMode((ctx.body as { mode?: unknown }).mode),
-      );
-      return { success: true, walkthroughId: result.walkthroughId };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  // Cancel the in-flight walkthrough for this PR (the Stop button). No-op
-  // when no live job is registered (already finished / never started). The
-  // orchestrator's failure handler picks up the `cancelledByUser` flag and
-  // transitions the row to `status='error'` with code `'Cancelled'`, then
-  // broadcasts `lifecycle:error` — that's what the UI consumes to flip out
-  // of the streaming state. (That handler hangs off `Effect.onExit`, not
-  // `catchAllCause`; an interrupted fiber skips the error channel entirely,
-  // so the older wiring left every stopped row stuck at 'generating'.)
-  // We do NOT supersede the row: a partial walkthrough should remain
-  // resumable via the Resume button, which revives the 'error' row.
-  .post("/:id/walkthrough/abort", async (ctx) => {
-    try {
-      await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const jobs = yield* WalkthroughJobs;
-          const mode = coerceWalkthroughMode((ctx.body as { mode?: unknown } | undefined)?.mode);
-          const existing = yield* jobs.findActiveByPr(ctx.params.id, mode);
-          if (existing !== null) {
-            yield* jobs.cancel(existing.walkthroughId);
-          }
-        }),
-      );
-      return { success: true };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  // ── GitHub submission ──────────────────────────────────────────────────
-  .post(
-    "/:id/github-submit",
-    async (ctx) => {
-      try {
-        return await submitGithubReviewHandler(ctx.params.id, ctx.session.user.id, ctx.body);
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
-    {
-      body: t.Object({
-        action: t.Union([t.Literal("approve"), t.Literal("request_changes"), t.Literal("comment")]),
-        body: t.Optional(t.String()),
-        comments: t.Optional(
-          t.Array(
-            t.Object({
-              path: t.String(),
-              body: t.String(),
-              line: t.Number(),
-              side: t.Union([t.Literal("LEFT"), t.Literal("RIGHT")]),
-              startLine: t.Optional(t.Number()),
-              threadId: t.String(),
-            }),
-          ),
-        ),
-        issueIds: t.Optional(t.Array(t.String())),
-      }),
-    },
-  );
+  .post("/:id/github-submit", (ctx) => runRoute(submitReview(ctx.params.id, ctx.body)), {
+    body: t.Object({
+      action: literalUnion(REVIEW_ACTIONS),
+      threadIds: t.Optional(t.Array(t.String())),
+      issueIds: t.Optional(t.Array(t.String())),
+    }),
+  });

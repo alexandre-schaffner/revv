@@ -1,5 +1,4 @@
 import {
-  DIFFS_TAG_NAME,
   type FileDiffMetadata,
   type FileDiffOptions,
   HEADER_METADATA_SLOT_ID,
@@ -7,13 +6,21 @@ import {
   Virtualizer,
 } from "@pierre/diffs";
 import type { HunkScanRow } from "@revv/shared";
-import { hunkTone, rowMatchesHunk, type SmellTone } from "$lib/utils/hunk-scan";
+import { hunkTone, rowMatchesHunk, type SmellTone } from "$lib/hunk-scan/first-pass";
 
+/**
+ * A request to open a comment over rendered rows, numbered 1.. in display
+ * order the way the keyboard cursor counts them. `seq` makes a repeat count.
+ */
+export interface CommentRowsTrigger {
+  fromRow: number;
+  toRow: number;
+  seq: number;
+}
+
+/** What a diff annotation carries: a comment thread, or the new-comment input. */
 export interface ThreadMeta {
   threadId: string;
-  status: string;
-  messageCount: number;
-  isExpanded: boolean;
   isInputActive: boolean;
   isReplying: boolean;
   isPending: boolean;
@@ -81,10 +88,6 @@ export class ShadowSheet {
       root.adoptedStyleSheets = [...root.adoptedStyleSheets, this.sheet];
     }
   }
-}
-
-export function createDiffsHost(): HTMLElement {
-  return document.createElement(DIFFS_TAG_NAME);
 }
 
 export function findShadowHost(container: HTMLElement): HTMLElement | null {

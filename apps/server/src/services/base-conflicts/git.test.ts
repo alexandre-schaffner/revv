@@ -1,23 +1,24 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, setDefaultTimeout } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BaseConflictStrategy } from "@revv/shared";
+import { clearScratch, prepareScratch } from "../git/scratch";
 import {
   checkTips,
-  clearScratch,
   deleteTipRefs,
   fetchTips,
   type OperationInput,
-  prepareScratch,
   pushResult,
   type SyncRepo,
   startOperation,
   type Tips,
   verifyResolution,
 } from "./git";
+
+// git processes start slowly on a loaded machine; a test here runs a dozen.
+setDefaultTimeout(60_000);
 
 const FIXTURE_ENV: Record<string, string> = {
   ...process.env,
@@ -46,14 +47,20 @@ function commit(cwd: string, file: string, body: string, message: string): strin
   return git(cwd, ["rev-parse", "HEAD"]);
 }
 
-let root: string;
-let origin: string;
-let dev: string;
-let revv: string;
-let scratch: string;
-let repo: SyncRepo;
+const root = mkdtempSync(join(tmpdir(), "revv-base-conflicts-"));
+const pristine = `${root}-pristine`;
+const origin = join(root, "origin.git");
+const dev = join(root, "dev");
+const revv = join(root, "revv");
+const scratch = join(root, "scratch");
+const repo: SyncRepo = {
+  clonePath: revv,
+  remoteUrl: `file://${origin}`,
+  prNumber: 7,
+  baseBranch: "main",
+  refs: "base-conflicts",
+};
 
-/** Move main on origin; `conflicting` rewrites the line `feat` also rewrote. */
 function moveMain(opts: { conflicting: boolean; workflow?: boolean }) {
   git(dev, ["checkout", "-q", "main"]);
   if (opts.conflicting) commit(dev, "shared.txt", "main\n", "main edits shared");
@@ -72,7 +79,6 @@ function opFor(strategy: BaseConflictStrategy, tips: Tips): OperationInput {
   return { strategy, scratchPath: scratch, tips, baseBranch: "main", sourceBranch: "feat" };
 }
 
-/** What the agent does: write the combined file, stage it, continue. */
 function resolveAsAgent(strategy: BaseConflictStrategy, body = "main\nfeat\n") {
   writeFileSync(join(scratch, "shared.txt"), body);
   git(scratch, ["add", "shared.txt"]);
@@ -80,12 +86,9 @@ function resolveAsAgent(strategy: BaseConflictStrategy, body = "main\nfeat\n") {
   else git(scratch, ["rebase", "--continue"]);
 }
 
-beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "revv-base-conflicts-"));
-  origin = join(root, "origin.git");
-  dev = join(root, "dev");
-  revv = join(root, "revv");
-  scratch = join(root, "scratch");
+// Built once and copied back before each test: the repos record absolute
+// paths, so the copy goes back to the same place.
+beforeAll(() => {
   execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin], { env: FIXTURE_ENV });
 
   execFileSync("git", ["init", "-q", "-b", "main", dev], { env: FIXTURE_ENV });
@@ -104,12 +107,17 @@ beforeEach(() => {
   git(revv, ["config", "user.email", "revv@example.com"]);
   git(revv, ["config", "commit.gpgsign", "false"]);
   git(revv, ["config", "core.hooksPath", "/dev/null"]);
-
-  repo = { clonePath: revv, remoteUrl: `file://${origin}`, prNumber: 7, baseBranch: "main" };
+  cpSync(root, pristine, { recursive: true });
 });
 
-afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
+beforeEach(() => {
+  rmSync(root, { recursive: true, force: true });
+  cpSync(pristine, root, { recursive: true });
+});
+
+afterAll(() => {
+  rmSync(root, { recursive: true, force: true });
+  rmSync(pristine, { recursive: true, force: true });
 });
 
 describe("checking a PR against its base", () => {

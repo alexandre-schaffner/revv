@@ -39,7 +39,7 @@ export function compositeScore(input: {
   readonly actionable: number;
   readonly novel: number;
   readonly severity: number;
-  readonly declaredSeverity: string;
+  readonly declaredSeverity: IssueSeverity;
 }): number {
   const weighted =
     WEIGHTS.grounded * input.grounded +

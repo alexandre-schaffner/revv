@@ -31,7 +31,6 @@ function parseJournal(text: string): JournalEntry[] {
 const entries = parseJournal(readFileSync(JOURNAL, "utf8"));
 const sqlFiles = readdirSync(MIGRATIONS).filter((file) => file.endsWith(".sql"));
 
-// ── Journal shape ────────────────────────────────────────────────────────────
 entries.forEach((entry, position) => {
   check(entry.idx === position, `${entry.tag}: idx ${entry.idx} should be ${position}`);
   const previous = entries[position - 1];
@@ -44,7 +43,6 @@ entries.forEach((entry, position) => {
 });
 check(new Set(entries.map((entry) => entry.tag)).size === entries.length, "duplicate journal tags");
 
-// ── Files ↔ journal ──────────────────────────────────────────────────────────
 const tags = new Set(entries.map((entry) => entry.tag));
 for (const file of sqlFiles) {
   check(tags.has(file.slice(0, -4)), `${file} is not in the journal, so it never runs`);
@@ -61,7 +59,6 @@ for (const prefix of new Set(prefixes)) {
   check(clashing.length === 1, `migration number ${prefix} is used twice: ${clashing.join(", ")}`);
 }
 
-// ── Statements that fail on a database that already holds rows ───────────────
 for (const file of sqlFiles) {
   const statements = readFileSync(join(MIGRATIONS, file), "utf8").split("--> statement-breakpoint");
   for (const statement of statements) {
@@ -74,7 +71,6 @@ for (const file of sqlFiles) {
   }
 }
 
-// ── Shipped migrations are append-only ───────────────────────────────────────
 function git(...args: string[]): string | null {
   try {
     return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });

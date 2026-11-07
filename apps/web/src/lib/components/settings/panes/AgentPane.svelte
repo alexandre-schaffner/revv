@@ -1,8 +1,53 @@
+<script module lang="ts">
+import Robot from "phosphor-svelte/lib/Robot";
+import { agentReadiness } from "$lib/agent-setup/readiness";
+import { fetchAgentStatus, getAgentStatus, getSettings } from "$lib/stores/settings.svelte";
+import { defineSettingsPane } from "../settings-panes";
+
+export const pane = defineSettingsPane({
+  id: "ai",
+  title: "AI agent",
+  description: "The coding agent that writes walkthroughs and answers in chat.",
+  icon: Robot,
+  rows: {
+    provider: {
+      label: "Agent",
+      keywords: ["provider", "claude code", "codex", "opencode", "cursor", "install", "sign in"],
+    },
+    reviewModel: { label: "Review model", keywords: ["model", "opus", "sonnet", "gpt", "llm"] },
+    thinkingEffort: {
+      label: "Thinking effort",
+      keywords: ["reasoning", "ultrathink", "effort", "depth"],
+    },
+    suggestionsModel: {
+      label: "Suggestions model",
+      keywords: ["prompts", "cheap", "haiku", "right panel"],
+    },
+    maxTurns: { label: "Max turns", keywords: ["limit", "tool calls", "budget", "steps"] },
+    baseConflictStrategy: {
+      label: "Resolve base conflicts by",
+      keywords: ["merge", "rebase", "conflicts", "base branch", "update branch", "force push"],
+    },
+    agentTest: {
+      label: "Test the agent",
+      keywords: ["connection", "keychain", "login", "credentials", "check access"],
+    },
+  },
+  badge: () => {
+    const status = getAgentStatus()?.agents[getSettings().aiAgent];
+    if (!status || agentReadiness(status).ready) return null;
+    return { kind: "attention", title: "The selected agent needs setup" };
+  },
+  onModalOpen: () => void fetchAgentStatus(),
+});
+</script>
+
 <script lang="ts">
 import type { AgentCheckResult } from "@revv/shared";
 import {
   ACP_AGENTS,
   type AcpAgentId,
+  AI_MAX_TURNS,
   AUTO_SENTINEL,
   type BaseConflictStrategy,
   type ThinkingEffortSetting,
@@ -12,19 +57,15 @@ import Spinner from "phosphor-svelte/lib/Spinner";
 import { Button } from "$lib/components/ui/button/index.js";
 import { SegmentedControl, type SegmentedOption } from "$lib/components/ui/segmented-control";
 import * as Select from "$lib/components/ui/select";
-import type { ModelOption } from "$lib/constants/models";
-import { resetAgentSetup } from "$lib/stores/agent-setup.svelte";
+import { selectAgent } from "$lib/agent-setup/store.svelte";
 import {
-  cascadeChatAgentChange,
-  fetchAgentStatus,
   fetchModels,
-  getAgentStatus,
   getAvailableModels,
   getReviewModelOptions,
-  getSettings,
   getThinkingEffortOptions,
   isAutoEffortOffered,
   isAutoModelOffered,
+  type ModelOption,
   runAgentCheck,
   updateSettings,
 } from "$lib/stores/settings.svelte";
@@ -33,14 +74,10 @@ import SettingsPane from "../primitives/SettingsPane.svelte";
 import SettingsRow from "../primitives/SettingsRow.svelte";
 import StatusDot from "../primitives/StatusDot.svelte";
 import Stepper from "../primitives/Stepper.svelte";
-import { SETTINGS_PANES } from "../settings-index";
 import AgentProviderList from "./AgentProviderList.svelte";
 
-const MAX_TURNS_MIN = 10;
-const MAX_TURNS_MAX = 500;
-
 const conflictStrategy = $derived<BaseConflictStrategy>(
-  getSettings()?.baseConflictStrategy ?? "merge",
+  getSettings().baseConflictStrategy,
 );
 const conflictStrategyOptions: SegmentedOption<BaseConflictStrategy>[] = [
   { value: "merge", label: "Merge" },
@@ -52,10 +89,9 @@ const conflictStrategyHints: Record<BaseConflictStrategy, string> = {
     "Replays the PR onto the base branch and force-pushes (with lease). History is rewritten.",
 };
 
-const aiAgent = $derived(getSettings()?.aiAgent ?? "opencode");
+const aiAgent = $derived(getSettings().aiAgent);
 const agentLabel = $derived(ACP_AGENTS.find((a) => a.id === aiAgent)?.label ?? "agent");
 
-// ── Provider status ───────────────────────────────────────────────────────
 let statusLoading = $state(false);
 
 async function refreshStatus(options: { refresh?: boolean } = {}): Promise<void> {
@@ -77,36 +113,20 @@ $effect(() => {
   void fetchModels(aiAgent);
 });
 
-// ── Agent test ────────────────────────────────────────────────────────────
 let agentChecking = $state(false);
-let agentCheck = $state<AgentCheckResult | null>(null);
+let lastCheck = $state<{ agent: AcpAgentId; result: AgentCheckResult } | null>(null);
+const agentCheck = $derived(lastCheck?.agent === aiAgent ? lastCheck.result : null);
 
 async function handleRunAgentCheck(): Promise<void> {
+  const agent = aiAgent;
   agentChecking = true;
   try {
-    agentCheck = await runAgentCheck(aiAgent);
+    lastCheck = { agent, result: await runAgentCheck(agent) };
   } finally {
     agentChecking = false;
   }
 }
 
-// An install or sign-in belongs to the agent it started for. Switching agents
-// from anywhere (here, or the chat bottom bar) drops it.
-let lastAgent: AcpAgentId | null = null;
-$effect(() => {
-  const agent = aiAgent;
-  if (lastAgent !== null && lastAgent !== agent) resetAgentSetup();
-  lastAgent = agent;
-  agentCheck = null;
-});
-
-async function handleSelectAgent(agent: AcpAgentId): Promise<void> {
-  await updateSettings(cascadeChatAgentChange(agent));
-  void fetchModels(agent);
-  void refreshStatus();
-}
-
-// ── Defaults ──────────────────────────────────────────────────────────────
 const AUTO_LABEL = "Auto (sized per pull request)";
 const AUTO_OPTION: ModelOption = { label: AUTO_LABEL, value: AUTO_SENTINEL };
 const AUTO_EFFORT: { label: string; value: ThinkingEffortSetting } = {
@@ -118,7 +138,7 @@ const reviewModelOptions = $derived<ModelOption[]>([
   ...(isAutoModelOffered(aiAgent) ? [AUTO_OPTION] : []),
   ...getReviewModelOptions(aiAgent),
 ]);
-const reviewModel = $derived(getSettings()?.aiModel ?? "");
+const reviewModel = $derived(getSettings().aiModel);
 
 // Hidden, Auto included, for an agent with no effort knob — as in the chat bar.
 const agentEfforts = $derived(getThinkingEffortOptions(aiAgent));
@@ -126,17 +146,17 @@ const effortOptions = $derived<{ label: string; value: ThinkingEffortSetting }[]
   ...(isAutoEffortOffered() ? [AUTO_EFFORT] : []),
   ...agentEfforts,
 ]);
-const effort = $derived(getSettings()?.aiThinkingEffort ?? "medium");
+const effort = $derived(getSettings().aiThinkingEffort);
 
 const suggestionsOptions = $derived(getAvailableModels(aiAgent));
-const suggestionsModel = $derived(getSettings()?.aiSuggestionsModel ?? "");
+const suggestionsModel = $derived(getSettings().aiSuggestionsModel);
 
 function labelIn(options: readonly { label: string; value: string }[], value: string): string {
   return options.find((o) => o.value === value)?.label ?? (value || "Select…");
 }
 </script>
 
-<SettingsPane {...SETTINGS_PANES.ai}>
+<SettingsPane {pane}>
 	<SettingsGroup heading="Agent">
 		{#snippet actions()}
 			<Button
@@ -155,15 +175,16 @@ function labelIn(options: readonly { label: string; value: string }[], value: st
 			</Button>
 		{/snippet}
 		<AgentProviderList
+			row={pane.rows.provider}
 			selected={aiAgent}
 			status={getAgentStatus()}
 			loading={statusLoading}
-			onSelect={handleSelectAgent}
+			onSelect={selectAgent}
 		/>
 	</SettingsGroup>
 
 	<SettingsGroup heading="Defaults" description="What new reviews and chats start with. The chat bar can change them too.">
-		<SettingsRow id="ai-review-model" label="Review model" hint="Writes walkthroughs and answers in chat.">
+		<SettingsRow row={pane.rows.reviewModel} hint="Writes walkthroughs and answers in chat.">
 			{#snippet control()}
 				<Select.Root
 					type="single"
@@ -185,7 +206,7 @@ function labelIn(options: readonly { label: string; value: string }[], value: st
 		</SettingsRow>
 
 		{#if agentEfforts.length > 0}
-			<SettingsRow id="ai-thinking-effort" label="Thinking effort" hint="How long the agent deliberates before it answers.">
+			<SettingsRow row={pane.rows.thinkingEffort} hint="How long the agent deliberates before it answers.">
 				{#snippet control()}
 					<Select.Root
 						type="single"
@@ -209,8 +230,7 @@ function labelIn(options: readonly { label: string; value: string }[], value: st
 		{/if}
 
 		<SettingsRow
-			id="ai-suggestions-model"
-			label="Suggestions model"
+			row={pane.rows.suggestionsModel}
 			hint="A low-cost model for the suggested prompts in the right panel."
 		>
 			{#snippet control()}
@@ -234,17 +254,16 @@ function labelIn(options: readonly { label: string; value: string }[], value: st
 		</SettingsRow>
 
 		<SettingsRow
-			id="ai-max-turns"
-			label="Max turns"
-			hint="Most tool round trips the agent may take in one review or chat reply ({MAX_TURNS_MIN}–{MAX_TURNS_MAX})."
+			row={pane.rows.maxTurns}
+			hint="Most tool round trips the agent may take in one review or chat reply ({AI_MAX_TURNS.min}–{AI_MAX_TURNS.max})."
 		>
 			{#snippet control()}
 				<Stepper
 					id="ai-max-turns-input"
 					aria-label="Max turns"
-					value={getSettings()?.aiMaxTurns ?? 60}
-					min={MAX_TURNS_MIN}
-					max={MAX_TURNS_MAX}
+					value={getSettings().aiMaxTurns}
+					min={AI_MAX_TURNS.min}
+					max={AI_MAX_TURNS.max}
 					step={10}
 					onCommit={(n) => void updateSettings({ aiMaxTurns: n })}
 				/>
@@ -252,8 +271,7 @@ function labelIn(options: readonly { label: string; value: string }[], value: st
 		</SettingsRow>
 
 		<SettingsRow
-			id="ai-base-conflict-strategy"
-			label="Resolve base conflicts by"
+			row={pane.rows.baseConflictStrategy}
 			hint={conflictStrategyHints[conflictStrategy]}
 		>
 			{#snippet control()}
@@ -269,8 +287,7 @@ function labelIn(options: readonly { label: string; value: string }[], value: st
 
 	<SettingsGroup heading="Connection">
 		<SettingsRow
-			id="ai-agent-test"
-			label="Test the agent"
+			row={pane.rows.agentTest}
 			hint="Sends one short prompt with your review model, from Revv's background service, the same way walkthroughs run. Uses a few tokens."
 		>
 			{#snippet control()}

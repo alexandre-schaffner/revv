@@ -1,27 +1,20 @@
 <script lang="ts">
 import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwise";
 import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
-import { onMount, untrack } from "svelte";
+import { untrack } from "svelte";
 import YourReview from "$lib/components/review/YourReview.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
+import { prefersReducedMotion } from "$lib/motion";
+import { useCommands } from "$lib/stores/commands.svelte";
 import {
-  changeAssignees,
-  changeLabels,
-  changeReviewers,
-  deleteComment,
   editBody,
-  editComment,
+  getAbilities,
   getConversation,
-  hasPendingChecks,
-  loadCheckDetails,
   loadConversation,
   postComment,
-  rerunFailedRuns,
-  rerunJob,
-  watchChecks,
+  watchConversation,
 } from "$lib/stores/conversation.svelte";
 import { getActivePanel } from "$lib/stores/focus-mode.svelte";
-import { isTextEditingKeyTarget } from "$lib/utils";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { openExternal } from "$lib/utils/open-external";
 import BaseConflicts from "./BaseConflicts.svelte";
@@ -40,65 +33,75 @@ let { prId, isActive }: Props = $props();
 
 const entry = $derived(getConversation(prId));
 const conversation = $derived(entry.request.status === "ok" ? entry.request.data : null);
-const canEdit = $derived(!!conversation?.viewerCanUpdate && !entry.denied.has("edit"));
-const canComment = $derived(!entry.denied.has("edit"));
-const canRerun = $derived(!!conversation?.viewerCanPush && !entry.denied.has("rerun"));
-const shouldPollChecks = $derived(
-  isActive && (hasPendingChecks(conversation?.ci) || entry.awaitingRerun),
-);
+const abilities = $derived(getAbilities(prId));
 
 let composer = $state<HTMLTextAreaElement | null>(null);
 let reviewersOpen = $state(false);
 let assigneesOpen = $state(false);
 let labelsOpen = $state(false);
 
-// Load when the tab comes on screen; the store skips a fetch younger than 30s.
-// `untrack` keeps this effect from subscribing to the store's map, which
-// every write replaces.
 $effect(() => {
   if (!isActive || !prId) return;
   const id = prId;
-  untrack(() => void loadConversation(id));
+  return untrack(() => watchConversation(id));
 });
 
-// The tab owns CI polling: on while it's on screen and something is pending
-// (or a re-run hasn't shown up yet); the store stops on its own once settled.
-$effect(() => {
-  if (!shouldPollChecks) return;
-  const id = prId;
-  return untrack(() => watchChecks(id));
-});
+// The sidebar's file tree binds the same letters (`l` opens a file).
+const keysLive = (): boolean => isActive && conversation !== null && getActivePanel() !== "sidebar";
+const canEdit = (): boolean => keysLive() && abilities.canEdit;
 
-onMount(() => {
-  const onFocus = () => {
-    if (isActive) void loadConversation(prId);
-  };
-  window.addEventListener("focus", onFocus);
-  return () => window.removeEventListener("focus", onFocus);
-});
-
-function onKeydown(e: KeyboardEvent): void {
-  if (!isActive || !conversation || e.defaultPrevented) return;
-  if (e.metaKey || e.ctrlKey || e.altKey || isTextEditingKeyTarget(e)) return;
-  // The sidebar's file tree binds the same letters (`l` opens a file).
-  if (getActivePanel() === "sidebar") return;
-  const key = e.key.toLowerCase();
-  if (key === "c" && canComment && composer) {
-    e.preventDefault();
-    composer.focus();
-    composer.scrollIntoView({ block: "center", behavior: "smooth" });
-  } else if (canEdit && (key === "r" || key === "a" || key === "l")) {
-    e.preventDefault();
-    if (key === "r") reviewersOpen = true;
-    if (key === "a") assigneesOpen = true;
-    if (key === "l") labelsOpen = true;
-  }
+function focusComposer(): void {
+  if (!composer) return;
+  composer.focus();
+  composer.scrollIntoView({
+    block: "center",
+    behavior: prefersReducedMotion() ? "auto" : "smooth",
+  });
 }
+
+useCommands([
+  {
+    id: "conversation:comment",
+    label: "Write a comment",
+    keys: { bare: ["c", "C"] },
+    when: () => keysLive() && abilities.canComment && composer !== null,
+    hidden: true,
+    run: focusComposer,
+  },
+  {
+    id: "conversation:reviewers",
+    label: "Edit reviewers",
+    keys: { bare: ["r", "R"] },
+    when: canEdit,
+    hidden: true,
+    run: () => {
+      reviewersOpen = true;
+    },
+  },
+  {
+    id: "conversation:assignees",
+    label: "Edit assignees",
+    keys: { bare: ["a", "A"] },
+    when: canEdit,
+    hidden: true,
+    run: () => {
+      assigneesOpen = true;
+    },
+  },
+  {
+    id: "conversation:labels",
+    label: "Edit labels",
+    keys: { bare: ["l", "L"] },
+    when: canEdit,
+    hidden: true,
+    run: () => {
+      labelsOpen = true;
+    },
+  },
+]);
 </script>
 
-<svelte:window onkeydown={onKeydown} />
-
-<div class="conversation">
+<div class="conversation review-columns">
 	<div class="conversation-main">
 		{#if conversation}
 			{#if entry.stale}
@@ -113,39 +116,25 @@ function onKeydown(e: KeyboardEvent): void {
 			<div class="slot-description">
 				<CommentCard
 					author={conversation.author}
-					verb="opened"
+					kind="description"
 					createdAt={conversation.createdAt}
 					body={conversation.body}
 					url={conversation.url}
 					emptyText="No description provided."
-					onsave={canEdit ? (body) => editBody(prId, body) : undefined}
+					onsave={abilities.canEdit ? (body) => editBody(prId, body) : undefined}
 				/>
 			</div>
 
 
 			<div class="slot-timeline">
-				<Timeline
-					{conversation}
-					canEdit={canComment}
-					onEditComment={(id, body) => editComment(prId, id, body)}
-					onDeleteComment={(id) => deleteComment(prId, id)}
-				/>
+				<Timeline {prId} {conversation} />
 			</div>
 
 			<!-- Where CI stands now, after the history that led here: GitHub's merge
 			     box sits in the same place. Each commit above carries its own CI
 			     state in the timeline. -->
 			<div class="slot-checks">
-				<CiChecks
-					rollup={conversation.ci}
-					denied={conversation.ciAccess === 'denied'}
-					prUrl={conversation.url}
-					details={entry.checkDetails}
-					{canRerun}
-					onExpand={(id) => void loadCheckDetails(prId, id)}
-					onRerunRuns={(runIds) => rerunFailedRuns(prId, runIds)}
-					onRerunJob={(jobId) => rerunJob(prId, jobId)}
-				/>
+				<CiChecks {prId} {conversation} />
 			</div>
 
 			<!-- The other half of GitHub's merge box: conflicts with the base. -->
@@ -153,7 +142,7 @@ function onKeydown(e: KeyboardEvent): void {
 				<BaseConflicts {prId} {conversation} />
 			</div>
 
-			{#if canComment && conversation.state === 'open'}
+			{#if abilities.canComment && conversation.state === 'open'}
 				<div class="slot-composer">
 					<MarkdownEditor
 						placeholder="Add a comment"
@@ -191,15 +180,11 @@ function onKeydown(e: KeyboardEvent): void {
 		</section>
 	</div>
 
-	<aside class="conversation-side" aria-label="Pull request details">
+	<aside class="conversation-side" data-col="rail" aria-label="Pull request details">
 		{#if conversation}
 			<ConversationSidebar
 				{prId}
 				{conversation}
-				{canEdit}
-				onReviewers={(added, removed) => void changeReviewers(prId, added, removed)}
-				onAssignees={(added, removed) => void changeAssignees(prId, added, removed)}
-				onLabels={(added, removed) => void changeLabels(prId, added, removed)}
 				bind:reviewersOpen
 				bind:assigneesOpen
 				bind:labelsOpen
@@ -213,21 +198,9 @@ function onKeydown(e: KeyboardEvent): void {
 </div>
 
 <style>
-	/* The main-area-anchored 6-col grid every review tab shares (see
-	   GuidedWalkthrough.svelte's `.walkthrough-content` for the col_1
-	   derivation): the timeline takes col 3, the sidebar the 380px
-	   annotation rail in col 5. Col 3 is a FIXED 820px, not minmax, because
-	   the Your review panels set `container-type: inline-size` and would
-	   report a 0 max-content, collapsing a content-sized track. */
+	/* The review grid (review-columns.css): the timeline in the content
+	   column, the sidebar in the rail. */
 	.conversation {
-		display: grid;
-		grid-template-columns:
-			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
-			48px
-			820px
-			40px
-			380px
-			minmax(24px, 1fr);
 		align-items: start;
 		/* Clears the floating review action bar. */
 		padding: 16px 0 100px;
@@ -239,7 +212,6 @@ function onKeydown(e: KeyboardEvent): void {
 	}
 
 	.conversation-main {
-		grid-column: 3;
 		display: flex;
 		flex-direction: column;
 		gap: 16px;
@@ -247,7 +219,6 @@ function onKeydown(e: KeyboardEvent): void {
 	}
 
 	.conversation-side {
-		grid-column: 5;
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
@@ -366,7 +337,7 @@ function onKeydown(e: KeyboardEvent): void {
 	   flow so the sidebar can slot in right under the description, where
 	   GitHub's mobile layout puts it. Gated on `.review-content`'s width,
 	   not the viewport (the sidebar and right panel both move it). */
-	@container (max-width: 1335px) {
+	@container review (max-width: 1335px) {
 		/* Left edge pinned at col_3's x (72px), like the title and the
 		   walkthrough's narrow layout, so all three stay aligned. */
 		.conversation {

@@ -1,8 +1,8 @@
 // Drives the real stdio bridge as a subprocess. The contract under test is
 // narrow but load-bearing: a JSON-RPC request carrying an `id` must ALWAYS get
 // exactly one response line back. Anything less hangs the calling agent
-// forever with no diagnostic — which is what a stale endpoint path did, since
-// an unmatched Elysia route 404s with an empty body.
+// forever with no diagnostic; an unmatched Elysia route, for one, 404s with an
+// empty body.
 
 import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -15,6 +15,12 @@ const BRIDGE = resolve(
 );
 const REQUEST = `${JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/list" })}\n`;
 
+// Bun routes even loopback requests through HTTP_PROXY, so a developer's proxy
+// would answer the bridge instead of the stub (with a 407, say).
+const BRIDGE_ENV = Object.fromEntries(
+  Object.entries(process.env).filter(([name]) => !/^(https?|all|no)_proxy$/i.test(name)),
+);
+
 const servers: { stop: () => void }[] = [];
 const temporaryDirectories: string[] = [];
 
@@ -25,7 +31,6 @@ afterEach(() => {
   }
 });
 
-/** A stand-in Revv endpoint that answers every request the same way. */
 function stubRevv(respond: (request: Request) => Response): string {
   const server = Bun.serve({ port: 0, fetch: respond });
   servers.push({ stop: () => server.stop(true) });
@@ -36,13 +41,15 @@ async function askBridge(
   apiUrl: string,
   cwd: string = resolve(import.meta.dir, "../../../../.."),
   input: string = REQUEST,
+  env: Record<string, string> = {},
 ): Promise<string> {
   const child = Bun.spawn(["bun", "run", BRIDGE], {
     cwd,
     env: {
-      ...process.env,
+      ...BRIDGE_ENV,
       REVV_INTEGRATION_TOKEN: "test-token",
       REVV_API_URL: apiUrl,
+      ...env,
     },
     stdin: new TextEncoder().encode(input),
     stdout: "pipe",
@@ -125,6 +132,29 @@ describe("external MCP bridge", () => {
 
     expect(JSON.parse(output)).toEqual(replies);
     expect(repositoryHeader).toBeNull();
+  });
+
+  it("reaches Revv on loopback past a proxy the environment names", async () => {
+    const url = stubRevv(
+      () => new Response(JSON.stringify({ jsonrpc: "2.0", id: 7, result: { tools: [] } })),
+    );
+
+    const output = await askBridge(url, undefined, REQUEST, {
+      HTTP_PROXY: "http://127.0.0.1:1",
+      http_proxy: "http://127.0.0.1:1",
+    });
+
+    expect(JSON.parse(output)).toEqual({ jsonrpc: "2.0", id: 7, result: { tools: [] } });
+  });
+
+  it("keeps Revv's refusal when the next endpoint can't be reached", async () => {
+    const url = stubRevv(() => new Response("credential revoked", { status: 403 }));
+
+    const output = await askBridge(`${url},http://127.0.0.1:1/mcp/external`);
+
+    const response = JSON.parse(output) as { id: number; error?: { message: string } };
+    expect(response.error?.message).toContain("403");
+    expect(response.error?.message).toContain("credential revoked");
   });
 
   it("reports an unreachable Revv instead of waiting on it", async () => {

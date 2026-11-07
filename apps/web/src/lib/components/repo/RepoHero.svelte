@@ -5,9 +5,9 @@ import RepoEngraving from "$lib/components/repo/RepoEngraving.svelte";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import { Button } from "$lib/components/ui/button";
 import { gsap, turnLook } from "$lib/motion";
+import type { OwnerPalette } from "$lib/repos/avatar-palette";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
-import type { OwnerPalette } from "$lib/utils/avatarPalette";
-import { repoInk } from "$lib/utils/repo-ink";
+import { repoInk } from "./repo-ink";
 
 interface Props {
   repo: Repository;

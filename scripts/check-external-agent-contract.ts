@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { EXTERNAL_AGENT_SCOPES } from "@revv/shared";
 import {
   EXTERNAL_REVIEW_TOOL_SPECS,
   MAX_WAIT_SECONDS,
 } from "../apps/server/src/ai/providers/external-review-tools";
-import { EXTERNAL_AGENT_SCOPES } from "../apps/server/src/services/ExternalIntegrations";
 
 const names = EXTERNAL_REVIEW_TOOL_SPECS.map((spec) => spec.name);
 const duplicateNames = names.filter((name, index) => names.indexOf(name) !== index);
@@ -39,6 +39,23 @@ if (bridgeTimeout === undefined) {
 if (MAX_WAIT_SECONDS * 1000 >= Number(bridgeTimeout.replaceAll("_", ""))) {
   throw new Error(
     `wait_for_walkthrough may wait ${MAX_WAIT_SECONDS}s, at or past the bridge's ${bridgeTimeout}ms request timeout.`,
+  );
+}
+
+// Installed guides name tools; a renamed tool would leave every install
+// pointing at one that doesn't exist. Every backticked name the guide starts
+// with a tool verb must be a tool.
+const guide = readFileSync(
+  join(import.meta.dir, "../integrations/external-agent-guides/address-feedback.md"),
+  "utf8",
+);
+const verbs = new Set(names.map((name) => name.split("_")[0]));
+const unknownGuideTools = [...guide.matchAll(/`([a-z]+(?:_[a-z]+)+)`/g)]
+  .map(([, name]) => name ?? "")
+  .filter((name) => verbs.has(name.split("_")[0]) && !names.includes(name));
+if (unknownGuideTools.length > 0) {
+  throw new Error(
+    `The external agent guide names tools that don't exist: ${[...new Set(unknownGuideTools)].join(", ")}`,
   );
 }
 

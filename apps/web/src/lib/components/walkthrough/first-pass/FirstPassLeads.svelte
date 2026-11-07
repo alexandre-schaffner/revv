@@ -7,7 +7,7 @@ import {
   leadOutcomeNote,
   smellTone,
   type UnraisedLead,
-} from "$lib/utils/hunk-scan";
+} from "$lib/hunk-scan/first-pass";
 import FoldedDisclosure from "../FoldedDisclosure.svelte";
 import { SMELL_ICONS } from "./smell-icons";
 

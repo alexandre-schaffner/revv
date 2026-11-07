@@ -1,20 +1,11 @@
 # shellcheck shell=bash
-# ──────────────────────────────────────────────────────────────
-# Revv — Shared shell helpers (sourced by install.sh and scripts/revv)
-#
-# This file is intentionally NOT executable and has no shebang — it's meant
-# to be loaded with `source`. It provides colors, logging helpers, TTY-safe
-# prompts, platform detection, and toolchain-install routines that both the
-# installer and the management CLI use.
-# ──────────────────────────────────────────────────────────────
+# Shared shell helpers, sourced (not executed) by install.sh and scripts/revv.
 
-# ── Double-source guard ───────────────────────────────────────
 if [[ -n "${__REVV_COMMON_LOADED__:-}" ]]; then
   return 0 2>/dev/null || true
 fi
 __REVV_COMMON_LOADED__=1
 
-# ── Colors (only when stdout is a TTY) ────────────────────────
 if [[ -t 1 ]]; then
   REVV_RED=$'\033[0;31m'
   REVV_GREEN=$'\033[0;32m'
@@ -29,7 +20,7 @@ else
   REVV_BOLD="" REVV_DIM="" REVV_RESET=""
 fi
 
-# Legacy short aliases — existing scripts reference $RED, $GREEN, etc.
+# Short aliases used by scripts/revv.
 RED="$REVV_RED"
 GREEN="$REVV_GREEN"
 YELLOW="$REVV_YELLOW"
@@ -39,14 +30,12 @@ BOLD="$REVV_BOLD"
 DIM="$REVV_DIM"
 RESET="$REVV_RESET"
 
-# ── Logging ───────────────────────────────────────────────────
 info()    { printf "  %s·%s  %s\n"        "$REVV_CYAN"   "$REVV_RESET" "$*"; }
 success() { printf "  %s✓%s  %s\n"        "$REVV_GREEN"  "$REVV_RESET" "$*"; }
 warn()    { printf "  %s⚠%s  %s\n"        "$REVV_YELLOW" "$REVV_RESET" "$*"; }
 fail()    { printf "\n  %s✗%s  %s\n\n"    "$REVV_RED"    "$REVV_RESET" "$*" >&2; exit 1; }
 step()    { printf "\n  %s%s▸%s  %s\n\n" "$REVV_BOLD" "$REVV_CYAN" "$REVV_RESET" "$*"; }
 
-# ── Banner ────────────────────────────────────────────────────
 banner() {
   printf "\n"
   printf "  %s%s██████╗ ███████╗██╗   ██╗██╗   ██╗%s\n" "$REVV_CYAN" "$REVV_BOLD" "$REVV_RESET"
@@ -58,7 +47,6 @@ banner() {
   printf "\n  %sAI-powered code review%s\n\n" "$REVV_DIM" "$REVV_RESET"
 }
 
-# ── Spinner ───────────────────────────────────────────────────
 _REVV_SP_FRAMES='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 _REVV_SP_MSG=''
 _REVV_SP_PID=''
@@ -95,11 +83,8 @@ spin_stop() {
   fi
 }
 
-# ── Quiet command runner ──────────────────────────────────────
-# Usage: run_quiet "Label" command [args...]
-#   Default: spinner while running; stdout+stderr captured to a temp log.
-#   REVV_VERBOSE=1: streams output inline with an indented label header.
-# On failure: prints exit code, log path, and last 15 log lines.
+# run_quiet LABEL CMD [ARGS...]: spinner while output goes to a temp log
+# (REVV_VERBOSE=1 streams it instead); exits on failure.
 run_quiet() {
   local label="$1"; shift
   local _log _rc
@@ -134,10 +119,8 @@ run_quiet() {
   exit 1
 }
 
-# ── TTY-safe input (works under `curl … | bash`) ──────────────
-#
-# Reads from /dev/tty so prompts work even when stdin is the pipe carrying
-# the script itself. `read_tty VAR PROMPT [DEFAULT] [silent]`.
+# read_tty VAR PROMPT [DEFAULT] [silent]. Reads /dev/tty: under
+# `curl … | bash`, stdin is the pipe carrying the script.
 read_tty() {
   local __varname="$1" __prompt="$2" __default="${3:-}" __silent="${4:-}"
   if [[ "${REVV_AUTO_YES:-0}" == "1" && -n "$__default" ]]; then
@@ -165,10 +148,7 @@ confirm() {
 
 check_cmd() { command -v "$1" >/dev/null 2>&1; }
 
-# ── Platform detection ────────────────────────────────────────
-#
-# Revv is macOS-only. Sets globals: PLATFORM (always macos), ARCH (raw
-# uname -m), RUST_TARGET (aarch64-apple-darwin | x86_64-apple-darwin).
+# Sets and exports PLATFORM, ARCH (raw uname -m) and RUST_TARGET.
 detect_platform() {
   local os arch
   os="$(uname -s)"
@@ -184,10 +164,8 @@ detect_platform() {
   export PLATFORM ARCH RUST_TARGET
 }
 
-# ── Canonical paths ───────────────────────────────────────────
-#
-# Sets globals: REVV_SUPPORT_DIR, REVV_SRC_DIR, REVV_LOG_DIR,
-# REVV_LAUNCH_AGENT_PLIST, REVV_CLI_DIR, REVV_AUTH_KEY.
+# Sets and exports REVV_SUPPORT_DIR, REVV_SRC_DIR, REVV_LOG_DIR,
+# REVV_LAUNCH_AGENT_PLIST, REVV_CLI_DIR.
 revv_paths() {
   : "${PLATFORM:=$(uname -s)}"
   # bash 3.2 (macOS /bin/bash) lacks ${VAR,,}; lowercase via tr.
@@ -205,41 +183,9 @@ revv_paths() {
   esac
   REVV_SRC_DIR="${REVV_INSTALL_DIR:-$REVV_SUPPORT_DIR/src}"
   REVV_CLI_DIR="${REVV_CLI_DIR:-$HOME/.local/bin}"
-  REVV_AUTH_KEY="${REVV_AUTH_KEY:-$REVV_SUPPORT_DIR/auth.key}"
   export REVV_SUPPORT_DIR REVV_SRC_DIR REVV_LOG_DIR
-  export REVV_LAUNCH_AGENT_PLIST REVV_CLI_DIR REVV_AUTH_KEY
+  export REVV_LAUNCH_AGENT_PLIST REVV_CLI_DIR
 }
-
-# ── Auth key management ───────────────────────────────────────
-#
-# Creates $REVV_AUTH_KEY (64 hex chars) mode 600 in a dir mode 700 if it
-# doesn't exist. No-op if already present and non-empty. The server reads
-# this file at startup (see apps/server/src/auth.ts loadOrCreateAuthSecret).
-ensure_auth_key() {
-  revv_paths
-  if [[ -s "$REVV_AUTH_KEY" ]]; then
-    success "Auth key already present"
-    return 0
-  fi
-  mkdir -p "$REVV_SUPPORT_DIR"
-  chmod 700 "$REVV_SUPPORT_DIR" 2>/dev/null || true
-  local secret=""
-  if check_cmd openssl; then
-    secret="$(openssl rand -hex 32)"
-  elif check_cmd xxd; then
-    secret="$(head -c 32 /dev/urandom | xxd -p -c 32)"
-  else
-    secret="$(LC_ALL=C tr -dc 'a-f0-9' </dev/urandom | head -c 64)"
-  fi
-  if [[ ${#secret} -lt 32 ]]; then
-    fail "Could not generate an auth key (no openssl/xxd/urandom available)"
-  fi
-  printf '%s' "$secret" > "$REVV_AUTH_KEY"
-  chmod 600 "$REVV_AUTH_KEY"
-  success "Generated auth key at $REVV_AUTH_KEY"
-}
-
-# ── Toolchain installers ──────────────────────────────────────
 
 ensure_xcode_clt() {
   [[ "${PLATFORM:-}" == "macos" ]] || return 0
@@ -296,7 +242,6 @@ ensure_bun() {
 }
 
 ensure_rust() {
-  # Pick up cargo if it was just installed in this shell
   [[ -f "$HOME/.cargo/env" ]] && { # shellcheck disable=SC1091
     source "$HOME/.cargo/env"; }
 
@@ -314,7 +259,6 @@ ensure_rust() {
     success "rustc $(rustc --version | awk '{print $2}')"
   fi
 
-  # Rust target
   : "${RUST_TARGET:?detect_platform must run before ensure_rust}"
   if check_cmd rustup; then
     if rustup target list --installed 2>/dev/null | grep -q "^$RUST_TARGET$"; then
@@ -339,8 +283,6 @@ ensure_rust() {
   fi
 }
 
-# ── Release bundle install ────────────────────────────────────
-
 revv_sha256_of() {
   if check_cmd sha256sum; then
     sha256sum "$1" | awk '{print $1}'
@@ -349,9 +291,13 @@ revv_sha256_of() {
   fi
 }
 
+# install_release_app TAG [INSTALL_DIR] [PREVIOUS_APP]: installs the app from
+# a GitHub release's updater archive (see install_app_bundle). Returns 1 when
+# the release or its archive is unavailable.
 install_release_app() {
-  local release_tag="$1" app_dir="${2:-}" asset_arch release_json bundle_url bundle_sha
-  local sums_file sums_url bundle_filename bundle_file actual_sha mount_point app_source install_dir installed_app tmp_app backup_app
+  local release_tag="$1" install_dir="${2:-}" previous_app="${3:-}"
+  local asset_arch asset_name release_json bundle_url bundle_sha
+  local sums_file bundle_file actual_sha extract_dir app_source rc
 
   REVV_INSTALLED_APP=""
   [[ -n "$release_tag" ]] || return 1
@@ -360,28 +306,28 @@ install_release_app() {
     x86_64)        asset_arch="x64" ;;
     *)             return 1 ;;
   esac
+  # The updater archive: the release's only copy of the app.
+  asset_name="Revv_${asset_arch}.app.tar.gz"
 
   release_json="$(mktemp)"
   curl -fsSL \
     "https://api.github.com/repos/${REVV_GITHUB_REPO}/releases/tags/${release_tag}" \
     -o "$release_json" || { rm -f "$release_json"; return 1; }
 
-  bundle_url="$(sed -n "s/.*\"browser_download_url\": \"\([^\"]*_${asset_arch}\.dmg\)\".*/\1/p" "$release_json" | head -1)"
-  bundle_sha="$(sed -n "/\"name\": \".*_${asset_arch}\.dmg\"/,/\"browser_download_url\"/ s/.*\"digest\": *\"sha256:\([a-fA-F0-9]*\)\".*/\1/p" "$release_json" | head -1)"
+  bundle_url="$(sed -n "s/.*\"browser_download_url\": \"\([^\"]*\/${asset_name//./\\.}\)\".*/\1/p" "$release_json" | head -1)"
+  bundle_sha="$(sed -n "/\"name\": \"${asset_name//./\\.}\"/,/\"browser_download_url\"/ s/.*\"digest\": *\"sha256:\([a-fA-F0-9]*\)\".*/\1/p" "$release_json" | head -1)"
   rm -f "$release_json"
   [[ -n "$bundle_url" ]] || return 1
 
   if [[ -z "$bundle_sha" ]]; then
-    sums_url="https://github.com/${REVV_GITHUB_REPO}/releases/download/${release_tag}/SHA256SUMS"
     sums_file="$(mktemp)"
-    if curl -fsSL "$sums_url" -o "$sums_file" 2>/dev/null; then
-      bundle_filename="$(basename "$bundle_url")"
-      bundle_sha="$(awk -v name="$bundle_filename" '$2 == name {print $1}' "$sums_file" | head -1)"
+    if curl -fsSL "https://github.com/${REVV_GITHUB_REPO}/releases/download/${release_tag}/SHA256SUMS" -o "$sums_file" 2>/dev/null; then
+      bundle_sha="$(awk -v name="$asset_name" '$2 == name {print $1}' "$sums_file" | head -1)"
     fi
     rm -f "$sums_file"
   fi
 
-  bundle_file="$(mktemp).dmg"
+  bundle_file="$(mktemp)"
   spin_start "Downloading Revv.app from ${release_tag} (${asset_arch})"
   if ! curl -fsSL "$bundle_url" -o "$bundle_file"; then
     spin_stop 0
@@ -394,51 +340,85 @@ install_release_app() {
     actual_sha="$(revv_sha256_of "$bundle_file")"
     if [[ "$actual_sha" != "$bundle_sha" ]]; then
       rm -f "$bundle_file"
-      fail "Downloaded DMG checksum mismatch for ${release_tag}."
+      fail "Downloaded app archive checksum mismatch for ${release_tag}."
     fi
   else
-    warn "SHA256SUMS unavailable for ${release_tag}; installing without checksum verification."
+    warn "No checksum published for ${release_tag}; installing without checksum verification."
   fi
 
-  mount_point="$(mktemp -d)"
-  hdiutil attach -quiet -nobrowse -mountpoint "$mount_point" "$bundle_file" || {
-    _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
+  extract_dir="$(mktemp -d)"
+  tar -xzf "$bundle_file" -C "$extract_dir" || {
+    rm -rf "$extract_dir" "$bundle_file"
     return 1
   }
+  rm -f "$bundle_file"
 
-  app_source="$(find "$mount_point" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
+  app_source="$(find "$extract_dir" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
   if [[ -z "$app_source" ]]; then
-    _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
+    rm -rf "$extract_dir"
     return 1
   fi
 
-  install_dir="${app_dir:-/Applications}"
+  rc=0
+  install_app_bundle "$app_source" "$install_dir" "$previous_app" || rc=$?
+  rm -rf "$extract_dir"
+  return "$rc"
+}
+
+# build_local_app PROJECT_ROOT: builds Revv.app from the checkout with
+# `bun run dist` and sets REVV_BUILT_APP.
+build_local_app() {
+  local project_root="$1" bundle_dir
+  detect_platform
+  ensure_xcode_clt
+  ensure_rust
+  (cd "$project_root" && bun run dist) || fail "Building Revv.app failed (see the output above)."
+
+  bundle_dir="$project_root/apps/desktop/target/release/bundle/macos"
+  REVV_BUILT_APP="$(find "$bundle_dir" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
+  if [[ -z "$REVV_BUILT_APP" ]]; then
+    # A cargo build.target setting puts the bundle under target/<triple>/.
+    REVV_BUILT_APP="$(find "$project_root/apps/desktop/target" -maxdepth 6 -type d -name '*.app' -path '*/bundle/macos/*' 2>/dev/null | head -1)"
+  fi
+  [[ -n "$REVV_BUILT_APP" ]] || fail "Build finished but no .app was found under $bundle_dir"
+}
+
+# install_app_bundle SOURCE_APP [INSTALL_DIR] [PREVIOUS_APP]: copies
+# SOURCE_APP into INSTALL_DIR (default /Applications; ~/Applications when it
+# isn't writable) and swaps it in for the installed copy in one rename, so a
+# failure leaves the old app in place. PREVIOUS_APP is the app this replaces;
+# it is removed when the product name changed. Sets REVV_INSTALLED_APP.
+install_app_bundle() {
+  local source_app="$1" install_dir="${2:-/Applications}" previous_app="${3:-}"
+  local installed_app tmp_app backup_app=""
+
+  REVV_INSTALLED_APP=""
   [[ -w "$install_dir" ]] || install_dir="$HOME/Applications"
-  mkdir -p "$install_dir" || {
-    _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
-    return 1
-  }
-  installed_app="$install_dir/$(basename "$app_source")"
+  mkdir -p "$install_dir" || return 1
+  installed_app="$install_dir/$(basename "$source_app")"
   tmp_app="${installed_app}.tmp.$$"
 
-  rm -rf "$tmp_app" || {
-    _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
-    return 1
-  }
-  if ! cp -R "$app_source" "$tmp_app"; then
+  rm -rf "$tmp_app" || return 1
+  if ! cp -R "$source_app" "$tmp_app"; then
     rm -rf "$tmp_app"
-    _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
     return 1
   fi
   xattr -cr "$tmp_app" 2>/dev/null || true
 
-  backup_app=""
+  # legacy-upgrade: launchAgent. Its KeepAlive server runs from inside the
+  # installed bundle; stop it before the bundle moves. The plist stays for
+  # write_desktop_server_config to migrate, then retire_server_launch_agent
+  # removes it.
+  local launch_agent="${REVV_LAUNCH_AGENT_PLIST:-$HOME/Library/LaunchAgents/com.revv.server.plist}"
+  if [[ -f "$launch_agent" ]]; then
+    launchctl unload "$launch_agent" 2>/dev/null || true
+  fi
+
   if [[ -e "$installed_app" ]]; then
     quit_revv_app "$installed_app"
     backup_app="${installed_app}.backup.$$"
     if ! rm -rf "$backup_app" || ! mv "$installed_app" "$backup_app"; then
       rm -rf "$tmp_app"
-      _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
       return 1
     fi
   fi
@@ -447,24 +427,20 @@ install_release_app() {
     if [[ -n "$backup_app" ]]; then
       mv "$backup_app" "$installed_app" 2>/dev/null || true
     fi
-    _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
     return 1
   fi
   if [[ -n "$backup_app" ]]; then
     rm -rf "$backup_app" || warn "Installed app, but could not remove backup: $backup_app"
   fi
 
-  _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
+  if [[ -n "$previous_app" && "$previous_app" != "$installed_app" && -d "$previous_app" ]]; then
+    info "Product name changed — removing $previous_app"
+    quit_revv_app "$previous_app"
+    rm -rf "$previous_app" || warn "Installed app, but could not remove $previous_app"
+  fi
+
   REVV_INSTALLED_APP="$installed_app"
 }
-
-_revv_cleanup_release_app_install() {
-  local mount_point="$1" bundle_file="$2"
-  hdiutil detach -quiet "$mount_point" 2>/dev/null || true
-  rm -rf "$mount_point" "$bundle_file"
-}
-
-# ── Desktop server configuration ────────────────────────────
 
 quit_revv_app() {
   local app_path="$1" executable pid command pids="" deadline
@@ -484,28 +460,49 @@ quit_revv_app() {
   return 0
 }
 
-# Parse a single KEY=value (or KEY="value") line from a .env file.
-# Strips surrounding single- or double-quotes; ignores blank lines and comments.
-# Prints the bare value, or nothing if the key is absent.
+# Prints KEY's value from a .env-style file, surrounding quotes stripped, or
+# nothing if absent.
 _revv_dotenv_get() {
   local key="$1" env_file="$2"
   [[ -f "$env_file" ]] || return 0
   local line value
   while IFS= read -r line; do
-    # Skip comments and lines that don't start with KEY=
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
     [[ "$line" =~ ^[[:space:]]*${key}= ]] || continue
-    # Extract everything after the first '='
     value="${line#*=}"
-    # Strip surrounding double-quotes
     value="${value%\"}"
     value="${value#\"}"
-    # Strip surrounding single-quotes
     value="${value%\'}"
     value="${value#\'}"
     printf '%s' "$value"
     return 0
   done < "$env_file"
+}
+
+# Persist the GitHub override (REVV_GITHUB_HOST / REVV_GITHUB_CLIENT_ID) to
+# $REVV_SUPPORT_DIR/github.conf, where `revv update` finds it again, or remove
+# the file when there is none. With a .env path, values the environment lacks
+# come from it.
+save_github_overrides() {
+  local env_file="${1:-}"
+  local host="${REVV_GITHUB_HOST:-}" client_id="${REVV_GITHUB_CLIENT_ID:-}"
+  if [[ -n "$env_file" ]]; then
+    [[ -f "$env_file" ]] || fail "No .env file at $env_file"
+    [[ -n "$host" ]] || host="$(_revv_dotenv_get GITHUB_HOST "$env_file")"
+    [[ -n "$client_id" ]] || client_id="$(_revv_dotenv_get GITHUB_CLIENT_ID "$env_file")"
+  fi
+  local conf="$REVV_SUPPORT_DIR/github.conf"
+  mkdir -p "$REVV_SUPPORT_DIR"
+  if [[ -z "$host" && -z "$client_id" ]]; then
+    rm -f "$conf"
+    return 0
+  fi
+  {
+    if [[ -n "$host" ]]; then printf 'GITHUB_HOST=%s\n' "$host"; fi
+    if [[ -n "$client_id" ]]; then printf 'GITHUB_CLIENT_ID=%s\n' "$client_id"; fi
+  } > "$conf"
+  chmod 600 "$conf"
+  success "GitHub overrides persisted → $conf (host: ${host:-<bundled>})"
 }
 
 # Record the user's tool locations for Finder/login launches, which lack shell setup.
@@ -526,14 +523,13 @@ write_desktop_server_config() {
   local github_host="${REVV_GITHUB_HOST:-}" github_client_id="${REVV_GITHUB_CLIENT_ID:-}"
   [[ -n "$github_host" ]] || github_host="$(_revv_dotenv_get GITHUB_HOST "$REVV_SUPPORT_DIR/github.conf")"
   [[ -n "$github_client_id" ]] || github_client_id="$(_revv_dotenv_get GITHUB_CLIENT_ID "$REVV_SUPPORT_DIR/github.conf")"
-  [[ -n "$github_host" ]] || github_host="$(_revv_dotenv_get GITHUB_HOST "$project_root/apps/server/.env")"
-  [[ -n "$github_client_id" ]] || github_client_id="$(_revv_dotenv_get GITHUB_CLIENT_ID "$project_root/apps/server/.env")"
 
   "$bun_bin" --no-env-file -e '
     const fs = require("node:fs");
     const path = require("node:path");
     const [target, executable, projectRoot, logDir, supportDir, claude, opencode, codex, host, clientId, legacy] = process.argv.slice(1);
     let previousEnv = {};
+    // legacy-upgrade: launchAgent (the app migrates it too, in server_config.rs).
     if (fs.existsSync(legacy)) {
       const migrated = Bun.spawnSync(["/usr/bin/plutil", "-convert", "json", "-o", "-", legacy]);
       if (migrated.exitCode !== 0) throw new Error("Cannot read legacy Revv server configuration");
@@ -551,8 +547,10 @@ write_desktop_server_config() {
       REVV_CLAUDE_BIN: claude || previousEnv.REVV_CLAUDE_BIN || "",
       REVV_OPENCODE_BIN: opencode || previousEnv.REVV_OPENCODE_BIN || "",
       REVV_CODEX_BIN: codex || previousEnv.REVV_CODEX_BIN || "",
-      CODEX_PATH: codex || previousEnv.CODEX_PATH || previousEnv.REVV_CODEX_BIN || "",
     };
+    // github.conf holds the override: one an earlier install wrote here goes with it.
+    delete env.GITHUB_HOST;
+    delete env.GITHUB_CLIENT_ID;
     if (host) env.GITHUB_HOST = host;
     if (clientId) env.GITHUB_CLIENT_ID = clientId;
     fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });

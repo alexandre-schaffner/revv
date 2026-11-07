@@ -1,7 +1,7 @@
+import type { RuntimeHealth } from "@revv/shared";
 import { toast } from "svelte-sonner";
-import type { RuntimeHealth } from "$lib/api/runtime";
-import { compareServiceBuild } from "$lib/api/service-build";
 import { getCommitHash } from "./client";
+import { compareServiceBuild } from "./service-build";
 
 /**
  * Warn when the server answering the app runs a different build.

@@ -1,12 +1,8 @@
-// ── Jev state builders ──────────────────────────────────────────────────────
-//
-// One builder per hook. Each returns a plain JSON object sized to fit under
+// Each builder returns a plain JSON object sized to fit under
 // the System One state budget, with named fields rather than a prose blob so
 // questions can reference nested paths (`pr.title`, `issues.<id>.description`).
-//
-// Not sharing the walkthrough prompt builder's budget loop
-// (`ai/prompts/walkthrough.ts`): different limit, different consumer.
 
+import type { IssueSeverity } from "@revv/shared";
 import type { JsonValue } from "@typesafe-ai/sdk";
 import type { JevState } from "../../services/Jev";
 import { truncatePatchToChars } from "../../services/patch-truncate";
@@ -18,10 +14,8 @@ import { truncatePatchToChars } from "../../services/patch-truncate";
  */
 export const JEV_STATE_MAX_CHARS = 96_000;
 
-/** Per-file patch ceiling, so one enormous file can't crowd out the rest. */
 const PER_PATCH_MAX_CHARS = 12_000;
 
-/** Rough token-equivalent size of a state blob, for budget decisions. */
 export function stateChars(state: JevState): number {
   return JSON.stringify(state).length;
 }
@@ -53,16 +47,19 @@ export interface CommitLike {
 const PR_BODY_MAX_CHARS = 4_000;
 const COMMIT_SUBJECT_MAX = 40;
 
-/** First line of a commit message — the subject is all a sizing judgment needs. */
-function commitSubject(message: string): string {
-  return (message.split("\n", 1)[0] ?? "").slice(0, 200);
+/** The commit subjects the job-start state carries, head first. */
+export function commitSubjects(commits: readonly CommitLike[]): string[] {
+  return commits
+    .slice(0, COMMIT_SUBJECT_MAX)
+    .map((c) => (c.message.split("\n", 1)[0] ?? "").slice(0, 200));
 }
 
 /**
- * State for the job-start call (risk tier + review depth + wide-context).
- * Patches are included because the questions are about the change, not the
- * description. Files are added whole-patch-first until budget runs out; the
- * rest still appear with stats, so the change size is never understated.
+ * Patches are included because the job-start questions are about the change,
+ * not the description. Files past the budget still appear with stats, so the
+ * change size is never understated. `files` and `commits` are the PR's cached
+ * diff (`DiffCacheService`), so every caller asking about one head sends the
+ * same state.
  */
 export interface JobStartStateInput {
   readonly pr: PrLike;
@@ -83,7 +80,7 @@ export function buildJobStartState({ pr, files, commits }: JobStartStateInput): 
       deletions: pr.deletions,
       changed_files: pr.changedFiles,
     },
-    commits: commits.slice(0, COMMIT_SUBJECT_MAX).map((c) => commitSubject(c.message)),
+    commits: commitSubjects(commits),
     commit_count: commits.length,
   };
 
@@ -111,14 +108,13 @@ export function buildJobStartState({ pr, files, commits }: JobStartStateInput): 
     withPatch.push({ ...stats, patch: clipped.patch });
   }
 
-  // The stats-only tail isn't budgeted above (entries are tiny), but thousands of files could still overflow it, hence the clamp below.
   return clampState({ ...header, files: [...withPatch, ...statsOnly] });
 }
 
 export interface IssueRelevanceInput {
   readonly pr: PrLike;
   readonly issue: {
-    readonly severity: string;
+    readonly severity: IssueSeverity;
     readonly title: string;
     readonly description: string;
     readonly filePath: string | null;
@@ -246,9 +242,8 @@ export function buildHunkScanState(input: HunkScanStateInput): JevState {
 
 /**
  * Last-resort clamp: a pathological input degrades to a truncated-but-valid
- * state rather than a 422. Halves the largest array/record field repeatedly
- * until it fits, biased toward keeping header fields over list tails.
- * Truncation is announced in-band so the model doesn't read it as complete.
+ * state rather than a 422. Truncation is announced in-band so the model
+ * doesn't read it as complete.
  */
 function clampState(state: JevState): JevState {
   if (stateChars(state) <= JEV_STATE_MAX_CHARS) return state;

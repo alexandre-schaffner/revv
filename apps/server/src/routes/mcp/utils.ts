@@ -1,15 +1,12 @@
-// ── MCP route shared utilities ───────────────────────────────────────────────
-//
-// Types and helpers shared by all HTTP MCP transports (walkthrough, chat-context,
-// etc.). Each transport is a thin JSON-RPC router; this module keeps the
-// protocol boilerplate in one place.
-
+import { spanName } from "@revv/shared/telemetry";
+import { Effect } from "effect";
 import { Elysia } from "elysia";
 import type { McpToolResult, ToolSpec, ToolSpecBundle } from "../../ai/providers/mcp-tool-gateway";
+import type { Db } from "../../db";
 import { debug, logError } from "../../logger";
 import { withGraftedSpan } from "../../observability/span-graft";
-
-// ── JSON-RPC 2.0 types ───────────────────────────────────────────────────────
+import { AppRuntime, type AppServices } from "../../runtime";
+import { DbService } from "../../services/Db";
 
 export interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -31,8 +28,6 @@ export interface JsonRpcError {
 }
 
 export type JsonRpcResponse = JsonRpcSuccess | JsonRpcError;
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
 
 export function jsonRpcSuccess(id: number | string | null, result: unknown): JsonRpcSuccess {
   return { jsonrpc: "2.0", id, result };
@@ -58,30 +53,6 @@ export function extractBearer(req: Request): string | null {
   return match?.[1] ? match[1].trim() : null;
 }
 
-/**
- * Convert a zod object schema to an MCP-ish JSON Schema object. Uses the
- * standard `.toJSONSchema()` method when available, falling back to a
- * permissive schema so the tool is still callable (the zod schema still
- * validates on handler entry).
- */
-export function toJsonSchema(schema: unknown): Record<string, unknown> {
-  try {
-    if (
-      schema != null &&
-      typeof schema === "object" &&
-      "toJSONSchema" in schema &&
-      typeof (schema as { toJSONSchema: unknown }).toJSONSchema === "function"
-    ) {
-      return (schema as { toJSONSchema: () => Record<string, unknown> }).toJSONSchema();
-    }
-  } catch {
-    /* fall through — zod schema still validates on handler entry */
-  }
-  return { type: "object", properties: {}, additionalProperties: true };
-}
-
-// ── Shared HTTP binder ──────────────────────────────────────────────────────
-
 export type ContextResolution<Ctx, Meta> =
   | { ok: true; ctx: Ctx; meta: Meta }
   | { ok: false; status: number; message: string };
@@ -90,15 +61,14 @@ export type ConnectionResolution<Meta> =
   | { ok: true; meta: Meta }
   | { ok: false; status: number; message: string };
 
-export interface HttpToolCall<Ctx, Meta> {
-  readonly toolName: string;
+export interface HttpToolCall<Ctx, Meta, Result extends McpToolResult> {
+  readonly spec: ToolSpec<Ctx, Result>;
+  readonly input: Record<string, unknown>;
   readonly ctx: Ctx;
   readonly meta: Meta;
 }
 
 export interface BindHttpOptions<Ctx, Meta, Result extends McpToolResult> {
-  readonly prefix?: string;
-  readonly path: string;
   readonly logScope: string;
   readonly bundle: ToolSpecBundle<Ctx, Result>;
   readonly resolveContext: (req: Request) => Promise<ContextResolution<Ctx, Meta>>;
@@ -107,23 +77,19 @@ export interface BindHttpOptions<Ctx, Meta, Result extends McpToolResult> {
    * Tool calls still resolve the full project-bound context.
    */
   readonly resolveConnection?: (req: Request) => Promise<ConnectionResolution<Meta>>;
-  readonly serverVersion?: string;
   readonly logInbound?: boolean;
-  readonly specsForList?: (
-    specs: ReadonlyArray<ToolSpec<Ctx, Result>>,
-    meta: Meta,
-  ) => ReadonlyArray<ToolSpec<Ctx, Result>>;
-  readonly rejectToolCall?: (toolName: string, meta: Meta) => string | null;
+  /** Why this caller may not use `spec`, or null. A refused tool is neither listed nor callable. */
+  readonly refuse?: (spec: ToolSpec<Ctx, Result>, meta: Meta) => string | null;
   /**
-   * Key under which the job that provoked this call published its trace anchor
-   * (see observability/span-graft.ts) — the walkthrough id for generation, the
-   * recap id for recaps. Returning it files each `tools/call` span inside that
-   * job's trace instead of a trace of its own, which is what makes an agent's
-   * content writes visible in the generation timeline. Omit for surfaces with
-   * no owning job (chat context): the span is still recorded, just unparented.
+   * The job that provoked this call: `key` is the id it published its trace
+   * anchor under (see observability/span-graft.ts), stamped on the span as
+   * `attribute`. Files each `tools/call` span inside that job's trace instead
+   * of a trace of its own, which is what makes an agent's content writes
+   * visible in the generation timeline. Omit for surfaces with no owning job
+   * (chat context): the span is still recorded, just unparented.
    */
-  readonly traceAnchorKey?: (meta: Meta) => string | null;
-  readonly beforeToolCall?: (call: HttpToolCall<Ctx, Meta>) => void;
+  readonly trace?: { readonly attribute: string; readonly key: (meta: Meta) => string };
+  readonly beforeToolCall?: (call: HttpToolCall<Ctx, Meta, Result>) => void;
   readonly servedMessage?: (requests: readonly JsonRpcRequest[], ctx: Ctx, meta: Meta) => string;
 }
 
@@ -142,12 +108,11 @@ function inboundMethod(body: unknown): string {
 function handleInitialize<Ctx, Result extends McpToolResult>(
   id: number | string | null,
   bundle: ToolSpecBundle<Ctx, Result>,
-  serverVersion?: string,
 ): JsonRpcResponse {
   return jsonRpcSuccess(id, {
     protocolVersion: "2024-11-05",
     capabilities: { tools: {} },
-    serverInfo: { name: bundle.name, version: serverVersion ?? bundle.version },
+    serverInfo: { name: bundle.name, version: bundle.version },
   });
 }
 
@@ -158,7 +123,9 @@ function handleToolsList<Ctx, Result extends McpToolResult>(
   const tools = specs.map((spec) => ({
     name: spec.name,
     description: spec.description,
-    inputSchema: toJsonSchema(spec.inputSchema),
+    // zod throws on what JSON Schema can't express (a `.transform()`); a
+    // permissive fallback would silently strip the tool's contract.
+    inputSchema: spec.inputSchema.toJSONSchema(),
   }));
   return jsonRpcSuccess(id, { tools });
 }
@@ -178,14 +145,13 @@ async function handleToolsCall<Ctx, Meta, Result extends McpToolResult>(
     return jsonRpcError(id, -32602, "tools/call: missing tool name");
   }
 
-  const rejection = options.rejectToolCall?.(name, resolved.meta) ?? null;
-  if (rejection) {
-    return jsonRpcError(id, -32601, rejection);
-  }
-
   const spec = options.bundle.specs.find((s) => s.name === name);
   if (!spec) {
     return jsonRpcError(id, -32601, `tools/call: unknown tool '${name}'`);
+  }
+  const refusal = options.refuse?.(spec, resolved.meta) ?? null;
+  if (refusal) {
+    return jsonRpcError(id, -32601, refusal);
   }
 
   const parsed = spec.inputSchema.safeParse(p.arguments ?? {});
@@ -198,12 +164,22 @@ async function handleToolsCall<Ctx, Meta, Result extends McpToolResult>(
   }
 
   try {
-    options.beforeToolCall?.({ toolName: name, ctx: resolved.ctx, meta: resolved.meta });
-    const anchorKey = options.traceAnchorKey?.(resolved.meta) ?? null;
+    options.beforeToolCall?.({
+      spec,
+      input: parsed.data,
+      ctx: resolved.ctx,
+      meta: resolved.meta,
+    });
+    const anchorKey = options.trace?.key(resolved.meta) ?? null;
     const result = await withGraftedSpan(
       anchorKey,
-      `Mcp.${name}`,
-      { attributes: { mcp_tool: name, ...(anchorKey ? { walkthrough_id: anchorKey } : {}) } },
+      spanName("mcp", name),
+      {
+        attributes: {
+          mcp_tool: name,
+          ...(anchorKey && options.trace ? { [options.trace.attribute]: anchorKey } : {}),
+        },
+      },
       () => spec.handler(resolved.ctx, parsed.data),
     );
     return jsonRpcSuccess(id, result);
@@ -225,7 +201,7 @@ async function handleToolsCall<Ctx, Meta, Result extends McpToolResult>(
 export function bindHttp<Ctx, Meta, Result extends McpToolResult>(
   options: BindHttpOptions<Ctx, Meta, Result>,
 ) {
-  return new Elysia({ prefix: options.prefix ?? "/mcp" }).post(options.path, async (ctx) => {
+  return new Elysia().post(options.bundle.route, async (ctx) => {
     const req = ctx.request;
     const body: unknown = ctx.body;
 
@@ -260,6 +236,16 @@ export function bindHttp<Ctx, Meta, Result extends McpToolResult>(
       // independent from a checkout-resolution failure in a sibling call.
       if (requests.some((rpc) => rpc?.method !== "tools/call")) {
         connectionResolution = await options.resolveConnection(req);
+      } else {
+        fullResolution = await options.resolveContext(req);
+        // A refused credential answers with its HTTP status here too, as on
+        // the handshake: a bridge probing Revv's channels moves on to the next.
+        if (
+          !fullResolution.ok &&
+          (fullResolution.status === 401 || fullResolution.status === 403)
+        ) {
+          connectionResolution = fullResolution;
+        }
       }
     } else {
       fullResolution = await options.resolveContext(req);
@@ -285,7 +271,7 @@ export function bindHttp<Ctx, Meta, Result extends McpToolResult>(
       const rpcId = rpc.id ?? null;
       try {
         if (rpc.method === "initialize") {
-          responses.push(handleInitialize(rpcId, options.bundle, options.serverVersion));
+          responses.push(handleInitialize(rpcId, options.bundle));
         } else if (rpc.method === "notifications/initialized") {
           if (rpc.id !== undefined && rpc.id !== null) {
             responses.push(jsonRpcSuccess(rpcId, null));
@@ -295,9 +281,10 @@ export function bindHttp<Ctx, Meta, Result extends McpToolResult>(
             responses.push(jsonRpcError(rpcId, -32603, "MCP connection was not resolved"));
             continue;
           }
-          const specs =
-            options.specsForList?.(options.bundle.specs, connectionResolution.meta) ??
-            options.bundle.specs;
+          const { meta } = connectionResolution;
+          const specs = options.refuse
+            ? options.bundle.specs.filter((spec) => options.refuse?.(spec, meta) === null)
+            : options.bundle.specs;
           responses.push(handleToolsList(rpcId, specs));
         } else if (rpc.method === "tools/call") {
           if (fullResolution === null) {
@@ -340,13 +327,10 @@ export function bindHttp<Ctx, Meta, Result extends McpToolResult>(
       debug(options.logScope, served);
     }
 
-    // All inbound messages were notifications/responses (no `id`), so there is
-    // nothing to reply with — e.g. the `notifications/initialized` handshake
-    // step. Per the MCP Streamable HTTP spec, return 202 Accepted with an empty
-    // body. Returning a bodyless 200 + `Content-Type: application/json` (the old
-    // behavior) makes strict clients try to JSON-parse an empty body and fail
-    // with "EOF while parsing a value at line 1 column 0" — this killed Codex's
-    // `rmcp` transport worker right after the initialized notification.
+    // Only notifications/responses (no `id`), e.g. the `notifications/initialized`
+    // handshake step. The MCP Streamable HTTP spec wants 202 Accepted with an
+    // empty body: strict clients (Codex's `rmcp`) JSON-parse a bodyless 200 and
+    // fail with "EOF while parsing".
     if (responses.length === 0) {
       return new Response(null, { status: 202 });
     }
@@ -356,5 +340,42 @@ export function bindHttp<Ctx, Meta, Result extends McpToolResult>(
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
+  });
+}
+
+export interface BindTokenRouteOptions<Ctx, Meta, Payload, Result extends McpToolResult>
+  extends Omit<BindHttpOptions<Ctx, Meta, Result>, "resolveContext" | "resolveConnection"> {
+  /** The bearer's payload from its issuer's token store; `null` when unknown, expired or revoked. */
+  readonly resolveToken: (token: string) => Effect.Effect<Payload | null, never, AppServices>;
+  /** The 403 message for a token that doesn't resolve. */
+  readonly rejected: string;
+  readonly toContext: (payload: Payload, db: Db) => { readonly ctx: Ctx; readonly meta: Meta };
+}
+
+/**
+ * An MCP route whose caller is an agent Revv started, holding a per-run bearer
+ * token: 401 without one, 403 when it doesn't resolve, otherwise the tool
+ * context built from its payload.
+ */
+export function bindTokenMcpRoute<Ctx, Meta, Payload, Result extends McpToolResult>(
+  options: BindTokenRouteOptions<Ctx, Meta, Payload, Result>,
+) {
+  const { resolveToken, rejected, toContext, ...rest } = options;
+  return bindHttp<Ctx, Meta, Result>({
+    ...rest,
+    resolveContext: async (req) => {
+      const token = extractBearer(req);
+      if (!token) return { ok: false, status: 401, message: "Missing bearer token" };
+      const resolved = await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const payload = yield* resolveToken(token);
+          if (payload === null) return null;
+          const { db } = yield* DbService;
+          return { payload, db };
+        }),
+      );
+      if (!resolved) return { ok: false, status: 403, message: rejected };
+      return { ok: true, ...toContext(resolved.payload, resolved.db) };
+    },
   });
 }

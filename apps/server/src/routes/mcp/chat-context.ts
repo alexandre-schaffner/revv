@@ -1,105 +1,42 @@
-// ── /mcp/chat-context ──────────────────────────────────────────────────────
-//
-// HTTP transport for the right-pane chat agent's MCP tools. Token resolution,
-// plan-mode filtering, and edit broadcasts are chat-specific; JSON-RPC
-// dispatch is shared by the MCP tool gateway binder.
-
-import type { ThreadEventMessage, WalkthroughStreamEvent } from "@revv/shared";
 import { Effect } from "effect";
-import { EDIT_TOOL_SPECS } from "../../ai/providers/chat-edit-tools";
-import { CHAT_TOOL_BUNDLE, type ChatToolContext } from "../../ai/providers/chat-mcp-tools";
-import { logError } from "../../logger";
+import { artifactJudge } from "../../ai/jev/artifact-quality";
+import type { ChatWalkthroughEditContext } from "../../ai/providers/chat-edit-tools";
+import { CHAT_TOOL_BUNDLE } from "../../ai/providers/chat-mcp-tools";
+import type { Db } from "../../db";
 import { AppRuntime } from "../../runtime";
-import { fireAndForgetThreadEventBroadcast } from "../../services/broadcast-thread-event";
-import { ChatMcpTokens, type ChatTokenResolved } from "../../services/ChatMcpTokens";
-import { DbService } from "../../services/Db";
-import { RemoteWalkthroughCache } from "../../services/RemoteWalkthroughCache";
-import { WalkthroughJobs } from "../../services/WalkthroughJobs";
-import { bindHttp, type ContextResolution, extractBearer } from "./utils";
+import { ChatMcpTokens, type ChatTokenResolved } from "../../services/chat/ChatMcpTokens";
+import { fireAndForgetThreadEventBroadcast, fireAndForgetWalkthroughEdit } from "./publish";
+import { bindTokenMcpRoute } from "./utils";
 
-const EDIT_TOOL_NAMES = new Set(EDIT_TOOL_SPECS.map((s) => s.name));
-
-async function resolveContext(
-  req: Request,
-): Promise<ContextResolution<ChatToolContext, ChatTokenResolved>> {
-  const token = extractBearer(req);
-  if (!token) {
-    return { ok: false, status: 401, message: "Missing bearer token" };
-  }
-  const db = await AppRuntime.runPromise(Effect.flatMap(DbService, (s) => Effect.succeed(s.db)));
-  const resolved = await AppRuntime.runPromise(
-    Effect.flatMap(ChatMcpTokens, (t) => t.resolve(token)),
-  );
-  if (!resolved) {
-    return {
-      ok: false,
-      status: 403,
-      message: "Chat MCP token not recognized or already revoked",
-    };
-  }
-
-  const emit = (walkthroughId: string, event: WalkthroughStreamEvent): void => {
-    void AppRuntime.runPromise(
-      Effect.flatMap(WalkthroughJobs, (jobs) =>
-        Effect.gen(function* () {
-          yield* jobs.emitEvent(walkthroughId, {
-            type: "lifecycle:edited",
-            data: { walkthroughId, editedAt: new Date().toISOString() },
-          });
-          yield* jobs.emitEvent(walkthroughId, event);
-        }),
-      ),
-    ).catch((err) => {
-      logError(
-        "mcp-chat-context",
-        "walkthrough:event emit failed:",
-        err instanceof Error ? err.message : String(err),
-      );
-    });
-    void AppRuntime.runPromise(
-      Effect.flatMap(RemoteWalkthroughCache, (cache) =>
-        cache.push(walkthroughId).pipe(Effect.catch(() => Effect.void)),
-      ),
-    ).catch((err) => {
-      logError(
-        "mcp-chat-context",
-        "remote cache push after edit failed:",
-        err instanceof Error ? err.message : String(err),
-      );
-    });
-  };
-
-  const broadcastThreadEvent = (msg: ThreadEventMessage): void => {
-    fireAndForgetThreadEventBroadcast("mcp-chat-context", resolved.prId, resolved.userId, msg);
-  };
-
+function toContext(
+  resolved: ChatTokenResolved,
+  db: Db,
+): { ctx: ChatWalkthroughEditContext; meta: ChatTokenResolved } {
   return {
-    ok: true,
     ctx: {
       db,
       prId: resolved.prId,
-      userId: resolved.userId,
-      actor: resolved.actor,
-      emit,
-      broadcastThreadEvent,
+      actor: "chat:acp",
+      publishEdit: fireAndForgetWalkthroughEdit,
+      broadcastThreadEvent: (msg) => fireAndForgetThreadEventBroadcast(resolved.prId, msg),
+      judgeArtifact: artifactJudge(
+        (judgment) => AppRuntime.runPromise(judgment),
+        "mcp-chat-context",
+      ),
     },
     meta: resolved,
   };
 }
 
-export const mcpChatContextRoute = bindHttp({
-  path: "/chat-context",
+export const mcpChatContextRoute = bindTokenMcpRoute({
   logScope: "mcp-chat-context",
   bundle: CHAT_TOOL_BUNDLE,
-  resolveContext,
-  serverVersion: "2.0.0",
-  specsForList: (specs, resolved) =>
-    resolved.interactionMode === "plan"
-      ? specs.filter((spec) => !EDIT_TOOL_NAMES.has(spec.name))
-      : specs,
-  rejectToolCall: (name, resolved) =>
-    resolved.interactionMode === "plan" && EDIT_TOOL_NAMES.has(name)
-      ? `tools/call: '${name}' is disabled in plan mode — exit plan mode to make edits.`
+  resolveToken: (token) => Effect.flatMap(ChatMcpTokens, (tokens) => tokens.resolve(token)),
+  rejected: "Chat MCP token not recognized, expired or already revoked",
+  toContext,
+  refuse: (spec, resolved) =>
+    resolved.interactionMode === "plan" && spec.access === "write"
+      ? `tools/call: '${spec.name}' is disabled in plan mode — exit plan mode to make edits.`
       : null,
   servedMessage: (requests, ctx, meta) =>
     `served ${requests.length} request(s), prId=${ctx.prId}, mode=${meta.interactionMode}`,

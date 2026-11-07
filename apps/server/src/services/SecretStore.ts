@@ -1,13 +1,11 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Entry, type EntryOptions } from "@napi-rs/keyring";
-import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import { account } from "../db/schema";
+import { serverEnv } from "../config";
 import { logError } from "../logger";
 import { appDataDir, keyringServiceName } from "../paths";
-import { DbService } from "./Db";
 
 /**
  * GitHub OAuth tokens for a single linked account. Both rotate together, so
@@ -32,11 +30,10 @@ export interface TokenPair {
  * The fallback encryption key is *derived* (scrypt) from a secret plus a
  * persisted random salt, rather than read verbatim from a key file sitting
  * next to the ciphertext. When `BETTER_AUTH_SECRET` is configured in the
- * environment (the recommended deployment path), that secret never lands on
- * disk, so an attacker with only filesystem read of the app-support dir holds
- * the ciphertext and a useless salt — not the key. Absent an env secret we
- * fall back to a persisted `0600` key file, matching the trust model the
- * better-auth signing secret already uses (`auth.ts`).
+ * environment, that secret never lands on disk, so an attacker with only
+ * filesystem read of the app-support dir holds the ciphertext and a useless
+ * salt — not the key. Absent an env secret we fall back to a persisted `0600`
+ * key file.
  */
 export class SecretStore extends Context.Service<
   SecretStore,
@@ -44,15 +41,12 @@ export class SecretStore extends Context.Service<
     readonly setTokens: (accountId: string, tokens: TokenPair) => Effect.Effect<void>;
     readonly getTokens: (accountId: string) => Effect.Effect<TokenPair | null>;
     readonly deleteTokens: (accountId: string) => Effect.Effect<void>;
-    /** Generic single-string secrets, through the same keyring/fallback path as token pairs. `key` is a logical name, see {@link JEV_API_KEY_SECRET}. */
+    /** Single-string secrets under a logical name, through the same keyring/fallback path as token pairs. */
     readonly setSecret: (key: string, value: string) => Effect.Effect<void>;
     readonly getSecret: (key: string) => Effect.Effect<string | null>;
     readonly deleteSecret: (key: string) => Effect.Effect<void>;
   }
 >()("SecretStore") {}
-
-/** Logical name of the TypeSafe System One API key in {@link SecretStore}. */
-export const JEV_API_KEY_SECRET = "jev-api-key";
 
 const KEYRING_USER_PREFIX = "github-tokens:";
 const KEYRING_SECRET_PREFIX = "secret:";
@@ -69,19 +63,6 @@ function keyringEntry(username: string): Entry {
   return new Entry(keyringServiceName(), username, ENTRY_OPTIONS);
 }
 
-function entryFor(accountId: string): Entry {
-  return keyringEntry(`${KEYRING_USER_PREFIX}${accountId}`);
-}
-
-function secretEntryFor(key: string): Entry {
-  return keyringEntry(`${KEYRING_SECRET_PREFIX}${key}`);
-}
-
-/** Prefixed so a secret name can't collide with an account id's token pair in the fallback map. */
-function fallbackSecretKey(key: string): string {
-  return `${KEYRING_SECRET_PREFIX}${key}`;
-}
-
 export function serialize(tokens: TokenPair): string {
   return JSON.stringify({
     accessToken: tokens.accessToken ?? null,
@@ -94,13 +75,10 @@ export function deserialize(raw: string): TokenPair {
     const o = JSON.parse(raw) as Partial<TokenPair>;
     return { accessToken: o.accessToken ?? null, refreshToken: o.refreshToken ?? null };
   } catch {
-    // Tolerate a legacy raw-string access token (defensive — current writes
-    // always JSON-encode).
+    // A legacy raw-string access token; current writes always JSON-encode.
     return { accessToken: raw, refreshToken: null };
   }
 }
-
-// ── Encrypted-file fallback ────────────────────────────────────────────────
 
 function fallbackKeyPath(): string {
   return join(appDataDir(), "secret-store.key");
@@ -130,14 +108,8 @@ function loadFallbackSalt(): Buffer {
   return salt;
 }
 
-/**
- * Resolve the input secret for key derivation. Prefers `BETTER_AUTH_SECRET`
- * from the environment (kept off disk); otherwise falls back to a persisted
- * `0600` random key file, generated on first use.
- */
 function loadFallbackSecret(): string {
-  const envSecret = process.env.BETTER_AUTH_SECRET;
-  if (envSecret && envSecret.length > 0) return envSecret;
+  if (serverEnv.secretStoreSecret) return serverEnv.secretStoreSecret;
 
   const p = fallbackKeyPath();
   if (existsSync(p)) {
@@ -150,33 +122,66 @@ function loadFallbackSecret(): string {
   return secret;
 }
 
-/** Derive the AES-256 key from the resolved secret + persisted salt (scrypt). */
 function deriveFallbackKey(): Buffer {
   return scryptSync(loadFallbackSecret(), loadFallbackSalt(), 32);
 }
 
-/** Fallback map holds token pairs (keyed by account id) and generic secrets (keyed by `secret:<name>`), disjoint by prefix. */
 type FallbackEntry = TokenPair | string;
+type FallbackMap = Record<string, FallbackEntry>;
 
-function readFallbackMap(): Record<string, FallbackEntry> {
+/**
+ * The fallback file's contents. `unreadable` (it exists but won't decrypt or
+ * parse — e.g. `BETTER_AUTH_SECRET` changed) is not the same as absent: the
+ * file still holds every stored token, recoverable with the old secret.
+ */
+type FallbackRead =
+  | { readonly kind: "ok"; readonly map: FallbackMap }
+  | { readonly kind: "unreadable"; readonly cause: unknown };
+
+function readFallbackFile(path = fallbackDataPath()): FallbackRead {
+  if (!existsSync(path)) return { kind: "ok", map: {} };
   try {
-    if (!existsSync(fallbackDataPath())) return {};
-    const raw = readFileSync(fallbackDataPath());
+    const raw = readFileSync(path);
     // Layout: iv(12) | authTag(16) | ciphertext
+    if (raw.length < 28) throw new Error(`truncated (${raw.length} bytes)`);
     const iv = raw.subarray(0, 12);
     const tag = raw.subarray(12, 28);
     const ct = raw.subarray(28);
     const decipher = createDecipheriv("aes-256-gcm", deriveFallbackKey(), iv);
     decipher.setAuthTag(tag);
     const json = Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8");
-    return JSON.parse(json) as Record<string, FallbackEntry>;
-  } catch (e) {
-    logError("SecretStore", "fallback store read failed:", e);
-    return {};
+    return { kind: "ok", map: JSON.parse(json) as FallbackMap };
+  } catch (cause) {
+    return { kind: "unreadable", cause };
   }
 }
 
-function writeFallbackMap(map: Record<string, FallbackEntry>): void {
+/** For reads: an unreadable store answers nothing, loudly. */
+function readFallbackMap(): FallbackMap {
+  const read = readFallbackFile();
+  if (read.kind === "ok") return read.map;
+  logError("SecretStore", "fallback token store is unreadable; treating it as empty:", read.cause);
+  return {};
+}
+
+/**
+ * For writes. An unreadable store is moved aside, never overwritten: writing
+ * the one new entry over it would erase every other stored token.
+ */
+export function fallbackMapForWrite(path = fallbackDataPath()): FallbackMap {
+  const read = readFallbackFile(path);
+  if (read.kind === "ok") return read.map;
+  const aside = `${path}.unreadable-${Date.now()}`;
+  renameSync(path, aside);
+  logError(
+    "SecretStore",
+    `fallback token store is unreadable (was BETTER_AUTH_SECRET changed?); moved it to ${aside} and starting a new one:`,
+    read.cause,
+  );
+  return {};
+}
+
+function writeFallbackMap(map: FallbackMap): void {
   ensureAppDir();
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", deriveFallbackKey(), iv);
@@ -185,11 +190,26 @@ function writeFallbackMap(map: Record<string, FallbackEntry>): void {
   writeFileSync(fallbackDataPath(), Buffer.concat([iv, tag, ct]), { mode: 0o600 });
 }
 
+interface Slot {
+  readonly entry: Entry;
+  readonly fallbackKey: string;
+}
+
+const tokenSlot = (accountId: string): Slot => ({
+  entry: keyringEntry(`${KEYRING_USER_PREFIX}${accountId}`),
+  fallbackKey: accountId,
+});
+
+const secretSlot = (key: string): Slot => ({
+  entry: keyringEntry(`${KEYRING_SECRET_PREFIX}${key}`),
+  fallbackKey: `${KEYRING_SECRET_PREFIX}${key}`,
+});
+
 export const SecretStoreLive = Layer.sync(SecretStore, () => {
   // Probe once: getPassword returns null when the entry is absent and throws
-  // only when the backend itself is unreachable, so it's a clean availability
-  // check. All ops route consistently to keyring or fallback to avoid a
-  // split-brain where a token lands in one store and is read from the other.
+  // only when the backend itself is unreachable. All ops route consistently to
+  // keyring or fallback to avoid a split-brain where a token lands in one store
+  // and is read from the other.
   let useKeyring = true;
   try {
     keyringEntry("__revv_probe__").getPassword();
@@ -202,132 +222,64 @@ export const SecretStoreLive = Layer.sync(SecretStore, () => {
     );
   }
 
+  const write = (slot: Slot, keyringValue: string, fallbackValue: FallbackEntry): void => {
+    if (useKeyring) {
+      try {
+        slot.entry.setPassword(keyringValue);
+        return;
+      } catch (e) {
+        logError("SecretStore", `keyring set failed for ${slot.fallbackKey}; using fallback:`, e);
+      }
+    }
+    const map = fallbackMapForWrite();
+    map[slot.fallbackKey] = fallbackValue;
+    writeFallbackMap(map);
+  };
+
+  /** The keyring's string, else the fallback file's entry. */
+  const read = (slot: Slot): FallbackEntry | undefined => {
+    if (useKeyring) {
+      try {
+        const v = slot.entry.getPassword();
+        if (v) return v;
+      } catch (e) {
+        logError("SecretStore", `keyring get failed for ${slot.fallbackKey}; using fallback:`, e);
+      }
+    }
+    return readFallbackMap()[slot.fallbackKey];
+  };
+
+  const remove = (slot: Slot): void => {
+    if (useKeyring) {
+      try {
+        slot.entry.deletePassword();
+      } catch {
+        // No matching entry / backend hiccup — nothing to clean up.
+      }
+    }
+    const map = fallbackMapForWrite();
+    if (slot.fallbackKey in map) {
+      delete map[slot.fallbackKey];
+      writeFallbackMap(map);
+    }
+  };
+
   return {
     setTokens: (accountId, tokens) =>
-      Effect.sync(() => {
-        const json = serialize(tokens);
-        if (useKeyring) {
-          try {
-            entryFor(accountId).setPassword(json);
-            return;
-          } catch (e) {
-            logError("SecretStore", `keyring set failed for ${accountId}; using fallback:`, e);
-          }
-        }
-        const map = readFallbackMap();
-        map[accountId] = deserialize(json);
-        writeFallbackMap(map);
-      }),
-
+      Effect.sync(() => write(tokenSlot(accountId), serialize(tokens), tokens)),
     getTokens: (accountId) =>
       Effect.sync((): TokenPair | null => {
-        if (useKeyring) {
-          try {
-            const v = entryFor(accountId).getPassword();
-            if (v) return deserialize(v);
-          } catch (e) {
-            logError("SecretStore", `keyring get failed for ${accountId}; using fallback:`, e);
-          }
-        }
-        const map = readFallbackMap();
-        const entry = map[accountId];
-        return entry === undefined || typeof entry === "string" ? null : entry;
+        const stored = read(tokenSlot(accountId));
+        if (stored === undefined) return null;
+        return typeof stored === "string" ? deserialize(stored) : stored;
       }),
-
-    deleteTokens: (accountId) =>
-      Effect.sync(() => {
-        if (useKeyring) {
-          try {
-            entryFor(accountId).deletePassword();
-          } catch {
-            // No matching entry / backend hiccup — nothing to clean up.
-          }
-        }
-        const map = readFallbackMap();
-        if (accountId in map) {
-          delete map[accountId];
-          writeFallbackMap(map);
-        }
-      }),
-
-    setSecret: (key, value) =>
-      Effect.sync(() => {
-        if (useKeyring) {
-          try {
-            secretEntryFor(key).setPassword(value);
-            return;
-          } catch (e) {
-            logError("SecretStore", `keyring set failed for secret ${key}; using fallback:`, e);
-          }
-        }
-        const map = readFallbackMap();
-        map[fallbackSecretKey(key)] = value;
-        writeFallbackMap(map);
-      }),
-
+    deleteTokens: (accountId) => Effect.sync(() => remove(tokenSlot(accountId))),
+    setSecret: (key, value) => Effect.sync(() => write(secretSlot(key), value, value)),
     getSecret: (key) =>
       Effect.sync((): string | null => {
-        if (useKeyring) {
-          try {
-            const v = secretEntryFor(key).getPassword();
-            if (v) return v;
-          } catch (e) {
-            logError("SecretStore", `keyring get failed for secret ${key}; using fallback:`, e);
-          }
-        }
-        const entry = readFallbackMap()[fallbackSecretKey(key)];
-        return typeof entry === "string" && entry.length > 0 ? entry : null;
+        const stored = read(secretSlot(key));
+        return typeof stored === "string" && stored.length > 0 ? stored : null;
       }),
-
-    deleteSecret: (key) =>
-      Effect.sync(() => {
-        if (useKeyring) {
-          try {
-            secretEntryFor(key).deletePassword();
-          } catch {
-            // No matching entry / backend hiccup — nothing to clean up.
-          }
-        }
-        const map = readFallbackMap();
-        const mapKey = fallbackSecretKey(key);
-        if (mapKey in map) {
-          delete map[mapKey];
-          writeFallbackMap(map);
-        }
-      }),
+    deleteSecret: (key) => Effect.sync(() => remove(secretSlot(key))),
   };
 });
-
-/**
- * One-time boot migration: copy any plaintext tokens still living in the
- * `account.access_token` / `refresh_token` columns into the secure store, then
- * null the columns. Idempotent — rows already migrated have null columns and
- * are skipped. Returns the number of accounts migrated.
- */
-export const migrateLegacyTokens: Effect.Effect<number, never, SecretStore | DbService> =
-  Effect.gen(function* () {
-    const store = yield* SecretStore;
-    const { db } = yield* DbService;
-    const rows = db
-      .select({
-        id: account.id,
-        accessToken: account.accessToken,
-        refreshToken: account.refreshToken,
-      })
-      .from(account)
-      .all();
-    let migrated = 0;
-    for (const r of rows) {
-      if (!r.accessToken && !r.refreshToken) continue;
-      yield* store.setTokens(r.id, {
-        accessToken: r.accessToken ?? null,
-        refreshToken: r.refreshToken ?? null,
-      });
-      db.update(account)
-        .set({ accessToken: null, refreshToken: null, updatedAt: new Date() })
-        .where(eq(account.id, r.id))
-        .run();
-      migrated++;
-    }
-    return migrated;
-  });

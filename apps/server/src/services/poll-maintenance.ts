@@ -2,393 +2,266 @@
  * The maintenance phases of `PollScheduler.syncAllRepos` — work that runs
  * after the open-PR list has gone out, because nothing on screen waits on it.
  */
-import type { PullRequest, Repository } from "@revv/shared";
-import { eq, inArray } from "drizzle-orm";
-import { Effect } from "effect";
-import { account, user } from "../db/schema/auth";
-import { pullRequests } from "../db/schema/pull-requests";
-import { DbError } from "../domain/errors";
-import { withDb } from "../effects/with-db";
-import { logError } from "../logger";
-import { apiBaseForHost } from "./github-rest";
-import type { GitHubInfra, PollDeps, SyncCycle } from "./poll-cycle";
-import type { SettingsService } from "./Settings";
 
-const ARCHIVE_BACKFILL_DAYS = 7;
+import type { PullRequest, Repository } from "@revv/shared";
+import { SPAN_ATTR } from "@revv/shared/telemetry";
+import { and, inArray, isNotNull, lt } from "drizzle-orm";
+import type { Context } from "effect";
+import { Effect } from "effect";
+import { daysBefore, type RetentionPolicy } from "../db/retention";
+import { pullRequests } from "../db/schema/pull-requests";
+import { logError } from "../logger";
+import type { DiffCacheService } from "./DiffCache";
+import type { GitHubAccounts } from "./github/accounts";
+import type { AvatarCache } from "./github/avatars";
+import type { GitHubGateway } from "./github/gateway";
+import type { PrMirror } from "./PrMirror";
+import type { PullRequestService } from "./PullRequest";
+import type { AccountGate } from "./poll-gate";
+import type { Realtime } from "./Realtime";
+import type { RepositoryService } from "./Repository";
+
+/** The local archive holds the last week of closed and merged PRs. */
+const ARCHIVE_DAYS = 7;
+
+/** Deleting a PR cascades to its walkthroughs, sessions, chats, diff files and pins. */
+export const prArchiveRetention: RetentionPolicy = {
+  table: "pull_requests",
+  sweep: (db, now) =>
+    db
+      .delete(pullRequests)
+      .where(
+        and(
+          inArray(pullRequests.status, ["closed", "merged"]),
+          isNotNull(pullRequests.closedAt),
+          lt(pullRequests.closedAt, daysBefore(now, ARCHIVE_DAYS)),
+        ),
+      )
+      .returning({ id: pullRequests.id })
+      .all().length,
+};
 /**
- * Sized to cover the full backfill window in a single cycle for an active repo
- * (~13 closed PRs/day × 7 days ≈ 90, with headroom). The search returns the
- * whole window; this caps how many missing rows we individually fetch per repo
- * per cycle. At 25 a busy repo only imported ~2 days per cycle, so a fresh
- * mirror never showed the whole week. Only ever fetches PRs not already
- * mirrored, so the cost is a bounded one-time burst that converges to
- * near-zero.
+ * Covers the whole archive window in one cycle for an active repo (~13 closed
+ * PRs/day × 7 days ≈ 90, with headroom), so a fresh mirror shows the full week.
+ * Only unmirrored PRs are fetched, so the burst is one-time.
  */
 const ARCHIVE_BACKFILL_MAX_FETCHES_PER_REPO = 150;
 
 /**
- * Refresh repo metadata (avatar URL, default branch), broadcasting
- * `repos:updated` to each account whose repos changed. Returns whether any
- * repo's visible metadata changed.
- *
- * Bypasses the ETag cache — some GitHub Enterprise instances return signed
- * `avatar_url`s whose token expires without invalidating the endpoint's ETag,
- * so a plain `getRepo` would replay the stale body. Repo creation and login
- * paths already hydrate these values; this pass is maintenance for expiring
- * GitHub Enterprise avatar URLs.
+ * Bypasses the ETag cache: GitHub Enterprise's signed `avatar_url`s expire
+ * without invalidating the endpoint's ETag, so a 304 would replay a dead URL.
  */
 export const refreshRepoMetadata = (
-  deps: PollDeps,
-  cycle: SyncCycle,
+  svc: {
+    readonly github: Context.Service.Shape<typeof GitHubGateway>;
+    readonly repoService: Context.Service.Shape<typeof RepositoryService>;
+    readonly avatars: Context.Service.Shape<typeof AvatarCache>;
+    readonly realtime: Context.Service.Shape<typeof Realtime>;
+  },
+  gate: AccountGate,
   repos: readonly Repository[],
-): Effect.Effect<boolean, never, GitHubInfra> =>
+): Effect.Effect<boolean> =>
   Effect.gen(function* () {
-    const { db, github, repoService } = deps;
+    const { github, repoService, avatars, realtime } = svc;
     let anyRepoChanged = false;
     yield* Effect.forEach(
       repos,
       (repo) =>
         Effect.gen(function* () {
-          const live = cycle.liveAccountForRepo(repo.id, "core");
-          if (!live) return;
-          const fresh = yield* cycle.tryGuarded(
-            live.acc,
-            github.repos.getFresh(repo.fullName, live.token, apiBaseForHost(repo.githubHost)),
-          );
+          const client = yield* gate.clientForRepo(repo.id, "core");
+          if (!client) return;
+          const fresh = yield* gate.guarded(github.repos.getFresh(client, repo.fullName));
           if (!fresh) return;
-          // Always hand the fresh metadata to the service — it owns the change
-          // detection (the served `avatarUrl` is the cached data URL, so a
-          // raw-URL comparison here would never match). It re-fetches the
-          // avatar bytes only when the raw URL rotated or was never cached,
-          // then returns the updated repo. Broadcast only when the
-          // externally-visible value actually changed.
-          const updated = yield* withDb(
-            db,
-            repoService.updateRepoMetadata(repo.id, {
-              avatarUrl: fresh.avatarUrl,
+          const avatar = yield* avatars.ensure(repo.githubHost, repo.owner, fresh.ownerAvatarUrl);
+          // A repo removed mid-cycle has nothing left to update.
+          const updated = yield* repoService
+            .updateRepoMetadata(repo.id, {
+              avatarUrl: fresh.ownerAvatarUrl,
               defaultBranch: fresh.defaultBranch,
-            }),
-          ).pipe(Effect.orElseSucceed(() => null));
-          if (
-            updated &&
-            (updated.avatarUrl !== repo.avatarUrl || updated.defaultBranch !== repo.defaultBranch)
-          ) {
+            })
+            .pipe(
+              Effect.catchTag("NotFoundError", () => Effect.succeed(null)),
+              Effect.catchTag("DbError", (err) =>
+                Effect.sync(() => {
+                  logError("PollScheduler", `recording ${repo.fullName}'s metadata failed:`, err);
+                  return null;
+                }),
+              ),
+            );
+          if (avatar.changed || (updated && updated.defaultBranch !== repo.defaultBranch)) {
             anyRepoChanged = true;
           }
-        }).pipe(Effect.orElseSucceed(() => undefined)),
-      { concurrency: 3 },
+        }),
+      { concurrency: 3, discard: true },
     );
 
     if (anyRepoChanged) {
-      const refreshedRepos = yield* withDb(db, repoService.listRepos());
-      // Group by account and broadcast per-account so each connected client
-      // only receives repos for the account it is authenticated against.
-      const reposByAccount = Map.groupBy(
-        refreshedRepos,
-        (r) => cycle.repoToAccountId.get(r.id) ?? "unknown",
-      );
-      for (const [accountId, accountRepos] of reposByAccount) {
-        yield* deps.broadcaster.broadcastToAccount(accountId, {
-          type: "repos:updated",
-          data: accountRepos,
-        });
+      for (const accountId of gate.accountIds) {
+        const host = repos.find((r) => gate.repoToAccountId.get(r.id) === accountId)?.githubHost;
+        if (host === undefined) continue;
+        yield* repoService.listRepos(accountId).pipe(
+          Effect.flatMap((accountRepos) =>
+            realtime.toAccount(accountId, {
+              type: "repos:updated",
+              data: { host, repos: accountRepos },
+            }),
+          ),
+          Effect.catchTag("DbError", (err) =>
+            Effect.sync(() => logError("PollScheduler", "announcing repo metadata failed:", err)),
+          ),
+        );
       }
     }
     return anyRepoChanged;
   });
 
 /**
- * Refresh each account's avatar + githubLogin, mirroring them onto the `user`
- * row and into `cycle.accountById`.
- *
- * Same rationale as {@link refreshRepoMetadata}: GitHub Enterprise signed
- * `avatar_url`s on the /user endpoint expire without the ETag changing, so a
- * cached response replays a dead token. Bypassing the ETag cache keeps the
- * stored avatar URLs fresh so sidebars, comment headers, and the settings page
- * don't render broken avatars after the signed URL rotates.
- *
- * Per ACCOUNT (not "the first user") because each account has its own OAuth
- * identity — github_login + avatar_url live on the `account` row, and the
- * connected client's SSE stream is account-scoped. The `user.image` mirror is
- * updated to the avatar of one of the user's accounts so existing code that
- * reads `user.image` keeps working.
+ * Record each account's current login and avatar. `/user` is read without
+ * the ETag cache for the same reason as {@link refreshRepoMetadata}.
  */
 export const refreshAccountIdentities = (
-  deps: PollDeps,
-  cycle: SyncCycle,
-): Effect.Effect<void, never, SettingsService> =>
+  svc: {
+    readonly github: Context.Service.Shape<typeof GitHubGateway>;
+    readonly accounts: Context.Service.Shape<typeof GitHubAccounts>;
+  },
+  gate: AccountGate,
+): Effect.Effect<void> =>
   Effect.forEach(
-    cycle.accountRows,
-    (acc) =>
+    gate.accountIds,
+    (accountId) =>
       Effect.gen(function* () {
-        const { db, github, broadcaster } = deps;
-        const live = cycle.liveAccount(acc, "core");
-        if (!live) return;
-        // ...ForHost, not the settings-derived variant: each account carries
-        // its own `providerId` host, so resolving the API base from the single
-        // global settings row would send a GitHub Enterprise token to
-        // api.github.com as soon as two hosts are connected on this machine.
-        const fresh = yield* cycle.tryGuarded(
-          live.acc,
-          github.users.authenticatedFreshForHost(live.token, live.acc.host),
-        );
-        if (!fresh) return;
-
-        const avatarChanged = acc.avatarUrl !== fresh.avatarUrl;
-        const loginChanged = acc.githubLogin !== fresh.login;
-        if (!avatarChanged && !loginChanged) return;
-
-        const now = new Date();
-        yield* Effect.try({
-          try: () =>
-            db
-              .update(account)
-              .set({
-                avatarUrl: fresh.avatarUrl,
-                githubLogin: fresh.login,
-                updatedAt: now,
-              })
-              .where(eq(account.id, acc.id))
-              .run(),
-          catch: (e) => new Error(String(e)),
-        }).pipe(Effect.orElseSucceed(() => undefined));
-
-        // Keep the in-memory map coherent for the rest of this cycle: the
-        // notification diff, which `syncAllRepos` runs after this phase, reads
-        // the account's `githubLogin` to decide which PRs are "for me".
-        cycle.accountById.set(acc.id, {
-          ...acc,
-          avatarUrl: fresh.avatarUrl,
-          githubLogin: fresh.login,
-        });
-
-        // Mirror to the user row so existing code that reads `user.image` /
-        // `user.github_login` keeps working. Only touch the row if our values
-        // actually differ.
-        const userRow = db
-          .select({ id: user.id, name: user.name, email: user.email, image: user.image })
-          .from(user)
-          .where(eq(user.id, acc.userId))
-          .get();
-        if (!userRow) return;
-        const needsUserUpdate = userRow.image !== fresh.avatarUrl || loginChanged === true;
-        if (needsUserUpdate) {
-          yield* Effect.try({
-            try: () =>
-              db
-                .update(user)
-                .set({
-                  image: fresh.avatarUrl,
-                  githubLogin: fresh.login,
-                  updatedAt: now,
-                })
-                .where(eq(user.id, acc.userId))
-                .run(),
-            catch: (e) => new Error(String(e)),
-          }).pipe(Effect.orElseSucceed(() => undefined));
-        }
-
-        // Broadcast scoped to this account's SSE clients so only the sessions
-        // actually authenticated against `acc` see the avatar swap. The full
-        // broadcast path would leak A's avatar to B.
-        yield* broadcaster.broadcastToAccount(acc.id, {
-          type: "user:updated",
-          data: {
-            id: userRow.id,
-            name: userRow.name,
-            email: userRow.email,
-            image: fresh.avatarUrl,
-            githubLogin: fresh.login,
-          },
-        });
-      }).pipe(Effect.orElseSucceed(() => undefined)),
+        const client = yield* gate.clientForAccount(accountId, "core");
+        if (!client) return;
+        const viewer = yield* gate.guarded(svc.github.users.viewer(client));
+        if (!viewer) return;
+        yield* svc.accounts
+          .recordIdentity(accountId, { login: viewer.login, avatarUrl: viewer.avatarUrl })
+          .pipe(
+            Effect.catch((e) =>
+              Effect.sync(() => logError("PollScheduler", `identity of ${accountId}:`, e)),
+            ),
+          );
+      }),
     { concurrency: 3, discard: true },
   );
 
 /**
- * Re-fill the cached diffs of PRs whose range moved.
- * Sequential, to avoid rate-limit bursts.
+ * Re-fill the cached diffs of PRs whose range moved. Sequential, to avoid
+ * rate-limit bursts.
  */
 export const refetchDiffs = (
-  deps: PollDeps,
-  cycle: SyncCycle,
-  prIds: readonly string[],
-  prById: ReadonlyMap<string, PullRequest>,
+  diffCache: Context.Service.Shape<typeof DiffCacheService>,
+  gate: AccountGate,
+  prs: readonly PullRequest[],
   repoById: ReadonlyMap<string, Repository>,
-): Effect.Effect<void, never, GitHubInfra> =>
+): Effect.Effect<void> =>
   Effect.forEach(
-    prIds,
-    (prId) =>
+    prs,
+    (pr) =>
       Effect.gen(function* () {
-        const pr = prById.get(prId);
-        if (!pr) return;
-
         const repo = repoById.get(pr.repositoryId);
         if (!repo) return;
-
-        // No account row, token in the known-bad guard, or REST paused → skip
-        // silently; the per-account log already covered it.
-        const live = cycle.liveAccountForRepo(repo.id, "core");
-        if (!live) return;
-
-        const fileList = yield* cycle.tryGuarded(
-          live.acc,
-          deps.github.prs.files(
-            repo.fullName,
-            pr.externalId,
-            live.token,
-            apiBaseForHost(repo.githubHost),
+        const client = yield* gate.clientForRepo(repo.id, "core");
+        if (!client) return;
+        const filled = yield* gate.guarded(
+          diffCache.getOrFetch(pr, repo.fullName, client).pipe(
+            Effect.catchTag("DbError", (e) =>
+              Effect.sync(() => {
+                logError("PollScheduler", `diff refill of ${pr.id}:`, e.message);
+                return null;
+              }),
+            ),
           ),
+          `diff refill failed for ${pr.id}`,
         );
-        if (!fileList) return;
-
-        const files = fileList.map((f) => ({
-          path: f.filename,
-          oldPath: f.previousFilename,
-          status: f.status,
-          additions: f.additions,
-          deletions: f.deletions,
-          patch: f.patch,
-          fetchedAt: new Date().toISOString(),
-        }));
-
-        yield* Effect.annotateCurrentSpan("files", files.length);
-        // `cacheFiles` also records the PR's real diff size from this list.
-        yield* withDb(deps.db, deps.diffCache.cacheFiles(pr, files)).pipe(
-          Effect.orElseSucceed(() => undefined),
-        );
+        if (filled) yield* Effect.annotateCurrentSpan("files", filled.files.length);
       }).pipe(
-        Effect.withSpan("PollScheduler.refreshPrFiles", { attributes: { prId } }),
-        Effect.orElseSucceed(() => undefined),
+        Effect.withSpan("PollScheduler.refreshPrFiles", {
+          attributes: { [SPAN_ATTR.prId]: pr.id },
+        }),
       ),
     { concurrency: 1, discard: true },
   );
 
 /**
- * Catch closed/merged PRs that never made it into the local mirror — e.g.
- * closed before the user added the repo to Revv, or while the server was
- * offline for longer than one poll interval. Bounded to the same 7-day window
- * the DbMaintenance sweep uses for retention, so the local archive converges on
- * "last week of activity" from GitHub. Per-repo fetch cap defends against
- * bursty repos. Failures are non-fatal — we degrade silently to whatever the
- * local mirror already has.
- *
- * Returns whether any PR was added to the archive.
+ * Catch closed/merged PRs that never made it into the local mirror — closed
+ * before the repo was added, or while the server was offline. Bounded to the
+ * archive window (`ARCHIVE_DAYS`), with a per-repo fetch cap for bursty
+ * repos. Returns whether any PR was added to the archive.
  */
 export const backfillArchive = (
-  deps: PollDeps,
-  cycle: SyncCycle,
+  svc: {
+    readonly github: Context.Service.Shape<typeof GitHubGateway>;
+    readonly prService: Context.Service.Shape<typeof PullRequestService>;
+    readonly mirror: Context.Service.Shape<typeof PrMirror>;
+  },
+  gate: AccountGate,
   repos: readonly Repository[],
-): Effect.Effect<boolean, never, GitHubInfra> =>
+): Effect.Effect<boolean> =>
   Effect.gen(function* () {
-    const { db, github, prService } = deps;
-    const backfillSinceIso = new Date(
-      Date.now() - ARCHIVE_BACKFILL_DAYS * 24 * 60 * 60 * 1000,
-    ).toISOString();
-    const backfillUntilIso = new Date().toISOString();
+    const { github, prService, mirror } = svc;
+    const sinceIso = new Date(Date.now() - ARCHIVE_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    const untilIso = new Date().toISOString();
 
-    const knownRows = yield* Effect.try({
-      try: () =>
-        repos.length === 0
-          ? []
-          : db
-              .select({
-                repositoryId: pullRequests.repositoryId,
-                externalId: pullRequests.externalId,
-              })
-              .from(pullRequests)
-              .where(
-                inArray(
-                  pullRequests.repositoryId,
-                  repos.map((r) => r.id),
-                ),
-              )
-              .all(),
-      catch: (cause) =>
-        new DbError({ message: "Failed to read mirrored PRs for the archive backfill", cause }),
-    }).pipe(
-      Effect.catchTag("DbError", (err) =>
+    const known = yield* prService.externalIdsByRepo(repos.map((r) => r.id)).pipe(
+      Effect.catch((err) =>
         Effect.sync(() => {
-          logError("PollScheduler", err.message, err.cause);
+          logError("PollScheduler", "archive backfill: reading mirrored PRs failed:", err);
           return null;
         }),
       ),
     );
-    if (knownRows === null) return false;
-    const existingExternalIdsByRepo = new Map<string, Set<number>>();
-    for (const row of knownRows) {
-      let set = existingExternalIdsByRepo.get(row.repositoryId);
-      if (!set) {
-        set = new Set<number>();
-        existingExternalIdsByRepo.set(row.repositoryId, set);
-      }
-      set.add(row.externalId);
-    }
+    if (known === null) return false;
 
-    let upserted = 0;
+    let added = 0;
     yield* Effect.forEach(
       repos,
       (repo) =>
         Effect.gen(function* () {
-          const live = cycle.liveAccountForRepo(repo.id, "search");
-          if (!live) return;
-
-          const repoApiBase = apiBaseForHost(repo.githubHost);
-          const searched = yield* cycle.tryGuarded(
-            live.acc,
-            github.prs.searchClosedInWindow(
-              repo.fullName,
-              backfillSinceIso,
-              backfillUntilIso,
-              live.token,
-              repoApiBase,
-            ),
-            { errorLabel: `archive backfill search failed for ${repo.fullName}` },
+          const searchClient = yield* gate.clientForRepo(repo.id, "search");
+          if (!searchClient) return;
+          const searched = yield* gate.guarded(
+            github.prs.searchClosedInWindow(searchClient, repo.fullName, sinceIso, untilIso),
+            `archive backfill search failed for ${repo.fullName}`,
           );
           if (!searched || searched.length === 0) return;
 
-          const known = existingExternalIdsByRepo.get(repo.id) ?? new Set<number>();
+          const mirrored = known.get(repo.id) ?? new Set<number>();
           const missing = searched
-            .filter((s) => !known.has(s.number))
+            .filter((s) => !mirrored.has(s.number))
             .slice(0, ARCHIVE_BACKFILL_MAX_FETCHES_PER_REPO);
           if (missing.length === 0) return;
-          const detailLive = cycle.liveAccountForRepo(repo.id, "graphql");
-          if (!detailLive) return;
+          const detailClient = yield* gate.clientForRepo(repo.id, "graphql");
+          if (!detailClient) return;
 
-          const fetched = yield* cycle.tryGuarded(
-            detailLive.acc,
+          const fetched = yield* gate.guarded(
             github.prs.getMany(
+              detailClient,
               repo.fullName,
               repo.id,
               missing.map((m) => m.number),
-              detailLive.token,
-              repoApiBase,
             ),
-            { errorLabel: `archive backfill read failed for ${repo.fullName}` },
+            `archive backfill read failed for ${repo.fullName}`,
           );
-          if (!fetched) return;
-          const upsertable = [...fetched.values()];
-          if (upsertable.length === 0) return;
-
-          yield* withDb(db, prService.upsertPrs(upsertable)).pipe(
+          if (!fetched || fetched.size === 0) return;
+          yield* mirror.apply([...fetched.values()], { announce: false }).pipe(
             Effect.tap(() =>
               Effect.sync(() => {
-                upserted += upsertable.length;
+                added += fetched.size;
               }),
             ),
-            Effect.tapError((err) =>
-              Effect.sync(() => {
+            Effect.catch((err) =>
+              Effect.sync(() =>
                 logError(
                   "PollScheduler",
-                  `archive backfill upsert failed for ${repo.fullName}:`,
+                  `archive backfill write failed for ${repo.fullName}:`,
                   err,
-                );
-              }),
+                ),
+              ),
             ),
-            Effect.orElseSucceed(() => undefined),
           );
-        }).pipe(Effect.orElseSucceed(() => undefined)),
-      { concurrency: 3 },
+        }),
+      { concurrency: 3, discard: true },
     );
-    return upserted > 0;
+    return added > 0;
   });

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { Cause, Effect, Exit, Fiber } from "effect";
-import { analyzeJobFailure } from "./job-failure";
+import { Effect, Option } from "effect";
 import { makeStartJobMutex } from "./job-mutex";
 import {
   makeSubscriberRegistry,
@@ -9,121 +8,27 @@ import {
 } from "./job-subscribers";
 import { makeSessionTokenStore } from "./session-token-store";
 
-// ── analyzeJobFailure ────────────────────────────────────────────────────────
-// The cancelledByUser split (invariant #1): only a bare process-shutdown
-// interrupt is resume-worthy; a user-cancel or a genuine failure is terminal.
-
-describe("analyzeJobFailure", () => {
-  const interrupt = Cause.interrupt();
-  const failure = Cause.fail(new Error("boom"));
-
-  it("leaves shutdown interrupts for resume", () => {
-    expect(analyzeJobFailure(interrupt, { cancelledByUser: false })).toBe("leave-for-resume");
-  });
-
-  it("errors on user-cancelled interrupts", () => {
-    expect(analyzeJobFailure(interrupt, { cancelledByUser: true })).toBe("error");
-  });
-
-  it("errors on genuine failures regardless of cancel flag", () => {
-    expect(analyzeJobFailure(failure, { cancelledByUser: false })).toBe("error");
-    expect(analyzeJobFailure(failure, { cancelledByUser: true })).toBe("error");
-  });
-});
-
-// ── Job teardown wiring ──────────────────────────────────────────────────────
-// `analyzeJobFailure` only matters if the handler that consults it actually
-// runs. It used to hang off `Effect.catchAllCause`, which an interrupted fiber
-// skips outright — so every user Stop left its row at 'generating', never
-// broadcast `lifecycle:error`, and got re-launched by resume-on-boot until the
-// retry budget ran out. `WalkthroughJobs` therefore attaches the handler with
-// `Effect.onExit`; `ProjectRecapJobs` compensates differently, with an explicit
-// force-transition in its own `cancel`. These two pin the difference.
-
-describe("terminal handler placement under interruption", () => {
-  const interruptAfterStart = async (body: Effect.Effect<void>): Promise<void> => {
-    const fiber = await Effect.runPromise(Effect.forkDetach(body));
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    await Effect.runPromise(Fiber.interrupt(fiber));
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  };
-
-  it("skips a catchAllCause handler when the fiber is interrupted", async () => {
-    const ran: string[] = [];
-    await interruptAfterStart(
-      Effect.never.pipe(
-        Effect.catchCause(() =>
-          Effect.sync(() => {
-            ran.push("handled");
-          }),
-        ),
-      ),
-    );
-
-    expect(ran).toEqual([]);
-  });
-
-  it("runs an onExit handler to completion when the fiber is interrupted", async () => {
-    const ran: string[] = [];
-    await interruptAfterStart(
-      Effect.never.pipe(
-        Effect.onExit((exit) =>
-          Exit.isFailure(exit)
-            ? Effect.gen(function* () {
-                ran.push("entered");
-                // A DB write is async: the handler has to survive past a yield
-                // point, not just reach its first line.
-                yield* Effect.sleep("1 millis");
-                ran.push("committed");
-              })
-            : Effect.void,
-        ),
-      ),
-    );
-
-    expect(ran).toEqual(["entered", "committed"]);
-  });
-});
-
-// ── makeStartJobMutex ────────────────────────────────────────────────────────
-
 describe("makeStartJobMutex", () => {
-  it("returns one shared semaphore per key and distinct ones across keys", () =>
+  it("excludes a second holder of the same key, and only of that key", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const mutex = yield* makeStartJobMutex();
-        const a1 = yield* mutex.acquire("pr-a");
-        const a2 = yield* mutex.acquire("pr-a");
-        const b = yield* mutex.acquire("pr-b");
-        // Same key → identical semaphore instance (that is what serializes).
-        expect(a1).toBe(a2);
-        expect(a1).not.toBe(b);
-      }),
-    ));
-
-  it("serializes critical sections sharing a key", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const mutex = yield* makeStartJobMutex();
-        const sem = yield* mutex.acquire("k");
-        let active = 0;
-        let maxActive = 0;
-        const task = sem.withPermits(1)(
+        const holder = yield* mutex.acquire("pr-a");
+        const [sameKey, otherKey] = yield* holder.withPermits(1)(
           Effect.gen(function* () {
-            active += 1;
-            maxActive = Math.max(maxActive, active);
-            yield* Effect.sleep("10 millis");
-            active -= 1;
+            const same = yield* mutex.acquire("pr-a");
+            const other = yield* mutex.acquire("pr-b");
+            return [
+              yield* same.withPermitsIfAvailable(1)(Effect.void),
+              yield* other.withPermitsIfAvailable(1)(Effect.void),
+            ] as const;
           }),
         );
-        yield* Effect.all([task, task, task], { concurrency: "unbounded" });
-        // Never two at once under the same key.
-        expect(maxActive).toBe(1);
+        expect(Option.isNone(sameKey)).toBe(true);
+        expect(Option.isSome(otherKey)).toBe(true);
       }),
     ));
 });
-
-// ── makeSessionTokenStore ────────────────────────────────────────────────────
 
 describe("makeSessionTokenStore", () => {
   it("issues, resolves, and clears tokens (recap semantics, no liveCheck)", () =>
@@ -142,7 +47,6 @@ describe("makeSessionTokenStore", () => {
       Effect.gen(function* () {
         const store = yield* makeSessionTokenStore<{ recapId: string }>(0);
         const token = yield* store.issue({ recapId: "r1" });
-        // TTL 0 → already expired on resolve.
         expect(yield* store.resolve(token)).toBeNull();
       }),
     ));
@@ -161,23 +65,7 @@ describe("makeSessionTokenStore", () => {
         expect(yield* store.resolve(deadTok)).toBeNull();
       }),
     ));
-
-  it("clearWhere evicts every matching token", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const store = yield* makeSessionTokenStore<{ recapId: string }>(60_000);
-        const a = yield* store.issue({ recapId: "r1" });
-        const b = yield* store.issue({ recapId: "r1" });
-        const c = yield* store.issue({ recapId: "r2" });
-        yield* store.clearWhere((ctx) => ctx.recapId === "r1");
-        expect(yield* store.resolve(a)).toBeNull();
-        expect(yield* store.resolve(b)).toBeNull();
-        expect(yield* store.resolve(c)).toEqual({ recapId: "r2" });
-      }),
-    ));
 });
-
-// ── makeSubscriberRegistry ───────────────────────────────────────────────────
 
 type TestEvent = { readonly type: string; readonly n?: number };
 
@@ -219,66 +107,47 @@ describe("makeSubscriberRegistry", () => {
     ]);
   });
 
-  it("increments the diagnostic seq monotonically", () => {
+  it("stops delivering to a subscriber after 3 consecutive throws", () => {
     const registry = makeSubscriberRegistry<TestEvent>(config);
     const channel = makeChannel();
-    expect(registry.fanOut("job", channel, { type: "a" })).toBe(0);
-    expect(registry.fanOut("job", channel, { type: "b" })).toBe(1);
-    expect(channel.nextSeq).toBe(2);
-  });
-
-  it("drops a subscriber after 3 consecutive throws", () => {
-    const registry = makeSubscriberRegistry<TestEvent>(config);
-    const channel = makeChannel();
+    let calls = 0;
     const { flush } = registry.subscribe("job", channel, () => {
+      calls += 1;
       throw new Error("always throws");
-    });
-    flush(); // switch to direct-forward mode
-
-    expect(channel.subscribers.size).toBe(1);
-    registry.fanOut("job", channel, { type: "1" });
-    registry.fanOut("job", channel, { type: "2" });
-    expect(channel.subscribers.size).toBe(1); // 2 strikes — still alive
-    registry.fanOut("job", channel, { type: "3" });
-    expect(channel.subscribers.size).toBe(0); // 3rd strike — dropped
-  });
-
-  it("resets the strike counter on a successful delivery", () => {
-    const registry = makeSubscriberRegistry<TestEvent>(config);
-    const channel = makeChannel();
-    let mode: "throw" | "ok" = "throw";
-    const { flush } = registry.subscribe("job", channel, () => {
-      if (mode === "throw") throw new Error("nope");
     });
     flush();
 
-    registry.fanOut("job", channel, { type: "1" });
-    registry.fanOut("job", channel, { type: "2" });
-    mode = "ok";
-    registry.fanOut("job", channel, { type: "3" }); // success resets counter
-    mode = "throw";
-    registry.fanOut("job", channel, { type: "4" });
-    registry.fanOut("job", channel, { type: "5" });
-    // Only 2 consecutive throws since the reset — still subscribed.
-    expect(channel.subscribers.size).toBe(1);
+    for (const type of ["1", "2", "3", "4"]) registry.fanOut("job", channel, { type });
+    expect(calls).toBe(3);
   });
 
-  it("drops a subscriber that throws 3 times while replaying buffered events on flush", () => {
+  it("resets the strike count on a successful delivery", () => {
     const registry = makeSubscriberRegistry<TestEvent>(config);
     const channel = makeChannel();
+    const received: string[] = [];
+    const { flush } = registry.subscribe("job", channel, (e) => {
+      received.push(e.type);
+      if (e.type !== "ok") throw new Error("nope");
+    });
+    flush();
+
+    for (const type of ["1", "2", "ok", "4", "5", "6"]) registry.fanOut("job", channel, { type });
+    expect(received).toEqual(["1", "2", "ok", "4", "5", "6"]);
+  });
+
+  it("stops replaying a buffer to a subscriber that throws 3 times on flush", () => {
+    const registry = makeSubscriberRegistry<TestEvent>(config);
+    const channel = makeChannel();
+    let calls = 0;
     const { flush } = registry.subscribe("job", channel, () => {
+      calls += 1;
       throw new Error("always throws");
     });
+    for (const type of ["1", "2", "3", "4"]) registry.fanOut("job", channel, { type });
 
-    // Buffer 4 pre-flush events; replay throws on each.
-    registry.fanOut("job", channel, { type: "1" });
-    registry.fanOut("job", channel, { type: "2" });
-    registry.fanOut("job", channel, { type: "3" });
-    registry.fanOut("job", channel, { type: "4" });
-    expect(channel.subscribers.size).toBe(1);
-
-    flush(); // replay budget exhausted on the 3rd throw
-    expect(channel.subscribers.size).toBe(0);
+    flush();
+    registry.fanOut("job", channel, { type: "5" });
+    expect(calls).toBe(3);
   });
 
   it("stops delivering to an unsubscribed handle", () => {

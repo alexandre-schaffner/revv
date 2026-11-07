@@ -1,23 +1,23 @@
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { remoteUsers } from "./remote-users";
 
-// Better Auth managed tables — do not modify manually
-// Generated equivalent of `bunx @better-auth/cli generate`
+// The tables better-auth created. Revv owns them now: `GitHubAccounts` writes users, accounts and
+// sessions; `verification` is retired and never read.
 
 export const user = sqliteTable("user", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
   emailVerified: integer("email_verified", { mode: "boolean" }).notNull().default(false),
+  // Retired: each account row owns its GitHub login and avatar. Never written now.
   image: text("image"),
   githubLogin: text("github_login"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
-  // Timestamp of when the user finished the onboarding flow. Null until the
-  // 5-step onboarding (welcome → host → sign-in → connect repo → done)
-  // completes. Surviving across reinstalls — see OnboardingGate.
+  // Null until the user finishes onboarding (the web app's OnboardingGate).
+  // Survives reinstalls.
   onboardedAt: integer("onboarded_at", { mode: "timestamp" }),
-  /** FK into remote_users — the authenticated user's canonical profile. */
+  /** Retired: never written or read. */
   identityId: text("identity_id").references(() => remoteUsers.id),
 });
 
@@ -59,6 +59,11 @@ export const account = sqliteTable("account", {
   reauthRequiredAt: integer("reauth_required_at", { mode: "timestamp" }),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+  /**
+   * The OAuth client the account's token was issued to. GitHub's refresh grant only accepts that
+   * client. Null on rows from before the column: they resolve the bundled or env client ID.
+   */
+  clientId: text("client_id"),
 });
 
 export const verification = sqliteTable("verification", {

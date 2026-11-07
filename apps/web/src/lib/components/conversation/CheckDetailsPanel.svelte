@@ -6,19 +6,22 @@ import Copy from "phosphor-svelte/lib/Copy";
 import Info from "phosphor-svelte/lib/Info";
 import Warning from "phosphor-svelte/lib/Warning";
 import XCircle from "phosphor-svelte/lib/XCircle";
+import Markdown from "$lib/components/markdown/Markdown.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import type { RequestState } from "$lib/stores/_types";
-import { getReviewFiles, jumpToDiffLine } from "$lib/stores/review.svelte";
-import MarkdownBody from "./MarkdownBody.svelte";
+import { getChangedPaths } from "$lib/stores/diff-files.svelte";
+import { openInDiff } from "$lib/stores/review-nav.svelte";
+import { copyFeedback } from "$lib/utils/copy-feedback.svelte";
 
 interface Props {
+  prId: string;
   request: RequestState<CheckDetails>;
   onretry: () => void;
 }
 
-let { request, onretry }: Props = $props();
+let { prId, request, onretry }: Props = $props();
 
-let copied = $state(false);
+const logCopy = copyFeedback(1400);
 
 const UNAVAILABLE: Record<NonNullable<CheckDetails["logUnavailable"]>, string | null> = {
   not_actions: null,
@@ -34,13 +37,10 @@ const LEVEL_LABEL: Record<CheckAnnotation["level"], string> = {
 };
 
 /** Paths the PR touches; an annotation elsewhere has no diff line to jump to. */
-const prPaths = $derived(new Set(getReviewFiles().map((f) => f.path)));
+const prPaths = $derived(new Set(getChangedPaths(prId)));
 
-async function copyLog(details: CheckDetails): Promise<void> {
-  if (!details.log) return;
-  await navigator.clipboard.writeText(details.log.lines.map((l) => l.text).join("\n"));
-  copied = true;
-  setTimeout(() => (copied = false), 1400);
+function copyLog(details: CheckDetails): void {
+  if (details.log) void logCopy.copy(details.log.lines.map((l) => l.text).join("\n"));
 }
 </script>
 
@@ -80,7 +80,7 @@ async function copyLog(details: CheckDetails): Promise<void> {
 										type="button"
 										class="annotation-path"
 										title="Show in the diff"
-										onclick={() => jumpToDiffLine(annotation.path, annotation.startLine)}
+										onclick={() => openInDiff(prId, annotation.path, annotation.startLine)}
 									>
 										{annotation.path}:{annotation.startLine}
 									</button>
@@ -100,8 +100,8 @@ async function copyLog(details: CheckDetails): Promise<void> {
 				<div class="log-head">
 					<span class="log-step">{details.log.stepName ?? 'Job log'}</span>
 					{#if details.log.truncated}<span class="log-note">last {details.log.lines.length} lines</span>{/if}
-					<Button variant="ghost" size="xs" onclick={() => void copyLog(details)}>
-						{#if copied}<Check />Copied{:else}<Copy />Copy log{/if}
+					<Button variant="ghost" size="xs" onclick={() => copyLog(details)}>
+						{#if logCopy.copied}<Check />Copied{:else}<Copy />Copy log{/if}
 					</Button>
 				</div>
 				<pre class="log-body"><code
@@ -115,7 +115,7 @@ async function copyLog(details: CheckDetails): Promise<void> {
 		{/if}
 
 		{#if !details.log && details.summary}
-			<MarkdownBody source={details.summary} />
+			<Markdown source={details.summary} trust="external" density="dense" class="wrap-anywhere" />
 		{/if}
 
 		{#if details.annotations.length === 0 && !details.log && !details.summary && !(details.logUnavailable && UNAVAILABLE[details.logUnavailable])}

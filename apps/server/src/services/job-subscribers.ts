@@ -1,50 +1,28 @@
-// ── Subscriber fan-out ─────────────────────────────────────────────────────
+// Per-job SSE subscriber fan-out for a job orchestrator: events buffer until a
+// subscriber flushes, then forward directly, and a subscriber is dropped after
+// 3 consecutive throwing deliveries so one wedged client can't stall the others.
 //
-// Shared SSE subscriber fan-out for the two durable job orchestrators
-// (walkthrough, recap). Both maintain a set of per-job subscribers that
-// receive a live event stream; both buffer pre-flush events, forward directly
-// post-flush, and drop a subscriber after 3 consecutive throwing deliveries (a
-// per-subscriber error budget so one wedged client can't stall the others).
+// Commit first, broadcast second (invariant 8): by the time an event reaches
+// `fanOut`, the MCP tool handler (content events) or the orchestrator
+// (lifecycle events) has already committed it. A delivery failure never rolls
+// back state; a reconnecting subscriber recovers the truth from the DB.
 //
-// Commit-first / broadcast-second (CLAUDE.md invariant #8): by the time an
-// event reaches `fanOut`, the MCP tool handler (content events) or the
-// orchestrator (lifecycle events) has already committed the DB write. A
-// delivery failure here never rolls back state — a reconnecting subscriber
-// recovers the truth from the DB.
-//
-// Subscriber state (the `Set` + the diagnostic `nextSeq`) deliberately lives
-// INSIDE each orchestrator's job object, not in a registry owned here: that is
-// what lets the orchestrator's own registry identity-guard protect it (a stale
-// job's teardown can't drop a newer same-id job's subscribers, because the set
-// is part of the old object). This module owns only the *algorithm*.
-//
-// NOTE (invariant boundary): the diagnostic `nextSeq` counter bumped here is
-// NOT the durable wire cursor. Walkthrough's `emitEvent` stamps the
-// authoritative, kill-9-surviving seq separately via `walkthroughService.bumpSeq`.
-// Keep the two distinct. Likewise, any re-entrancy guard (e.g. dropping
-// `thinking` heartbeats) lives in the orchestrator's concrete emit caller, not
-// here — `fanOut` forwards every event it is handed.
+// The subscriber set lives inside the orchestrator's run object, not in a
+// registry owned here, so a stale run's teardown can't drop a newer same-id
+// run's subscribers. `nextSeq` is a diagnostic counter, not a durable wire
+// cursor. `fanOut` forwards every event it is handed; any filtering belongs to
+// the caller.
 
 import { debug, logError } from "../logger";
 
 export interface SubscriberHandle<E> {
-  /** Short opaque id for diagnostic logging. */
   readonly id: string;
   readonly callback: (event: E) => void;
   /** Buffer for pre-flush events. `null` after flush (direct-forward mode). */
   buffered: E[] | null;
-  /**
-   * Consecutive failure counter for the per-subscriber error budget.
-   * Incremented on every throw from the callback; reset to 0 on each
-   * successful invocation. Subscriber is dropped after 3 consecutive throws.
-   */
   consecutiveFailures: number;
 }
 
-/**
- * Minimal shape the fan-out algorithm operates on. Each orchestrator's job
- * object (`ActiveJob` / `ActiveRecapJob`) structurally satisfies this.
- */
 export interface SubscriberChannel<E> {
   readonly subscribers: Set<SubscriberHandle<E>>;
   /** Diagnostic-only monotonic counter assigned to every fanned-out event. */
@@ -52,11 +30,8 @@ export interface SubscriberChannel<E> {
 }
 
 export interface SubscriberRegistryConfig {
-  /** `debug()` scope for the verbose trace lines (e.g. "wt-trace"). */
   readonly traceScope: string;
-  /** `logError()` scope for subscriber-failure lines (e.g. "walkthrough-jobs"). */
   readonly errorScope: string;
-  /** Job-id label used in log lines (e.g. "wt" / "recap"). */
   readonly idLabel: string;
   /** Prefix for generated handle ids (e.g. "h" → "h1", "" → "1"). */
   readonly handleIdPrefix: string;
@@ -68,16 +43,9 @@ export interface SubscriberSubscription {
 }
 
 export interface SubscriberRegistry<E extends { readonly type: string }> {
-  /**
-   * Deliver `event` to every subscriber on `channel`, buffering or forwarding
-   * per handle and enforcing the 3-strike error budget. Returns the diagnostic
-   * seq assigned to this event.
-   */
+  /** Returns the diagnostic seq assigned to the event. */
   readonly fanOut: (jobId: string, channel: SubscriberChannel<E>, event: E) => number;
-  /**
-   * Register a new subscriber on `channel`. The caller is responsible for the
-   * `found`/miss check against its own job registry before calling this.
-   */
+  /** The caller checks its own job registry for the job before calling this. */
   readonly subscribe: (
     jobId: string,
     channel: SubscriberChannel<E>,
@@ -98,7 +66,6 @@ export const makeSubscriberRegistry = <E extends { readonly type: string }>(
     if (subsCount === 0) {
       debug(traceScope, `fanOut-no-subscribers ${idLabel}=${jobId} seq=${seq} type=${event.type}`);
     }
-    // Collect subscribers to drop (can't modify Set while iterating).
     const toDrop: SubscriberHandle<E>[] = [];
     for (const handle of channel.subscribers) {
       try {

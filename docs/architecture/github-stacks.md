@@ -6,8 +6,8 @@ How Revv reviews a PR that sits in one of GitHub's native stacks, and what it ow
 
 | What | Owner | Where |
 |---|---|---|
-| Membership (stack number, position) | GitHub, mirrored by the poll | `pull_requests.stack_number/stack_position`, `services/github-graphql-prs.ts` |
-| Stack detail (every layer's state, merge settings) | GitHub | `services/stacks/queries.ts` `PR_STACK_QUERY`, cached 30s in kv `pr-stack` |
+| Membership (stack number, position) | GitHub, mirrored by the poll | `pull_requests.stack_number/stack_position`, `services/github/pulls.ts` |
+| Stack detail (every layer's state, merge settings) | GitHub | `services/github/stack-queries.ts` `PR_STACK_QUERY`, cached in kv `pr-stack` |
 | Per-layer review state, restack verdict | Revv's DB, recomputed per read | `services/stacks/overlay.ts` |
 | What a walkthrough's agent saw | the walkthrough row | `walkthroughs.stack_context`, `diff_fingerprint` |
 | Whole-stack brief | the stack-brief pipeline | `stack_briefs`, `stack_brief_layers` |
@@ -19,9 +19,9 @@ GitHub's GraphQL has no stack mutations. Everything Revv does to a stack through
 
 ## Freshness
 
-`StackService.detail` serves the GitHub half from the kv cache for 30s, then re-reads GitHub, and falls back to the cached copy (`stale: true`) when GitHub is unreachable. The Revv half is read from the DB on every call. Clients re-read on:
+`StackService.detail` serves the GitHub half from the kv cache while it is under 30s old. An older copy is served while GitHub is re-read in the background (`stack:updated` follows); with no copy, it reads GitHub, and falls back to the copy built from the mirror (`stale: true`) when GitHub is unreachable. The Revv half is read from the DB on every call. Clients re-read on:
 
-- `stack:updated`: the poll saw a member join, leave, move, or change head or base, or a stacked PR close. The server drops the cache first.
+- `stack:updated`: the poll saw a member join, leave, move, or change head or base, or a stacked PR close; or Revv pushed, retargeted or merged a layer. Every one of those is a write to `PrMirror`, the one caller of `StackService.moved`, which drops the cached copy first, so the re-read asks GitHub; a background re-read that started before the move is discarded.
 - a member's `walkthrough:event` lifecycle envelope
 - `stack-brief:status-changed`, `stack-merge:progress`
 
@@ -40,8 +40,8 @@ The prompt gains a `### Stack` block, and the agent can call `get_stack_context`
 |---|---|---|
 | `current` | Nothing has moved. | Nothing. |
 | `below-moved` | The review still reads true; the context around it moved. | Banner. |
-| `restacked` | New head, byte-identical layer changes. | Carries the review over: a new row at the new head, hydrated from the prior row through `WalkthroughSnapshotImporter`, with no agent run. |
-| `layer-changed` | The layer's own changes differ. | Incremental run over only the changed files' current patches (`diffSource: stack_layer_delta`), never `git diff oldHead newHead`, which drags in lower-layer churn. |
+| `restacked` | New head, byte-identical layer changes, and a finished review a queued "Review the stack" run takes over (`services/walkthrough/restack.ts`: a full review covers either request, an incremental one only an incremental request). | Carries the review over: a new row at the new head, hydrated from the prior row through `WalkthroughSnapshotImporter`, with no agent run. |
+| `layer-changed` | The layer's own changes differ (or are identical but no finished review would carry over: an empty file list, no banner). | The banner's run is incremental, over only the changed files' current patches (`diffSource: stack_layer_delta`), never `git diff oldHead newHead`, which drags in lower-layer churn. "Review the stack" queues a full run for the layer instead. |
 | `needs-rebase` | A layer below merged and this one still targets it or conflicts. | Banner with **Rebase stack**. |
 
 ## Rebasing a stack
@@ -75,6 +75,6 @@ Stacks can't be created through the API, so these have to be observed by hand on
 1. After layer 1 merges (merge commit, squash, rebase), does GitHub retarget layer 2 onto the stack base by itself? How fast? Does it depend on the head branch being auto-deleted?
 2. Does GitHub refuse to merge layer 2 while layer 1 is open, or would it merge layer 2 into layer 1's branch? (Revv never offers the latter: the merge pill becomes "Merge through #N…".)
 3. Does auto-merge enabled on layer 2 fire before layer 1 lands?
-4. Does PATCHing layer 2's base keep it in the stack (`RETARGET_BY_PATCH`)?
+4. Does PATCHing layer 2's base keep it in the stack (`base-change-keeps-membership`)?
 5. After a squash merge of layer 1, what do layer 2's `mergeStateStatus` and diff look like until the author restacks?
 6. What does `stack.entries` report for merged layers, and for how long?

@@ -1,12 +1,5 @@
-// ─── Recap prompts ───────────────────────────────────────────────────────────
-//
-// System + user prompts for the structured daily/weekly project recap
-// pipeline. The agent reads source PRs and prior recaps via MCP tools, then
-// writes a short lede and per-PR entries via tool calls. All content flows
-// through tool arguments — there is no visible-text capture buffer.
-
 import type { ProjectRecap } from "@revv/shared";
-import type { RecapSourceBundle } from "../providers/recap-tools";
+import type { RecapSourceBundle } from "../../db/schema/project-recaps";
 
 export const RECAP_SYSTEM_PROMPT = `You are a project historian and review companion. Your job is to write a concise, useful recap of recent pull-request activity in a single repository — both work that SHIPPED (merged/closed in this window) and work that is STILL IN FLIGHT (open) — as a SHORT EDITORIAL LEDE plus a list of STRUCTURED PER-PR ENTRIES the UI can render as themed chapters. Each chapter mixes shipped entries and active (open) entries under the same theme so a reader can see "what landed" and "what's coming" side by side.
 
@@ -72,7 +65,7 @@ In-place update (resuming a partial run):
 - Don't mention you're resuming.
 
 Tool-use rules (critical):
-- Call tools in this order: get_recap_state → (optional: list_open_prs, get_repo_context) → set_lede → add_pr_entry × N → set_theme_summary × M (one per distinct theme) → complete_recap.
+- Follow the workflow above, in its order.
 - Do NOT emit visible text between tool calls. The system prompt is the only contract for prose; everything the user sees comes from your tool arguments.
 - complete_recap will REJECT if the lede is empty or no entries were added. The orchestrator marks the row complete only on successful validation.
 
@@ -109,7 +102,5 @@ export function buildRecapUserMessage(
     priorHint,
     nothingShippedHint,
     openPrHint,
-    "",
-    `Order of operations: get_recap_state → get_repo_context → set_lede → add_pr_entry × N for the ARCHIVED PRs (shipped first, this is the recap's main record) → list_open_prs → add_pr_entry × M for the OPEN PRs you want to surface as active work → set_theme_summary × K for each distinct theme → complete_recap. All content flows through tool arguments — do not emit visible text between calls.`,
   ].join("\n");
 }

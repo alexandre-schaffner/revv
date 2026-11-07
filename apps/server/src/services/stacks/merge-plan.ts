@@ -1,17 +1,17 @@
 import {
   classifyLayerMergeState,
   type MergeMethod,
+  rollupBucket,
   type StackMergeMode,
   type StackMergePlanLayer,
   type StackMergeReadiness,
   type StackMergeRun,
   type StackMergeRunLayer,
 } from "@revv/shared";
-import type { GitHubStack, GitHubStackLayer } from "./map";
+import type { GitHubStack, GitHubStackLayer } from "../github/stacks";
 import {
   baseWasMoved,
   blockedOnlyByLayersBelow,
-  contradiction,
   type UnverifiedStackBehaviour,
 } from "./unverified-github";
 
@@ -44,8 +44,9 @@ function ownBlockers(layer: GitHubStackLayer): { hard: string[]; checksRunning: 
   const hard: string[] = [];
   if (layer.reviewDecision === "changes_requested") hard.push("Changes requested");
   if (layer.reviewDecision === "review_required") hard.push("Review required");
-  if (layer.checks === "failure" || layer.checks === "error") hard.push("Checks failing");
-  const checksRunning = layer.checks === "pending" || layer.checks === "expected";
+  const checks = rollupBucket(layer.checks);
+  if (checks === "fail") hard.push("Checks failing");
+  const checksRunning = checks === "pending";
   return { hard, checksRunning };
 }
 
@@ -96,12 +97,35 @@ export function mergeModeOf(stack: GitHubStack): StackMergeMode {
   return stack.autoMergeAllowed ? "auto" : "driven";
 }
 
+type ReadLayer = Omit<StackMergePlanLayer, "refusal">;
+
+/**
+ * Why a merge can't run through each layer: it already merged, it is
+ * blocked, or a layer below it is. The picker offers only the layers with
+ * none, and `defaultThrough` is the highest of them in an unbroken run.
+ */
+function throughRefusals(layers: readonly ReadLayer[]): Map<number, string> {
+  const refusals = new Map<number, string>();
+  let blocker: ReadLayer | null = null;
+  for (const layer of [...layers].sort((a, b) => a.position - b.position)) {
+    if (layer.readiness === "merged") {
+      refusals.set(layer.position, "Already merged");
+    } else if (blocker) {
+      refusals.set(layer.position, `#${blocker.number} below can't merge yet`);
+    } else if (layer.readiness === "blocked") {
+      blocker = layer;
+      refusals.set(layer.position, layer.reasons[0] ?? "Can't merge yet");
+    }
+  }
+  return refusals;
+}
+
 export function planLayers(
   stack: GitHubStack,
   prIds: ReadonlyMap<number, string>,
 ): StackMergePlanLayer[] {
   const mode = mergeModeOf(stack);
-  return stack.layers.map((layer) => {
+  const read: ReadLayer[] = stack.layers.map((layer) => {
     const { readiness, reasons } = layerReadiness(layer, stack, mode);
     return {
       position: layer.position,
@@ -114,6 +138,8 @@ export function planLayers(
       reasons,
     };
   });
+  const refusals = throughRefusals(read);
+  return read.map((layer) => ({ ...layer, refusal: refusals.get(layer.position) ?? null }));
 }
 
 export function defaultThrough(layers: readonly StackMergePlanLayer[]): number | null {
@@ -268,7 +294,7 @@ export function nextStep(
   if (!layer) {
     const message = `#${number} is no longer in this stack`;
     return baseWasMoved(target)
-      ? contradiction("base-change-keeps-membership", number, message)
+      ? { kind: "fail", number, message, contradicts: "base-change-keeps-membership" }
       : { kind: "fail", number, message };
   }
 

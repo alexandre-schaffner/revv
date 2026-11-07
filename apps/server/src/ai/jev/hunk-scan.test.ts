@@ -10,7 +10,6 @@ import {
 } from "./hunk-scan";
 import type { FileLike } from "./state";
 
-/** A patch with `count` one-line hunks, each adding `line`. */
 function patchOf(count: number, line = "const x = 1;"): string {
   return Array.from(
     { length: count },

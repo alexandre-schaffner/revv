@@ -1,0 +1,124 @@
+import { STACK_CITATION_PATTERN, type StackLayer } from "@revv/shared";
+import { mount, unmount } from "svelte";
+import { decorationAction } from "$lib/markdown/decorate";
+import type { StackPlace } from "$lib/stacks/stack-margin";
+import LayerChip from "./LayerChip.svelte";
+
+const CITE_CLASS = "stack-cite";
+const NUMBER_ATTR = "data-stack-number";
+const SOURCE_ATTR = "data-stack-source";
+
+interface Chip {
+  readonly instance: ReturnType<typeof mount>;
+  readonly update: (layer: StackLayer, place: StackPlace) => void;
+}
+
+function mountChip(host: HTMLElement, layer: StackLayer, place: StackPlace): Chip {
+  let current = $state.raw({ layer, place });
+  const instance = mount(LayerChip, {
+    target: host,
+    props: {
+      get layer() {
+        return current.layer;
+      },
+      get place() {
+        return current.place;
+      },
+    },
+  });
+  return {
+    instance,
+    update: (nextLayer, nextPlace) => {
+      current = { layer: nextLayer, place: nextPlace };
+    },
+  };
+}
+
+const SKIP = `a, code, pre, button, .${CITE_CLASS}`;
+
+/**
+ * The bound value is the PR's place in its stack, or null when it isn't
+ * stacked (which also turns any chips back into text).
+ */
+export const stackCitations = decorationAction<StackPlace | null>((node) => {
+  const chips = new Map<HTMLElement, Chip>();
+
+  const unmountChip = (host: HTMLElement): void => {
+    const chip = chips.get(host);
+    if (chip) void unmount(chip.instance);
+    chips.delete(host);
+  };
+
+  const revert = (host: HTMLElement): void => {
+    unmountChip(host);
+    host.replaceWith(document.createTextNode(host.getAttribute(SOURCE_ATTR) ?? ""));
+  };
+
+  const decorateTextNode = (
+    text: Text,
+    byNumber: ReadonlyMap<number, StackLayer>,
+    at: StackPlace,
+  ): void => {
+    const value = text.nodeValue ?? "";
+    const frag = document.createDocumentFragment();
+    const minted: [HTMLElement, StackLayer][] = [];
+    let last = 0;
+    for (const match of value.matchAll(STACK_CITATION_PATTERN)) {
+      const layer = byNumber.get(Number(match[1]));
+      if (!layer) continue;
+      if (match.index > last) frag.append(value.slice(last, match.index));
+      const host = document.createElement("span");
+      host.className = CITE_CLASS;
+      // The chip's peek positions itself against its host.
+      host.style.position = "relative";
+      host.setAttribute(NUMBER_ATTR, String(layer.number));
+      host.setAttribute(SOURCE_ATTR, match[0]);
+      frag.append(host);
+      minted.push([host, layer]);
+      last = match.index + match[0].length;
+    }
+    if (minted.length === 0) return;
+    if (last < value.length) frag.append(value.slice(last));
+    text.replaceWith(frag);
+    for (const [host, layer] of minted) chips.set(host, mountChip(host, layer, at));
+  };
+
+  const decorate = (place: StackPlace | null): void => {
+    // `{@html}` re-renders drop hosts without telling us; their chips go too.
+    for (const host of [...chips.keys()]) {
+      if (!node.contains(host)) unmountChip(host);
+    }
+    if (!place) {
+      for (const host of [...chips.keys()]) revert(host);
+      return;
+    }
+    const at = place;
+    const byNumber = new Map(at.stack.layers.map((l) => [l.number, l]));
+    for (const [host, chip] of [...chips]) {
+      const layer = byNumber.get(Number(host.getAttribute(NUMBER_ATTR)));
+      if (layer) chip.update(layer, at);
+      else revert(host);
+    }
+    const roots = node.matches(".prose")
+      ? [node]
+      : Array.from(node.querySelectorAll<HTMLElement>(".prose"));
+    const texts: Text[] = [];
+    for (const root of roots) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        const value = n.nodeValue ?? "";
+        if (!value.includes("#") || !/layer/i.test(value)) continue;
+        if (n.parentElement?.closest(SKIP)) continue;
+        texts.push(n as Text);
+      }
+    }
+    for (const t of texts) decorateTextNode(t, byNumber, at);
+  };
+
+  return {
+    apply: decorate,
+    destroy() {
+      for (const host of [...chips.keys()]) unmountChip(host);
+    },
+  };
+});

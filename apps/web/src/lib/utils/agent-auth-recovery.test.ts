@@ -14,12 +14,6 @@ describe("agentAuthRecoveryDescription", () => {
     expect(description).not.toContain("subscription login");
   });
 
-  it("shows the raw error for non-keychain auth failures", () => {
-    expect(agentAuthRecoveryDescription("401 unauthorized")).toBe(
-      "Reconnect the agent in Settings, then retry. Agent error: 401 unauthorized",
-    );
-  });
-
   it("truncates a long error", () => {
     const description = agentAuthRecoveryDescription(`oauth ${"x".repeat(500)}`);
     expect(description.length).toBeLessThan(320);

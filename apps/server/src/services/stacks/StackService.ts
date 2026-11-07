@@ -1,50 +1,41 @@
-import type { PrStackDetail, RiskLevel, StackBrief, WalkthroughStackSnapshot } from "@revv/shared";
-import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import type { PrStackDetail, StackBrief, WalkthroughStackSnapshot } from "@revv/shared";
+import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
+import type { Db } from "../../db/index";
 import { pullRequests } from "../../db/schema/pull-requests";
 import { stackBriefs } from "../../db/schema/stack-briefs";
-import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
 import { walkthroughs } from "../../db/schema/walkthroughs";
-import {
-  DbError,
-  type GitHubError,
-  GitHubNetworkError,
-  GitHubNotFoundError,
-  GitHubRateLimitError,
-} from "../../domain/errors";
-import { withDb } from "../../effects/with-db";
+import { type DbError, type GitHubError, isGitHubUnreachable } from "../../domain/errors";
+import { dbTry } from "../../effects/db-try";
 import { logError } from "../../logger";
 import { withGitHubOrigin } from "../../observability/github-ledger/origin";
-import { Broadcaster } from "../Broadcaster";
 import { CacheService } from "../Cache";
 import { DbService } from "../Db";
-import { readCurrentHeadFiles } from "../DiffCache";
-import { githubGraphql, githubGraphqlPartial, withSchemaFallback } from "../github-rest";
-import { type PrContextBasic, type PrContextError, PrContextService } from "../PrContext";
-import { fingerprintFiles, stackSignature } from "./fingerprint";
+import { readCurrentHeadFiles, toGitHubFileShape } from "../DiffCache";
+import { GitHubGateway } from "../github/gateway";
+import type { GitHubStack } from "../github/stacks";
+import type { GitHubClient } from "../github/transport";
 import {
-  type GitHubStack,
-  layersToCompare,
-  type MirroredLayer,
-  mapGitHubStack,
-  membershipSupersededByPoll,
-  stackFromMirror,
-  withBehind,
-} from "./map";
-import {
-  overlayStack,
-  type RevvStackFacts,
-  type TrackedLayer,
-  type WalkthroughFact,
-} from "./overlay";
-import {
-  layerCompareQuery,
-  PR_STACK_QUERY,
-  type RawLayerCompareAnswer,
-  type RawPrStackAnswer,
-  STACK_SCHEMA_TOKENS,
-} from "./queries";
-import { isCompleteReview, readBriefLayers } from "./reads";
+  type PrContextBasic,
+  type PrContextError,
+  PrContextService,
+  type RepoContext,
+} from "../PrContext";
+import { Realtime } from "../Realtime";
+import { perspectiveOf } from "../walkthrough/perspective";
+import { fingerprintFiles, restackCarry, restackSourceOf } from "../walkthrough/restack";
+import { latestFinishedReviews } from "../walkthrough/review-reads";
+import { type MirroredLayer, membershipSupersededByPoll, stackFromMirror } from "./map";
+import { overlayStack, type RevvStackFacts, type TrackedLayer } from "./overlay";
+import { readBriefLayers } from "./reads";
+import { stackSignature } from "./signature";
+
+/**
+ * The generation mode "Review the stack" asks for when it queues a layer, in
+ * the layer's own perspective: the overlay's `restacked` verdict says whether
+ * that request carries a review over.
+ */
+export const STACK_REVIEW_GENERATION_MODE = "full";
 
 const CACHE_NS = "pr-stack";
 const FRESH_FOR_MS = 30_000;
@@ -62,71 +53,24 @@ export class StackService extends Context.Service<
      * (or the host predates stacks). Serves a read under 30s old from the
      * cache, and the last good one (`stale: true`) when GitHub is unreachable.
      */
-    readonly detail: (
-      prId: string,
-      userId: string,
-      accountId?: string,
-    ) => Effect.Effect<PrStackDetail | null, StackError>;
-    readonly fetchFresh: (ctx: PrContextBasic) => Effect.Effect<GitHubStack | null, StackError>;
+    readonly detail: (prId: string) => Effect.Effect<PrStackDetail | null, StackError>;
+    /** PR #`prNumber`'s stack as GitHub reports it now, cached for the next read. */
+    readonly fetchFresh: (
+      at: { readonly client: GitHubClient; readonly repo: RepoContext["repo"] },
+      prNumber: number,
+    ) => Effect.Effect<GitHubStack | null, StackError>;
     readonly snapshot: (ctx: PrContextBasic) => Effect.Effect<WalkthroughStackSnapshot | null>;
-    readonly markStale: (repositoryId: string, stackNumber: number) => Effect.Effect<void, DbError>;
+    /**
+     * Revv or GitHub moved the stack (a push, a retarget, a merge): drop the
+     * cached read, so the next one asks GitHub, and tell the account.
+     */
+    readonly moved: (
+      accountId: string,
+      repositoryId: string,
+      stackNumber: number,
+    ) => Effect.Effect<void>;
   }
 >()("StackService") {}
-
-function repoRef(ctx: PrContextBasic) {
-  const [owner, repo, ...rest] = ctx.repo.fullName.split("/");
-  return owner && repo && rest.length === 0
-    ? Effect.succeed({ owner, repo })
-    : Effect.fail(new GitHubNotFoundError({ resource: "repo", id: ctx.repo.fullName }));
-}
-
-function isUnreachable(e: unknown): boolean {
-  return e instanceof GitHubNetworkError || e instanceof GitHubRateLimitError;
-}
-
-function askStack(ctx: PrContextBasic) {
-  return Effect.gen(function* () {
-    const ref = yield* repoRef(ctx);
-    const { value, modern } = yield* withSchemaFallback(
-      (modern) =>
-        modern
-          ? githubGraphql<RawPrStackAnswer>(
-              PR_STACK_QUERY,
-              { ...ref, number: ctx.pr.externalId },
-              ctx.token,
-              ctx.apiBase,
-            )
-          : Effect.succeed<RawPrStackAnswer>({ repository: null }),
-      STACK_SCHEMA_TOKENS,
-    );
-    const stack = modern ? mapGitHubStack(value, new Date().toISOString()) : null;
-    return stack ? yield* withLayerBehind(ctx, ref, stack) : null;
-  });
-}
-
-function withLayerBehind(
-  ctx: PrContextBasic,
-  ref: { owner: string; repo: string },
-  stack: GitHubStack,
-) {
-  const layers = layersToCompare(stack);
-  if (layers.length === 0) return Effect.succeed(stack);
-  const { query, variables } = layerCompareQuery(layers);
-  return githubGraphqlPartial<RawLayerCompareAnswer>(
-    query,
-    { ...ref, ...variables },
-    ctx.token,
-    ctx.apiBase,
-  ).pipe(
-    Effect.map((answer) => withBehind(stack, answer)),
-    Effect.catch((err) =>
-      Effect.sync(() => {
-        logError("stacks", `comparing stack #${stack.number}'s layers failed`, err);
-        return stack;
-      }),
-    ),
-  );
-}
 
 export function toSnapshot(stack: GitHubStack, position: number): WalkthroughStackSnapshot {
   return {
@@ -146,160 +90,116 @@ export function toSnapshot(stack: GitHubStack, position: number): WalkthroughSta
 }
 
 export function readStackFacts(
+  db: Db,
   repositoryId: string,
   stack: GitHubStack,
-): Effect.Effect<RevvStackFacts, DbError, DbService> {
-  return Effect.gen(function* () {
-    const { db } = yield* DbService;
-    return yield* Effect.try({
-      try: (): RevvStackFacts => {
-        const numbers = stack.layers.map((l) => l.number);
-        const prRows = db
-          .select({
-            id: pullRequests.id,
-            externalId: pullRequests.externalId,
-            headSha: pullRequests.headSha,
-          })
-          .from(pullRequests)
-          .where(
-            and(
-              eq(pullRequests.repositoryId, repositoryId),
-              inArray(pullRequests.externalId, numbers),
-            ),
-          )
-          .all();
-        const prIds = prRows.map((r) => r.id);
+): Effect.Effect<RevvStackFacts, DbError> {
+  return dbTry("stack facts read", (): RevvStackFacts => {
+    const numbers = stack.layers.map((l) => l.number);
+    const prRows = db
+      .select({
+        id: pullRequests.id,
+        externalId: pullRequests.externalId,
+        headSha: pullRequests.headSha,
+      })
+      .from(pullRequests)
+      .where(
+        and(eq(pullRequests.repositoryId, repositoryId), inArray(pullRequests.externalId, numbers)),
+      )
+      .all();
+    const prIds = prRows.map((r) => r.id);
+    const layers = prRows.map((pr) => ({ ...pr, perspective: perspectiveOf(db, pr.id) }));
 
-        const wtRows =
-          prIds.length === 0
-            ? []
-            : db
-                .select({
-                  id: walkthroughs.id,
-                  prId: walkthroughs.pullRequestId,
-                  status: walkthroughs.status,
-                  phase: walkthroughs.lastCompletedPhase,
-                  completedAt: walkthroughs.completedAt,
-                  prHeadSha: walkthroughs.prHeadSha,
-                  riskLevel: walkthroughs.riskLevel,
-                  summary: walkthroughs.summary,
-                  stackContext: walkthroughs.stackContext,
-                  diffFingerprint: walkthroughs.diffFingerprint,
-                  carriedFrom: walkthroughs.carriedFromWalkthroughId,
-                })
-                .from(walkthroughs)
-                .where(inArray(walkthroughs.pullRequestId, prIds))
-                .orderBy(desc(walkthroughs.generatedAt))
-                .all();
-
-        const wtIds = wtRows.map((w) => w.id);
-        const issueCounts = new Map<string, { open: number; critical: number }>();
-        if (wtIds.length > 0) {
-          const counts = db
+    const standing =
+      prIds.length === 0
+        ? []
+        : db
             .select({
-              walkthroughId: walkthroughIssues.walkthroughId,
-              open: sql<number>`count(*)`,
-              critical: sql<number>`sum(case when ${walkthroughIssues.severity} = 'critical' then 1 else 0 end)`,
+              id: walkthroughs.id,
+              prId: walkthroughs.pullRequestId,
+              status: walkthroughs.status,
+              prHeadSha: walkthroughs.prHeadSha,
+              mode: walkthroughs.mode,
             })
-            .from(walkthroughIssues)
+            .from(walkthroughs)
             .where(
               and(
-                inArray(walkthroughIssues.walkthroughId, wtIds),
-                eq(walkthroughIssues.resolutionStatus, "open"),
+                inArray(walkthroughs.pullRequestId, prIds),
+                ne(walkthroughs.status, "superseded"),
               ),
             )
-            .groupBy(walkthroughIssues.walkthroughId)
+            .orderBy(desc(walkthroughs.generatedAt))
             .all();
-          for (const c of counts) {
-            issueCounts.set(c.walkthroughId, { open: c.open, critical: c.critical ?? 0 });
-          }
-        }
+    const finished = latestFinishedReviews(db, prIds);
+    const filesByPr = readCurrentHeadFiles(db, prIds);
 
-        const filesByPr = readCurrentHeadFiles(db, prIds);
+    const tracked = new Map<number, TrackedLayer>();
+    for (const pr of layers) {
+      const current = standing.find(
+        (w) => w.prId === pr.id && w.prHeadSha === pr.headSha && w.mode === pr.perspective,
+      );
+      const files = filesByPr.get(pr.id);
+      const currentFingerprint = files ? fingerprintFiles(toGitHubFileShape(files)) : null;
+      tracked.set(pr.externalId, {
+        prId: pr.id,
+        currentFingerprint,
+        files: files ? files.map((f) => f.path) : null,
+        current: current ? { id: current.id, status: current.status } : null,
+        latestFinished: finished.get(pr.id) ?? null,
+        carries:
+          pr.headSha !== null &&
+          currentFingerprint !== null &&
+          restackCarry(
+            restackSourceOf(db, pr.id, pr.headSha, pr.perspective),
+            STACK_REVIEW_GENERATION_MODE,
+            currentFingerprint,
+          ) !== null,
+      });
+    }
 
-        const toFact = (w: (typeof wtRows)[number]): WalkthroughFact => {
-          const counts = issueCounts.get(w.id);
-          return {
-            id: w.id,
-            status: w.status,
-            prHeadSha: w.prHeadSha,
-            riskLevel: (w.riskLevel as RiskLevel | null) ?? null,
-            summary: w.summary,
-            openIssues: counts?.open ?? 0,
-            criticalIssues: counts?.critical ?? 0,
-            stackContext: w.stackContext,
-            fingerprint: w.diffFingerprint,
-            carried: w.carriedFrom !== null,
-          };
-        };
-
-        const tracked = new Map<number, TrackedLayer>();
-        for (const pr of prRows) {
-          const rows = wtRows.filter((w) => w.prId === pr.id);
-          const current = rows.find((w) => w.status !== "superseded" && w.prHeadSha === pr.headSha);
-          const latestComplete = rows.find(isCompleteReview);
-          const files = filesByPr.get(pr.id);
-          tracked.set(pr.externalId, {
-            prId: pr.id,
-            currentFingerprint: files
-              ? fingerprintFiles(
-                  files.map((f) => ({ filename: f.path, status: f.status, patch: f.patch })),
-                )
-              : null,
-            files: files ? files.map((f) => f.path) : null,
-            current: current ? toFact(current) : null,
-            latestComplete: latestComplete ? toFact(latestComplete) : null,
-          });
-        }
-
-        return {
-          repositoryId,
-          tracked,
-          brief: readBrief(db, repositoryId, stack),
-        };
-      },
-      catch: (cause) => new DbError({ message: "stack facts read failed", cause }),
-    });
+    return {
+      repositoryId,
+      tracked,
+      brief: readBrief(db, repositoryId, stack),
+    };
   });
 }
 
 function readMirror(
+  db: Db,
   repositoryId: string,
   stackNumber: number,
-): Effect.Effect<MirroredLayer[], DbError, DbService> {
+): Effect.Effect<MirroredLayer[], DbError> {
   return Effect.gen(function* () {
-    const { db } = yield* DbService;
-    return yield* Effect.try({
-      try: () =>
-        db
-          .select({
-            number: pullRequests.externalId,
-            position: pullRequests.stackPosition,
-            title: pullRequests.title,
-            url: pullRequests.url,
-            status: pullRequests.status,
-            isDraft: pullRequests.isDraft,
-            sourceBranch: pullRequests.sourceBranch,
-            targetBranch: pullRequests.targetBranch,
-            headSha: pullRequests.headSha,
-            additions: pullRequests.additions,
-            deletions: pullRequests.deletions,
-            changedFiles: pullRequests.changedFiles,
-            authorLogin: pullRequests.authorLogin,
-            closedAt: pullRequests.closedAt,
-            fetchedAt: pullRequests.fetchedAt,
-          })
-          .from(pullRequests)
-          .where(
-            and(
-              eq(pullRequests.repositoryId, repositoryId),
-              eq(pullRequests.stackNumber, stackNumber),
-            ),
-          )
-          .all()
-          .flatMap((row) => (row.position === null ? [] : [{ ...row, position: row.position }])),
-      catch: (cause) => new DbError({ message: "stack mirror read failed", cause }),
-    });
+    return yield* dbTry("stack mirror read", () =>
+      db
+        .select({
+          number: pullRequests.externalId,
+          position: pullRequests.stackPosition,
+          title: pullRequests.title,
+          url: pullRequests.url,
+          status: pullRequests.status,
+          isDraft: pullRequests.isDraft,
+          sourceBranch: pullRequests.sourceBranch,
+          targetBranch: pullRequests.targetBranch,
+          headSha: pullRequests.headSha,
+          additions: pullRequests.additions,
+          deletions: pullRequests.deletions,
+          changedFiles: pullRequests.changedFiles,
+          authorLogin: pullRequests.authorLogin,
+          closedAt: pullRequests.closedAt,
+          fetchedAt: pullRequests.fetchedAt,
+        })
+        .from(pullRequests)
+        .where(
+          and(
+            eq(pullRequests.repositoryId, repositoryId),
+            eq(pullRequests.stackNumber, stackNumber),
+          ),
+        )
+        .all()
+        .flatMap((row) => (row.position === null ? [] : [{ ...row, position: row.position }])),
+    );
   });
 }
 
@@ -333,8 +233,6 @@ export function chooseStackSource(args: {
   };
 }
 
-type Db = Context.Service.Shape<typeof DbService>["db"];
-
 function readBrief(db: Db, repositoryId: string, stack: GitHubStack): StackBrief | null {
   const row = db
     .select()
@@ -366,21 +264,25 @@ export const StackServiceLive = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* DbService;
     const prContext = yield* PrContextService;
+    const github = yield* GitHubGateway;
     const cache = yield* CacheService;
-    const broadcaster = yield* Broadcaster;
+    const realtime = yield* Realtime;
     const revalidating = new Set<string>();
+    // Bumped by every move, so a background re-read that started before one
+    // can't write the pre-move stack back.
+    const moves = new Map<string, number>();
+    const movesOf = (key: string) => moves.get(key) ?? 0;
 
-    const fetchFresh = (ctx: PrContextBasic) =>
+    const store = (repositoryId: string, stack: GitHubStack) =>
+      cache.set(CACHE_NS, cacheKey(repositoryId, stack.number), stack, { ttlMs: CACHE_TTL_MS });
+
+    const fetchFresh = (
+      { client, repo }: { readonly client: GitHubClient; readonly repo: RepoContext["repo"] },
+      prNumber: number,
+    ) =>
       Effect.gen(function* () {
-        const stack = yield* askStack(ctx);
-        if (stack) {
-          yield* withDb(
-            db,
-            cache.set(CACHE_NS, cacheKey(ctx.repo.id, stack.number), stack, {
-              ttlMs: CACHE_TTL_MS,
-            }),
-          );
-        }
+        const stack = yield* github.stacks.ofPr(client, repo.fullName, prNumber);
+        if (stack) yield* store(repo.id, stack);
         return stack;
       });
 
@@ -388,13 +290,18 @@ export const StackServiceLive = Layer.effect(
       const key = cacheKey(ctx.repo.id, stackNumber);
       if (revalidating.has(key)) return Effect.void;
       revalidating.add(key);
-      return fetchFresh(ctx).pipe(
+      const started = movesOf(key);
+      return github.stacks.ofPr(ctx.client, ctx.repo.fullName, ctx.pr.externalId).pipe(
         Effect.flatMap((stack) =>
-          stack
-            ? broadcaster.broadcastToAccount(accountId, {
-                type: "stack:updated",
-                data: { repositoryId: ctx.repo.id, stackNumber: stack.number },
-              })
+          stack && movesOf(key) === started
+            ? store(ctx.repo.id, stack).pipe(
+                Effect.andThen(
+                  realtime.toAccount(accountId, {
+                    type: "stack:updated",
+                    data: { repositoryId: ctx.repo.id, stackNumber: stack.number },
+                  }),
+                ),
+              )
             : Effect.void,
         ),
         Effect.catchCause((cause) =>
@@ -413,11 +320,8 @@ export const StackServiceLive = Layer.effect(
       revalidateFor: string | null = null,
     ) =>
       Effect.gen(function* () {
-        const mirror = yield* withDb(db, readMirror(ctx.repo.id, stackNumber));
-        const cached = yield* withDb(
-          db,
-          cache.get<GitHubStack>(CACHE_NS, cacheKey(ctx.repo.id, stackNumber)),
-        );
+        const mirror = yield* readMirror(db, ctx.repo.id, stackNumber);
+        const cached = yield* cache.get<GitHubStack>(CACHE_NS, cacheKey(ctx.repo.id, stackNumber));
         const source = chooseStackSource({
           cached,
           mirror,
@@ -433,9 +337,9 @@ export const StackServiceLive = Layer.effect(
             return { stack: source.stack, stale: false };
           case "github": {
             const { ifUnreachable } = source;
-            return yield* fetchFresh(ctx).pipe(
+            return yield* fetchFresh(ctx, ctx.pr.externalId).pipe(
               Effect.map((stack) => ({ stack, stale: false })),
-              Effect.catchIf(isUnreachable, (err) =>
+              Effect.catchIf(isGitHubUnreachable, (err) =>
                 ifUnreachable
                   ? Effect.succeed({ stack: ifUnreachable, stale: true })
                   : Effect.fail(err),
@@ -445,13 +349,13 @@ export const StackServiceLive = Layer.effect(
         }
       });
 
-    const detail = (prId: string, userId: string, accountId?: string) =>
+    const detail = (prId: string) =>
       Effect.gen(function* () {
-        const ctx = yield* withDb(db, prContext.resolveBasic(prId, userId, accountId));
+        const ctx = yield* prContext.forPr(prId);
         if (!ctx.pr.stack) return null;
-        const { stack, stale } = yield* githubStack(ctx, ctx.pr.stack.number, accountId ?? null);
+        const { stack, stale } = yield* githubStack(ctx, ctx.pr.stack.number, ctx.accountId);
         if (!stack) return null;
-        const facts = yield* withDb(db, readStackFacts(ctx.repo.id, stack));
+        const facts = yield* readStackFacts(db, ctx.repo.id, stack);
         return overlayStack(stack, facts, ctx.pr.externalId, stale);
       });
 
@@ -471,15 +375,24 @@ export const StackServiceLive = Layer.effect(
         ),
       );
 
-    const markStale = (repositoryId: string, stackNumber: number) =>
-      Effect.gen(function* () {
-        const key = cacheKey(repositoryId, stackNumber);
-        const cached = yield* cache.get<GitHubStack>(CACHE_NS, key);
-        if (!cached) return;
-        const aged: GitHubStack = { ...cached, fetchedAt: new Date(0).toISOString() };
-        yield* cache.set(CACHE_NS, key, aged, { ttlMs: CACHE_TTL_MS });
-      }).pipe((eff) => withDb(db, eff));
+    const moved = (accountId: string, repositoryId: string, stackNumber: number) => {
+      const key = cacheKey(repositoryId, stackNumber);
+      moves.set(key, movesOf(key) + 1);
+      return cache.invalidate(CACHE_NS, key).pipe(
+        Effect.catch((err) =>
+          Effect.sync(() =>
+            logError("stacks", `dropping the cached read of stack #${stackNumber}:`, err),
+          ),
+        ),
+        Effect.andThen(
+          realtime.toAccount(accountId, {
+            type: "stack:updated",
+            data: { repositoryId, stackNumber },
+          }),
+        ),
+      );
+    };
 
-    return { detail, fetchFresh, snapshot, markStale };
+    return { detail, fetchFresh, snapshot, moved };
   }),
 );

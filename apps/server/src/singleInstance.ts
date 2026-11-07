@@ -2,17 +2,6 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { dirname } from "node:path";
 import { logError } from "./logger";
 
-/**
- * Acquires a PID-file lock for this server instance.
- *
- * If another process holds the same PID file and is still alive:
- *   1. SIGTERM it and wait up to 3 s for a clean exit.
- *   2. SIGKILL it if it is still running after the grace period.
- *
- * Writes this process's PID to `pidFile` so the next startup can do the same.
- *
- * @returns A cleanup function that removes the PID file; call it on exit.
- */
 export function acquireSingleInstance(pidFile: string): () => void {
   const dir = dirname(pidFile);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -27,9 +16,7 @@ export function acquireSingleInstance(pidFile: string): () => void {
       try {
         process.kill(existingPid, 0);
         alive = true;
-      } catch {
-        // ESRCH — process is already dead; stale PID file
-      }
+      } catch {}
 
       if (alive) {
         logError("server", `[single-instance] stale instance PID ${existingPid} — SIGTERM…`);
@@ -37,13 +24,12 @@ export function acquireSingleInstance(pidFile: string): () => void {
           process.kill(existingPid, "SIGTERM");
         } catch {}
 
-        // Busy-wait up to 3 s for the old process to exit cleanly.
-        // This runs synchronously at startup before we bind any port, so
-        // blocking the event loop here is harmless.
+        // Blocking the event loop is harmless: this runs at startup, before any port
+        // is bound.
         const deadline = Date.now() + 3000;
         while (Date.now() < deadline) {
           try {
-            process.kill(existingPid, 0); // still alive
+            process.kill(existingPid, 0);
             Bun.sleepSync(100);
           } catch {
             alive = false;

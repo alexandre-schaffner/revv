@@ -2,17 +2,13 @@ import { describe, expect, it } from "bun:test";
 import type { ServerEventMessage } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
-import {
-  type StackBriefSnapshot,
-  type StackBriefToolContext,
-  setArcHandler,
-  setLayerRoleHandler,
-} from "../../ai/providers/stack-brief-tools";
+import type { StackBriefToolContext } from "../../ai/providers/stack-brief-tools";
+import { setArcHandler, setLayerRoleHandler } from "../../ai/providers/stack-brief-tools/handlers";
 import { createDb, type Db } from "../../db/index";
-import { stackBriefs } from "../../db/schema/stack-briefs";
-import { Broadcaster } from "../Broadcaster";
+import { type StackBriefSnapshot, stackBriefs } from "../../db/schema/stack-briefs";
 import { DbService } from "../Db";
 import { PrContextService } from "../PrContext";
+import { Realtime } from "../Realtime";
 import { SettingsService } from "../Settings";
 import { StackBriefJobs, StackBriefJobsLive } from "./StackBriefJobs";
 import { StackService } from "./StackService";
@@ -55,7 +51,6 @@ function seedBrief(db: Db, id: string, resumeAttempts = 0): StackBriefToolContex
       signature: `sig-${id}`,
       stackSnapshot: SNAPSHOT,
       status: "generating",
-      userId: "u",
       createdAt: new Date().toISOString(),
       resumeAttempts,
     })
@@ -65,15 +60,17 @@ function seedBrief(db: Db, id: string, resumeAttempts = 0): StackBriefToolContex
 
 function resume(db: Db) {
   const events: ServerEventMessage[] = [];
+  const record = (msg: ServerEventMessage) =>
+    Effect.sync(() => {
+      events.push(msg);
+    });
   const deps = Layer.mergeAll(
     Layer.succeed(DbService, { db }),
-    Layer.succeed(Broadcaster, {
-      register: () => Effect.succeed(() => undefined),
-      broadcastToAccount: (_accountId: string, msg: ServerEventMessage) =>
-        Effect.sync(() => {
-          events.push(msg);
-        }),
-      broadcastAll: () => Effect.void,
+    Layer.succeed(Realtime, {
+      toAccount: (_accountId, msg) => record(msg),
+      toRepo: (_repoId, msg) => record(msg),
+      toUsers: () => Effect.void,
+      toPr: (_prId, msg) => record(msg),
     }),
     Layer.succeed(PrContextService, {
       getAccountIdForRepo: () => Effect.succeed("acct-1"),

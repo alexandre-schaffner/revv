@@ -1,5 +1,3 @@
-// ── External coding-agent integrations ──────────────────────────────────────
-//
 // Credential lifecycle and checkout→PR resolution for coding agents that run
 // outside Revv's own agent lifecycle. Each provider gets one account-scoped
 // credential (stored only as a SHA-256 digest) plus a per-account/provider
@@ -8,34 +6,34 @@
 // the checkout's commit ancestry.
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import {
+  API_PORT,
+  DEV_API_PORT,
   EXTERNAL_AGENT_PROVIDERS,
+  EXTERNAL_AGENT_SCOPES,
   type ExternalAgentProvider,
-  type ExternalIntegrationConnectResult,
+  type ExternalAgentScope,
   type ExternalIntegrationStatus,
+  isExternalAgentProvider,
+  SHA_PATTERN,
 } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
+import { serverEnv } from "../config";
 import { externalIntegrations } from "../db/schema/external-integrations";
 import { pullRequests } from "../db/schema/pull-requests";
 import { repositories } from "../db/schema/repositories";
 import { ExternalIntegrationError } from "../domain/errors";
+import { logError } from "../logger";
 import { DbService } from "./Db";
 import {
+  type ExternalIntegrationInstaller,
   externalIntegrationError,
   externalIntegrationInstaller,
   findIntegrationsDirectory,
+  type InstalledBinding,
 } from "./external-integrations/install";
-
-export const EXTERNAL_AGENT_SCOPES = [
-  "context:read",
-  "walkthrough:edit",
-  "walkthrough:generate",
-  "issues:resolve",
-  "comments:write",
-] as const;
-
-export type ExternalAgentScope = (typeof EXTERNAL_AGENT_SCOPES)[number];
 
 /** Short, provider-identifying token prefixes so a leaked value is traceable. */
 const TOKEN_PREFIX: Readonly<Record<ExternalAgentProvider, string>> = {
@@ -55,7 +53,6 @@ export interface ExternalResolvedContext {
   readonly provider: ExternalAgentProvider;
   readonly integrationId: string;
   readonly accountId: string;
-  readonly userId: string;
   readonly prId: string;
   readonly prHeadSha: string | null;
   readonly scopes: readonly ExternalAgentScope[];
@@ -65,7 +62,6 @@ export interface ExternalAuthorizedContext {
   readonly provider: ExternalAgentProvider;
   readonly integrationId: string;
   readonly accountId: string;
-  readonly userId: string;
   readonly scopes: readonly ExternalAgentScope[];
 }
 
@@ -100,31 +96,33 @@ export function selectPullRequestForCheckout<T extends ExternalPullRequestCandid
   return branchMatches.length === 1 ? (branchMatches[0] ?? null) : null;
 }
 
+/** The MCP route the bridges of this server's installs talk to. */
+function bridgeApiUrl(): string {
+  return `http://${serverEnv.host}:${serverEnv.port}/mcp/external`;
+}
+
+/**
+ * Where the bridge of a config written before it carried `REVV_API_URL`
+ * looks for Revv: both channels' default ports (legacy-upgrade: unpinnedBridge).
+ */
+const LEGACY_BRIDGE_URLS = [API_PORT, DEV_API_PORT].map(
+  (port) => `http://127.0.0.1:${port}/mcp/external`,
+);
+
 function tokenHash(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-function parseScopes(raw: string): readonly ExternalAgentScope[] {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((value): value is ExternalAgentScope =>
-      EXTERNAL_AGENT_SCOPES.some((scope) => scope === value),
-    );
-  } catch {
-    return [];
-  }
-}
-
-function isProvider(value: string): value is ExternalAgentProvider {
-  return (EXTERNAL_AGENT_PROVIDERS as readonly string[]).includes(value);
-}
-
-/** A full 40-hex commit SHA, either case. */
-export const SHA_PATTERN = /^[0-9a-f]{40}$/i;
-
-function isSha(value: string): boolean {
-  return SHA_PATTERN.test(value);
+/**
+ * Whether an install is this server's to rewrite or remove. A server booted
+ * on a copy of another's database holds the same credential rows, so the
+ * credential alone doesn't say: the install also has to talk to this server.
+ */
+function isThisServersInstall(binding: InstalledBinding, credentialHash: string): boolean {
+  if (tokenHash(binding.token) !== credentialHash) return false;
+  return binding.apiUrl === null
+    ? LEGACY_BRIDGE_URLS.includes(bridgeApiUrl())
+    : binding.apiUrl === bridgeApiUrl();
 }
 
 export function isIntegrationCredentialActive(
@@ -134,7 +132,6 @@ export function isIntegrationCredentialActive(
   return credential.revokedAt === null && Date.parse(credential.expiresAt) > now;
 }
 
-/** Map an install-mechanics throw onto a tagged error without losing detail. */
 function asIntegrationError(
   code: ExternalIntegrationError["code"],
   message: string,
@@ -155,11 +152,24 @@ export class ExternalIntegrations extends Context.Service<
       readonly accountId: string;
       readonly userId: string;
       readonly provider: ExternalAgentProvider;
-    }) => Effect.Effect<ExternalIntegrationConnectResult, ExternalIntegrationError>;
+    }) => Effect.Effect<ExternalIntegrationStatus, ExternalIntegrationError>;
     readonly disconnect: (
       accountId: string,
       provider: ExternalAgentProvider,
     ) => Effect.Effect<void, ExternalIntegrationError>;
+    /**
+     * Remove the install of every credential the account holds, before its
+     * rows go: the agents' configs carry the plaintext token, and once the
+     * rows are deleted nothing can find them again.
+     */
+    readonly uninstallAccount: (accountId: string) => Effect.Effect<void, ExternalIntegrationError>;
+    /**
+     * Rewrite every file Revv owns in the agents' configs (bridge copy,
+     * guide, and the entry's command, URL and proxy bypass) for each active
+     * credential whose install is this server's, so a release's fixes reach
+     * installs without a reconnect. Run once per boot.
+     */
+    readonly refreshInstalls: () => Effect.Effect<void>;
     readonly authenticate: (
       token: string,
     ) => Effect.Effect<ExternalAuthorizedContext, ExternalIntegrationError>;
@@ -170,272 +180,402 @@ export class ExternalIntegrations extends Context.Service<
   }
 >()("ExternalIntegrations") {}
 
-export const ExternalIntegrationsLive = Layer.effect(
-  ExternalIntegrations,
-  Effect.gen(function* () {
-    const { db } = yield* DbService;
+/**
+ * The service over the agent configs under `home` (Codex's under `CODEX_HOME`
+ * when set): the user's home, or a temp dir in tests. Rewriting or removing
+ * an install is refused when it belongs to another server.
+ */
+export const externalIntegrationsLayer = (home: string) =>
+  Layer.effect(
+    ExternalIntegrations,
+    Effect.gen(function* () {
+      const { db } = yield* DbService;
+      const installerFor = (provider: ExternalAgentProvider, accountId: string) =>
+        externalIntegrationInstaller(provider, accountId, home);
 
-    const status = Effect.fn("ExternalIntegrations.status")(function* (accountId: string) {
-      const rows = yield* Effect.try({
-        try: () =>
-          db
-            .select({
-              provider: externalIntegrations.provider,
-              createdAt: externalIntegrations.createdAt,
-              expiresAt: externalIntegrations.expiresAt,
-              lastUsedAt: externalIntegrations.lastUsedAt,
-              revokedAt: externalIntegrations.revokedAt,
-            })
-            .from(externalIntegrations)
-            .where(eq(externalIntegrations.accountId, accountId))
-            .all(),
-        catch: (cause) =>
-          externalIntegrationError(
-            "INTERNAL",
-            "Could not read integration connection state.",
-            cause,
+      const removeInstall = (
+        installer: ExternalIntegrationInstaller,
+        credentialHash: string | null,
+      ) =>
+        Effect.try({
+          try: () => {
+            const binding = installer.installedBinding();
+            if (
+              binding !== null &&
+              (credentialHash === null || !isThisServersInstall(binding, credentialHash))
+            ) {
+              logError(
+                "external-integrations",
+                `leaving ${installer.clientName} installed: it belongs to another Revv server`,
+              );
+              return;
+            }
+            installer.uninstall();
+          },
+          catch: asIntegrationError(
+            "INSTALL_FAILED",
+            "Credential revoked, but the client configuration could not be removed.",
           ),
-      });
-      const byProvider = new Map(rows.map((row) => [row.provider, row]));
-      const now = Date.now();
-      return EXTERNAL_AGENT_PROVIDERS.map((provider): ExternalIntegrationStatus => {
-        const row = byProvider.get(provider);
-        const active = row ? isIntegrationCredentialActive(row, now) : false;
-        const installer = externalIntegrationInstaller(provider, accountId);
-        return {
-          provider,
-          connected: Boolean(row && active),
-          clientConfigured: installer.installed(),
-          clientName: installer.clientName,
-          createdAt: row?.createdAt ?? null,
-          lastUsedAt: row?.lastUsedAt ?? null,
-          expiresAt: row?.expiresAt ?? null,
-        };
-      });
-    });
+        });
 
-    const connect = Effect.fn("ExternalIntegrations.connect")(function* (args: {
-      readonly accountId: string;
-      readonly userId: string;
-      readonly provider: ExternalAgentProvider;
-    }) {
-      const token = `${TOKEN_PREFIX[args.provider]}_${randomBytes(32).toString("base64url")}`;
-      const id = randomUUID();
-      const now = new Date().toISOString();
-      const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
-      const installer = externalIntegrationInstaller(args.provider, args.accountId);
-
-      const integrationsDirectory = yield* Effect.try({
-        try: findIntegrationsDirectory,
-        catch: asIntegrationError(
-          "INSTALL_FAILED",
-          "Could not locate the bundled Revv integration assets.",
-        ),
-      });
-
-      yield* Effect.try({
-        try: () =>
-          installer.install({
-            runtimeExecutable: process.execPath,
-            token,
-            integrationsDirectory,
-          }),
-        catch: asIntegrationError("INSTALL_FAILED", "Could not install the Revv integration."),
+      const status = Effect.fn("ExternalIntegrations.status")(function* (accountId: string) {
+        const rows = yield* Effect.try({
+          try: () =>
+            db
+              .select({
+                provider: externalIntegrations.provider,
+                createdAt: externalIntegrations.createdAt,
+                expiresAt: externalIntegrations.expiresAt,
+                lastUsedAt: externalIntegrations.lastUsedAt,
+                revokedAt: externalIntegrations.revokedAt,
+              })
+              .from(externalIntegrations)
+              .where(eq(externalIntegrations.accountId, accountId))
+              .all(),
+          catch: (cause) =>
+            externalIntegrationError(
+              "INTERNAL",
+              "Could not read integration connection state.",
+              cause,
+            ),
+        });
+        const byProvider = new Map(rows.map((row) => [row.provider, row]));
+        const now = Date.now();
+        return EXTERNAL_AGENT_PROVIDERS.map((provider): ExternalIntegrationStatus => {
+          const row = byProvider.get(provider);
+          const active = row ? isIntegrationCredentialActive(row, now) : false;
+          const installer = installerFor(provider, accountId);
+          return {
+            provider,
+            connected: Boolean(row && active),
+            clientConfigured: installer.installed(),
+            clientName: installer.clientName,
+            activation: installer.activation,
+            createdAt: row?.createdAt ?? null,
+            lastUsedAt: row?.lastUsedAt ?? null,
+            expiresAt: row?.expiresAt ?? null,
+          };
+        });
       });
 
-      yield* Effect.try({
-        try: () =>
-          db
-            .insert(externalIntegrations)
-            .values({
-              id,
-              provider: args.provider,
-              userId: args.userId,
-              accountId: args.accountId,
-              tokenHash: tokenHash(token),
-              scopes: JSON.stringify(EXTERNAL_AGENT_SCOPES),
-              createdAt: now,
-              expiresAt,
-              lastUsedAt: null,
-              revokedAt: null,
-            })
-            .onConflictDoUpdate({
-              target: [externalIntegrations.provider, externalIntegrations.accountId],
-              set: {
+      const connect = Effect.fn("ExternalIntegrations.connect")(function* (args: {
+        readonly accountId: string;
+        readonly userId: string;
+        readonly provider: ExternalAgentProvider;
+      }) {
+        const token = `${TOKEN_PREFIX[args.provider]}_${randomBytes(32).toString("base64url")}`;
+        const id = randomUUID();
+        const now = new Date().toISOString();
+        const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
+        const installer = installerFor(args.provider, args.accountId);
+
+        const integrationsDirectory = yield* Effect.try({
+          try: findIntegrationsDirectory,
+          catch: asIntegrationError(
+            "INSTALL_FAILED",
+            "Could not locate the bundled Revv integration assets.",
+          ),
+        });
+
+        yield* Effect.try({
+          try: () =>
+            installer.install({
+              runtimeExecutable: process.execPath,
+              token,
+              integrationsDirectory,
+              apiUrl: bridgeApiUrl(),
+            }),
+          catch: asIntegrationError("INSTALL_FAILED", "Could not install the Revv integration."),
+        });
+
+        yield* Effect.try({
+          try: () =>
+            db
+              .insert(externalIntegrations)
+              .values({
+                id,
+                provider: args.provider,
                 userId: args.userId,
+                accountId: args.accountId,
                 tokenHash: tokenHash(token),
+                // Read only by older Revv versions; this one grants every scope.
                 scopes: JSON.stringify(EXTERNAL_AGENT_SCOPES),
                 createdAt: now,
                 expiresAt,
                 lastUsedAt: null,
                 revokedAt: null,
-              },
-            })
-            .run(),
-        catch: (cause) =>
-          externalIntegrationError(
-            "INTERNAL",
-            "The integration was installed, but Revv could not activate its credential. Reconnect to retry.",
-            cause,
-          ),
+              })
+              .onConflictDoUpdate({
+                target: [externalIntegrations.provider, externalIntegrations.accountId],
+                set: {
+                  userId: args.userId,
+                  tokenHash: tokenHash(token),
+                  scopes: JSON.stringify(EXTERNAL_AGENT_SCOPES),
+                  createdAt: now,
+                  expiresAt,
+                  lastUsedAt: null,
+                  revokedAt: null,
+                },
+              })
+              .run(),
+          catch: (cause) =>
+            externalIntegrationError(
+              "INTERNAL",
+              "The integration was installed, but Revv could not activate its credential. Reconnect to retry.",
+              cause,
+            ),
+        });
+
+        return {
+          provider: args.provider,
+          connected: true,
+          clientConfigured: true,
+          clientName: installer.clientName,
+          activation: installer.activation,
+          createdAt: now,
+          lastUsedAt: null,
+          expiresAt,
+        };
       });
 
-      return {
-        provider: args.provider,
-        connected: true,
-        clientConfigured: true,
-        clientName: installer.clientName,
-        createdAt: now,
-        lastUsedAt: null,
-        expiresAt,
-        locations: installer.locations,
-      };
-    });
-
-    const disconnect = Effect.fn("ExternalIntegrations.disconnect")(function* (
-      accountId: string,
-      provider: ExternalAgentProvider,
-    ) {
-      const now = new Date().toISOString();
-      yield* Effect.try({
-        try: () =>
-          db
-            .update(externalIntegrations)
-            .set({ revokedAt: now })
-            .where(
-              and(
-                eq(externalIntegrations.provider, provider),
-                eq(externalIntegrations.accountId, accountId),
-              ),
-            )
-            .run(),
-        catch: (cause) =>
-          externalIntegrationError(
-            "INTERNAL",
-            "Could not revoke the integration credential.",
-            cause,
-          ),
-      });
-      yield* Effect.try({
-        try: () => externalIntegrationInstaller(provider, accountId).uninstall(),
-        catch: asIntegrationError(
-          "INSTALL_FAILED",
-          "Credential revoked, but the client configuration could not be removed.",
-        ),
-      });
-    });
-
-    const authenticate = Effect.fn("ExternalIntegrations.authenticate")(function* (token: string) {
-      const integration = yield* Effect.try({
-        try: () =>
-          db
-            .select()
-            .from(externalIntegrations)
-            .where(eq(externalIntegrations.tokenHash, tokenHash(token)))
-            .get(),
-        catch: (cause) =>
-          externalIntegrationError("INTERNAL", "Could not validate the integration token.", cause),
-      });
-      if (
-        !integration ||
-        !isIntegrationCredentialActive(integration) ||
-        !isProvider(integration.provider)
+      const disconnect = Effect.fn("ExternalIntegrations.disconnect")(function* (
+        accountId: string,
+        provider: ExternalAgentProvider,
       ) {
-        return yield* Effect.fail(
-          externalIntegrationError(
-            "INVALID_CREDENTIAL",
-            "The Revv integration credential is invalid, expired, or revoked.",
-          ),
-        );
-      }
-
-      const usedAt = new Date().toISOString();
-      yield* Effect.try({
-        try: () =>
-          db
-            .update(externalIntegrations)
-            .set({ lastUsedAt: usedAt })
-            .where(eq(externalIntegrations.id, integration.id))
-            .run(),
-        catch: (cause) =>
-          externalIntegrationError("INTERNAL", "Could not update integration usage.", cause),
+        const revoked = yield* Effect.try({
+          try: () =>
+            db
+              .update(externalIntegrations)
+              .set({ revokedAt: new Date().toISOString() })
+              .where(
+                and(
+                  eq(externalIntegrations.provider, provider),
+                  eq(externalIntegrations.accountId, accountId),
+                ),
+              )
+              .returning({ tokenHash: externalIntegrations.tokenHash })
+              .get(),
+          catch: (cause) =>
+            externalIntegrationError(
+              "INTERNAL",
+              "Could not revoke the integration credential.",
+              cause,
+            ),
+        });
+        yield* removeInstall(installerFor(provider, accountId), revoked?.tokenHash ?? null);
       });
 
-      return {
-        provider: integration.provider,
-        integrationId: integration.id,
-        accountId: integration.accountId,
-        userId: integration.userId,
-        scopes: parseScopes(integration.scopes),
-      };
-    });
-
-    const resolveProject = Effect.fn("ExternalIntegrations.resolve")(function* (
-      token: string,
-      project: ExternalProjectIdentity,
-    ) {
-      const authorized = yield* authenticate(token);
-      const cleanRepository = project.repositoryFullName.trim();
-      const headCandidates = project.headCandidates.filter(isSha).slice(0, 64);
-      if (!/^[^/\s]+\/[^/\s]+$/.test(cleanRepository) || headCandidates.length === 0) {
-        return yield* Effect.fail(
-          externalIntegrationError("INVALID_PROJECT", "The agent checkout identity is invalid."),
-        );
-      }
-
-      const repoRows = yield* Effect.try({
-        try: () =>
-          db
-            .select()
-            .from(repositories)
-            .where(eq(repositories.accountId, authorized.accountId))
-            .all(),
-        catch: (cause) =>
-          externalIntegrationError("INTERNAL", "Could not resolve the tracked repository.", cause),
+      const uninstallAccount = Effect.fn("ExternalIntegrations.uninstallAccount")(function* (
+        accountId: string,
+      ) {
+        const rows = yield* Effect.try({
+          try: () =>
+            db
+              .select({
+                provider: externalIntegrations.provider,
+                tokenHash: externalIntegrations.tokenHash,
+              })
+              .from(externalIntegrations)
+              .where(eq(externalIntegrations.accountId, accountId))
+              .all(),
+          catch: (cause) =>
+            externalIntegrationError("INTERNAL", "Could not read integration credentials.", cause),
+        });
+        let failure: ExternalIntegrationError | null = null;
+        for (const row of rows) {
+          if (!isExternalAgentProvider(row.provider)) continue;
+          const removed = yield* Effect.result(
+            removeInstall(installerFor(row.provider, accountId), row.tokenHash),
+          );
+          if (removed._tag === "Failure") failure ??= removed.failure;
+        }
+        if (failure) return yield* Effect.fail(failure);
       });
-      const repo = repoRows.find(
-        (row) => row.fullName.toLowerCase() === cleanRepository.toLowerCase(),
+
+      const refreshInstalls = Effect.fn("ExternalIntegrations.refreshInstalls")(
+        function* () {
+          const integrationsDirectory = yield* Effect.try({
+            try: findIntegrationsDirectory,
+            catch: asIntegrationError("INSTALL_FAILED", "Could not locate the bundled assets."),
+          });
+          const rows = yield* Effect.try({
+            try: () =>
+              db
+                .select({
+                  provider: externalIntegrations.provider,
+                  accountId: externalIntegrations.accountId,
+                  tokenHash: externalIntegrations.tokenHash,
+                  expiresAt: externalIntegrations.expiresAt,
+                  revokedAt: externalIntegrations.revokedAt,
+                })
+                .from(externalIntegrations)
+                .all(),
+            catch: (cause) =>
+              externalIntegrationError(
+                "INTERNAL",
+                "Could not read integration credentials.",
+                cause,
+              ),
+          });
+          for (const row of rows) {
+            if (!isExternalAgentProvider(row.provider) || !isIntegrationCredentialActive(row))
+              continue;
+            const installer = installerFor(row.provider, row.accountId);
+            try {
+              const binding = installer.installedBinding();
+              if (binding === null || !isThisServersInstall(binding, row.tokenHash)) continue;
+              installer.install({
+                runtimeExecutable: process.execPath,
+                token: binding.token,
+                integrationsDirectory,
+                apiUrl: bridgeApiUrl(),
+              });
+            } catch (err) {
+              logError(
+                "external-integrations",
+                `refreshing the ${row.provider} install failed:`,
+                err,
+              );
+            }
+          }
+        },
+        Effect.catch((err) =>
+          Effect.sync(() => logError("external-integrations", "refreshing installs failed:", err)),
+        ),
       );
-      if (!repo) {
-        return yield* Effect.fail(
-          externalIntegrationError(
-            "INVALID_PROJECT",
-            `${cleanRepository} is not tracked by the connected Revv account.`,
-          ),
-        );
-      }
 
-      const prs = yield* Effect.try({
-        try: () =>
-          db
-            .select()
-            .from(pullRequests)
-            .where(and(eq(pullRequests.repositoryId, repo.id), eq(pullRequests.status, "open")))
-            .all(),
-        catch: (cause) =>
-          externalIntegrationError(
-            "INTERNAL",
-            "Could not resolve a pull request for the checkout.",
-            cause,
-          ),
+      const authenticate = Effect.fn("ExternalIntegrations.authenticate")(function* (
+        token: string,
+      ) {
+        const integration = yield* Effect.try({
+          try: () =>
+            db
+              .select()
+              .from(externalIntegrations)
+              .where(eq(externalIntegrations.tokenHash, tokenHash(token)))
+              .get(),
+          catch: (cause) =>
+            externalIntegrationError(
+              "INTERNAL",
+              "Could not validate the integration token.",
+              cause,
+            ),
+        });
+        if (
+          !integration ||
+          !isIntegrationCredentialActive(integration) ||
+          !isExternalAgentProvider(integration.provider)
+        ) {
+          return yield* Effect.fail(
+            externalIntegrationError(
+              "INVALID_CREDENTIAL",
+              "The Revv integration credential is invalid, expired, or revoked.",
+            ),
+          );
+        }
+
+        const usedAt = new Date().toISOString();
+        yield* Effect.try({
+          try: () =>
+            db
+              .update(externalIntegrations)
+              .set({ lastUsedAt: usedAt })
+              .where(eq(externalIntegrations.id, integration.id))
+              .run(),
+          catch: (cause) =>
+            externalIntegrationError("INTERNAL", "Could not update integration usage.", cause),
+        });
+
+        return {
+          provider: integration.provider,
+          integrationId: integration.id,
+          accountId: integration.accountId,
+          scopes: EXTERNAL_AGENT_SCOPES,
+        };
       });
-      const matched = selectPullRequestForCheckout(prs, headCandidates, project.branch);
-      if (!matched) {
-        return yield* Effect.fail(
-          externalIntegrationError(
-            "PR_NOT_FOUND",
-            `No open Revv pull request matches ${cleanRepository} at this checkout's commit ancestry.`,
-          ),
+
+      const resolveProject = Effect.fn("ExternalIntegrations.resolve")(function* (
+        token: string,
+        project: ExternalProjectIdentity,
+      ) {
+        const authorized = yield* authenticate(token);
+        const cleanRepository = project.repositoryFullName.trim();
+        const headCandidates = project.headCandidates
+          .filter((sha) => SHA_PATTERN.test(sha))
+          .slice(0, 64);
+        if (!/^[^/\s]+\/[^/\s]+$/.test(cleanRepository) || headCandidates.length === 0) {
+          return yield* Effect.fail(
+            externalIntegrationError("INVALID_PROJECT", "The agent checkout identity is invalid."),
+          );
+        }
+
+        const repoRows = yield* Effect.try({
+          try: () =>
+            db
+              .select()
+              .from(repositories)
+              .where(eq(repositories.accountId, authorized.accountId))
+              .all(),
+          catch: (cause) =>
+            externalIntegrationError(
+              "INTERNAL",
+              "Could not resolve the tracked repository.",
+              cause,
+            ),
+        });
+        const repo = repoRows.find(
+          (row) => row.fullName.toLowerCase() === cleanRepository.toLowerCase(),
         );
-      }
+        if (!repo) {
+          return yield* Effect.fail(
+            externalIntegrationError(
+              "INVALID_PROJECT",
+              `${cleanRepository} is not tracked by the connected Revv account.`,
+            ),
+          );
+        }
+
+        const prs = yield* Effect.try({
+          try: () =>
+            db
+              .select()
+              .from(pullRequests)
+              .where(and(eq(pullRequests.repositoryId, repo.id), eq(pullRequests.status, "open")))
+              .all(),
+          catch: (cause) =>
+            externalIntegrationError(
+              "INTERNAL",
+              "Could not resolve a pull request for the checkout.",
+              cause,
+            ),
+        });
+        const matched = selectPullRequestForCheckout(prs, headCandidates, project.branch);
+        if (!matched) {
+          return yield* Effect.fail(
+            externalIntegrationError(
+              "PR_NOT_FOUND",
+              `No open Revv pull request matches ${cleanRepository} at this checkout's commit ancestry.`,
+            ),
+          );
+        }
+
+        return {
+          ...authorized,
+          prId: matched.id,
+          prHeadSha: matched.headSha,
+        };
+      });
 
       return {
-        ...authorized,
-        prId: matched.id,
-        prHeadSha: matched.headSha,
+        status,
+        connect,
+        disconnect,
+        uninstallAccount,
+        refreshInstalls,
+        authenticate,
+        resolve: resolveProject,
       };
-    });
+    }),
+  );
 
-    return { status, connect, disconnect, authenticate, resolve: resolveProject };
-  }),
-);
+export const ExternalIntegrationsLive = externalIntegrationsLayer(homedir());

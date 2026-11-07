@@ -1,19 +1,10 @@
-// ── Review-copy contracts ──────────────────────────────────────────────────
-//
 // The shape rules for the prose an agent writes — how long, in what order,
 // leading with what. They are stated in two places that must agree: the system
-// prompt (`walkthrough-system-common.md`, which teaches the rule) and the tool
-// schemas' `.describe()` strings (which are what the model actually has in
-// front of it at call time).
-//
-// Generation and chat-edit each have their own tool surface writing the same
-// field, so a single rule was previously restated in up to four literals. They
-// drifted the moment one was tightened and, since a `.describe()` is never
-// type-checked against anything, nothing said so.
-//
-// These constants are the tool-schema half. The prompt still explains the rule
-// at length with worked examples — that is teaching, not duplication — but the
-// normative sentence lives here and is interpolated everywhere it is quoted.
+// prompt (`walkthrough-system-common.md`, which teaches the rule with worked
+// examples) and the tool schemas' `.describe()` strings (what the model has in
+// front of it at call time). Nothing type-checks a `.describe()`, so the
+// normative sentence lives here once and both the generation and chat-edit
+// tool surfaces interpolate it.
 
 /**
  * Appended to the `.describe()` of every field the UI renders as plain text:

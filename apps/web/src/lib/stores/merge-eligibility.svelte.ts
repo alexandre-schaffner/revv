@@ -1,119 +1,103 @@
-import type { CiRollupState, MergeEligibility, PrConversation, ReviewDecision } from "@revv/shared";
-import { isMergeStateSettling } from "$lib/utils/merge-blocker";
-import { RequestState } from "./_types";
-import { getMergeEligibility } from "./prs.svelte";
+import type { MergeEligibility } from "@revv/shared";
+import { isMergeStateSettling, loginsMatch } from "@revv/shared";
+import { untrack } from "svelte";
+import { api } from "$lib/api/client";
+import { call } from "$lib/api/errors";
+import { viewerIsAuthor, viewerLoginOnPr } from "$lib/prs/viewer";
+import { getConversation } from "./conversation.svelte";
+import { getPrById } from "./prs.svelte";
+import { createResource } from "./resource";
 
-/** Everything a mergeability answer depends on that Revv observes. Equal questions share one answer. */
-export interface MergeQuestion {
-  readonly prId: string;
-  readonly headSha: string | null;
-  readonly reviewDecision: ReviewDecision | null;
-  readonly ciState: CiRollupState | null;
+/**
+ * Per PR, versioned by the question: a different question supersedes the
+ * running ask, while the PR's last answer stays up. GitHub computes
+ * mergeability lazily after a push; the server keeps asking and pushes the
+ * settled answer (`pr:merge-eligibility`).
+ */
+const answers = createResource<void, MergeEligibility>({
+  freshForMs: 15_000,
+  waitForSignalMs: 30_000,
+  fetch: async (prId) => {
+    const eligibility = await call(
+      api.api.prs({ id: prId })["merge-eligibility"].get(),
+      "Couldn't check whether this can be merged",
+    );
+    return isMergeStateSettling(eligibility.mergeStateStatus)
+      ? { status: "pending", data: eligibility }
+      : { status: "ok", data: eligibility };
+  },
+});
+
+/**
+ * Everything a mergeability answer depends on that Revv observes, as a
+ * version: equal views of a PR share one GitHub call, and a new head, review
+ * decision or CI state asks again. Null until the PR's conversation has
+ * loaded (or failed to), so the first ask already carries it.
+ */
+function questionVersion(prId: string): string | null {
+  const pr = getPrById(prId);
+  const request = getConversation(prId).request;
+  if (!pr || (request.status !== "ok" && request.status !== "error")) return null;
+  const conversation = request.status === "ok" ? request.data : null;
+  return `${pr.headSha}|${conversation?.reviewDecision ?? null}|${conversation?.ci?.state ?? null}`;
 }
 
-interface Entry {
-  readonly question: MergeQuestion;
-  readonly request: RequestState<MergeEligibility>;
-  readonly askedAt: number;
-}
-
-const RETRY_MS = 3_000;
-const MAX_RETRIES = 4;
-const FRESH_FOR_MS = 15_000;
-
-let entries = $state(new Map<string, Entry>());
-
-const generations = new Map<string, number>();
-const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-function setEntry(prId: string, entry: Entry): void {
-  entries.set(prId, entry);
-  entries = new Map(entries);
-}
-
-function updateEntry(prId: string, update: (entry: Entry) => Entry): void {
-  const entry = entries.get(prId);
-  if (entry) setEntry(prId, update(entry));
+export interface MergeEligibilityView {
+  /** The PR's last answer; it stays up while a newer question is asked. */
+  readonly current: MergeEligibility | null;
+  /** The viewer may merge the PR, and GitHub says they can. The one gate for the PR and its stack. */
+  readonly viewerCanMerge: boolean;
 }
 
 /**
- * The question for a PR as Revv currently sees it. Everyone who asks about
- * the same PR builds it here, so equal views share one GitHub call.
+ * The PR's mergeability, asked of GitHub while `shouldAsk` holds and again
+ * whenever the PR's head, review decision or CI state moves (unless the same
+ * question is in flight, retrying, or answered recently). Call during
+ * component init.
  */
-export function mergeQuestionFor(
-  prId: string,
-  headSha: string | null,
-  conversation: PrConversation | null,
-): MergeQuestion {
+export function useMergeEligibility(
+  getPrId: () => string,
+  shouldAsk: () => boolean,
+): MergeEligibilityView {
+  $effect(() => {
+    const prId = getPrId();
+    if (!shouldAsk()) return;
+    const version = questionVersion(prId);
+    if (version !== null) untrack(() => void answers.load(prId, undefined, version));
+  });
   return {
-    prId,
-    headSha,
-    reviewDecision: conversation?.reviewDecision ?? null,
-    ciState: conversation?.ci?.state ?? null,
+    get current() {
+      return answers.data(getPrId());
+    },
+    get viewerCanMerge() {
+      const prId = getPrId();
+      return viewerMayMerge(prId) && answers.data(prId)?.canMerge === true;
+    },
   };
 }
 
-function sameQuestion(a: MergeQuestion, b: MergeQuestion): boolean {
-  return (
-    a.prId === b.prId &&
-    a.headSha === b.headSha &&
-    a.reviewDecision === b.reviewDecision &&
-    a.ciState === b.ciState
+/** The viewer approved the PR in a GitHub review. */
+export function viewerApproved(prId: string): boolean {
+  const request = getConversation(prId).request;
+  if (request.status !== "ok") return false;
+  const viewer = viewerLoginOnPr(prId);
+  return request.data.reviewers.some(
+    (r) => r.kind === "user" && loginsMatch(r.actor.login, viewer) && r.verdict === "approved",
   );
 }
 
-/** The PR's latest answer; null without a question. */
-export function getMergeAnswer(question: MergeQuestion | null): MergeEligibility | null {
-  const request = question ? entries.get(question.prId)?.request : undefined;
-  return request?.status === "ok" ? request.data : null;
-}
-
 /**
- * Asks GitHub unless an equal question is in flight, retrying, or answered
- * under `FRESH_FOR_MS` ago. The PR's last answer stays up meanwhile.
+ * Revv offers merging to the PR's author and to a reviewer who approved it;
+ * whether GitHub lets them is the mergeability answer's `canMerge`.
  */
-export function askMergeEligibility(question: MergeQuestion): void {
-  const { prId } = question;
-  const entry = entries.get(prId);
-  if (
-    entry &&
-    sameQuestion(entry.question, question) &&
-    (entry.request.status === "loading" ||
-      retryTimers.has(prId) ||
-      Date.now() - entry.askedAt < FRESH_FOR_MS)
-  ) {
-    return;
-  }
-  clearTimeout(retryTimers.get(prId));
-  retryTimers.delete(prId);
-  const generation = (generations.get(prId) ?? 0) + 1;
-  generations.set(prId, generation);
-  setEntry(prId, {
-    question,
-    request: entry?.request.status === "ok" ? entry.request : RequestState.loading(),
-    askedAt: Date.now(),
-  });
-  ask(prId, generation, MAX_RETRIES);
+export function viewerMayMerge(prId: string): boolean {
+  return viewerIsAuthor(prId) || viewerApproved(prId);
 }
 
-function ask(prId: string, generation: number, retriesLeft: number): void {
-  void getMergeEligibility(prId).then((eligibility) => {
-    if (generations.get(prId) !== generation) return;
-    updateEntry(prId, (entry) => ({
-      ...entry,
-      request: eligibility
-        ? RequestState.ok(eligibility)
-        : RequestState.error("Couldn't check whether this can be merged"),
-      askedAt: Date.now(),
-    }));
-    if (eligibility && isMergeStateSettling(eligibility.mergeStateStatus) && retriesLeft > 0) {
-      retryTimers.set(
-        prId,
-        setTimeout(() => {
-          retryTimers.delete(prId);
-          if (generations.get(prId) === generation) ask(prId, generation, retriesLeft - 1);
-        }, RETRY_MS),
-      );
-    }
-  });
+export function onPrMergeEligibility(data: { prId: string; eligibility: MergeEligibility }): void {
+  answers.put(data.prId, data.eligibility);
+}
+
+export function reset(): void {
+  answers.reset();
 }

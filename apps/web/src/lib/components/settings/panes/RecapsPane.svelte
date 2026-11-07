@@ -1,3 +1,21 @@
+<script module lang="ts">
+import CalendarDots from "phosphor-svelte/lib/CalendarDots";
+import { defineSettingsPane } from "../settings-panes";
+
+export const pane = defineSettingsPane({
+  id: "recap",
+  title: "Recaps",
+  description: "Daily and weekly summaries of what shipped in each repository.",
+  icon: CalendarDots,
+  rows: {
+    enabled: { label: "Generate recaps", keywords: ["summary", "digest", "project recap"] },
+    daily: { label: "Daily recap", keywords: ["every day", "schedule"] },
+    weekly: { label: "Weekly recap", keywords: ["every week", "schedule"] },
+    agent: { label: "Recap agent", keywords: ["provider", "model"] },
+  },
+});
+</script>
+
 <script lang="ts">
 import { ACP_AGENTS, type RecapAgentChoice } from "@revv/shared";
 import * as Select from "$lib/components/ui/select";
@@ -6,16 +24,15 @@ import { getSettings, updateSettings } from "$lib/stores/settings.svelte";
 import SettingsGroup from "../primitives/SettingsGroup.svelte";
 import SettingsPane from "../primitives/SettingsPane.svelte";
 import SettingsRow from "../primitives/SettingsRow.svelte";
-import { SETTINGS_PANES } from "../settings-index";
 
 const agentOptions: { value: RecapAgentChoice; label: string }[] = [
   { value: "auto", label: "Follow main agent" },
   ...ACP_AGENTS.map((a) => ({ value: a.id, label: a.label })),
 ];
 
-const recap = $derived(getSettings()?.recap);
-const enabled = $derived(recap?.enabled ?? true);
-const agent = $derived(recap?.agent ?? "auto");
+const recap = $derived(getSettings().recap);
+const enabled = $derived(recap.enabled);
+const agent = $derived(recap.agent);
 
 function handleAgentChange(value: string | undefined): void {
   const next = agentOptions.find((o) => o.value === value);
@@ -23,11 +40,10 @@ function handleAgentChange(value: string | undefined): void {
 }
 </script>
 
-<SettingsPane {...SETTINGS_PANES.recap}>
+<SettingsPane {pane}>
 	<SettingsGroup>
 		<SettingsRow
-			id="recap-enabled"
-			label="Generate recaps"
+			row={pane.rows.enabled}
 			hint="Summarize each repository's merged and in-flight work on a schedule. When off, nothing is generated in the background."
 		>
 			{#snippet control()}
@@ -44,20 +60,20 @@ function handleAgentChange(value: string | undefined): void {
 		heading="Schedule"
 		description="Schedules run on UTC boundaries: daily recaps cover the previous UTC day, weekly ones the previous ISO week."
 	>
-		<SettingsRow id="recap-daily" label="Daily recap" disabled={!enabled}>
+		<SettingsRow row={pane.rows.daily} disabled={!enabled}>
 			{#snippet control()}
 				<Switch
-					checked={recap?.dailyEnabled ?? true}
+					checked={recap.dailyEnabled}
 					disabled={!enabled}
 					onCheckedChange={(v) => void updateSettings({ recap: { dailyEnabled: v } })}
 					aria-label="Daily recap"
 				/>
 			{/snippet}
 		</SettingsRow>
-		<SettingsRow id="recap-weekly" label="Weekly recap" disabled={!enabled}>
+		<SettingsRow row={pane.rows.weekly} disabled={!enabled}>
 			{#snippet control()}
 				<Switch
-					checked={recap?.weeklyEnabled ?? true}
+					checked={recap.weeklyEnabled}
 					disabled={!enabled}
 					onCheckedChange={(v) => void updateSettings({ recap: { weeklyEnabled: v } })}
 					aria-label="Weekly recap"
@@ -65,8 +81,7 @@ function handleAgentChange(value: string | undefined): void {
 			{/snippet}
 		</SettingsRow>
 		<SettingsRow
-			id="recap-agent"
-			label="Recap agent"
+			row={pane.rows.agent}
 			hint="Which agent writes recaps. Following the main agent keeps it in step with Settings → AI agent."
 			disabled={!enabled}
 		>

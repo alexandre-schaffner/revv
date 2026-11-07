@@ -1,156 +1,49 @@
+<script module lang="ts">
+import ReviewTabs from "$lib/components/review/chrome/ReviewTabs.svelte";
+
+// Module-level so the tabs stay mounted when the page re-mounts for another
+// PR (see `useShellChrome`).
+export { reviewTabs };
+</script>
+
 <script lang="ts">
-import type { ReviewMode } from "@revv/shared";
-import { onDestroy, untrack } from "svelte";
 import { page } from "$app/state";
-import { api } from "$lib/api/client";
-import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import ConversationTab from "$lib/components/conversation/ConversationTab.svelte";
+import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
+import ReviewStatus from "$lib/components/review/chrome/ReviewStatus.svelte";
+import WalkthroughActionBar from "$lib/components/review/chrome/WalkthroughActionBar.svelte";
 import ReviewLayout from "$lib/components/review/ReviewLayout.svelte";
-import { readStackPlace } from "$lib/components/stack/margin/place";
+import { readStackPlace } from "$lib/stacks/place";
 import StackPlaceLine from "$lib/components/stack/margin/StackPlaceLine.svelte";
 import StackPlaceNote from "$lib/components/stack/margin/StackPlaceNote.svelte";
 import StackThumbIndex from "$lib/components/stack/margin/StackThumbIndex.svelte";
 import { Badge } from "$lib/components/ui/badge";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import GuidedWalkthrough from "$lib/components/walkthrough/GuidedWalkthrough.svelte";
-import { getToken } from "$lib/stores/auth.svelte";
-import { loadConversation } from "$lib/stores/conversation.svelte";
-import { ensureHunkScan } from "$lib/stores/hunk-scan.svelte";
-import { markVisited as markPrVisited } from "$lib/stores/pr-visits.svelte";
-import { getSelectedPr, isReviewModeResolved, setSelectedPrId } from "$lib/stores/prs.svelte";
-import {
-  clearReviewFiles,
-  getActiveFilePath,
-  getActiveTab,
-  getFilesError,
-  getIsLoadingFiles,
-  getLoadedHeadSha,
-  getPrScrollPosition,
-  getReviewFiles,
-  getReviewMode,
-  loadSession,
-  setActiveFilePath,
-  setFilesError,
-  setIsLoadingFiles,
-  setLoadedHeadSha,
-  setPrScrollPosition,
-  setReviewFiles,
-  switchPrViewState,
-} from "$lib/stores/review.svelte";
-import { getSettings } from "$lib/stores/settings.svelte";
-import { ensureStackHeadlines } from "$lib/stores/stack-headlines.svelte";
-import { ensureStack, warmNeighbours } from "$lib/stores/stacks.svelte";
-import { requestThreadSync } from "$lib/stores/sync.svelte";
-import {
-  deactivate as deactivateWalkthrough,
-  getRiskLevel as getWalkthroughRiskLevel,
-} from "$lib/stores/walkthrough.svelte";
-import {
-  fetchWalkthroughSizing,
-  getWalkthroughSizing,
-} from "$lib/stores/walkthrough-sizing.svelte";
-import { setScrollRoot } from "$lib/stores/walkthroughNav.svelte";
+import { useOpenReview } from "$lib/review/open-review.svelte";
+import { getReviewFiles } from "$lib/stores/diff-files.svelte";
+import { getActiveTab } from "$lib/stores/pr-view-state.svelte";
+import { getPrById } from "$lib/stores/prs.svelte";
+import { scrollPane } from "$lib/stores/review-nav.svelte";
+import { getPrRiskTier } from "$lib/walkthrough/sizing.svelte";
 
-const pr = $derived(getSelectedPr());
+// The decoded route param: PR ids are `<repoId>:<number>`.
+const prId = $derived(page.params.prId ?? "");
+useOpenReview(() => prId || null);
 
-const routePrId = $derived(page.params.prId ?? null);
-const signedIn = $derived(getToken() !== null);
-$effect(() => {
-  const id = routePrId;
-  if (id && signedIn) untrack(() => void loadConversation(id));
-});
-const threadSyncPrId = $derived(pr && pr.id === page.params.prId ? pr.id : null);
-$effect(() => {
-  const id = threadSyncPrId;
-  if (id) untrack(() => requestThreadSync(id));
-});
-// Review lens is derived from identity (author vs. signed-in user) — see
-// `getReviewModeForPr`. No manual override; the file fetch + session load
-// below resolve through it.
-const reviewMode = $derived(getReviewMode(page.params.prId ?? ""));
-// Read through a `$derived`, never inline in the diff-load effect below.
-// `isReviewModeResolved` walks `pullRequests` + `archivedPrs`, so calling it
-// from inside the effect subscribed that effect to both arrays — and every
-// `prs:updated` broadcast (5-min poll cycle) and every `fetchPrs()`
-// (SSE reconnect, window refocus) swaps those arrays wholesale. The effect
-// then re-ran for the *same* PR, and past its 60s reuse window it called
-// `clearReviewFiles()` + `setIsLoadingFiles(true)`, which flips the template
-// to the "Loading diff…" branch and destroys `.review-page` — unmounting a
-// mid-generation walkthrough and replaying every entrance animation. A
-// derived only propagates when the boolean itself changes.
-const reviewModeResolved = $derived(isReviewModeResolved(page.params.prId ?? ""));
-const files = $derived(getReviewFiles());
-const isLoading = $derived(getIsLoadingFiles());
-const loadError = $derived(getFilesError());
+const pr = $derived(prId ? getPrById(prId) : null);
+const files = $derived(getReviewFiles(prId));
 const activeTab = $derived(getActiveTab());
-// The tier a generated walkthrough carries. Null until one exists.
-const generatedRiskLevel = $derived(getWalkthroughRiskLevel());
+// The tier is resolved from the diff before generation, so opening a PR shows
+// the attention it needs without a review. Same cached answer either way, so
+// the badge value doesn't change when generation starts.
+const riskTier = $derived(getPrRiskTier(prId));
 
-// …and the same tier resolved from the diff before generation, so opening a
-// PR shows attention needed without a review. Same cached answer either way,
-// so the badge value doesn't change when generation starts.
-const sizing = $derived(getWalkthroughSizing(pr?.id ?? null, pr?.headSha ?? null));
-$effect(() => {
-  const prId = pr?.id;
-  const headSha = pr?.headSha;
-  if (!prId || !headSha || generatedRiskLevel !== null) return;
-  if (sizing !== null) return;
-  void fetchWalkthroughSizing(prId, headSha);
-});
+const stackPlace = $derived(activeTab === "walkthrough" && pr ? readStackPlace(prId) : null);
 
-// The first pass, for the head the diff on screen was loaded against. Asked
-// once that diff has loaded, which is also when the server's diff cache is
-// warm; it runs on its own, so the Diff tab has it before any walkthrough.
-// Untracked: the store's rows change on every `hunk-scan:hunk`, and reading
-// them here would re-ask the server for each one.
-const loadedHeadSha = $derived(getLoadedHeadSha(page.params.prId ?? ""));
-const jevEnabled = $derived(getSettings()?.jev.enabled ?? false);
-$effect(() => {
-  const prId = page.params.prId;
-  const headSha = loadedHeadSha;
-  if (!prId || !headSha || !jevEnabled) return;
-  untrack(() => void ensureHunkScan(prId, headSha));
-});
-
-const stackPrId = $derived(pr?.stack ? pr.id : null);
-const stackNumber = $derived(pr?.stack?.number ?? null);
-$effect(() => {
-  const prId = stackPrId;
-  const number = stackNumber;
-  if (!prId || number === null) return;
-  let live = true;
-  let cancelIdle: (() => void) | null = null;
-  void untrack(() => ensureStack(prId, number)).then(() => {
-    if (live) cancelIdle = whenIdle(() => warmNeighbours(prId));
-  });
-  return () => {
-    live = false;
-    cancelIdle?.();
-  };
-});
-
-const stackPlace = $derived(activeTab === "walkthrough" && pr ? readStackPlace(pr.id) : null);
-const stackRepositoryId = $derived(pr?.stack ? pr.repositoryId : null);
-$effect(() => {
-  const repositoryId = stackRepositoryId;
-  if (repositoryId) untrack(() => ensureStackHeadlines(repositoryId));
-});
-
-function whenIdle(run: () => void): () => void {
-  if (typeof window.requestIdleCallback === "function") {
-    const handle = window.requestIdleCallback(run, { timeout: 2000 });
-    return () => window.cancelIdleCallback(handle);
-  }
-  const handle = setTimeout(run, 400);
-  return () => clearTimeout(handle);
-}
-
-const walkthroughRiskLevel = $derived(
-  generatedRiskLevel ?? (sizing?.status === "ready" ? sizing.riskLevel : null),
-);
-// Pre-review, the tier describes the change, not a verdict — say so on hover.
+const walkthroughRiskLevel = $derived(riskTier?.level ?? null);
 const riskTitle = $derived(
-  generatedRiskLevel !== null
+  riskTier?.fromReview
     ? "How much attention this pull request needs. It set the depth of the review below."
     : "How much attention this pull request needs, sized from the diff. A review has not run yet.",
 );
@@ -161,325 +54,92 @@ const riskClasses: Record<string, string> = {
   high: "risk-badge risk-badge--high",
 };
 
-let scrollRootEl: HTMLDivElement | undefined = $state(undefined);
+const scrollRootPane = $derived(activeTab === "diff" ? null : activeTab);
 
-// Per-PR scroll persistence for the walkthrough / conversation tabs.
-// (Diff tab has its own scroll container inside ReviewLayout.svelte and
-// persists itself there.) The `prViewStates` map in `review.svelte.ts` is
-// the single source of truth: `handleScrollRootScroll` writes on every
-// scroll, the `$effect` below restores once per (prId, tab) change.
-function tabScrollKey(tab: string): "walkthrough" | "conversation" | null {
-  if (tab === "walkthrough") return "walkthrough";
-  if (tab === "conversation") return "conversation";
-  return null;
-}
-
-// Latch: the scroll handler fires immediately when we restore (because
-// setting scrollTop emits a 'scroll' event), which would clobber the
-// freshly-restored value with whatever the *previous* PR's scrollTop
-// happened to be at that microtask. Suppress one event per restore.
-let suppressNextScroll = false;
-
-function handleScrollRootScroll(): void {
-  if (suppressNextScroll) {
-    suppressNextScroll = false;
-    return;
-  }
-  const tab = activeTab;
-  const prId = page.params.prId;
-  if (!scrollRootEl || tab === "diff" || !prId) return;
-  const key = tabScrollKey(tab);
-  if (key) setPrScrollPosition(prId, key, scrollRootEl.scrollTop);
-}
-
-// Restore AFTER the DOM update (container is now visible again).
-// Re-runs on tab change AND on PR change — both flows need to land at
-// the right scroll offset. `restoredFor` keys on `${prId}:${tab}` so
-// repeated reactive ticks for the same active tab don't refight the
-// user's scrolling. We MUST clear it when the user passes through the
-// diff tab: diff hides `.review-content` via display:none, and browsers
-// don't reliably preserve scrollTop across that toggle — the re-entry
-// into walkthrough/conversation needs a fresh restore, otherwise
-// the stamp would still match and we'd land at the top.
-let restoredFor: string | null = null;
-$effect(() => {
-  const tab = activeTab;
-  const prId = page.params.prId;
-  if (!scrollRootEl || !prId) return;
-  if (tab === "diff") {
-    restoredFor = null;
-    return;
-  }
-  const stamp = `${prId}:${tab}`;
-  if (stamp === restoredFor) return;
-  restoredFor = stamp;
-  const key = tabScrollKey(tab);
-  const saved = key ? getPrScrollPosition(prId, key) : 0;
-  suppressNextScroll = true;
-  scrollRootEl.scrollTop = saved;
-});
-
-// Register the scroll container with the walkthrough-nav store so the
-// floating Top / Rating buttons in AppShell can scroll it without
-// having to reach across components for the DOM ref.
-$effect(() => {
-  setScrollRoot(scrollRootEl ?? null);
-  return () => setScrollRoot(null);
-});
-
-// Record the visit against the current head SHA so the sidebar dot
-// clears now and only reappears if a new commit lands on this PR.
-// Waits until the PR row is loaded for the route id — initial deep-link
-// loads call setSelectedPrId() before fetchPrs() has populated the store.
-$effect(() => {
-  const current = pr;
-  const routeId = page.params.prId;
-  if (!current || !routeId || current.id !== routeId) return;
-  markPrVisited(current.id, current.headSha ?? null);
-});
-
-let currentRequestId = 0;
-
-// Phase 1 stopgap: avoid refetching diff files when the user bounces back to
-// the same PR within a minute. Replaced by queryStore in Phase 3.
-let lastLoadedPrId: string | null = null;
-let lastLoadedMode: ReviewMode | null = null;
-let lastLoadedAt = 0;
-const PR_REFETCH_WINDOW_MS = 60_000;
-
-function apiErrorMessage(
-  error: { status?: number; value?: unknown },
-  fallback = "Failed to fetch PR files",
-): string {
-  const value = error.value;
-  if (typeof value !== "object" || value === null) return fallback;
-  const body = value as Record<string, unknown>;
-  if (typeof body.error === "string" && body.error.length > 0) return body.error;
-  if (typeof body.message === "string" && body.message.length > 0) return body.message;
-  if (typeof error.status === "number") return `${fallback} (HTTP ${error.status})`;
-  return fallback;
-}
-
-$effect(() => {
-  const prId = page.params.prId;
-  const mode = reviewMode;
-  if (!prId) return;
-
-  // Hold until the author-vs-reviewer lens is real. On a cold start (deep
-  // link, or the desktop app reopening on this route) the PR row and the
-  // signed-in user's login are both still in flight, and `reviewMode` reads
-  // "reviewer" for everything — including PRs the user authored. Fetching on
-  // that provisional value means the whole `/files` payload is downloaded
-  // twice, which on a 3 000-file PR is two ~12 MB responses back to back.
-  // Keep the spinner up instead; this effect re-runs the moment mode resolves.
-  if (!reviewModeResolved) {
-    setIsLoadingFiles(true);
-    return;
-  }
-
-  // Everything below mutates store state. Calls like `clearReviewFiles()`
-  // invoke `clearSession()`, which does `threadsVersion++` — a read-then-
-  // write on $state. Inside an untracked block, that read doesn't subscribe
-  // the effect to threadsVersion, so the write can't re-trigger us.
-  untrack(() => {
-    // Bump request ID so any in-flight fetch for a previous PR is ignored
-    const requestId = ++currentRequestId;
-
-    setSelectedPrId(prId);
-    switchPrViewState(prId);
-
-    // Short-circuit: same PR, recent load, files still in memory —
-    // keep rendering what's there. An SSE `cache:invalidated` (Phase 3)
-    // or a hard refresh will bust this.
-    const now = Date.now();
-    const currentFiles = getReviewFiles();
-    const sameView = prId === lastLoadedPrId && mode === lastLoadedMode && currentFiles.length > 0;
-    if (sameView && now - lastLoadedAt < PR_REFETCH_WINDOW_MS) {
-      // Still kick off a session load so thread-counts refresh; cheap.
-      loadSession(prId, mode).catch((e) =>
-        console.error("[review] Session load failed (non-blocking):", e),
-      );
-      return;
-    }
-
-    // Refresh in place when the view isn't actually changing. `clearReviewFiles()`
-    // + `setIsLoadingFiles(true)` swap the template to the "Loading diff…" branch,
-    // which destroys `.review-page` — the walkthrough, the conversation tab and
-    // the review session go with it. That's the right trade when the user asked
-    // for a different PR or lens; it is never right for a background re-fetch of
-    // the view already on screen. New files replace the old ones when they land.
-    if (!sameView) {
-      clearReviewFiles();
-      setIsLoadingFiles(true);
-    }
-    const activeFileHint = getActiveFilePath();
-
-    (async () => {
-      try {
-        // Fetch the PR's "Files changed" diff directly from GitHub via the
-        // server. The diff is always baseSha...headSha (merge-base, 3-dot),
-        // matching GitHub's "Files changed" tab. There is no per-commit
-        // selection — the dropdown is read-only.
-        const [filesResult] = await Promise.all([
-          api.api.prs({ id: prId }).files.get({
-            query: activeFileHint === null ? { mode } : { active: activeFileHint, mode },
-          }),
-          loadSession(prId, mode).catch((e) =>
-            console.error("[review] Session load failed (non-blocking):", e),
-          ),
-        ]);
-
-        if (requestId !== currentRequestId) return;
-
-        const { data, error } = filesResult;
-        if (error) throw new Error(apiErrorMessage(error, "Failed to fetch PR files"));
-        if (Array.isArray(data)) {
-          const mapped = data.map((f) => ({
-            path: f.path,
-            patch: f.patch ?? null,
-            additions: f.additions,
-            deletions: f.deletions,
-            ...(f.oldPath ? { oldPath: f.oldPath } : {}),
-            ...(f.isNew ? { isNew: true as const } : {}),
-            ...(f.isDeleted ? { isDeleted: true as const } : {}),
-            ...(f.prerenderedHtml ? { prerenderedHtml: f.prerenderedHtml } : {}),
-          }));
-          setReviewFiles(mapped);
-          if (mapped.length > 0) {
-            // Honor the restored per-PR active file when it still exists in
-            // the new diff. First-visits (path is null) and stale paths fall
-            // back to file[0].
-            const restored = getActiveFilePath();
-            const stillExists = restored !== null && mapped.some((f) => f.path === restored);
-            if (!stillExists) {
-              // biome-ignore lint/style/noNonNullAssertion: mapped is non-empty here
-              setActiveFilePath(mapped[0]!.path);
-            }
-          }
-          // Stamp the SHA the diff was loaded against so the FloatingTabs
-          // dot can detect when a later `prs:updated` swaps in a newer one.
-          // Reading from the store captures any `prs:updated` that merged
-          // mid-fetch — the server has already re-cached the diff against
-          // that same SHA, so they agree.
-          const currentPr = getSelectedPr();
-          if (currentPr?.id === prId && currentPr.headSha) {
-            setLoadedHeadSha(prId, currentPr.headSha);
-          }
-          lastLoadedPrId = prId;
-          lastLoadedMode = mode;
-          lastLoadedAt = Date.now();
-        }
-      } catch (e) {
-        if (requestId !== currentRequestId) return;
-        // A failed background refresh must not replace a diff the user is
-        // reading with a full-page error — the files already on screen are
-        // still the last good answer. Only a load the view is waiting on
-        // (PR switch, lens switch, first visit) surfaces as `loadError`.
-        if (sameView) {
-          console.error("[review] Background diff refresh failed:", e);
-          return;
-        }
-        setFilesError(e instanceof Error ? e.message : "Failed to load diff");
-      } finally {
-        if (requestId === currentRequestId) setIsLoadingFiles(false);
-      }
-    })();
-  });
-});
-
-onDestroy(() => {
-  // Invalidate any in-flight request and clean up store state
-  currentRequestId++;
-  clearReviewFiles();
-  // Drops the SSE subscription for this PR (so the controllers map
-  // doesn't keep an orphaned, possibly-stalled handle that would block
-  // the next mount from opening a fresh stream). The server-side job
-  // keeps running — walkthrough generation is decoupled from which PR
-  // is on screen, so two concurrent walkthroughs progress in parallel
-  // even after navigating between them.
-  deactivateWalkthrough();
-});
+useShellChrome(() => ({
+  tabs: pr ? { snippet: reviewTabs, key: prId } : undefined,
+  actions: pr && activeTab === "walkthrough" ? walkthroughActions : undefined,
+  status: prId ? reviewStatus : undefined,
+}));
 </script>
 
-<AuthGuard>
-{#if isLoading}
-	<div class="loading">
-		<Dotmatrix variant="square-9" />
-		<p>Loading diff…</p>
-	</div>
-{:else if loadError}
-	<div class="loading error">
-		<p>{loadError}</p>
-	</div>
+{#snippet reviewStatus()}
+	<ReviewStatus {prId} />
+{/snippet}
+
+{#snippet reviewTabs(prId: string)}
+	<ReviewTabs {prId} />
+{/snippet}
+
+{#snippet walkthroughActions()}
+	<WalkthroughActionBar {prId} />
+{/snippet}
+
+{#if files.status === 'loading'}
+<div class="loading">
+	<Dotmatrix variant="square-9" />
+	<p>Loading diff…</p>
+</div>
+{:else if files.status === 'error'}
+<div class="loading error">
+	<p>{files.error}</p>
+</div>
 {:else if pr !== null}
-	<div class="review-page">
-		{#if activeTab === 'diff'}
-			{#if files.length > 0}
-				<ReviewLayout prId={page.params['prId'] ?? ''} {files} />
-			{:else}
-				<div class="loading">
-					<p>No changed files in this PR</p>
-				</div>
-			{/if}
+<div class="review-page">
+	{#if activeTab === 'diff'}
+		{#if files.status === 'ok' && files.data.length > 0}
+			<ReviewLayout {prId} files={files.data} />
+		{:else}
+			<div class="loading">
+				<p>No changed files in this PR</p>
+			</div>
 		{/if}
+	{/if}
 
-		<!-- Scroll root for walkthrough and conversation tabs. Kept mounted
-		     across diff-tab switches so the walkthrough never unmounts. -->
-		<div
-			class="review-content"
-			class:review-content--hidden={activeTab === 'diff'}
-			bind:this={scrollRootEl}
-			onscroll={handleScrollRootScroll}
-		>
-			<div
-				class="page-title-section"
-				class:page-title-section--narrow={activeTab === 'walkthrough' || activeTab === 'conversation'}
-			>
-				<h1 class="page-title">{pr.title}</h1>
-				<span class="page-subtitle">#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}</span>
-				{#if stackPlace}
-					<div class="title-stack-line"><StackPlaceLine place={stackPlace} /></div>
-				{/if}
-				{#if activeTab === 'walkthrough' && walkthroughRiskLevel}
-					<Badge
-						variant="outline"
-						class={riskClasses[walkthroughRiskLevel] ?? ''}
-						title={riskTitle}
-					>
-						{walkthroughRiskLevel} risk
-					</Badge>
-				{/if}
-				{#if stackPlace}
-					<div class="title-stack-thumb"><StackThumbIndex place={stackPlace} /></div>
-					<div class="title-stack-note"><StackPlaceNote place={stackPlace} /></div>
-				{/if}
-			</div>
+	<!-- Kept mounted across diff-tab switches so the walkthrough never unmounts. -->
+	<div
+		class="review-content"
+		class:review-content--hidden={activeTab === 'diff'}
+		use:scrollPane={{ prId, pane: scrollRootPane }}
+	>
+		<div class="page-title-section review-columns">
+			<h1 class="page-title">{pr.title}</h1>
+			<span class="page-subtitle">#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}</span>
+			{#if stackPlace}
+				<div class="title-stack-line"><StackPlaceLine place={stackPlace} /></div>
+			{/if}
+			{#if activeTab === 'walkthrough' && walkthroughRiskLevel}
+				<Badge
+					variant="outline"
+					class={riskClasses[walkthroughRiskLevel] ?? ''}
+					title={riskTitle}
+				>
+					{walkthroughRiskLevel} risk
+				</Badge>
+			{/if}
+			{#if stackPlace}
+				<div class="title-stack-thumb"><StackThumbIndex place={stackPlace} /></div>
+				<div class="title-stack-note"><StackPlaceNote place={stackPlace} /></div>
+			{/if}
+		</div>
 
-			<!-- Walkthrough: always mounted to avoid re-render freeze on tab switch.
-			     Heavy blocks (PierreFile, FileDiff, markdown) stay alive in DOM. -->
-			<div class="tab-wrapper" class:tab-wrapper--hidden={activeTab !== 'walkthrough'}>
-				<GuidedWalkthrough
-					prId={page.params['prId'] ?? ''}
-					scrollRoot={scrollRootEl}
-					isActive={activeTab === 'walkthrough'}
-				/>
-			</div>
+		<!-- Always mounted: re-rendering its heavy blocks (Pierre, markdown) froze
+		     tab switches. -->
+		<div class="tab-wrapper" class:tab-wrapper--hidden={activeTab !== 'walkthrough'}>
+			<GuidedWalkthrough {prId} />
+		</div>
 
-			<div class="tab-wrapper" class:tab-wrapper--hidden={activeTab !== 'conversation'}>
-				<ConversationTab
-					prId={page.params['prId'] ?? ''}
-					isActive={activeTab === 'conversation'}
-				/>
-			</div>
+		<div class="tab-wrapper" class:tab-wrapper--hidden={activeTab !== 'conversation'}>
+			<ConversationTab {prId} isActive={activeTab === 'conversation'} />
 		</div>
 	</div>
+</div>
 {:else}
-	<div class="loading">
-		<Dotmatrix variant="square-9" />
-		<p>Loading…</p>
-	</div>
+<div class="loading">
+	<Dotmatrix variant="square-9" />
+	<p>Loading…</p>
+</div>
 {/if}
-</AuthGuard>
 
 <style>
 	.review-page {
@@ -490,29 +150,23 @@ onDestroy(() => {
 		position: relative;
 	}
 
-	/* ── Scroll container for walkthrough / conversation ───────────── */
-
 	.review-content {
 		flex: 1;
 		min-height: 0;
-		/* Always show the scrollbar track so the gutter is permanently reserved
-		   on the right. This prevents the layout shift between tabs (walkthrough
-		   has enough content to scroll; conversation may not) — the right-side
-		   column width stays constant regardless of overflow state. On macOS
-		   WebKit, `overflow-y: scroll` with a non-overflowing tab renders an
-		   inactive-but-present scrollbar, which is the same width as an active
-		   one, so the grid never reflows. */
+		/* Reserves the scrollbar gutter so switching between a tab that scrolls
+		   and one that doesn't never reflows the grid. On macOS WebKit,
+		   `overflow-y: scroll` without overflow renders an inactive scrollbar of
+		   the same width. */
 		overflow-y: scroll;
 		scrollbar-gutter: stable;
-		container-type: inline-size;
+		/* The review-columns grid of both tabs sizes against this pane. */
+		container: review / inline-size;
 	}
 
 	.review-content--hidden {
 		display: none;
 	}
 
-	/* Tab wrappers: display:contents when active so children participate in
-	   the parent's layout directly; display:none when inactive. */
 	.tab-wrapper {
 		display: contents;
 	}
@@ -521,54 +175,14 @@ onDestroy(() => {
 		display: none;
 	}
 
-	/* ── Title section (scrolls away naturally with content) ─────────── */
-
 	.page-title-section {
-		display: flex;
-		flex-direction: column;
 		row-gap: 4px;
-		padding: 76px 32px 16px;
+		padding: 76px 0 16px;
 		flex-shrink: 0;
 	}
 
-	/* Walkthrough / Conversation tabs: title row lands on the exact same
-	   6-col grid used by every container inside GuidedWalkthrough (content,
-	   loading skeleton, stepper header, blocks, …). See the derivation in
-	   GuidedWalkthrough.svelte → `.walkthrough-content` for the col_1 math
-	   (main-area-anchored centring that re-centres on every sidebar/right-panel
-	   toggle). Template must stay byte-for-byte identical to the walkthrough
-	   grids so the title above and the content below align pixel-for-pixel. */
-	.page-title-section--narrow {
-		display: grid;
-		grid-template-columns:
-			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
-			48px
-			minmax(0, 820px)
-			40px
-			380px
-			minmax(24px, 1fr);
-		padding-left: 0;
-		padding-right: 0;
-		/* No transition on grid-template-columns: .app-shell already animates
-		   the parent grid, and the @container (max-width: 1335px) rule
-		   flipping mid-collapse interpolates linearly between rules that
-		   reallocate ~488px across tracks, briefly squeezing col_3 and
-		   wrapping the title. Per-frame formula re-eval keeps col_3 stable.
-		   The walkthrough grids below match. */
-	}
-
-	/* `:global(*)` is required here because the Badge rendered by this section
-	   (for the risk level) lives in a different Svelte component's CSS scope,
-	   so a scoped `> *` selector won't match it — Svelte would rewrite the
-	   child as `*.svelte-hash`, and Badge has a different hash. Without this,
-	   Badge falls to grid auto-placement and lands in cols 4/5/6 (far right
-	   of the title column), which is the "misplaced" symptom. */
-	.page-title-section--narrow > :global(*) {
-		grid-column: 3;
-	}
-
-	.page-title-section--narrow > .title-stack-thumb,
-	.page-title-section--narrow > .title-stack-note {
+	.page-title-section > .title-stack-thumb,
+	.page-title-section > .title-stack-note {
 		grid-row: 1;
 		align-self: start;
 		position: relative;
@@ -576,52 +190,34 @@ onDestroy(() => {
 		height: 0;
 	}
 
-	.page-title-section--narrow > .title-stack-thumb {
+	.page-title-section > .title-stack-thumb {
 		grid-column: 2;
 		display: flex;
 		justify-content: flex-end;
 		padding: 9px 14px 0 0;
 	}
 
-	.page-title-section--narrow > .title-stack-note {
+	.page-title-section > .title-stack-note {
 		grid-column: 5;
 		padding-top: 9px;
 	}
 
-	.page-title-section--narrow > .title-stack-line {
+	.page-title-section > .title-stack-line {
 		display: none;
 		min-width: 0;
 	}
 
-	@container (max-width: 1335px) {
-		.page-title-section--narrow > .title-stack-thumb {
+	@container review (max-width: 1335px) {
+		.page-title-section > .title-stack-thumb {
 			grid-column: 1;
 		}
 
-		.page-title-section--narrow > .title-stack-note {
+		.page-title-section > .title-stack-note {
 			display: none;
 		}
 
-		.page-title-section--narrow > .title-stack-line {
+		.page-title-section > .title-stack-line {
 			display: block;
-		}
-	}
-
-	@container (max-width: 1335px) {
-		/* Collapse the annotation-rail tracks below the 1336-px geometric
-		   minimum while keeping the same 6-track grid shape. Matching track
-		   counts lets the right-pane resize animate through this breakpoint
-		   instead of snapping from grid layout to block layout. Col_3 still
-		   starts at 72px (the base grid's 24 + 48), so the title text remains
-		   aligned with the walkthrough content at the threshold. */
-		.page-title-section--narrow {
-			grid-template-columns:
-				72px
-				0
-				minmax(0, 820px)
-				0
-				0
-				minmax(32px, 1fr);
 		}
 	}
 
@@ -643,8 +239,6 @@ onDestroy(() => {
 		line-height: 1.4;
 	}
 
-	/* ── Risk badge (walkthrough) ─────────────────────────────────────── */
-
 	:global(.risk-badge) {
 		display: inline-flex;
 		font-size: 10px;
@@ -657,14 +251,8 @@ onDestroy(() => {
 		margin-top: 6px;
 	}
 
-	/* Risk-level color modifiers. The Badge is rendered with
-	   `variant="outline"` which sets `border-color: var(--color-border)` and
-	   `color: var(--color-foreground)`. These modifier rules override both
-	   so medium/high/low are visually distinct. Uses `color-mix` to produce
-	   a translucent tinted background that works on both light and dark
-	   themes without hardcoding a specific shade. !important is needed
-	   because Badge's Tailwind border/text classes have equal specificity
-	   and are authored later in the cascade. */
+	/* !important: the outline Badge's Tailwind border/text classes have equal
+	   specificity and come later in the cascade. */
 	:global(.risk-badge--low) {
 		background: color-mix(in srgb, var(--color-success) 12%, transparent) !important;
 		color: var(--color-success) !important;

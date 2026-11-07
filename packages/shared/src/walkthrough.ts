@@ -1,16 +1,14 @@
-// ── Block types ─────────────────────────────────────────────────────────────
-
+import type { ThinkingEffort } from "./acp-agents";
 import type { Activity, ActivityResult } from "./activity";
 import type { ExternalAgentProvider } from "./external-integrations";
 import type { HunkSmell, WalkthroughLead } from "./hunk-scan";
-import type { ReviewMode, ThinkingEffort } from "./types";
+import type { ReviewMode } from "./review";
 
 /**
  * How much attention a PR needs, and what "Auto" would pick for it, answered
  * before any walkthrough exists.
  *
- * Wire contract of `GET /api/reviews/:id/walkthrough/sizing`, shared so the
- * handler's return and the store's `res.json()` can't drift out of sync.
+ * Wire contract of `GET /api/reviews/:id/walkthrough/sizing`.
  */
 export type WalkthroughSizing =
   /** No auto half in play and the risk hook is off. */
@@ -31,45 +29,30 @@ export type WalkthroughSizing =
       readonly thinkingEffort: ThinkingEffort | null;
     };
 
-export type AnnotationPosition = "left" | "right";
-
-/** Which phase of the A→B→C→D pipeline a block belongs to. */
-export type WalkthroughBlockPhase = "overview" | "diff_analysis" | "sentiment";
-
-export interface BlockPhaseFields {
-  /**
-   * The pipeline phase this block belongs to. Currently only `'diff_analysis'`
-   * is populated at write time — Phase A (overview) lives on
-   * `Walkthrough.summary` / `riskLevel`, and Phase C (sentiment) lives on
-   * `Walkthrough.sentiment`. The discriminator is carried on every block for
-   * forward compatibility with future phases that may produce blocks.
-   */
-  phase?: WalkthroughBlockPhase;
-  /**
-   * Monotonic, zero-based index of the parent semantic step. Required when
-   * `phase === 'diff_analysis'`. Lets the renderer group atomic blocks under
-   * their chapter and lets resume reconstructions know which section each
-   * block belongs to.
-   */
-  semanticStepIndex?: number;
+/**
+ * Where a block sits in Phase B, the only phase that writes blocks: Phase A
+ * lives on `Walkthrough.summary` and Phase C on `Walkthrough.sentiment`.
+ */
+export interface BlockPosition {
+  /** Monotonic, zero-based index of the parent semantic step. */
+  semanticStepIndex: number;
   /**
    * Monotonic, zero-based atomic-block index *within* the parent semantic
-   * step. Restarts at 0 in each section. Required when
-   * `phase === 'diff_analysis'`. The persistence key is
-   * `(walkthroughId, phase, semanticStepIndex, stepIndex)` — retries with
-   * the same identity are idempotent upserts.
+   * step. Restarts at 0 in each section. The persistence key is
+   * `(walkthroughId, semanticStepIndex, stepIndex)` — retries with the same
+   * identity are idempotent upserts.
    */
-  stepIndex?: number;
+  stepIndex: number;
 }
 
-export interface MarkdownBlock extends BlockPhaseFields {
+export interface MarkdownBlock extends BlockPosition {
   type: "markdown";
   id: string;
   order: number;
   content: string;
 }
 
-export interface CodeBlock extends BlockPhaseFields {
+export interface CodeBlock extends BlockPosition {
   type: "code";
   id: string;
   order: number;
@@ -79,41 +62,27 @@ export interface CodeBlock extends BlockPhaseFields {
   language: string;
   content: string;
   annotation: string | null;
-  annotationPosition: AnnotationPosition;
-  /**
-   * Server-rendered HTML produced by `@pierre/diffs/ssr` (`preloadFile`).
-   * When present the client calls `instance.hydrate(...)` and skips the
-   * initial worker tokenize round-trip. Absent on cache misses and on
-   * live first emit — clients fall back to `instance.render(...)`.
-   */
-  prerenderedHtml?: string;
 }
 
-export interface DiffBlock extends BlockPhaseFields {
+export interface DiffBlock extends BlockPosition {
   type: "diff";
   id: string;
   order: number;
   filePath: string;
   patch: string;
   annotation: string | null;
-  annotationPosition: AnnotationPosition;
-  /** See {@link CodeBlock.prerenderedHtml}; produced via `preloadPatchDiff`. */
-  prerenderedHtml?: string;
 }
 
-export interface ArtifactBlock extends BlockPhaseFields {
+export interface ArtifactBlock extends BlockPosition {
   type: "artifact";
   id: string;
   order: number;
   /** Complete self-contained HTML document rendered in a sandboxed iframe. */
   html: string;
   annotation: string | null;
-  annotationPosition: AnnotationPosition;
 }
 
 export type WalkthroughBlock = MarkdownBlock | CodeBlock | DiffBlock | ArtifactBlock;
-
-// ── Semantic step (Phase B chapter) ─────────────────────────────────────────
 
 /**
  * A "chapter" of the walkthrough body — a meaningful unit of explanation
@@ -124,7 +93,6 @@ export type WalkthroughBlock = MarkdownBlock | CodeBlock | DiffBlock | ArtifactB
 export interface WalkthroughSemanticStep {
   /** Monotonic, zero-based ordering within the walkthrough. */
   semanticStepIndex: number;
-  /** Chapter title — the heading shown in the UI. */
   title: string;
   /** Optional 1–2 sentence prelude rendered beneath the chapter title. */
   summary: string | null;
@@ -149,15 +117,65 @@ export function chapterNumbersByIndex(
   return new Map(visible.map((index, position) => [index, position + 1]));
 }
 
-// ── Issue (structured concern flagged by the AI agent) ───────────────────────
+/**
+ * Consequence tiers of a flagged concern, most severe first: the order every
+ * issue list renders its severity groups in. Sent by the agent, then
+ * relabelled by the Jev relevance pass when Jev is on.
+ */
+export const ISSUE_SEVERITIES = ["critical", "warning", "info"] as const;
+export type IssueSeverity = (typeof ISSUE_SEVERITIES)[number];
+
+export const ISSUE_SEVERITY_LABEL: Readonly<Record<IssueSeverity, string>> = {
+  critical: "Critical",
+  warning: "Warning",
+  info: "Info",
+};
 
 /**
- * Consequence tier of a flagged concern. Decided by the agent, or by the
- * relevance pass when `jev.issueSeverity` is on — both name this closed set.
+ * How an issue's severity reads in markdown the reviewer sends on (the GitHub
+ * review body, the "address these issues" chat prompt): plain text, icon-free.
  */
-export type IssueSeverity = "info" | "warning" | "critical";
+export const ISSUE_SEVERITY_TAG: Readonly<Record<IssueSeverity, string>> = {
+  critical: "[CRITICAL]",
+  warning: "[WARNING]",
+  info: "[INFO]",
+};
 
-export type IssueResolutionStatus = "open" | "addressed" | "wont_fix";
+/** `path:12–18`, `path:12` or `path`; null when the issue names no file. */
+export function issueLocation(
+  issue: Pick<WalkthroughIssue, "filePath" | "startLine" | "endLine">,
+): string | null {
+  if (!issue.filePath) return null;
+  if (issue.startLine == null) return issue.filePath;
+  const range =
+    issue.endLine != null && issue.endLine !== issue.startLine ? `–${issue.endLine}` : "";
+  return `${issue.filePath}:${issue.startLine}${range}`;
+}
+
+/** Higher is more severe. */
+export function severityRank(severity: IssueSeverity): number {
+  return ISSUE_SEVERITIES.length - ISSUE_SEVERITIES.indexOf(severity);
+}
+
+export const ISSUE_RESOLUTION_STATUSES = ["open", "addressed", "wont_fix"] as const;
+export type IssueResolutionStatus = (typeof ISSUE_RESOLUTION_STATUSES)[number];
+
+export function isResolvedIssueStatus(
+  status: string | null | undefined,
+): status is Exclude<IssueResolutionStatus, "open"> {
+  return status === "addressed" || status === "wont_fix";
+}
+
+export function isIssueResolved(issue: Pick<WalkthroughIssue, "resolutionStatus">): boolean {
+  return isResolvedIssueStatus(issue.resolutionStatus);
+}
+
+/** Badge text for a resolved issue; null while it is open. */
+export function issueResolutionLabel(status: IssueResolutionStatus | undefined): string | null {
+  if (status === "addressed") return "Addressed";
+  if (status === "wont_fix") return "Won't fix";
+  return null;
+}
 
 export interface WalkthroughIssue {
   id: string;
@@ -174,9 +192,7 @@ export interface WalkthroughIssue {
   endLine?: number;
   /**
    * ISO 8601 timestamp recorded when the reviewer submitted this issue to
-   * GitHub via the Request Changes flow. Absent = not yet sent. Drives the
-   * "already posted" (grayed out) treatment in IssuesPanel and survives
-   * across sessions because it's persisted on the walkthrough_issues row.
+   * GitHub via the Request Changes flow. Absent = not yet sent.
    */
   submittedAt?: string;
   /**
@@ -199,9 +215,8 @@ export interface WalkthroughIssue {
   resolvedBy?: ExternalAgentProvider;
 }
 
-// ── Risk & token tracking ───────────────────────────────────────────────────
-
-export type RiskLevel = "low" | "medium" | "high";
+export const RISK_LEVELS = ["low", "medium", "high"] as const;
+export type RiskLevel = (typeof RISK_LEVELS)[number];
 
 export type WalkthroughMode = ReviewMode;
 
@@ -222,32 +237,52 @@ export interface WalkthroughTokenUsage {
    */
   contextTokens: number;
   /**
-   * Provider-reported context window for the active model. Only some providers
-   * report this (e.g. the Claude Agent SDK); the sole optional field, omitted
-   * when unavailable so consumers fall back to a configured window.
+   * Agent-reported context window for the active model (ACP `usage_update`
+   * `size`). Omitted when the agent doesn't report it, so consumers fall back
+   * to a configured window.
    */
   contextWindowTokens?: number;
 }
 
-// ── Per-axis scorecard ──────────────────────────────────────────────────────
+export const ZERO_TOKEN_USAGE: WalkthroughTokenUsage = Object.freeze({
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadInputTokens: 0,
+  cacheCreationInputTokens: 0,
+  contextTokens: 0,
+});
 
-export type RatingAxis =
-  | "correctness"
-  | "scope"
-  | "tests"
-  | "clarity"
-  | "safety"
-  | "consistency"
-  | "api_changes"
-  | "performance"
-  | "description";
+/** A token usage as any version of Revv recorded it; missing or non-numeric fields read as 0. */
+export function normalizeTokenUsage(value: unknown): WalkthroughTokenUsage {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return ZERO_TOKEN_USAGE;
+  const r = value as Record<string, unknown>;
+  const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  const inputTokens = num(r.inputTokens);
+  const outputTokens = num(r.outputTokens);
+  const cacheReadInputTokens = num(r.cacheReadInputTokens);
+  const cacheCreationInputTokens = num(r.cacheCreationInputTokens);
+  const contextWindowTokens = num(r.contextWindowTokens);
+  // Walkthroughs from before context occupancy was tracked carry no
+  // `contextTokens`; the throughput sum keeps their gauge populated.
+  const contextTokens =
+    typeof r.contextTokens === "number" && Number.isFinite(r.contextTokens)
+      ? r.contextTokens
+      : inputTokens + outputTokens + cacheReadInputTokens + cacheCreationInputTokens;
+  return {
+    inputTokens,
+    outputTokens,
+    cacheReadInputTokens,
+    cacheCreationInputTokens,
+    contextTokens,
+    ...(contextWindowTokens > 0 ? { contextWindowTokens } : {}),
+  };
+}
 
 /**
- * Canonical order for rendering the scorecard grid. The frontend renders cards
- * in this order regardless of arrival order so the 3×3 layout is stable and
- * reviewers' eyes always land on the same axis in the same spot.
+ * Canonical order for the 3×3 scorecard grid, regardless of arrival order, so
+ * each axis always lands in the same spot.
  */
-export const RATING_AXES: readonly RatingAxis[] = [
+export const RATING_AXES = [
   "correctness",
   "scope",
   "tests",
@@ -259,10 +294,8 @@ export const RATING_AXES: readonly RatingAxis[] = [
   "description",
 ] as const;
 
-/**
- * Display label for each axis. Used in the scorecard UI; the prompt also
- * references these labels so the model and the UI stay in sync.
- */
+export type RatingAxis = (typeof RATING_AXES)[number];
+
 export const RATING_AXIS_LABELS: Record<RatingAxis, string> = {
   correctness: "Correctness",
   scope: "Scope",
@@ -275,8 +308,10 @@ export const RATING_AXIS_LABELS: Record<RatingAxis, string> = {
   description: "Description",
 };
 
-export type Verdict = "pass" | "concern" | "blocker";
-export type Confidence = "low" | "medium" | "high";
+export const VERDICTS = ["pass", "concern", "blocker"] as const;
+export type Verdict = (typeof VERDICTS)[number];
+export const CONFIDENCES = ["low", "medium", "high"] as const;
+export type Confidence = (typeof CONFIDENCES)[number];
 
 export interface RatingCitation {
   filePath: string;
@@ -305,12 +340,10 @@ export interface WalkthroughRating {
 
 /**
  * Composite score below which an issue is treated as low signal. Kept low:
- * a false positive here hides a real bug behind a disclosure. Shared so the
- * server's DTO and client-side reasoning can't drift.
+ * a false positive here hides a real bug behind a disclosure.
  */
 export const LOW_SIGNAL_THRESHOLD = 0.4;
 
-/** True when a scored issue falls below {@link LOW_SIGNAL_THRESHOLD}. */
 export function isLowSignalScore(score: number | null | undefined): boolean {
   return typeof score === "number" && score < LOW_SIGNAL_THRESHOLD;
 }
@@ -327,27 +360,54 @@ export function isLowSignalScore(score: number | null | undefined): boolean {
  */
 export const ISSUE_DISCARD_THRESHOLD = 0.2;
 
-/** True when a scored concern falls below {@link ISSUE_DISCARD_THRESHOLD}. */
 export function isDiscardedScore(score: number | null | undefined): boolean {
   return typeof score === "number" && score < ISSUE_DISCARD_THRESHOLD;
 }
-
-// ── Pipeline phase (A→B→C→D) ────────────────────────────────────────────────
 
 /**
  * Pointer into the strict 4-phase content pipeline (see "Agent Subsystem
  * Invariants" in the repo root CLAUDE.md).
  *
  *   'none' — nothing persisted yet
- *   'A'    — Phase A (overview + risk) complete
+ *   'A'    — Phase A (overview) complete
  *   'B'    — Phase B (diff analysis, ≥1 step) complete
  *   'C'    — Phase C (overall sentiment) complete
  *   'D'    — Phase D (all 9 axes rated) complete
  */
 export type WalkthroughPipelinePhase = "none" | "A" | "B" | "C" | "D";
 
-/** Job lifecycle status. `WalkthroughJobs.setStatus` is the only writer. */
+/** Job lifecycle status. WalkthroughJobs is the only writer. */
 export type WalkthroughStatus = "generating" | "complete" | "error" | "superseded";
+
+/**
+ * Why a run ended without completing, recorded on the row
+ * (`walkthroughs.end_reason`) and carried by `lifecycle:error`. Null while a
+ * row is generating and once it completed.
+ */
+export const WALKTHROUGH_END_REASONS = [
+  /** The user's Stop. */
+  "cancelled",
+  /** A newer head or a Regenerate replaced the run. */
+  "superseded",
+  /** Auto-continuations ran out, or were judged doomed, before the review was finished. */
+  "budget_exhausted",
+  /** The run crashed more often than its resume budget allows. */
+  "resume_budget",
+  /** The agent needs its user to sign in again. */
+  "agent_auth",
+  /** The agent failed or declined to continue. */
+  "agent_error",
+  /** The agent's turn timed out before anything was written. */
+  "timeout_no_content",
+  /** The agent finished without writing anything. */
+  "no_content",
+  /** The repository clone the run waited on failed or never happened. */
+  "clone_failed",
+  /** The run itself failed before or around the agent (worktree, diff, database). */
+  "crashed",
+] as const;
+
+export type WalkthroughEndReason = (typeof WALKTHROUGH_END_REASONS)[number];
 
 /**
  * How a walkthrough row was produced.
@@ -357,7 +417,8 @@ export type WalkthroughStatus = "generating" | "complete" | "error" | "supersede
  * expected to use the linked prior walkthrough and the new commit range as its
  * starting point.
  */
-export type WalkthroughGenerationMode = "full" | "incremental";
+export const WALKTHROUGH_GENERATION_MODES = ["full", "incremental"] as const;
+export type WalkthroughGenerationMode = (typeof WALKTHROUGH_GENERATION_MODES)[number];
 
 export interface WalkthroughReviewRound {
   id: string;
@@ -389,8 +450,6 @@ export interface WalkthroughReviewRoundsResponse {
   rounds: WalkthroughReviewRound[];
 }
 
-// ── Walkthrough (cached & replayed) ─────────────────────────────────────────
-
 export interface Walkthrough {
   id: string;
   reviewSessionId: string;
@@ -407,7 +466,6 @@ export interface Walkthrough {
   riskConfidence?: number | null;
   /**
    * Phase C output — "Overall Sentiment" markdown. Null until Phase C completes.
-   * Replaces the old convention of a specially-formatted markdown block.
    */
   sentiment: string | null;
   /**
@@ -425,10 +483,11 @@ export interface Walkthrough {
    * from the remote cache — then only where its issues sit says anything.
    */
   leads: WalkthroughLead[] | null;
-  /** Current phase pointer. See {@link WalkthroughPipelinePhase}. */
   lastCompletedPhase: WalkthroughPipelinePhase;
   /** Last terminal generation failure, if this row is in `status='error'`. */
   errorMessage?: string | null;
+  /** Why the run ended, when it ended without completing. */
+  endReason?: WalkthroughEndReason | null;
   generatedAt: string;
   modelUsed: string;
   tokenUsage: WalkthroughTokenUsage;
@@ -438,13 +497,13 @@ export interface Walkthrough {
   baseHeadSha?: string | null;
   /**
    * ISO 8601 timestamp of the most recent chat-driven edit, or null if the
-   * walkthrough has only ever been produced by the generation pipeline. See
-   * CLAUDE.md invariant #7 (chat-edit carve-out).
+   * walkthrough has only ever been produced by the generation pipeline
+   * (CLAUDE.md invariant #7, chat-edit carve-out).
    */
   lastEditedAt?: string | null;
   /**
-   * Actor that performed the most recent chat-driven edit. Typically
-   * `'chat:claude'` or `'chat:opencode'`. Null when never edited.
+   * Actor of the most recent edit: `'chat:acp'` or an external coding agent's
+   * provider id. Null when never edited.
    */
   lastEditedBy?: string | null;
   /**
@@ -471,8 +530,6 @@ export interface Walkthrough {
     maxTurns: number;
   } | null;
 }
-
-// ── MCP read-tool response ──────────────────────────────────────────────────
 
 /**
  * Returned by `get_walkthrough_state` — the MCP read tool that agents call
@@ -539,10 +596,8 @@ export interface WalkthroughState {
   }>;
   ratedAxes: RatingAxis[];
   /**
-   * Identities of every issue already flagged for this walkthrough. The agent
-   * uses these `id` values when calling `add_issue_comment` so resumes can
-   * attach line comments to issues from prior runs without re-flagging. Empty
-   * for fresh walkthroughs. The order matches insertion order.
+   * Every issue already flagged, in insertion order. A resumed agent passes
+   * these ids to `add_issue_comment` instead of re-flagging.
    */
   issues: Array<{
     id: string;
@@ -551,16 +606,12 @@ export interface WalkthroughState {
     startLine: number | null;
     endLine: number | null;
   }>;
-  /** Convenience — equal to `issues.length`. Retained for forward compatibility. */
   issueCount: number;
   /**
-   * Subset of `issues` filtered to entries that REQUIRE an inline review
-   * comment but don't yet have one — i.e. `filePath` + `startLine` are both set, AND no
-   * `comment_threads` row references the issue. The walkthrough cannot
-   * transition to `'complete'` until this list is empty (enforced by
-   * `complete_walkthrough` AND the orchestrator). On a resumed run, the
-   * agent should call `add_issue_comment` for every entry here before
-   * calling `complete_walkthrough`.
+   * Line-anchored issues (`filePath` + `startLine` set) that no
+   * `comment_threads` row references yet. The walkthrough cannot become
+   * `'complete'` until this is empty (checked by `complete_walkthrough` and
+   * the orchestrator).
    */
   issuesNeedingInlineComment: Array<{
     id: string;
@@ -582,12 +633,9 @@ export interface WalkthroughState {
   leadsNeedingVerdict: string[];
 }
 
-// ── SSE stream events ───────────────────────────────────────────────────────
-
 /**
- * UI-lifecycle phase (distinct from the content pipeline phase). Drives the
- * phase-progress indicator in the walkthrough header. The content pipeline
- * phase is carried on events where relevant (e.g. `phase:advanced`).
+ * UI-lifecycle phase, distinct from the content pipeline phase (which
+ * `phase:advanced` carries).
  */
 export type WalkthroughLifecyclePhase =
   | "connecting"
@@ -598,49 +646,52 @@ export type WalkthroughLifecyclePhase =
   | "finishing";
 
 /**
- * Why a job started — surfaced on `lifecycle:started` for telemetry and to
- * let the UI tweak its spinner copy. Every `StartJobTrigger`, plus
- * `cache-import` for the snapshot-replay fast path. Treat as an open string
- * union; new variants don't break existing clients.
+ * Who asked the server to run a walkthrough — surfaced on `lifecycle:started`
+ * for telemetry and to let the UI tweak its spinner copy. `external_agent` is
+ * a coding agent outside Revv (`request_walkthrough`) acting on the user's
+ * behalf; `resume` is a run of an existing row, after a crash or the user's
+ * Resume. Treat as an open string union; new variants don't break existing
+ * clients.
  */
 export type WalkthroughStartTrigger =
   | "user"
   | "external_agent"
   | "resume"
   | "review_requested"
-  | "stack_review"
-  | "cache-import";
+  | "stack_review";
 
 /**
- * Who asked the server to run a walkthrough job. `external_agent` is a
- * coding agent outside Revv (`request_walkthrough`) acting on the user's
- * behalf, so it gets the same do-over semantics as `user`; it is its own
- * value so spans and `lifecycle:started` can tell the two apart.
+ * What only matters while a run is live: the agent's reasoning, its own tool
+ * calls, the context gauge and a coarse phase. Broadcast unsequenced on
+ * `walkthrough:live` and never journaled, so a client that misses one has
+ * lost nothing it could re-read.
  */
-export type StartJobTrigger = Exclude<WalkthroughStartTrigger, "cache-import">;
-
-export type WalkthroughStreamEvent =
-  | { type: "summary"; data: { summary: string; riskLevel: RiskLevel } }
-  | { type: "sentiment"; data: { sentiment: string } }
-  | { type: "semantic-step"; data: WalkthroughSemanticStep }
-  | { type: "block"; data: WalkthroughBlock }
-  | { type: "done"; data: { walkthroughId: string; tokenUsage: WalkthroughTokenUsage } }
+export type WalkthroughLiveEvent =
   | { type: "usage"; data: { tokenUsage: WalkthroughTokenUsage } }
-  | { type: "error"; data: { code: string; message: string; repoId?: string } }
   | { type: "exploration"; data: Activity }
   /**
    * Terminal output of a previously-streamed `exploration` tool call,
-   * correlated by `callId`. Lets the live walkthrough feed attach a clickable
-   * output peek (e.g. a Bash command's stdout) to the matching exploration
-   * pill. Transient — not persisted (walkthrough exploration is live-only).
+   * correlated by `callId`, for the pill's output peek.
    */
   | { type: "exploration-result"; data: ActivityResult }
   /**
    * Late-arriving tool input for a previously-streamed `exploration` pill,
-   * correlated by `callId` — patches its payload so the filename/command and
-   * file peek resolve when the agent only supplies them after the tool-call.
+   * correlated by `callId`, when the agent only supplies it after the call.
    */
   | { type: "exploration-input"; data: { callId: string; payload: unknown } }
+  | { type: "phase"; data: { phase: WalkthroughLifecyclePhase; message: string } }
+  | { type: "thought"; data: { text: string } };
+
+/**
+ * Content and lifecycle: every one is committed before it is sent and carries
+ * the walkthrough's durable seq on `walkthrough:event`, so a client that
+ * reconnects reconciles by re-reading the row.
+ */
+export type WalkthroughDurableEvent =
+  | { type: "summary"; data: { summary: string; riskLevel: RiskLevel } }
+  | { type: "sentiment"; data: { sentiment: string } }
+  | { type: "semantic-step"; data: WalkthroughSemanticStep }
+  | { type: "block"; data: WalkthroughBlock }
   | { type: "issue"; data: WalkthroughIssue }
   /**
    * The leads this run's agent was handed, recorded at job start before the
@@ -650,35 +701,11 @@ export type WalkthroughStreamEvent =
   /** A lead's verdict landed (`resolve_lead`). Full state for that lead. */
   | { type: "lead"; data: WalkthroughLead }
   | { type: "rating"; data: WalkthroughRating }
-  | { type: "phase"; data: { phase: WalkthroughLifecyclePhase; message: string } }
   | {
       type: "phase:advanced";
       data: { lastCompletedPhase: WalkthroughPipelinePhase };
     }
-  | { type: "in-progress"; data: { walkthroughId: string } }
-  | { type: "thinking"; data: Record<string, never> }
-  /**
-   * Streamed model reasoning text. Mirrors the recap `thought` event and is
-   * separate from `thinking` (which is the empty stream-guard heartbeat).
-   * Forwarded from agent-side `reasoning-delta` events; not persisted to
-   * SQLite — only meaningful during live generation.
-   */
-  | { type: "thought"; data: { text: string } }
-  // ── Lifecycle events (formerly carried as standalone WS envelopes) ───────
-  //
-  // After the SSE-unification refactor these are folded into the same event
-  // stream as content events so the client has one reducer and one cursor
-  // per walkthrough. The legacy `walkthrough:complete`, `walkthrough:error`,
-  // `walkthrough:cache-hit`, and `walkthrough:edited` WS envelopes are
-  // replaced by `lifecycle:*` variants here.
-  //
-  /**
-   * A new generation job started (or an existing one was claimed for
-   * resumption). Always the first event emitted for a walkthroughId.
-   * `status: "cloning"` indicates the repo is mid-clone — the orchestrator
-   * will re-emit a fresh `lifecycle:started` (with `status` omitted) when
-   * the clone finishes.
-   */
+  /** A run started on this row (fresh, resumed, or waiting on its clone). */
   | {
       type: "lifecycle:started";
       data: {
@@ -686,42 +713,28 @@ export type WalkthroughStreamEvent =
         prHeadSha: string;
         mode?: WalkthroughMode;
         trigger: WalkthroughStartTrigger;
-        status?: "cloning";
-        repoId?: string;
         /**
          * Risk tier, when the orchestrator assigned it before launching the
          * agent — known seconds before the Phase A `summary` event. Absent
-         * when the agent owns the tier; `summary` is then the first place
-         * it appears.
+         * when the agent owns the tier.
          */
         riskLevel?: RiskLevel;
-        /**
-         * The model this run actually launched with, resolved against the
-         * agent's catalog. Lets a UI showing "Auto" name what it picked,
-         * including when routing declined and the configured model stood.
-         */
+        /** The model this run launches with, resolved against the agent's catalog. */
         modelUsed?: string;
       };
     }
-  /**
-   * Generation finished — Phase D validated, `status='complete'`. Replaces
-   * the legacy `done` event and the `walkthrough:complete` WS envelope.
-   */
+  /** The journal passed the completion check and the row is `complete`. */
   | {
       type: "lifecycle:complete";
       data: { walkthroughId: string; tokenUsage: WalkthroughTokenUsage };
     }
-  /**
-   * Terminal failure. `code === "CloneInProgress"` is handled specially —
-   * the orchestrator will re-emit `lifecycle:started` when the repo clone
-   * finishes; no client retry needed.
-   */
-  | { type: "lifecycle:error"; data: { code: string; message: string; repoId?: string } }
+  /** The row is `error`; `reason` says why. */
+  | { type: "lifecycle:error"; data: { reason: WalkthroughEndReason; message: string } }
   /**
    * The walkthrough was imported rather than generated: from the team's
    * remote cache (`remote`), or carried from this PR's previous head because
    * a restack left the layer's own changes byte-identical (`restack`).
-   * Purely cosmetic — clients re-hydrate the imported content via `/current`.
+   * Clients re-hydrate the imported content via `/current`.
    */
   | {
       type: "lifecycle:cache-hit";
@@ -729,25 +742,21 @@ export type WalkthroughStreamEvent =
     }
   /**
    * A chat-driven edit landed on a completed walkthrough (CLAUDE.md
-   * invariant #7 carve-out). Stamps `lastEditedAt` on the entry; the
-   * inner content event that effected the mutation arrives in the
-   * same event stream with a subsequent seq.
+   * invariant #7 carve-out). The content event that effected the mutation
+   * arrives in the same stream with a later seq.
    */
   | { type: "lifecycle:edited"; data: { walkthroughId: string; editedAt: string } }
   /**
-   * This walkthrough was marked `status='superseded'` because a newer
-   * one replaced it (typically a fresh PR commit, or a user-driven
-   * regenerate that targets the same head SHA via the recycle path).
-   * `supersededBy` is the id of the replacement row, when known.
+   * This walkthrough was marked `status='superseded'`: a newer head, a
+   * Regenerate, or a fresh run at the same head replaced it. `supersededBy`
+   * is the replacement's id, when known.
    */
   | {
       type: "lifecycle:superseded";
       data: { walkthroughId: string; supersededBy: string | null };
     }
-  // Chat-edit deletion events (CLAUDE.md invariant #7 carve-out). Emitted
-  // only via the chat-edit MCP tools after a walkthrough has reached
-  // `status='complete'`; never produced by the generation pipeline. Frontend
-  // reducer drops the matching item by id / index.
+  // Deletions: chat-edit tools on a completed walkthrough, and a background
+  // relevance judgment retracting a concern during generation (`issue:deleted`).
   | {
       type: "block:deleted";
       data: { id: string; semanticStepIndex: number; stepIndex: number };
@@ -758,3 +767,23 @@ export type WalkthroughStreamEvent =
       type: "semantic-step:deleted";
       data: { semanticStepIndex: number };
     };
+
+/** Anything a walkthrough announces; `WalkthroughJobs.emitEvent` routes it by kind. */
+export type WalkthroughStreamEvent = WalkthroughDurableEvent | WalkthroughLiveEvent;
+
+// A record, not a list, so a live type added to the union without a key here
+// fails to compile instead of being journaled as durable.
+const LIVE_EVENT_TYPES: Record<WalkthroughLiveEvent["type"], true> = {
+  usage: true,
+  exploration: true,
+  "exploration-result": true,
+  "exploration-input": true,
+  phase: true,
+  thought: true,
+};
+
+export function isWalkthroughLiveEvent(
+  event: WalkthroughStreamEvent,
+): event is WalkthroughLiveEvent {
+  return Object.hasOwn(LIVE_EVENT_TYPES, event.type);
+}

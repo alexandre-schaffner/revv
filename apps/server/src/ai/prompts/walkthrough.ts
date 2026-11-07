@@ -1,21 +1,25 @@
 /// <reference path="../../assets.d.ts" />
-import { isAbsolute, relative } from "node:path";
 import {
+  ARTIFACT_THEME_TOKEN_GROUPS,
   HUNK_SMELL_META,
   hunkNewEnd,
-  type RatingAxis,
   REVIEW_MODE,
   type RiskLevel,
-  type WalkthroughBlock,
+  STACK_CITATION_FORMAT,
   type WalkthroughLead,
   type WalkthroughMode,
   type WalkthroughStackSnapshot,
 } from "@revv/shared";
-import type { PrFileMeta } from "../../services/GitHub";
+import type { PrFileMeta } from "../../services/github/pulls";
+import { renderCompletionRequirements } from "../../services/walkthrough/completion";
+import { journeyKeywordList } from "../../services/walkthrough/content";
 import {
   type PromptDiffSource,
   REVERTED_FILE_STATUS,
-} from "../../services/walkthrough-prompt-files";
+} from "../../services/walkthrough/prompt-files";
+import { FILE_TIERS } from "../jev/job-start";
+import { fillTemplate } from "./fill-template";
+import { renderRiskTiers } from "./risk-tiers";
 import WALKTHROUGH_ARTIFACTS_PROMPT from "./walkthrough-artifacts.md" with { type: "text" };
 import WALKTHROUGH_AUTHOR_PROMPT from "./walkthrough-author.md" with { type: "text" };
 import WALKTHROUGH_COMMON_PROMPT from "./walkthrough-common.md" with { type: "text" };
@@ -32,40 +36,48 @@ import WALKTHROUGH_SYSTEM_REVIEWER_PROMPT from "./walkthrough-system-reviewer.md
   type: "text",
 };
 
-// ── Continuation context (imported here to avoid circular deps) ──────────────
-//
-// Retained for provider-level bookkeeping (e.g. opencode's session id for
-// `--continue`). The agent itself no longer consumes this — per doctrine
-// invariant #6, it calls `get_walkthrough_state` via MCP instead.
-
-export interface PromptContinuationContext {
-  walkthroughId: string;
-  existingBlocks: WalkthroughBlock[];
-  existingRatedAxes: RatingAxis[];
+export interface WalkthroughReviewMode {
+  readonly mode: "full" | "incremental";
+  readonly parentWalkthroughId: string | null;
+  readonly baseHeadSha: string | null;
+  readonly headSha: string;
+  readonly diffSource?: PromptDiffSource;
 }
 
-// ── MCP-based walkthrough prompt (phase-bound, A→B→C→D) ─────────────────────
+// The common system prompt carries `{{REVIEW_PERSPECTIVE}}` right after its
+// intro, before the pipeline rules, so the mode prompt frames the whole
+// document instead of trailing it.
 
-// The common system prompt carries this marker where the perspective-specific
-// block belongs (right after the intro, before the pipeline rules) so the mode
-// prompt frames the whole document instead of trailing it. Validated at module
-// load so a future edit that drops the marker fails fast rather than silently
-// emitting a perspective-less system prompt.
-const REVIEW_PERSPECTIVE_MARKER = "{{REVIEW_PERSPECTIVE}}";
-if (!WALKTHROUGH_SYSTEM_COMMON_PROMPT.includes(REVIEW_PERSPECTIVE_MARKER)) {
-  throw new Error(
-    `walkthrough-system-common.md is missing the ${REVIEW_PERSPECTIVE_MARKER} marker`,
-  );
+const ARTIFACT_THEME_TOKENS_MARKER = "{{ARTIFACT_THEME_TOKENS}}";
+if (!WALKTHROUGH_ARTIFACTS_PROMPT.includes(ARTIFACT_THEME_TOKENS_MARKER)) {
+  throw new Error(`walkthrough-artifacts.md is missing the ${ARTIFACT_THEME_TOKENS_MARKER} marker`);
 }
 
-// The artifact craft spec is single-sourced in `walkthrough-artifacts.md` because
-// two agents write artifact blocks: the walkthrough author (add_semantic_step /
-// add_diff_step) and the chat agent's edit tools (add_block / update_block).
-// Substituted into both system prompts so the two can't drift.
-export const ARTIFACT_SPEC_MARKER = "{{ARTIFACT_SPEC}}";
-export const WALKTHROUGH_ARTIFACT_SPEC: string = WALKTHROUGH_ARTIFACTS_PROMPT.trim();
-if (!WALKTHROUGH_SYSTEM_COMMON_PROMPT.includes(ARTIFACT_SPEC_MARKER)) {
-  throw new Error(`walkthrough-system-common.md is missing the ${ARTIFACT_SPEC_MARKER} marker`);
+// The artifact craft spec is single-sourced in `walkthrough-artifacts.md`
+// because the chat agent's edit tools write artifact blocks too.
+export const WALKTHROUGH_ARTIFACT_SPEC: string = WALKTHROUGH_ARTIFACTS_PROMPT.replace(
+  ARTIFACT_THEME_TOKENS_MARKER,
+  () =>
+    ARTIFACT_THEME_TOKEN_GROUPS.map(
+      ({ label, tokens }) => `- **${label}:** ${tokens.map((t) => `\`${t}\``).join(", ")}`,
+    ).join("\n"),
+).trim();
+
+const CONTRACT_FRAGMENTS: Readonly<Record<string, string>> = {
+  ARTIFACT_SPEC: WALKTHROUGH_ARTIFACT_SPEC,
+  RISK_TIERS: renderRiskTiers(),
+  JOURNEY_KEYWORDS: journeyKeywordList("`"),
+  COMPLETION_GATE: renderCompletionRequirements(),
+};
+
+for (const [file, prompt, marker] of [
+  ["walkthrough-system-common.md", WALKTHROUGH_SYSTEM_COMMON_PROMPT, "{{REVIEW_PERSPECTIVE}}"],
+  ["walkthrough-system-common.md", WALKTHROUGH_SYSTEM_COMMON_PROMPT, "{{ARTIFACT_SPEC}}"],
+  ["walkthrough-system-common.md", WALKTHROUGH_SYSTEM_COMMON_PROMPT, "{{RISK_TIERS}}"],
+  ["walkthrough-system-common.md", WALKTHROUGH_SYSTEM_COMMON_PROMPT, "{{COMPLETION_GATE}}"],
+  ["walkthrough-system-reviewer.md", WALKTHROUGH_SYSTEM_REVIEWER_PROMPT, "{{JOURNEY_KEYWORDS}}"],
+] as const) {
+  if (!prompt.includes(marker)) throw new Error(`${file} is missing the ${marker} marker`);
 }
 
 export function buildWalkthroughSystemPrompt(mode: WalkthroughMode = REVIEW_MODE.reviewer): string {
@@ -74,87 +86,17 @@ export function buildWalkthroughSystemPrompt(mode: WalkthroughMode = REVIEW_MODE
       ? WALKTHROUGH_SYSTEM_AUTHOR_PROMPT
       : WALKTHROUGH_SYSTEM_REVIEWER_PROMPT;
 
-  // Replacer functions, not replacement strings: a `$&` or `$'` in a prompt
-  // file is a substitution pattern and would splice the surrounding prompt
-  // into itself.
-  return WALKTHROUGH_SYSTEM_COMMON_PROMPT.replace(REVIEW_PERSPECTIVE_MARKER, () =>
-    modePrompt.trim(),
-  ).replace(ARTIFACT_SPEC_MARKER, () => WALKTHROUGH_ARTIFACT_SPEC);
+  return fillTemplate(WALKTHROUGH_SYSTEM_COMMON_PROMPT, {
+    ...CONTRACT_FRAGMENTS,
+    REVIEW_PERSPECTIVE: fillTemplate(modePrompt.trim(), CONTRACT_FRAGMENTS),
+  });
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-/**
- * Render a tool's path argument relative to the agent's working directory
- * (the per-job git worktree). Agents are handed absolute worktree paths, so
- * the raw `file_path` is a long `/Users/…/worktree/apps/server/…` string that
- * clips in the narrow exploration feed. Relativizing against `cwd` yields the
- * familiar repo-relative form (`apps/server/…`). Falls back to the original
- * path when no `cwd` is supplied, the path isn't absolute (already relative,
- * e.g. Grep's `.`), or it resolves outside the worktree (so we never surface a
- * confusing `../../` escape).
- */
-export function toRepoRelative(p: string, cwd?: string): string {
-  if (!p || !cwd || !isAbsolute(p)) return p;
-  const rel = relative(cwd, p);
-  if (!rel || rel.startsWith("..")) return p;
-  return rel;
-}
-
-export function buildExplorationDescription(
-  toolName: string,
-  input: unknown,
-  cwd?: string,
-): string {
-  const inp = input as Record<string, unknown> | null | undefined;
-  const str = (k: string): string => (typeof inp?.[k] === "string" ? (inp[k] as string) : "");
-  const path = (k: string): string => toRepoRelative(str(k), cwd);
-  switch (toolName) {
-    case "Read":
-      return `Reading ${path("file_path") || "file"}`;
-    case "Grep":
-      return `Searching for '${str("pattern")}' in ${path("path") || "codebase"}`;
-    case "Glob":
-      return `Finding files matching ${str("pattern") || "*"}`;
-    case "LS":
-      return `Listing ${path("path") || "."}`;
-    case "Write":
-      return `Wrote ${path("file_path") || "file"}`;
-    case "Edit":
-      return `Edited ${path("file_path") || "file"}`;
-    case "Bash": {
-      // Single-line, truncated. The first line of the command is enough
-      // signal for the chat panel; full command is in the agent transcript.
-      const cmd = str("command");
-      if (!cmd) return "Running shell command";
-      const firstLine = cmd.split("\n")[0] ?? cmd;
-      const truncated = firstLine.length > 80 ? `${firstLine.slice(0, 77)}…` : firstLine;
-      return `$ ${truncated}`;
-    }
-    default:
-      return `Using ${toolName}`;
-  }
-}
-
-/** Human-readable attention tier, for the ranked list and the file headers. */
 function tierLabel(tier: number | null): string {
-  switch (tier) {
-    case 0:
-      return "tier 0 · generated";
-    case 1:
-      return "tier 1 · mechanical";
-    case 2:
-      return "tier 2 · routine";
-    case 3:
-      return "tier 3 · logic";
-    case 4:
-      return "tier 4 · critical";
-    default:
-      return "unscored";
-  }
+  const level = tier === null ? undefined : FILE_TIERS[tier];
+  return level === undefined ? "unscored" : `tier ${tier} · ${level.label}`;
 }
 
-/** `lines 42–68`, or `line 42` for a one-line hunk. */
 function leadRange(lead: WalkthroughLead): string {
   const end = hunkNewEnd(lead);
   return end === lead.newStart ? `line ${lead.newStart}` : `lines ${lead.newStart}–${end}`;
@@ -164,13 +106,9 @@ function leadRange(lead: WalkthroughLead): string {
 const LEAD_INFO_ALLOWANCE = 3;
 
 /**
- * The first pass, framed so the agent verifies rather than transcribes. The
- * scan saw each hunk alone and can't see callers, so a lead that holds up in
- * the file is worth raising, and one that doesn't is noise to drop. The bug
- * bar's "not cosmetic" clause and the tier budget would otherwise drop every
- * readability lead before it was weighed, so a confirmed lead is exempt from
- * the one and gets a small allowance outside the other. Every lead owes a
- * `resolve_lead` verdict, which is what tells the reader the lead was read.
+ * The bug bar's "not cosmetic" clause and the tier budget would otherwise drop
+ * every readability lead before it was weighed, so a confirmed lead is exempt
+ * from the one and gets a small allowance outside the other.
  */
 function renderHunkLeadRules(count: number): string[] {
   return [
@@ -186,7 +124,6 @@ function renderHunkLeadRules(count: number): string[] {
   ];
 }
 
-/** One file's leads, in line order, for the block under its diff header. */
 function renderFileLeads(leads: ReadonlyArray<WalkthroughLead>, withPath: boolean): string[] {
   return [
     "First-pass leads:",
@@ -206,8 +143,8 @@ function renderFileLeads(leads: ReadonlyArray<WalkthroughLead>, withPath: boolea
 
 /**
  * What the orchestrator worked out before the agent started, each one a given
- * the prompt states rather than a question it asks. Every field is optional:
- * absent means TypeSafe was off or had nothing to say.
+ * the prompt states rather than a question it asks. Absent means TypeSafe was
+ * off or had nothing to say.
  */
 export interface WalkthroughPromptHints {
   /**
@@ -251,7 +188,7 @@ function renderStackBlock(stack: WalkthroughStackSnapshot): string[] {
     "- The diff below is this layer's own changes only: GitHub scopes it to the layer below.",
     "- Before you flag something as missing, call `get_stack_context`. A higher layer may add it, and an absence a higher layer fills is not an issue.",
     "- Code in lower layers is out of scope unless this layer depends on it. When it does, say so in a comment on this layer's code, not in an issue against the lower layer.",
-    "- Cite another layer as `#N (layer k)`.",
+    `- Cite another layer as \`${STACK_CITATION_FORMAT}\`.`,
     "- Place this layer in the stack in one sentence of the overview's Context part.",
     "- A split recommendation, if there is one, concerns this layer alone.",
   ];
@@ -292,16 +229,11 @@ export function buildWalkthroughPrompt(
     };
     mode?: WalkthroughMode;
     files: PrFileMeta[];
-    reviewMode?: {
-      readonly mode: "full" | "incremental";
-      readonly parentWalkthroughId: string | null;
-      readonly baseHeadSha: string | null;
-      readonly headSha: string;
-      readonly diffSource?: PromptDiffSource;
-    };
+    reviewMode?: WalkthroughReviewMode;
+    /** An earlier run already wrote part of this walkthrough. */
+    resumed?: boolean;
   },
   maxTokenBudget = 40000,
-  continuation?: PromptContinuationContext,
 ): string {
   const mode = params.mode ?? REVIEW_MODE.reviewer;
   const lines: string[] = [
@@ -335,12 +267,9 @@ export function buildWalkthroughPrompt(
     );
   }
 
-  // Commit history is intentionally NOT inlined here. The orchestrator
-  // persists it on the walkthrough row at job start; the agent fetches it
-  // lazily via the `get_commit_history` MCP read tool when it's about to
-  // open the required "How we got here" journey chapter (chapter 0). This
-  // keeps the prompt token-bounded on long PRs (up to 300 commits) and
-  // resume reruns of the prompt cheap.
+  // Commit history is intentionally NOT inlined: the agent fetches it via
+  // `get_commit_history` when it opens the journey chapter, which keeps the
+  // prompt bounded on long PRs and cheap to resend on resume.
 
   const changedFilesHeading =
     params.reviewMode?.mode === "incremental"
@@ -446,10 +375,10 @@ export function buildWalkthroughPrompt(
     );
   }
 
-  if (continuation) {
+  if (params.resumed) {
     lines.push(
       "",
-      "(Informational only — authoritative state lives in get_walkthrough_state. Provider hint: continuation context was provided; if your state query shows a resume scenario, follow the resume discipline in the system prompt.)",
+      "(An earlier run already wrote part of this walkthrough. Authoritative state lives in get_walkthrough_state; if your state query shows a resume scenario, follow the resume discipline in the system prompt.)",
     );
   }
 

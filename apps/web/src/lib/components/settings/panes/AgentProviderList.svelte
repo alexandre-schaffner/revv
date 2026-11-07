@@ -1,52 +1,40 @@
 <script lang="ts">
-import {
-  ACP_AGENTS,
-  type AcpAgentId,
-  type AgentStatus,
-  type AgentStatusReport,
-} from "@revv/shared";
+import { ACP_AGENTS, type AcpAgentId, type AgentStatusReport } from "@revv/shared";
 import { RadioGroup } from "bits-ui";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import Warning from "phosphor-svelte/lib/Warning";
-import { acpAgentIcon } from "$lib/components/icons/acpAgentIcon";
-import AgentLoginTerminal from "$lib/components/onboarding/AgentLoginTerminal.svelte";
-import { Button } from "$lib/components/ui/button/index.js";
+import { agentReadiness } from "$lib/agent-setup/readiness";
 import {
   endAgentSignIn,
   getAgentInstall,
   getSigningInAgent,
   startAgentInstall,
   startAgentSignIn,
-} from "$lib/stores/agent-setup.svelte";
+} from "$lib/agent-setup/store.svelte";
+import AgentLoginTerminal from "$lib/components/agent-setup/AgentLoginTerminal.svelte";
+import { acpAgentIcon } from "$lib/components/icons/acpAgentIcon";
+import { Button } from "$lib/components/ui/button/index.js";
 import { fetchAgentStatus } from "$lib/stores/settings.svelte";
 import StatusDot from "../primitives/StatusDot.svelte";
+import type { SettingsRowRef } from "../settings-panes";
 
 // One radio row per registry agent, each carrying its own live status. The
 // selected row expands in place to whatever it still needs: install, sign-in,
 // a terminal command, or a reconnect.
 
 interface Props {
+  /** The search anchor for the whole list. */
+  row: SettingsRowRef;
   selected: AcpAgentId;
   status: AgentStatusReport | null;
   loading: boolean;
   onSelect: (agent: AcpAgentId) => void;
 }
 
-let { selected, status, loading, onSelect }: Props = $props();
+let { row, selected, status, loading, onSelect }: Props = $props();
 
 const install = $derived(getAgentInstall());
 const signingInAgent = $derived(getSigningInAgent());
-
-type Tone = "success" | "warning" | "danger" | "muted";
-
-function statusFor(s: AgentStatus | null | undefined): { tone: Tone; label: string } {
-  if (!s) return { tone: "muted", label: loading ? "Checking…" : "Not checked" };
-  if (!s.installed) return { tone: "muted", label: "Not installed" };
-  if (!s.authed) return { tone: "warning", label: "Needs sign-in" };
-  return s.verified
-    ? { tone: "success", label: "Connected" }
-    : { tone: "warning", label: "Configured" };
-}
 
 function handleChange(value: string): void {
   const agent = ACP_AGENTS.find((a) => a.id === value);
@@ -65,11 +53,11 @@ async function onLoginDone(): Promise<void> {
 	loop
 	aria-label="Agent"
 	class="provider-list"
-	data-setting-id="ai-provider"
+	data-setting-id={row.anchor}
 >
 	{#each ACP_AGENTS as agent (agent.id)}
 		{@const s = status?.agents[agent.id] ?? null}
-		{@const st = statusFor(s)}
+		{@const readiness = agentReadiness(s)}
 		{@const Icon = acpAgentIcon(agent.icon)}
 		{@const isSelected = agent.id === selected}
 		<div class="provider">
@@ -81,7 +69,7 @@ async function onLoginDone(): Promise<void> {
 						<span class="provider-name">{agent.label}</span>
 						<span class="provider-description">{agent.description}</span>
 					</span>
-					<StatusDot tone={st.tone} label={st.label} />
+					<StatusDot tone={readiness.tone} label={!s && loading ? "Checking…" : readiness.label} />
 				{/snippet}
 			</RadioGroup.Item>
 
@@ -138,16 +126,11 @@ async function onLoginDone(): Promise<void> {
 						<div>
 							<Button size="sm" onclick={() => startAgentInstall(agent.id)}>Install {agent.label}</Button>
 						</div>
-					{:else if s && !s.authed && status?.embeddedLoginSupported}
+					{:else if s && !s.authed}
 						<div>
 							<Button size="sm" onclick={() => startAgentSignIn(agent.id)}>Sign in to {agent.label}</Button>
 						</div>
-					{:else if s && !s.authed}
-						<div class="provider-manual">
-							<span>Run this in a terminal, then check again:</span>
-							<code>{s.loginCommand ?? `${agent.id} login`}</code>
-						</div>
-					{:else if s?.installed && s.authed && status?.embeddedLoginSupported}
+					{:else if s?.installed && s.authed}
 						<div>
 							<Button size="sm" variant="secondary" onclick={() => startAgentSignIn(agent.id)}>
 								Reconnect {agent.label}
@@ -317,40 +300,19 @@ async function onLoginDone(): Promise<void> {
 		color: var(--color-danger);
 	}
 
-	.provider-manual {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 8px;
-		font-size: 12px;
-		color: var(--color-text-secondary);
-	}
-
-	.provider-manual code {
-		padding: 3px 6px;
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 6px;
-		background: var(--color-bg-secondary);
-		color: var(--color-text-primary);
-		font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-		font-size: 11.5px;
-		overflow-wrap: anywhere;
-	}
-
 	.provider-login-terminal {
-		--ob-bg: var(--color-bg-secondary);
-		--ob-border: var(--color-border-subtle);
-		--ob-border-btn: var(--color-border);
-		--ob-error: var(--color-danger);
-		--ob-hover-subtle: var(--color-bg-primary);
-		--ob-row-highlight: color-mix(in srgb, var(--color-accent) 14%, transparent);
-		--ob-text: var(--color-text-primary);
-		--ob-text-body: var(--color-text-secondary);
-		--ob-text-dimmed: var(--color-text-muted);
-		--ob-text-heading: var(--color-text-primary);
-		--ob-text-italic: var(--color-accent);
-		--ob-text-label: var(--color-danger);
-		--ob-text-muted: var(--color-text-muted);
+		--terminal-bg: var(--color-bg-secondary);
+		--terminal-surface: var(--color-bg-primary);
+		--terminal-border: var(--color-border-subtle);
+		--terminal-error-border: var(--color-danger);
+		--terminal-fg: var(--color-text-primary);
+		--terminal-heading: var(--color-text-primary);
+		--terminal-body: var(--color-text-secondary);
+		--terminal-muted: var(--color-text-muted);
+		--terminal-dim: var(--color-text-muted);
+		--terminal-accent: var(--color-accent);
+		--terminal-danger: var(--color-danger);
+		--terminal-selection: color-mix(in srgb, var(--color-accent) 14%, transparent);
 		padding: 12px;
 		border: 1px solid var(--color-border-subtle);
 		border-radius: 8px;

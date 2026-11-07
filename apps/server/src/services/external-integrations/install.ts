@@ -1,5 +1,3 @@
-// ── External integration install mechanics ──────────────────────────────────
-//
 // Filesystem operations that place Revv's stdio MCP bridge and credential
 // where each coding agent can pick them up:
 //
@@ -12,8 +10,8 @@
 //
 // Every install is convergent (reconnect yields the same end state with a
 // rotated credential), isolated by a digest of the Revv account id, and
-// refuses to replace files it does not own. Paths are derived from an explicit
-// home directory so tests run inside temp dirs.
+// refuses to replace files it does not own. Paths derive from an explicit home
+// directory (Codex's also from `CODEX_HOME`) so tests run inside temp dirs.
 
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -30,6 +28,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { ExternalAgentProvider } from "@revv/shared";
+import { serverEnv } from "../../config";
 import { ExternalIntegrationError } from "../../domain/errors";
 
 const MANAGED_MARKER = ".revv-managed";
@@ -45,13 +44,9 @@ export function externalIntegrationError(
   return new ExternalIntegrationError({ message, code, ...(cause === undefined ? {} : { cause }) });
 }
 
-// ── Asset locations ─────────────────────────────────────────────────────────
-
-/** Locate the repository's `integrations/` directory (dev and packaged). */
 export function findIntegrationsDirectory(): string {
-  const override = process.env.REVV_INTEGRATIONS_DIR?.trim();
   const candidates = [
-    override,
+    serverEnv.integrationsDir,
     // Embedded by the compiled desktop server (`scripts/build-binary.ts`).
     join(import.meta.dir, "integrations"),
     resolve(import.meta.dir, "../../../../../integrations"),
@@ -78,22 +73,40 @@ function agentGuideSourceFile(integrationsDirectory: string): string {
   return join(integrationsDirectory, "external-agent-guides", "address-feedback.md");
 }
 
-// ── Shared install primitives ───────────────────────────────────────────────
-
 export interface BridgeInstallInput {
   readonly runtimeExecutable: string;
   readonly token: string;
   readonly integrationsDirectory: string;
+  /** The installing server's own MCP route: the bridge talks to it and nothing else. */
+  readonly apiUrl: string;
+}
+
+const LOOPBACK = "127.0.0.1,localhost";
+const TOKEN_VARIABLE = "REVV_INTEGRATION_TOKEN";
+const API_URL_VARIABLE = "REVV_API_URL";
+
+/** What an installed bridge carries: its credential, and the server it talks to. */
+export interface InstalledBinding {
+  readonly token: string;
+  /** Null for a config written before the bridge carried one (legacy-upgrade: unpinnedBridge). */
+  readonly apiUrl: string | null;
 }
 
 /**
  * Environment for the bridge process. `runtimeExecutable` is the server's own
  * executable; in the desktop app that is the compiled Revv server, which only
  * runs `run <file>` like the Bun CLI when `BUN_BE_BUN` is set. Plain Bun
- * ignores the variable.
+ * ignores the variable. Bun routes even loopback requests through
+ * `HTTP_PROXY` unless `NO_PROXY` names the host.
  */
 function bridgeEnvironment(input: BridgeInstallInput): Record<string, string> {
-  return { REVV_INTEGRATION_TOKEN: input.token, BUN_BE_BUN: "1" };
+  return {
+    [TOKEN_VARIABLE]: input.token,
+    [API_URL_VARIABLE]: input.apiUrl,
+    NO_PROXY: LOOPBACK,
+    no_proxy: LOOPBACK,
+    BUN_BE_BUN: "1",
+  };
 }
 
 /** Filesystem/config key that reveals no raw account identifier. */
@@ -111,7 +124,6 @@ function assertRevvManaged(directory: string): void {
   }
 }
 
-/** Atomic, convergent directory replacement used by every provider install. */
 function writeManagedDirectory(targetDirectory: string, populate: (staged: string) => void): void {
   assertRevvManaged(targetDirectory);
   mkdirSync(dirname(targetDirectory), { recursive: true, mode: 0o700 });
@@ -144,7 +156,6 @@ function removeManagedDirectory(directory: string): void {
   rmSync(directory, { recursive: true });
 }
 
-/** Copy the canonical bridge into a staged install directory. */
 // The compiled desktop server embeds `integrations/` in its virtual
 // filesystem, which supports reads but not `copyFile`/`cp`. Copy by content.
 function copyAsset(source: string, target: string): void {
@@ -168,7 +179,6 @@ function stageBridge(staged: string, integrationsDirectory: string): void {
   chmodSync(target, 0o600);
 }
 
-/** Absolute path of the bridge a provider's client config should launch. */
 function bridgeFile(installDirectory: string): string {
   return join(installDirectory, "server", "revv-mcp.ts");
 }
@@ -178,6 +188,8 @@ function readTextIfExists(file: string): string | null {
 }
 
 function writePrivateTextFile(file: string, content: string): void {
+  // A boot refresh rewrites every managed file: leave unchanged ones untouched.
+  if (readTextIfExists(file) === content) return;
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const staged = `${file}.staged-${randomUUID()}`;
   try {
@@ -205,11 +217,10 @@ function readManagedGuideBody(integrationsDirectory: string): string {
   return readFileSync(file, "utf8").trim();
 }
 
-/** Front-matter + body, in the shape the given agent's prompt loader expects. */
 function renderGuide(integrationsDirectory: string, frontMatter: readonly string[]): string {
   const body = readManagedGuideBody(integrationsDirectory);
   const header = frontMatter.length > 0 ? `---\n${frontMatter.join("\n")}\n---\n\n` : "";
-  return `${header}<!-- ${MANAGED_COMMENT} Reconnect from Revv Settings to refresh. -->\n\n${body}\n`;
+  return `${header}<!-- ${MANAGED_COMMENT} Revv rewrites this file when it starts. -->\n\n${body}\n`;
 }
 
 function writeManagedGuide(file: string, content: string): void {
@@ -234,8 +245,6 @@ function removeManagedGuide(file: string): void {
   }
   rmSync(file);
 }
-
-// ── Claude Code (user-scoped plugin directory) ──────────────────────────────
 
 interface ClaudeCodePaths {
   /** Claude Code loads `~/.claude/skills/<dir>` holding a plugin manifest as
@@ -294,12 +303,15 @@ function installClaudeCode(
   });
 }
 
-// ── Codex (config.toml managed block + custom prompt) ───────────────────────
-
 export interface CodexPaths {
   readonly installDir: string;
   readonly configFile: string;
   readonly promptFile: string;
+}
+
+/** The slash command the Codex prompt and the opencode command file register. */
+function addressFeedbackCommand(accountKey: string): string {
+  return `revv-address-feedback-${accountKey}`;
 }
 
 export function codexPaths(accountKey: string, home: string = homedir()): CodexPaths {
@@ -307,7 +319,7 @@ export function codexPaths(accountKey: string, home: string = homedir()): CodexP
   return {
     installDir: join(home, ".revv", "codex", accountKey),
     configFile: join(codexHome, "config.toml"),
-    promptFile: join(codexHome, "prompts", `revv-address-feedback-${accountKey}.md`),
+    promptFile: join(codexHome, "prompts", `${addressFeedbackCommand(accountKey)}.md`),
   };
 }
 
@@ -411,12 +423,31 @@ function uninstallCodex(paths: CodexPaths, serverName: string): void {
   removeManagedDirectory(paths.installDir);
 }
 
+function codexBinding(paths: CodexPaths, serverName: string): InstalledBinding | null {
+  const existing = readTextIfExists(paths.configFile);
+  if (existing === null) return null;
+  try {
+    const span = managedBlockSpan(existing, serverName);
+    if (!span) return null;
+    const block = existing.slice(span.begin, span.end);
+    const variable = (name: string) =>
+      new RegExp(`^${name} = "([^"\\\\]+)"$`, "m").exec(block)?.[1] ?? null;
+    const token = variable(TOKEN_VARIABLE);
+    return token === null ? null : { token, apiUrl: variable(API_URL_VARIABLE) };
+  } catch {
+    return null;
+  }
+}
+
+function claudeCodeBinding(paths: ClaudeCodePaths): InstalledBinding | null {
+  if (!existsSync(join(paths.installDir, MANAGED_MARKER))) return null;
+  return jsonEntryBinding(join(paths.installDir, ".mcp.json"), "mcpServers", "review");
+}
+
 function codexInstalled(paths: CodexPaths, serverName: string): boolean {
   const existing = readTextIfExists(paths.configFile);
   return existing?.includes(codexBlockBegin(serverName)) ?? false;
 }
-
-// ── Shared JSON config merge (OpenCode, Cursor) ─────────────────────────────
 
 function isRevvManagedEntry(entry: unknown): boolean {
   if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return false;
@@ -424,10 +455,37 @@ function isRevvManagedEntry(entry: unknown): boolean {
   for (const key of ["env", "environment"]) {
     const env = record[key];
     if (env !== null && typeof env === "object" && !Array.isArray(env)) {
-      if ("REVV_INTEGRATION_TOKEN" in (env as Record<string, unknown>)) return true;
+      if (TOKEN_VARIABLE in (env as Record<string, unknown>)) return true;
     }
   }
   return false;
+}
+
+function bindingIn(env: unknown): InstalledBinding | null {
+  if (env === null || typeof env !== "object" || Array.isArray(env)) return null;
+  const record = env as Record<string, unknown>;
+  const token = record[TOKEN_VARIABLE];
+  if (typeof token !== "string" || token === "") return null;
+  const apiUrl = record[API_URL_VARIABLE];
+  return { token, apiUrl: typeof apiUrl === "string" && apiUrl !== "" ? apiUrl : null };
+}
+
+/** The binding in Revv's entry of a JSON MCP config, or null. */
+function jsonEntryBinding(
+  file: string,
+  section: string,
+  serverName: string,
+): InstalledBinding | null {
+  try {
+    const servers = readJsonConfig(file)[section];
+    if (servers === null || typeof servers !== "object" || Array.isArray(servers)) return null;
+    const entry = (servers as Record<string, unknown>)[serverName];
+    if (!isRevvManagedEntry(entry)) return null;
+    const record = entry as Record<string, unknown>;
+    return bindingIn(record.env) ?? bindingIn(record.environment);
+  } catch {
+    return null;
+  }
 }
 
 function readJsonConfig(file: string): Record<string, unknown> {
@@ -467,7 +525,6 @@ function nestedRecord(parent: Record<string, unknown>, key: string): Record<stri
   return value as Record<string, unknown>;
 }
 
-/** Upsert one account-scoped Revv server, refusing a foreign row at that key. */
 function upsertJsonMcpEntry(
   file: string,
   section: string,
@@ -518,8 +575,6 @@ function jsonMcpEntryInstalled(file: string, section: string, serverName: string
   }
 }
 
-// ── OpenCode (opencode.json mcp entry + global command) ─────────────────────
-
 // Written in opencode 1's layout — the server directly under `mcp` with
 // `enabled`, the command in `command/` — which every opencode reads: opencode 2
 // normalizes such an entry into its own `mcp.servers` and scans both
@@ -542,7 +597,7 @@ export function openCodePaths(accountKey: string, home: string = homedir()): Ope
   return {
     installDir: join(home, ".revv", "opencode", accountKey),
     configFile: existsSync(jsonFile) || !existsSync(jsoncFile) ? jsonFile : jsoncFile,
-    commandFile: join(configDir, "command", `revv-address-feedback-${accountKey}.md`),
+    commandFile: join(configDir, "command", `${addressFeedbackCommand(accountKey)}.md`),
   };
 }
 
@@ -574,8 +629,6 @@ function uninstallOpenCode(paths: OpenCodePaths, serverName: string): void {
   removeManagedDirectory(paths.installDir);
 }
 
-// ── Cursor (~/.cursor/mcp.json) ─────────────────────────────────────────────
-
 export interface CursorPaths {
   readonly installDir: string;
   readonly configFile: string;
@@ -605,22 +658,19 @@ function uninstallCursor(paths: CursorPaths, serverName: string): void {
   removeManagedDirectory(paths.installDir);
 }
 
-// ── Provider registry ───────────────────────────────────────────────────────
-
 export interface ExternalIntegrationInstaller {
   /** Account-scoped name shown in the agent's MCP configuration. */
   readonly clientName: string;
-  /** Files and directories this install owns, shown to the user on connect. */
-  readonly locations: readonly string[];
+  /** What the user still has to do in the agent itself after connecting. */
+  readonly activation: string;
+  /** Write every file Revv owns in the agent's config. Convergent: a re-install rewrites them. */
   readonly install: (input: BridgeInstallInput) => void;
   readonly uninstall: () => void;
   readonly installed: () => boolean;
+  /** What the installed bridge carries, or null when none is installed. */
+  readonly installedBinding: () => InstalledBinding | null;
 }
 
-/**
- * Bind a provider's install mechanics to a home directory. Tests pass a temp
- * directory; the service uses the real one.
- */
 export function externalIntegrationInstaller(
   provider: ExternalAgentProvider,
   accountId: string,
@@ -633,40 +683,44 @@ export function externalIntegrationInstaller(
       const paths = claudeCodePaths(accountKey, home);
       return {
         clientName: serverName,
-        locations: [paths.installDir],
+        activation: `Run /reload-plugins in an open session, or restart Claude Code. Server: ${serverName}.`,
         install: (input) => installClaudeCode(input, paths, serverName),
         uninstall: () => removeManagedDirectory(paths.installDir),
         installed: () => existsSync(join(paths.installDir, MANAGED_MARKER)),
+        installedBinding: () => claudeCodeBinding(paths),
       };
     }
     case "codex": {
       const paths = codexPaths(accountKey, home);
       return {
         clientName: serverName,
-        locations: [paths.configFile, paths.promptFile],
+        activation: `Restart Codex, then use /${addressFeedbackCommand(accountKey)}.`,
         install: (input) => installCodex(input, paths, serverName),
         uninstall: () => uninstallCodex(paths, serverName),
         installed: () => codexInstalled(paths, serverName),
+        installedBinding: () => codexBinding(paths, serverName),
       };
     }
     case "opencode": {
       const paths = openCodePaths(accountKey, home);
       return {
         clientName: serverName,
-        locations: [paths.configFile, paths.commandFile],
+        activation: `Restart opencode, then use /${addressFeedbackCommand(accountKey)}.`,
         install: (input) => installOpenCode(input, paths, serverName),
         uninstall: () => uninstallOpenCode(paths, serverName),
         installed: () => jsonMcpEntryInstalled(paths.configFile, "mcp", serverName),
+        installedBinding: () => jsonEntryBinding(paths.configFile, "mcp", serverName),
       };
     }
     case "cursor": {
       const paths = cursorPaths(accountKey, home);
       return {
         clientName: serverName,
-        locations: [paths.configFile],
+        activation: `Reload the Cursor window, then enable “${serverName}” under Settings → MCP.`,
         install: (input) => installCursor(input, paths, serverName),
         uninstall: () => uninstallCursor(paths, serverName),
         installed: () => jsonMcpEntryInstalled(paths.configFile, "mcpServers", serverName),
+        installedBinding: () => jsonEntryBinding(paths.configFile, "mcpServers", serverName),
       };
     }
   }

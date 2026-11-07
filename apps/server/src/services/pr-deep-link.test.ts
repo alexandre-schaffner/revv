@@ -22,9 +22,9 @@ const repository: Repository = {
 };
 
 const remotePr: ObservedPr = {
-  id: "owner/repo:42",
+  id: "local-repo-id:42",
   externalId: 42,
-  repositoryId: "owner/repo",
+  repositoryId: "local-repo-id",
   title: "Deep links",
   body: null,
   authorLogin: "octocat",
@@ -33,7 +33,6 @@ const remotePr: ObservedPr = {
   requestedReviewers: [],
   mentionedUsers: [],
   status: "open",
-  reviewStatus: "pending",
   isDraft: false,
   sourceBranch: "feature",
   targetBranch: "main",
@@ -84,7 +83,7 @@ describe("resolvePullRequestLink", () => {
     expect(written).toBe(false);
   });
 
-  test("fetches, remaps, and upserts a missing local PR", async () => {
+  test("fetches and upserts a missing local PR", async () => {
     let written: ObservedPr | null = null;
     const result = await Effect.runPromise(
       resolvePullRequestLink(

@@ -28,8 +28,8 @@ import GitPullRequest from "phosphor-svelte/lib/GitPullRequest";
 import Avatar from "$lib/components/shared/Avatar.svelte";
 import { REASON_LABEL, type TaggedReason, type TaggedRow } from "$lib/prs/tagged-prs";
 import type { VisitState } from "$lib/stores/pr-visits.svelte";
-import { selectPr } from "$lib/stores/prs.svelte";
-import { setSidebarView } from "$lib/stores/sidebar.svelte";
+import { openPr } from "$lib/stores/sidebar-nav.svelte";
+import { formatCount } from "$lib/utils/format-count";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 
 interface Props {
@@ -42,15 +42,8 @@ let { row, visit, showBranch }: Props = $props();
 
 const pr = $derived(row.pr);
 
-/**
- * `updatedAt` is typed `string` but is a `Date` after an Eden fetch and a
- * `string` after an SSE broadcast, in the same array — see `timeOf` in
- * `$lib/prs/tagged-prs`. `String()` gives `Date.parse` something it accepts
- * either way.
- */
-const updatedAt = $derived(String(pr.updatedAt));
+const updatedAt = $derived(pr.updatedAt);
 
-/** Absolute timestamp for the hover title; falls back to the raw value. */
 const updatedAtExact = $derived.by(() => {
   const ms = Date.parse(updatedAt);
   return Number.isNaN(ms) ? updatedAt : new Date(ms).toLocaleString();
@@ -63,17 +56,12 @@ const updatedAtExact = $derived.by(() => {
  */
 const hasSize = $derived(pr.changedFiles > 0 || pr.additions > 0 || pr.deletions > 0);
 
-/** Thousands separators: a five-figure diff is the one worth reading twice. */
-function fmt(n: number): string {
-  return n.toLocaleString("en-US");
-}
-
 /**
  * Spoken form for screen readers. States a zero side the visual column
  * omits — "0 deletions" spoken is information; a red `−0` on screen isn't.
  */
 const sizeLabel = $derived(
-  `${fmt(pr.changedFiles)} ${pr.changedFiles === 1 ? "file" : "files"} changed, ${fmt(pr.additions)} additions, ${fmt(pr.deletions)} deletions`,
+  `${formatCount(pr.changedFiles)} ${pr.changedFiles === 1 ? "file" : "files"} changed, ${formatCount(pr.additions)} additions, ${formatCount(pr.deletions)} deletions`,
 );
 
 /**
@@ -101,8 +89,7 @@ function onNav(event: MouseEvent): void {
   // middle-click and "open in new window" keep working.
   if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
   event.preventDefault();
-  void selectPr(pr.id);
-  setSidebarView("files");
+  openPr(pr.id);
 }
 </script>
 
@@ -142,7 +129,7 @@ function onNav(event: MouseEvent): void {
 			takes its own "·" with it, and the row sheds five DOM nodes.
 		-->
 		<span class="meta">
-			<Avatar handle={pr.authorLogin} avatarContent={pr.authorAvatarContent} size={14} />
+			<Avatar name={pr.authorLogin} src={pr.authorAvatarContent} size={14} />
 			<span class="author">{pr.authorLogin}</span>
 			<span class="num led">#{pr.externalId}</span>
 			<span class="when led" title={updatedAtExact}>
@@ -189,7 +176,7 @@ function onNav(event: MouseEvent): void {
 			<span class="sr-only">{sizeLabel}</span>
 			{#if pr.changedFiles > 0}
 				<span class="size-files" aria-hidden="true">
-					<span class="size-count">{fmt(pr.changedFiles)}</span>
+					<span class="size-count">{formatCount(pr.changedFiles)}</span>
 					<span class="size-unit">{pr.changedFiles === 1 ? "file" : "files"}</span>
 				</span>
 			{/if}
@@ -197,10 +184,10 @@ function onNav(event: MouseEvent): void {
 			{#if pr.additions > 0 || pr.deletions > 0}
 				<span class="size-lines" aria-hidden="true">
 					{#if pr.additions > 0}
-						<span class="add">+{fmt(pr.additions)}</span>
+						<span class="add">+{formatCount(pr.additions)}</span>
 					{/if}
 					{#if pr.deletions > 0}
-						<span class="del">&minus;{fmt(pr.deletions)}</span>
+						<span class="del">&minus;{formatCount(pr.deletions)}</span>
 					{/if}
 				</span>
 			{/if}
@@ -251,11 +238,9 @@ function onNav(event: MouseEvent): void {
 	}
 
 	/*
-	 * Brand teal, not the warm "attention" orange — a review request is fresh
-	 * work, not a failure, and orange reads as an error. Teal matches the
-	 * system's other "this is live" marks (streaming cursor, active file row).
-	 * Specificity clears `.link--visited .state` since a read row dims its
-	 * glyph, but a pending review request still needs you.
+	 * Teal, like the system's other "this is live" marks. Out-specifies
+	 * `.link--visited .state`: a read row dims its glyph, but a pending review
+	 * request still needs you.
 	 */
 	.link .state--reason {
 		position: relative;
@@ -271,9 +256,7 @@ function onNav(event: MouseEvent): void {
 		flex: 1 1 auto;
 	}
 
-	/* A step below the section heading. The system's 0.9375rem "Title" step ties
-	   the heading exactly, which read as nine sibling headings rather than as a
-	   list under one; weight carries the emphasis instead. */
+	/* A step below the section heading; weight carries the emphasis. */
 	.title {
 		font-size: 0.875rem;
 		font-weight: 600;
@@ -332,14 +315,11 @@ function onNav(event: MouseEvent): void {
 		flex-shrink: 0;
 	}
 
-	/* ── Change size ────────────────────────────────────────────────────── */
-
 	/* Right-aligned so numbers terminate on the card's right inset. The min-width floor keeps small diffs from collapsing the column to a hairline. */
 	.size {
 		display: flex;
 		flex-direction: column;
 		align-items: flex-end;
-		/* Matches `.body`'s gap for shared rhythm between columns. */
 		gap: 0.1875rem;
 		flex-shrink: 0;
 		min-width: 5rem;
@@ -358,7 +338,6 @@ function onNav(event: MouseEvent): void {
 		white-space: nowrap;
 	}
 
-	/* Weight and ink split the digit (the datum) from the "files" label so the eye lands on the number. */
 	.size-count {
 		font-size: 0.8125rem;
 		font-weight: 600;
@@ -378,7 +357,6 @@ function onNav(event: MouseEvent): void {
 	 * below. Left-aligning or sizing to text would let either edge drift.
 	 */
 	.size-unit {
-		/* Sized to "files" itself; slack lands in the gap rather than as unused headroom. */
 		min-width: 1.375rem;
 		text-align: right;
 		font-size: 0.6875rem;
@@ -387,7 +365,6 @@ function onNav(event: MouseEvent): void {
 		color: var(--color-text-secondary);
 	}
 
-	/* Detail line: mono, one step down from the count, so it never reads louder than the file count. */
 	.size-lines {
 		display: flex;
 		align-items: baseline;
@@ -436,10 +413,8 @@ function onNav(event: MouseEvent): void {
 		opacity: 0.85;
 	}
 
-	/* `white-space: nowrap` is what makes the ellipsis work at all. Without it
-	   the branch name wraps instead, and once flex has shrunk this box toward
-	   zero it wraps to three lines and inflates the whole row from 55px to
-	   83px. */
+		/* `white-space: nowrap` is what makes the ellipsis work: otherwise the
+		   shrunk box wraps the name onto several lines and inflates the row. */
 	.branch-src {
 		min-width: 0;
 		overflow: hidden;

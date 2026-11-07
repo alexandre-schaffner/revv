@@ -1,4 +1,4 @@
-import type { StackBriefStatus, StackLayerLink } from "@revv/shared";
+import type { StackBriefStatus, StackEntryStatus, StackLayerLink } from "@revv/shared";
 import { sql } from "drizzle-orm";
 import {
   type AnySQLiteColumn,
@@ -8,8 +8,28 @@ import {
   text,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
-import type { StackBriefSnapshot } from "../../ai/providers/stack-brief-tools/spec";
 import { repositories } from "./repositories";
+
+interface StackBriefSnapshotLayer {
+  readonly position: number;
+  readonly number: number;
+  readonly title: string;
+  readonly headSha: string | null;
+  readonly status: StackEntryStatus;
+  readonly prId: string | null;
+  readonly additions: number;
+  readonly deletions: number;
+  readonly changedFiles: number;
+  readonly body: string | null;
+}
+
+export interface StackBriefSnapshot {
+  readonly stackNumber: number;
+  readonly baseRefName: string;
+  readonly layers: ReadonlyArray<StackBriefSnapshotLayer>;
+  readonly merged: ReadonlyArray<{ readonly number: number; readonly title: string }>;
+  readonly capturedAt: string;
+}
 
 const STACK_BRIEF_STATUSES = [
   "generating",
@@ -43,7 +63,6 @@ export const stackBriefs = sqliteTable(
     }),
     errorMessage: text("error_message"),
     modelUsed: text("model_used"),
-    userId: text("user_id").notNull(),
     createdAt: text("created_at").notNull(),
     completedAt: text("completed_at"),
   },

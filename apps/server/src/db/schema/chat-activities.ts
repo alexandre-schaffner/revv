@@ -2,23 +2,14 @@ import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqli
 import { chatSessions } from "./chat-sessions";
 
 /**
- * Right-pane chat tool-use rows. The structured replacement for the opaque
- * `{kind: 'tool', data: string}` SSE frame the previous design forwarded.
- *
- * Each row is one tool invocation surfaced to the user (Read, Grep, Bash,
- * Edit, Write, MCP context lookups, etc.). The provider drivers classify the
- * raw tool name into a controlled `activity_kind` so the UI can pick a typed
- * icon + style and so future approval flows (gap C2) can attach without a
- * schema change. The raw provider tool name is preserved in `tool_name` for
- * debugging / parity verification across drivers.
+ * Right-pane chat tool calls, one row per invocation surfaced to the user.
+ * `tool_name` keeps the agent's raw tool name.
  *
  * Sequence shares the per-session monotonic space with `chat_messages` so a
  * single ORDER BY sequence reconstructs the timeline.
  *
- * `payload_json` is best-effort: the Claude Agent SDK exposes the raw tool
- * input so we capture it; opencode emits structured tool events but we
- * currently only translate into a description string, so payload may be null.
- * Future work (F1: canonical ProviderRuntimeEvent) standardises this.
+ * `payload_json` is the tool input as the agent reported it; null when it
+ * reported none.
  */
 export const chatActivities = sqliteTable(
   "chat_activities",
@@ -28,9 +19,7 @@ export const chatActivities = sqliteTable(
       .notNull()
       .references(() => chatSessions.id, { onDelete: "cascade" }),
     turnId: text("turn_id").notNull(),
-    // Controlled vocabulary: 'tool.read' | 'tool.grep' | 'tool.glob' |
-    // 'tool.ls' | 'tool.bash' | 'tool.write' | 'tool.edit' |
-    // 'tool.todo' | 'tool.mcp' | 'tool.other'.
+    // `ActivityKind` from `@revv/shared`.
     activityKind: text("activity_kind").notNull(),
     toolName: text("tool_name"),
     summary: text("summary").notNull(),
@@ -45,11 +34,7 @@ export const chatActivities = sqliteTable(
     output: text("output"),
     isError: integer("is_error", { mode: "boolean" }),
     sequence: integer("sequence").notNull(),
-    // Optional FK to chat_subagent_invocations. When set, this activity row
-    // is a tool call made *inside* a sub-agent (Claude `Task` or opencode
-    // agent part). The UI nests it under the parent SubagentInvocation card
-    // instead of rendering at top level. ON DELETE SET NULL so dropping an
-    // invocation row doesn't cascade-delete the tool history.
+    // Nothing sets this any more: `chat_subagent_invocations` is retired.
     subagentInvocationId: text("subagent_invocation_id"),
     createdAt: text("created_at").notNull(),
   },

@@ -2,24 +2,9 @@ import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqli
 import { newPrSessions } from "./new-pr-sessions";
 
 /**
- * Chat transcript for a new-PR session — one row per user or assistant
- * turn-body. Mirrors `chat_messages` (PR-scoped review chat) one-to-one;
- * the only difference is the FK target.
- *
- * Lifecycle:
- *   - User message: inserted at turn start with role='user',
- *                   is_streaming=0, content=<the user's text>,
- *                   finalized_at=created_at.
- *   - Assistant message: inserted lazily at first text chunk OR at turn
- *                   finalize. is_streaming=1 while the agent is
- *                   mid-stream; content is appended to in-place via
- *                   SQL `||`. On finalize: is_streaming=0,
- *                   finalized_at set. On error: `error` populated.
- *
- * Sequence is per-session monotonic, allocated against
- * `new_pr_sessions.next_sequence` so it shares one ordering space with
- * `new_pr_activities`. `turn_id` groups (user_message, assistant_message,
- * activities) for the same user→agent exchange.
+ * Retired: nothing reads or writes this table. It stays in users' databases
+ * (no drop migration) and stays declared here because the migration snapshot
+ * still lists it, so `drizzle-kit generate` would otherwise emit a DROP TABLE.
  */
 export const newPrMessages = sqliteTable(
   "new_pr_messages",
@@ -28,7 +13,7 @@ export const newPrMessages = sqliteTable(
     sessionId: text("session_id")
       .notNull()
       .references(() => newPrSessions.id, { onDelete: "cascade" }),
-    role: text("role").notNull(), // 'user' | 'assistant'
+    role: text("role").notNull(),
     content: text("content").notNull().default(""),
     isStreaming: integer("is_streaming").notNull().default(0),
     sequence: integer("sequence").notNull(),

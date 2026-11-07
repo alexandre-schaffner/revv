@@ -20,9 +20,10 @@ function fakeSettings(jev: Partial<UserSettings["jev"]>) {
     getSettings: () => Effect.succeed(settings),
     updateSettings: () => Effect.succeed(settings),
     settingsChanges: () => Stream.empty,
+    githubHost: () => Effect.succeed(settings.githubHost),
+    watch: () => Stream.empty,
     resolveAgent: () => Effect.succeed("opencode" as const),
     resolveRecapAgent: () => Effect.succeed("opencode" as const),
-    resolveChatAgentId: () => Effect.succeed("opencode" as const),
   });
 }
 
@@ -41,18 +42,23 @@ function layerFor(jev: Partial<UserSettings["jev"]>, secrets: Record<string, str
   return JevServiceLive.pipe(Layer.provide(Layer.merge(fakeSettings(jev), fakeSecrets(secrets))));
 }
 
-/** Run with `fetch` booby-trapped, so any network use fails the test. */
-async function withoutNetwork<A>(run: () => Promise<A>): Promise<A> {
+async function withFetch<A>(
+  fake: (input: unknown, init?: RequestInit) => Promise<Response>,
+  run: () => Promise<A>,
+): Promise<A> {
   const original = globalThis.fetch;
-  globalThis.fetch = ((): never => {
-    throw new Error("network call attempted on a short-circuit path");
-  }) as unknown as typeof fetch;
+  globalThis.fetch = Object.assign(fake, { preconnect: original.preconnect });
   try {
     return await run();
   } finally {
     globalThis.fetch = original;
   }
 }
+
+const withoutNetwork = <A>(run: () => Promise<A>): Promise<A> =>
+  withFetch(() => {
+    throw new Error("network call attempted on a short-circuit path");
+  }, run);
 
 const probe = {
   label: "job-start" as const,
@@ -109,43 +115,37 @@ describe("JevService", () => {
   });
 
   it("maps an unreachable API onto a 'transport' failure rather than a defect", async () => {
-    // Resolvable key, unreachable host; only asserts the rejection is classified, not that it's fast.
-    const previousBase = process.env.TYPESAFE_BASE_URL;
-    process.env.TYPESAFE_BASE_URL = "http://127.0.0.1:1";
-    try {
-      const result = await Effect.runPromise(
-        Effect.flatMap(JevService, (jev) => jev.ask({ ...probe, timeoutMs: 3_000 })).pipe(
-          Effect.provide(layerFor({ enabled: true }, { "jev-api-key": "apikey_test" })),
-          Effect.result,
+    const result = await withFetch(
+      () => Promise.reject(new TypeError("Unable to connect")),
+      () =>
+        Effect.runPromise(
+          Effect.flatMap(JevService, (jev) => jev.ask({ ...probe, timeoutMs: 30_000 })).pipe(
+            Effect.provide(layerFor({ enabled: true }, { "jev-api-key": "apikey_test" })),
+            Effect.result,
+          ),
         ),
-      );
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") {
-        expect(["transport", "timeout"]).toContain(result.failure.reason);
-      }
-    } finally {
-      if (previousBase === undefined) delete process.env.TYPESAFE_BASE_URL;
-      else process.env.TYPESAFE_BASE_URL = previousBase;
-    }
+    );
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") expect(result.failure.reason).toBe("transport");
   });
 
-  it("honours the caller's timeout budget", async () => {
-    const previousBase = process.env.TYPESAFE_BASE_URL;
-    // Black-hole address: connections hang rather than refuse, so the budget (not the OS) ends the call.
-    process.env.TYPESAFE_BASE_URL = "http://10.255.255.1:81";
-    try {
-      const startedAt = Date.now();
-      const result = await Effect.runPromise(
+  it("ends a stalled call at the caller's timeout budget", async () => {
+    const hangUntilAborted = (_input: unknown, init?: RequestInit) =>
+      new Promise<never>((_, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      });
+    const startedAt = Date.now();
+    const result = await withFetch(hangUntilAborted, () =>
+      Effect.runPromise(
         Effect.flatMap(JevService, (jev) => jev.ask({ ...probe, timeoutMs: 300 })).pipe(
           Effect.provide(layerFor({ enabled: true }, { "jev-api-key": "apikey_test" })),
           Effect.result,
         ),
-      );
-      expect(result._tag).toBe("Failure");
-      expect(Date.now() - startedAt).toBeLessThan(5_000);
-    } finally {
-      if (previousBase === undefined) delete process.env.TYPESAFE_BASE_URL;
-      else process.env.TYPESAFE_BASE_URL = previousBase;
-    }
+      ),
+    );
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") expect(result.failure.reason).toBe("timeout");
+    // Well under the SDK's own 10 s per-attempt timeout.
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
   });
 });

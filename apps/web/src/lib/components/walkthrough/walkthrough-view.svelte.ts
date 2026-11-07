@@ -1,0 +1,431 @@
+// Everything the walkthrough tab renders for one PR, derived in one place
+// from the walkthrough store, the PR's first pass and the user's settings.
+// GuidedWalkthrough only switches on `page.kind` and lays the parts out.
+
+import type {
+  Activity,
+  IssueSeverity,
+  WalkthroughBlock,
+  WalkthroughIssue,
+  WalkthroughPipelinePhase,
+  WalkthroughSemanticStep,
+} from "@revv/shared";
+import { untrack } from "svelte";
+import {
+  type GroupableActivity,
+  isExplorationActivity,
+} from "$lib/components/agent-activity/activity-groups";
+import type { DotmatrixVariant } from "$lib/components/ui/dotmatrix";
+import { type FirstPassView, firstPassView } from "$lib/hunk-scan/first-pass";
+import { getHunkScan } from "$lib/hunk-scan/store.svelte";
+import { getLoadedHeadSha } from "$lib/stores/diff-files.svelte";
+import { getPrById } from "$lib/stores/prs.svelte";
+import { walkthroughAnchor } from "$lib/stores/review-nav.svelte";
+import { worstSeverity } from "$lib/walkthrough/issues";
+import { WALKTHROUGH_PERSPECTIVES } from "$lib/walkthrough/perspective";
+import { type WalkthroughEntry, walkthroughUiState } from "$lib/walkthrough/reducer";
+import { chapterNumbers } from "$lib/walkthrough/steps";
+import {
+  getIsHydrating,
+  getIssueSignal,
+  getSelectedMode,
+  getStepLabel,
+  getWalkthroughEntry,
+} from "$lib/walkthrough/store.svelte";
+
+/**
+ * What the tab body shows: the store's `walkthroughUiState`, plus the two
+ * states only the tab has (the cached read still landing, and a first pass
+ * with no review yet).
+ */
+export type WalkthroughPage =
+  | { kind: "hydrating" }
+  | { kind: "empty" }
+  | { kind: "first-pass-only" }
+  | { kind: "error-empty"; explorations: readonly Activity[] }
+  | { kind: "loading" }
+  | { kind: "content" };
+
+export interface ChapterEntry {
+  block: WalkthroughBlock;
+  /** The rail annotation of a code/diff/artifact block, as markdown. */
+  annotation: string | null;
+}
+
+export interface Chapter {
+  section: WalkthroughSemanticStep;
+  /** The printed "Chapter N" — what the chat agent reads as `chapterNumber`. Null for the Overview. */
+  number: number | null;
+  /** The stepper's jump target, on the chapter that starts its section. */
+  anchorId: string | undefined;
+  entries: ChapterEntry[];
+}
+
+export interface StepperChapterData {
+  id: string;
+  label: string;
+  blurb: string;
+  activeBlurb: string;
+  spinner: DotmatrixVariant;
+  targetId: string;
+  available: boolean;
+}
+
+export interface IssueTarget {
+  /** The block that explains the issue, when it's on the page to jump to. */
+  targetBlockId: string | null;
+  stepTag: string | null;
+}
+
+export type InterleavedActivity =
+  | { readonly kind: "thought"; readonly id: string; readonly text: string }
+  | {
+      readonly kind: "explorations";
+      readonly id: string;
+      readonly items: readonly GroupableActivity[];
+    };
+
+export const FIRST_PASS_SPINNER: DotmatrixVariant = "square-5";
+
+const AGENT_CHAPTERS = [
+  {
+    id: "overview",
+    label: "Overview",
+    blurb: "What changed and why",
+    activeBlurb: "Reading the diff…",
+    spinner: "ripple",
+    targetId: walkthroughAnchor.overview,
+  },
+  {
+    id: "diff",
+    label: "Diff Analysis",
+    blurb: "Hunk-by-hunk reasoning",
+    activeBlurb: "Analyzing hunks…",
+    spinner: "diagonal",
+    targetId: walkthroughAnchor.diff,
+  },
+  {
+    id: "sentiment",
+    label: "Sentiment",
+    blurb: "Overall read on the PR",
+    activeBlurb: "Forming a verdict…",
+    spinner: "collapse",
+    targetId: walkthroughAnchor.sentiment,
+  },
+  {
+    id: "rated",
+    label: "Rating",
+    blurb: "Across 9 axes",
+    activeBlurb: "Scoring each axis…",
+    spinner: "prism-bloom",
+    targetId: walkthroughAnchor.rating,
+  },
+] as const satisfies readonly Omit<StepperChapterData, "available">[];
+
+// The chapter the agent is writing, from `last_completed_phase`: 'A' is the
+// overview written and 'B' the first diff step, so both are mid-Diff; 'C' is
+// the sentiment, after which the ratings are next.
+const PHASE_TO_CHAPTER: Record<WalkthroughPipelinePhase, number> = {
+  none: 0,
+  A: 1,
+  B: 1,
+  C: 3,
+  D: 3,
+};
+
+/** The stepper shows the agent's last few tool calls in the active chapter. */
+const TOOL_CALL_WINDOW = 2;
+
+function annotationOf(block: WalkthroughBlock): string | null {
+  return (block.type === "code" || block.type === "diff" || block.type === "artifact") &&
+    block.annotation
+    ? block.annotation
+    : null;
+}
+
+function interleave(
+  timeline: WalkthroughEntry["timeline"],
+  results: WalkthroughEntry["explorationResults"],
+  inputs: WalkthroughEntry["explorationInputs"],
+): InterleavedActivity[] {
+  // Consecutive exploration calls between thoughts read as one group.
+  const out: InterleavedActivity[] = [];
+  for (const entry of timeline) {
+    if (entry.kind === "thought") {
+      out.push({ kind: "thought", id: entry.id, text: entry.text });
+      continue;
+    }
+    if (!isExplorationActivity(entry.activity)) continue;
+    const callId = entry.activity.callId;
+    const result = callId ? results[callId] : undefined;
+    const lateInput = callId ? inputs[callId] : undefined;
+    const item: GroupableActivity = {
+      ...entry.activity,
+      id: entry.id,
+      ...(lateInput !== undefined ? { payload: lateInput } : {}),
+      ...(result ? { output: result.output, isError: result.isError } : {}),
+    };
+    const last = out.at(-1);
+    if (last?.kind === "explorations") {
+      out[out.length - 1] = { ...last, items: [...last.items, item] };
+    } else {
+      out.push({ kind: "explorations", id: `group-${entry.id}`, items: [item] });
+    }
+  }
+  return out;
+}
+
+export class WalkthroughView {
+  readonly isStreaming: boolean;
+  readonly streamError: string | null;
+  readonly summary: string | null;
+  readonly sentiment: string | null;
+  readonly ratings: WalkthroughEntry["ratings"];
+  /** Session-unique: entrance motion keys are scoped to it. */
+  readonly walkthroughId: string | null;
+  readonly isComplete: boolean;
+
+  /** Blocks on the page. Pre-sentiment rows carried the sentiment as a final `## Overall Sentiment` block; once the field exists that copy is dropped. */
+  readonly blocks: WalkthroughBlock[];
+  readonly overview: Chapter | null;
+  readonly chapters: Chapter[];
+  readonly chapterCount: number;
+  /** The worst severity among the shown issues that point at each block. */
+  readonly blockSeverity: ReadonlyMap<string, IssueSeverity>;
+
+  readonly issues: WalkthroughIssue[];
+  /** Low-signal issues, folded behind a disclosure. */
+  readonly filteredIssues: WalkthroughIssue[];
+  readonly firstPass: FirstPassView;
+
+  readonly stepperVisible: boolean;
+  readonly stepperChapters: StepperChapterData[];
+  readonly stepperActiveId: string;
+  readonly toolCalls: { step: Activity; ordinal: number }[];
+  /** The "Reviewing…" row under the chapters while Phase B can still add to them. */
+  readonly showDiffSkeleton: boolean;
+  readonly activity: InterleavedActivity[];
+  readonly footerParts: string[];
+  readonly merged: { at: string | undefined } | null;
+
+  readonly page: WalkthroughPage;
+
+  readonly stepTagFor: (blockId: string) => string | null;
+  /** Where an issue card jumps, and the step tag it shows. */
+  readonly issueTarget: (issue: WalkthroughIssue) => IssueTarget;
+
+  constructor(prId: () => string) {
+    const entry = $derived(getWalkthroughEntry(prId()));
+    const hydrating = $derived(getIsHydrating(prId()));
+    const blocksAll = $derived(entry?.blocks ?? []);
+    const semanticSteps = $derived(entry?.semanticSteps ?? []);
+    const allIssues = $derived(entry?.issues ?? []);
+    const lastCompletedPhase = $derived(entry?.lastCompletedPhase ?? "none");
+    const explorationSteps = $derived(entry?.explorationSteps ?? []);
+
+    this.isStreaming = $derived(entry?.isStreaming ?? false);
+    this.streamError = $derived(entry?.streamError ?? null);
+    this.summary = $derived(entry?.summary ?? null);
+    const sentiment = $derived(entry?.sentiment ?? null);
+    this.sentiment = $derived(sentiment || null);
+    this.ratings = $derived(entry?.ratings ?? []);
+    this.walkthroughId = $derived(entry?.walkthroughId ?? null);
+    const uiState = $derived(walkthroughUiState(entry));
+    this.isComplete = $derived(uiState.kind === "complete");
+
+    this.blocks = $derived(
+      sentiment === null
+        ? blocksAll
+        : blocksAll.filter(
+            (b) =>
+              !(b.type === "markdown" && b.content.trimStart().startsWith("## Overall Sentiment")),
+          ),
+    );
+
+    const entriesByChapter = $derived.by(() => {
+      const map = new Map<number, ChapterEntry[]>();
+      for (const block of this.blocks) {
+        const list = map.get(block.semanticStepIndex) ?? [];
+        list.push({ block, annotation: annotationOf(block) });
+        map.set(block.semanticStepIndex, list);
+      }
+      return map;
+    });
+    // A chapter with no blocks yet (just opened, or left empty by a stalled
+    // run) isn't shown and isn't numbered — the same rule the chat agent
+    // numbers chapters by.
+    const numbers = $derived(chapterNumbers(semanticSteps, this.blocks));
+    this.chapterCount = $derived(numbers.size);
+    this.chapters = $derived(
+      semanticSteps
+        .filter((s) => numbers.has(s.semanticStepIndex))
+        .map((section, i) => ({
+          section,
+          number: numbers.get(section.semanticStepIndex) ?? null,
+          anchorId: i === 0 ? walkthroughAnchor.diff : undefined,
+          entries: entriesByChapter.get(section.semanticStepIndex) ?? [],
+        })),
+    );
+    this.overview = $derived(
+      this.summary === null
+        ? null
+        : {
+            section: { semanticStepIndex: -1, title: "Overview", summary: null },
+            number: null,
+            anchorId: walkthroughAnchor.overview,
+            entries: [
+              {
+                block: {
+                  type: "markdown",
+                  id: "overview-block",
+                  order: -1,
+                  semanticStepIndex: -1,
+                  stepIndex: 0,
+                  content: this.summary,
+                },
+                annotation: null,
+              },
+            ],
+          },
+    );
+
+    this.stepTagFor = (blockId) => {
+      const label = getStepLabel(prId(), blockId);
+      return label ? `→ ${label}` : null;
+    };
+
+    const signal = $derived(getIssueSignal(prId()));
+    this.issues = $derived(signal.shown);
+    this.filteredIssues = $derived(signal.filtered);
+    this.issueTarget = (issue) => {
+      const blockId = issue.blockIds[0] ?? null;
+      const stepTag = blockId ? this.stepTagFor(blockId) : null;
+      return { targetBlockId: stepTag ? blockId : null, stepTag };
+    };
+    this.blockSeverity = $derived.by(() => {
+      const map = new Map<string, IssueSeverity>();
+      for (const issue of this.issues) {
+        for (const id of issue.blockIds) {
+          map.set(id, worstSeverity([map.get(id), issue.severity]) ?? issue.severity);
+        }
+      }
+      return map;
+    });
+
+    // The first pass for the head on screen runs on its own, so it's here
+    // before Generate. A stale walkthrough reviewed an older head and can't
+    // confirm or miss this head's leads, so it shows none.
+    this.firstPass = $derived.by(() => {
+      const scan = getHunkScan(prId(), getLoadedHeadSha(prId()));
+      const rows = uiState.kind === "complete-stale" ? [] : scan.rows;
+      return firstPassView(rows, scan.status, allIssues, !this.isStreaming, entry?.leads ?? null);
+    });
+
+    // Later content is the stronger signal: a missed `phase:advanced` can't
+    // strand the stepper on Diff Analysis under rendered ratings.
+    const activeChapterIndex = $derived(
+      this.ratings.length > 0 ? 3 : sentiment !== null ? 2 : PHASE_TO_CHAPTER[lastCompletedPhase],
+    );
+    // The scan holds the agent until it hands over its leads; a scan that
+    // outlives that (past the join budget) no longer holds the stepper.
+    const agentStarted = $derived(entry?.leads != null || lastCompletedPhase !== "none");
+    this.stepperActiveId = $derived(
+      this.firstPass.rows.length > 0 && this.firstPass.running && !agentStarted
+        ? "first-pass"
+        : (AGENT_CHAPTERS[activeChapterIndex]?.id ?? AGENT_CHAPTERS[0].id),
+    );
+    this.stepperChapters = $derived.by(() => {
+      const written = [
+        this.summary !== null,
+        this.blocks.length > 0,
+        sentiment !== null,
+        this.ratings.length > 0,
+      ];
+      const agent = AGENT_CHAPTERS.map((c, i) => ({ ...c, available: written[i] ?? false }));
+      if (this.firstPass.rows.length === 0) return agent;
+      return [
+        {
+          id: "first-pass",
+          label: "First pass",
+          blurb: this.firstPass.result,
+          activeBlurb: this.firstPass.scanning,
+          spinner: FIRST_PASS_SPINNER,
+          targetId: walkthroughAnchor.firstPass,
+          // Its unraised leads fold under the issues, in the content view.
+          available: this.summary !== null && this.firstPass.hasLeads,
+        },
+        ...agent,
+      ];
+    });
+    // Tool calls from an earlier chapter don't carry into the next one.
+    const chapterStart = $derived.by(() => {
+      void activeChapterIndex;
+      return untrack(() => explorationSteps.length);
+    });
+    this.toolCalls = $derived.by(() => {
+      if (this.stepperActiveId === "first-pass") return [];
+      const start = Math.max(chapterStart, explorationSteps.length - TOOL_CALL_WINDOW);
+      // The absolute index keys each row: two identical `add_diff_step`
+      // calls in a row would otherwise collide.
+      return explorationSteps.slice(start).map((step, i) => ({ step, ordinal: start + i }));
+    });
+    this.showDiffSkeleton = $derived(this.isStreaming && activeChapterIndex <= 1);
+    this.activity = $derived(
+      interleave(
+        entry?.timeline ?? [],
+        entry?.explorationResults ?? {},
+        entry?.explorationInputs ?? {},
+      ),
+    );
+
+    this.footerParts = $derived.by(() => {
+      const parts: string[] = [];
+      const by = entry?.generatedBy?.githubLogin;
+      const model = entry?.providerConfig?.model;
+      if (by) {
+        parts.push(`Generated by @${by}`);
+        if (model) parts.push(model);
+      } else if (model) {
+        parts.push(`Generated by ${model}`);
+      }
+      const effort = entry?.providerConfig?.thinkingEffort;
+      if (effort) parts.push(`thinking: ${effort}`);
+      const mode = getSelectedMode(prId());
+      parts.push(`${WALKTHROUGH_PERSPECTIVES[mode].label.toLowerCase()} perspective`);
+      if (entry?.source === "remote") parts.push("loaded from team cache");
+      return parts;
+    });
+
+    // `getPrById` spans the archive, so a merged PR keeps its stamp.
+    this.merged = $derived.by(() => {
+      const pr = getPrById(prId());
+      return pr?.status === "merged" ? { at: pr.closedAt ?? undefined } : null;
+    });
+
+    this.page = $derived.by((): WalkthroughPage => {
+      switch (uiState.kind) {
+        case "absent":
+        case "idle":
+          if (hydrating) return { kind: "hydrating" };
+          return this.firstPass.rows.length > 0 ? { kind: "first-pass-only" } : { kind: "empty" };
+        case "error-empty":
+          return { kind: "error-empty", explorations: explorationSteps.slice(-6) };
+        case "streaming": {
+          const written =
+            this.summary !== null ||
+            blocksAll.length > 0 ||
+            sentiment !== null ||
+            this.ratings.length > 0;
+          return written ? { kind: "content" } : { kind: "loading" };
+        }
+        default:
+          return { kind: "content" };
+      }
+    });
+    this.stepperVisible = $derived(
+      !hydrating &&
+        (uiState.kind === "streaming" ||
+          (this.page.kind === "content" && uiState.kind !== "error-partial")),
+    );
+  }
+}

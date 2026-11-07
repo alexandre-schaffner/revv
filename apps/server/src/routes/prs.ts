@@ -1,59 +1,33 @@
-import type { DiffLineAnnotation } from "@pierre/diffs";
 import {
-  buildGitPatchHeader,
-  type CommentThread,
   guessImageContentType,
-  PR_DIFF_RENDER_OPTIONS,
-  resolveThinkingEffort,
+  MERGE_METHODS,
+  normalizeGithubHost,
+  sameGithubHost,
 } from "@revv/shared";
-import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import {
-  FALLBACK_PROMPTS,
-  generateSuggestions,
-  type SuggestionsWalkthroughContext,
-} from "../ai/providers/suggestions";
-import { db } from "../auth";
-import { pinnedPullRequests, user } from "../db/schema";
-import { logError } from "../logger";
-import { AppRuntime } from "../runtime";
-import { Broadcaster } from "../services/Broadcaster";
-import {
-  type CachedDiffFile,
-  DiffCacheService,
-  getOrFetchDiffFiles,
-  toCachedDiffFiles,
-} from "../services/DiffCache";
-import { GitHubGateway } from "../services/GitHub";
-import { apiBaseForHost } from "../services/github-rest";
+import { suggestionsForPr } from "../ai/providers/suggestions";
+import { RepoCloneService } from "../services/clone/RepoClone";
+import { DiffCacheService, toCachedDiffFiles } from "../services/DiffCache";
+import { GitHubGateway } from "../services/github/gateway";
+import { checkMergeEligibility } from "../services/merge-eligibility";
 import { PollScheduler } from "../services/PollScheduler";
 import { PrContextService } from "../services/PrContext";
+import { PrMirror } from "../services/PrMirror";
+import { PullRequestService } from "../services/PullRequest";
+import { listPinned, pinPr, unpinPr } from "../services/pinned-prs";
+import { resolvePullRequestLink } from "../services/pr-deep-link";
 import {
-  prerenderDiff,
+  prFilesWithPrerender,
   SSR_PATCH_BYTE_LIMIT,
   SSR_PATCH_LINE_LIMIT,
-  type SsrDiffOptions,
-} from "../services/PrerenderCache";
-import { PullRequestService } from "../services/PullRequest";
-import { resolvePullRequestLink } from "../services/pr-deep-link";
-import { RepoCloneService } from "../services/RepoClone";
+} from "../services/pr-file-prerender";
 import { RepositoryService } from "../services/Repository";
 import { ReviewService } from "../services/Review";
-import { SettingsService } from "../services/Settings";
 import { SyncService } from "../services/Sync";
-import { WalkthroughService } from "../services/Walkthrough";
-import { handleAppError, withAccount } from "./middleware";
-import { coerceReviewMode } from "./reviews/handlers/active-session";
-
-// ── PR diff SSR options ─────────────────────────────────────────────────────
-//
-// Must match the structural options in DiffViewerInner.svelte:326-345 so the
-// hydrated DOM lines up with what the client would have rendered. Callbacks
-// and DOM-producing options stay client-side; only the layout-affecting
-// fields are mirrored here.
-
-const PR_DIFF_SSR_OPTIONS: SsrDiffOptions = PR_DIFF_RENDER_OPTIONS;
+import { runRoute, withAccount, withAuth } from "./middleware";
+import { ownedBy } from "./ownership";
+import { literalUnion } from "./schemas";
 
 /**
  * Resolve the `?at=` query param to the SHA the review should be scoped to,
@@ -73,122 +47,57 @@ function resolveScopedSha(at: string | undefined, headSha: string | null): strin
   return isHead ? null : at;
 }
 
-/** Build the full git patch the SSR call expects from a cached PR file row. */
-function buildPrFilePatch(file: CachedDiffFile): string {
-  const header = buildGitPatchHeader({
-    path: file.path,
-    oldPath: file.oldPath,
-    isNew: file.status === "added",
-    isDeleted: file.status === "removed",
-  });
-  return file.patch !== null ? `${header}\n${file.patch}` : header;
-}
-
-/**
- * SSR a single PR file, returning the prerendered HTML or undefined if the
- * file has no patch (binary), exceeds the SSR guardrails, or rendering
- * failed. The client always has a working render-path fallback.
- */
-function annotationsForFile(
-  filePath: string,
-  threads: CommentThread[],
-): DiffLineAnnotation<unknown>[] {
-  return threads
-    .filter((thread) => thread.filePath === filePath)
-    .map((thread) => ({
-      side: thread.diffSide === "old" ? "deletions" : "additions",
-      lineNumber: thread.startLine,
-      metadata: null,
-    }));
-}
-
-async function prerenderPrFile(
-  file: CachedDiffFile,
-  threads: CommentThread[],
-): Promise<string | undefined> {
-  if (file.patch === null) return undefined;
-  try {
-    const annotations = annotationsForFile(file.path, threads);
-    const html = await prerenderDiff(buildPrFilePatch(file), PR_DIFF_SSR_OPTIONS, annotations);
-    return html ?? undefined;
-  } catch (err) {
-    logError("pr-files-prerender", `prerender failed for ${file.path}:`, err);
-    return undefined;
-  }
-}
-
-function selectPrerenderPath(files: CachedDiffFile[], activePath?: string): string | null {
-  if (activePath !== undefined && files.some((file) => file.path === activePath)) {
-    return activePath;
-  }
-  return files[0]?.path ?? null;
-}
-
-// ── Routes ───────────────────────────────────────────────────────────────────
-
-export const prRoutes = new Elysia({ prefix: "/api/prs" })
+/** The PR lists and whole-list actions: the active account's view. */
+const prListRoutes = new Elysia({ prefix: "/api/prs" })
   .use(withAccount)
   .get(
     "/",
     async (ctx) => {
-      try {
-        const repoId = ctx.query.repo;
-        return await AppRuntime.runPromise(
-          Effect.gen(function* () {
-            const prService = yield* PullRequestService;
-            const { accountId } = ctx.account;
-            return yield* prService.listPrs(accountId, repoId);
-          }),
-        );
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
+      const repoId = ctx.query.repo;
+      return runRoute(
+        Effect.gen(function* () {
+          const prService = yield* PullRequestService;
+          const { accountId } = ctx.account;
+          return yield* prService.listPrs(accountId, repoId);
+        }),
+      );
     },
     { query: t.Object({ repo: t.Optional(t.String()) }) },
   )
   .post(
     "/resolve-link",
     async (ctx) => {
-      const expectedHost = ctx.body.githubHost.toLowerCase();
-      const activeHost = (ctx.account.host ?? "github.com").toLowerCase();
+      const expectedHost = normalizeGithubHost(ctx.body.githubHost);
+      const activeHost = ctx.account.host;
 
       // This branch must stay before AppRuntime/service access. A mismatched
       // account is a recovery state, not permission to probe another
       // account's database rows or GitHub token.
-      if (activeHost !== expectedHost) {
+      if (!sameGithubHost(activeHost, expectedHost)) {
         return { status: "account_mismatch" as const, activeHost, expectedHost };
       }
 
-      try {
-        return await AppRuntime.runPromise(
-          Effect.gen(function* () {
-            const repositoryService = yield* RepositoryService;
-            const pullRequestService = yield* PullRequestService;
-            const github = yield* GitHubGateway;
-            const { accountId, accessToken } = ctx.account;
+      return runRoute(
+        Effect.gen(function* () {
+          const repositoryService = yield* RepositoryService;
+          const pullRequestService = yield* PullRequestService;
+          const github = yield* GitHubGateway;
+          const mirror = yield* PrMirror;
+          const { accountId, client } = ctx.account;
 
-            return yield* resolvePullRequestLink(
-              {
-                findRepository: (fullName) =>
-                  repositoryService.getRepoByFullName(fullName, accountId),
-                findCachedPullRequest: (id) =>
-                  pullRequestService.getPr(id, accountId).pipe(Effect.option),
-                fetchPullRequest: (repository, number) =>
-                  github.prs.get(
-                    repository.fullName,
-                    number,
-                    accessToken,
-                    apiBaseForHost(repository.githubHost),
-                  ),
-                upsertPullRequest: (pullRequest) => pullRequestService.upsertPrs([pullRequest]),
-              },
-              ctx.body,
-            );
-          }),
-        );
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
+          return yield* resolvePullRequestLink(
+            {
+              findRepository: (fullName) =>
+                repositoryService.getRepoByFullName(fullName, accountId),
+              findCachedPullRequest: (id) => pullRequestService.getPr(id).pipe(Effect.option),
+              fetchPullRequest: (repository, number) =>
+                github.prs.get(client, repository.fullName, repository.id, number),
+              upsertPullRequest: (pullRequest) => mirror.apply([pullRequest]).pipe(Effect.asVoid),
+            },
+            ctx.body,
+          );
+        }),
+      );
     },
     {
       body: t.Object({
@@ -204,139 +113,113 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
   .get(
     "/archived",
     async (ctx) => {
-      try {
-        const params: {
-          repoId?: string;
-          since?: string;
-          until?: string;
-          cursor?: string;
-          limit?: number;
-          authorLogins?: string[];
-        } = {};
-        if (ctx.query.repo !== undefined) params.repoId = ctx.query.repo;
-        if (ctx.query.since !== undefined) params.since = ctx.query.since;
-        if (ctx.query.until !== undefined) params.until = ctx.query.until;
-        if (ctx.query.cursor !== undefined) params.cursor = ctx.query.cursor;
-        if (ctx.query.limit !== undefined) {
-          const n = Number(ctx.query.limit);
-          if (Number.isFinite(n) && n > 0) params.limit = Math.floor(n);
-        }
-        if (ctx.query.authors !== undefined) {
-          // Comma-separated author logins. GitHub logins never contain commas,
-          // so a plain split is safe. Empty segments (e.g. trailing comma) are
-          // dropped so an all-empty value behaves as "no author filter".
-          const logins = ctx.query.authors.split(",").filter((s) => s.length > 0);
-          if (logins.length > 0) params.authorLogins = logins;
-        }
-        return await AppRuntime.runPromise(
-          Effect.gen(function* () {
-            const prService = yield* PullRequestService;
-            const { accountId } = ctx.account;
-            return yield* prService.listArchivedPrs(accountId, params);
-          }),
-        );
-      } catch (e) {
-        return handleAppError(e, ctx);
+      const params: { cursor?: string; authorLogins?: string[] } = {};
+      if (ctx.query.cursor !== undefined) params.cursor = ctx.query.cursor;
+      if (ctx.query.authors !== undefined) {
+        // GitHub logins never contain commas.
+        const logins = ctx.query.authors.split(",").filter((s) => s.length > 0);
+        if (logins.length > 0) params.authorLogins = logins;
       }
-    },
-    {
-      query: t.Object({
-        repo: t.Optional(t.String()),
-        since: t.Optional(t.String()),
-        until: t.Optional(t.String()),
-        cursor: t.Optional(t.String()),
-        limit: t.Optional(t.String()),
-        authors: t.Optional(t.String()),
-      }),
-    },
-  )
-  .get("/:id", async (ctx) => {
-    try {
-      return await AppRuntime.runPromise(
+      return runRoute(
         Effect.gen(function* () {
           const prService = yield* PullRequestService;
           const { accountId } = ctx.account;
-          return yield* prService.getPr(ctx.params.id, accountId);
+          return yield* prService.listArchivedPrs(accountId, params);
         }),
       );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-  .get(
-    "/:id/files",
-    async (ctx) => {
-      try {
-        const { files, threads } = await AppRuntime.runPromise(
-          Effect.gen(function* () {
-            const prService = yield* PullRequestService;
-            const repoService = yield* RepositoryService;
-            const reviewService = yield* ReviewService;
-            const github = yield* GitHubGateway;
-            const { accountId, accessToken: token } = ctx.account;
-
-            const pr = yield* prService.getPr(ctx.params.id, accountId);
-            const repo = yield* repoService.getRepoById(pr.repositoryId, accountId);
-
-            // Unscoped (or scoped to head) means the full PR diff (merge-base
-            // 3-dot, matching GitHub's "Files changed" tab) served from the
-            // `pr_diff_files` cache. `?at=<sha>` scopes the review to the PR as
-            // of that commit via a `base...at` compare, which is three-dot too
-            // and returns the same fields in the same hunks-only patch format.
-            // Ranged results deliberately never reach `pr_diff_files`: its PK
-            // `(prId, path)` has no range dimension and `cacheFiles` wipes the
-            // PR's rows, so caching them would poison the full-PR view.
-            const atSha = resolveScopedSha(ctx.query.at, pr.headSha);
-            const files =
-              atSha === null || pr.baseSha === null
-                ? yield* getOrFetchDiffFiles(
-                    pr.id,
-                    repo.fullName,
-                    pr.externalId,
-                    token,
-                    pr.changedFiles,
-                  )
-                : toCachedDiffFiles(
-                    yield* github.prs.compareFiles(repo.fullName, pr.baseSha, atSha, token),
-                  );
-            const mode = coerceReviewMode(ctx.query.mode);
-            const session = yield* reviewService.getActiveSession(pr.id, mode);
-            const threads = session ? yield* reviewService.getThreadsForSession(session.id) : [];
-            return { files, threads };
-          }),
-        );
-
-        // SSR only the first visible file. Shiki tokenization is synchronous CPU
-        // work, so rendering every file before returning makes cold /files calls
-        // scale with total PR size. Oversized patches skip SSR entirely and use
-        // the client renderer instead.
-        const prerenderPath = selectPrerenderPath(files, ctx.query.active);
-        return await Promise.all(
-          files.map(async (f) => {
-            const prerenderedHtml =
-              f.path === prerenderPath ? await prerenderPrFile(f, threads) : undefined;
-            return {
-              path: f.path,
-              oldPath: f.oldPath,
-              patch: f.patch,
-              additions: f.additions,
-              deletions: f.deletions,
-              isNew: f.status === "added",
-              isDeleted: f.status === "removed",
-              ...(prerenderedHtml ? { prerenderedHtml } : {}),
-            };
-          }),
-        );
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
     },
     {
       query: t.Object({
+        cursor: t.Optional(t.String()),
+        authors: t.Optional(t.String()),
+      }),
+    },
+  );
+
+/** The user's own actions across all their accounts: syncs and pins. A pinned PR must be theirs. */
+const prUserRoutes = new Elysia({ prefix: "/api/prs" })
+  .use(withAuth)
+  .onBeforeHandle(ownedBy({ prId: "pull request" }))
+  // Full sync of every repo. Forked, not awaited: a cold-start cycle also runs
+  // the hourly metadata refresh and the archive backfill (up to 150 detail
+  // fetches per repo), which is minutes of work — far too long to hold an HTTP
+  // request open. Completion reaches the client over SSE (`prs:sync-complete`),
+  // which is what it already listens for. A click while a cycle runs queues one
+  // follow-up cycle that reuses its listings; more clicks join that one.
+  .post("/sync", (ctx) =>
+    runRoute(
+      Effect.flatMap(PollScheduler, (s) => Effect.forkDetach(s.syncNow(ctx.userId))).pipe(
+        Effect.as({ success: true }),
+      ),
+    ),
+  )
+
+  // Background freshness check, sent by the client when the window opens or
+  // comes back to the foreground: the DB list it just painted can be a full
+  // poll interval old. Same cycle as `/sync`, forked for the same reason, but
+  // throttled server-side and never forcing a broadcast. An unchanged account
+  // costs one GraphQL probe (about a point per 80 repos) and nothing on the wire.
+  .post("/freshen", () =>
+    runRoute(
+      Effect.flatMap(PollScheduler, (s) => Effect.forkDetach(s.freshen())).pipe(
+        Effect.as({ success: true }),
+      ),
+    ),
+  )
+
+  .get("/pinned", (ctx) => runRoute(listPinned(ctx.userId)))
+
+  .post(
+    "/pinned",
+    (ctx) => runRoute(pinPr(ctx.userId, ctx.body.prId).pipe(Effect.as({ success: true }))),
+    { body: t.Object({ prId: t.String() }) },
+  )
+
+  .delete("/pinned/:prId", (ctx) =>
+    runRoute(unpinPr(ctx.userId, ctx.params.prId).pipe(Effect.as({ success: true }))),
+  );
+
+/** One PR's routes, acting as the account that owns its repository. */
+const prByIdRoutes = new Elysia({ prefix: "/api/prs" })
+  .use(withAuth)
+  .onBeforeHandle(ownedBy({ id: "pull request" }))
+  .get("/:id", (ctx) =>
+    runRoute(Effect.flatMap(PullRequestService, (prs) => prs.getPr(ctx.params.id))),
+  )
+  .get(
+    "/:id/files",
+    (ctx) =>
+      runRoute(
+        Effect.gen(function* () {
+          const prContext = yield* PrContextService;
+          const reviewService = yield* ReviewService;
+          const github = yield* GitHubGateway;
+          const diffCache = yield* DiffCacheService;
+          const { pr, repo, client } = yield* prContext.forPr(ctx.params.id);
+
+          // Unscoped (or scoped to head) means the full PR diff (merge-base
+          // 3-dot, matching GitHub's "Files changed" tab) served from the
+          // `pr_diff_files` cache. `?at=<sha>` scopes the review to the PR as
+          // of that commit via a `base...at` compare, which is three-dot too
+          // and returns the same fields in the same hunks-only patch format.
+          // Ranged results never reach `pr_diff_files`: its PK `(prId, path)`
+          // has no range dimension and `cacheDiff` wipes the PR's rows.
+          const atSha = resolveScopedSha(ctx.query.at, pr.headSha);
+          const files =
+            atSha === null || pr.baseSha === null
+              ? (yield* diffCache.getOrFetch(pr, repo.fullName, client)).files
+              : toCachedDiffFiles(
+                  yield* github.prs.compareFiles(client, repo.fullName, pr.baseSha, atSha),
+                );
+          const threads = yield* reviewService.threadsForPr(pr.id);
+          return yield* Effect.promise(() =>
+            prFilesWithPrerender(files, threads, ctx.query.active),
+          );
+        }),
+      ),
+    {
+      query: t.Object({
         active: t.Optional(t.String()),
-        mode: t.Optional(t.String()),
-        // Malformed SHAs are rejected with a 400 before the handler runs, so
-        // the compare path can only ever be reached with a plausible ref.
         at: t.Optional(t.String({ pattern: "^[0-9a-fA-F]{7,40}$" })),
       }),
       detail: {
@@ -346,121 +229,84 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
   )
   .get(
     "/:id/repo-file",
-    async (ctx) => {
-      try {
-        return await AppRuntime.runPromise(
-          Effect.gen(function* () {
-            const prService = yield* PullRequestService;
-            const repoCloneService = yield* RepoCloneService;
-            const { accountId } = ctx.account;
+    (ctx) =>
+      runRoute(
+        Effect.gen(function* () {
+          const prService = yield* PullRequestService;
+          const repoCloneService = yield* RepoCloneService;
 
-            const pr = yield* prService.getPr(ctx.params.id, accountId);
-            if (!pr.headSha) {
-              ctx.set.status = 404;
-              return {
-                status: "error" as const,
-                message: "PR has no head SHA",
-              };
-            }
-
-            const result = yield* repoCloneService.getFileContentAtSha(
-              pr.repositoryId,
-              pr.headSha,
-              ctx.query.path,
-            );
-
-            if (result.status === "cloning") {
-              ctx.set.status = 202;
-              return { status: "cloning" as const };
-            }
-            if (result.status === "not-found") {
-              ctx.set.status = 404;
-              return { status: "not-found" as const };
-            }
-            if (result.status === "too-large") {
-              // 413 Payload Too Large — surfaces a distinct
-              // frontend state ("file too large to preview")
-              // without conflating with cloning/missing.
-              ctx.set.status = 413;
-              return {
-                status: "too-large" as const,
-                size: result.size,
-              };
-            }
-            if (result.status === "error") {
-              ctx.set.status = 409;
-              return {
-                status: "error" as const,
-                message: result.message,
-              };
-            }
-
+          // Every state is an answer the file peek shows, not a refusal.
+          const pr = yield* prService.getPr(ctx.params.id);
+          if (!pr.headSha) {
             return {
-              status: "ready" as const,
-              headSha: pr.headSha,
-              path: ctx.query.path,
-              content: result.content,
-              isBinary: result.isBinary,
-              size: result.size,
+              status: "error" as const,
+              message: "PR has no head SHA",
             };
-          }),
-        );
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
+          }
+
+          const result = yield* repoCloneService.getFileContentAtSha(
+            pr.repositoryId,
+            pr.headSha,
+            ctx.query.path,
+          );
+
+          if (result.status === "cloning") return { status: "cloning" as const };
+          if (result.status === "not-found") return { status: "not-found" as const };
+          if (result.status === "too-large") {
+            return { status: "too-large" as const, size: result.size };
+          }
+          if (result.status === "error") {
+            return { status: "error" as const, message: result.message };
+          }
+
+          return {
+            status: "ready" as const,
+            headSha: pr.headSha,
+            path: ctx.query.path,
+            content: result.content,
+            isBinary: result.isBinary,
+            size: result.size,
+          };
+        }),
+      ),
     { query: t.Object({ path: t.String() }) },
   )
   .get(
     "/:id/file-blob",
     async (ctx) => {
-      try {
-        // Stream raw file bytes at the PR's base or head SHA for the
-        // image-diff viewer. The local clone is `--depth=1` against the
-        // default branch, so a PR's head SHA blob isn't guaranteed to
-        // exist locally (added files in particular). Fetching via
-        // GitHub's contents API with `Accept: application/vnd.github.raw`
-        // sidesteps that — it works for any ref + path the user can see.
-        return await AppRuntime.runPromise(
-          Effect.gen(function* () {
-            const prService = yield* PullRequestService;
-            const repoService = yield* RepositoryService;
-            const { accountId, accessToken: token } = ctx.account;
-            const github = yield* GitHubGateway;
+      // Stream raw file bytes at the PR's base or head SHA for the
+      // image-diff viewer. The local clone is `--depth=1` against the
+      // default branch, so a PR's head SHA blob isn't guaranteed to
+      // exist locally (added files in particular). Fetching via
+      // GitHub's contents API with `Accept: application/vnd.github.raw`
+      // sidesteps that — it works for any ref + path the user can see.
+      return runRoute(
+        Effect.gen(function* () {
+          const prContext = yield* PrContextService;
+          const github = yield* GitHubGateway;
+          const { pr, repo, client } = yield* prContext.forPr(ctx.params.id);
+          const sha = ctx.query.side === "base" ? pr.baseSha : pr.headSha;
+          if (!sha) {
+            return new Response("PR is missing the requested SHA", { status: 404 });
+          }
 
-            const pr = yield* prService.getPr(ctx.params.id, accountId);
-            const side = ctx.query.side;
-            const sha = side === "base" ? pr.baseSha : pr.headSha;
-            if (!sha) {
-              return new Response("PR is missing the requested SHA", { status: 404 });
-            }
+          const bytes = yield* github.files.rawBytes(client, repo.fullName, ctx.query.path, sha);
 
-            const repo = yield* repoService.getRepoById(pr.repositoryId, accountId);
-
-            const bytes = yield* github.files.rawBytes(repo.fullName, ctx.query.path, sha, token);
-
-            const contentType = guessImageContentType(ctx.query.path);
-            // Bun typings on `bytes` are `Uint8Array<ArrayBufferLike>`,
-            // narrower than the lib.dom BlobPart signature
-            // (`ArrayBufferView<ArrayBuffer>`). The cast is safe — we
-            // allocate the underlying ArrayBuffer ourselves via
-            // `new Uint8Array(arrayBuffer)`. Wrapping in a Blob avoids
-            // the BodyInit mismatch the raw Uint8Array hits.
-            const blob = new Blob([bytes as BlobPart], { type: contentType });
-            return new Response(blob, {
-              status: 200,
-              headers: {
-                "Content-Type": contentType,
-                "Content-Length": String(bytes.byteLength),
-                // Strong cache: (sha, path) is immutable per PR row.
-                "Cache-Control": "private, max-age=31536000, immutable",
-              },
-            });
-          }),
-        );
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
+          const contentType = guessImageContentType(ctx.query.path);
+          // Bun types `bytes` as `Uint8Array<ArrayBufferLike>`, narrower than the
+          // lib.dom BlobPart signature; we allocated its ArrayBuffer ourselves.
+          const blob = new Blob([bytes as BlobPart], { type: contentType });
+          return new Response(blob, {
+            status: 200,
+            headers: {
+              "Content-Type": contentType,
+              "Content-Length": String(bytes.byteLength),
+              // Strong cache: (sha, path) is immutable per PR row.
+              "Cache-Control": "private, max-age=31536000, immutable",
+            },
+          });
+        }),
+      );
     },
     {
       query: t.Object({
@@ -469,448 +315,114 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
       }),
     },
   )
-  .get("/:id/suggestions", async (ctx) => {
-    try {
-      const suggestions = await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const { accountId } = ctx.account;
-          return yield* resolveSuggestionsForPr(ctx.params.id, accountId);
-        }),
-      );
-      return { suggestions };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  // Full sync of every repo. Forked, not awaited: a cold-start cycle also runs
-  // the hourly metadata refresh and the archive backfill (up to 150 detail
-  // fetches per repo), which is minutes of work — far too long to hold an HTTP
-  // request open. Completion reaches the client over SSE (`prs:sync-complete`),
-  // which is what it already listens for. `syncNow` coalesces, so a double-click
-  // does not start a second pass.
-  .post("/sync", async (ctx) => {
-    try {
-      await AppRuntime.runPromise(
-        Effect.flatMap(PollScheduler, (s) => Effect.forkDetach(s.syncNow())),
-      );
-      return { success: true };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  // Background freshness check, sent by the client when the window opens or
-  // comes back to the foreground: the DB list it just painted can be a full
-  // poll interval old. Same cycle as `/sync`, forked for the same reason, but
-  // throttled server-side and never forcing a broadcast. An unchanged account
-  // costs one GraphQL probe (about a point per 80 repos) and nothing on the wire.
-  .post("/freshen", async (ctx) => {
-    try {
-      await AppRuntime.runPromise(
-        Effect.flatMap(PollScheduler, (s) => Effect.forkDetach(s.freshen())),
-      );
-      return { success: true };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
+  .get("/:id/suggestions", (ctx) =>
+    runRoute(suggestionsForPr(ctx.params.id).pipe(Effect.map((suggestions) => ({ suggestions })))),
+  )
 
   // Targeted refresh of a single PR. Bounded to a couple of GitHub requests, so
   // unlike `/sync` it is awaited and reports failure directly. Prefer this
   // wherever the user is asking about one PR rather than the whole list.
-  .post("/:id/refresh", async (ctx) => {
-    try {
-      // Ownership check before touching GitHub: `getPr` with the caller's
-      // accountId 404s on a PR belonging to another account, so a valid session
-      // can't refresh — or learn about — a repo it doesn't own.
-      await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const prService = yield* PullRequestService;
-          const scheduler = yield* PollScheduler;
-          yield* prService.getPr(ctx.params.id, ctx.account.accountId);
-          yield* scheduler.refreshPr(ctx.params.id);
-        }),
-      );
-      return { success: true };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  .get("/:id/commits", async (ctx) => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const prService = yield* PullRequestService;
-          const repoService = yield* RepositoryService;
-          const { accountId, accessToken: token } = ctx.account;
-          const githubService = yield* GitHubGateway;
-
-          const pr = yield* prService.getPr(ctx.params.id, accountId);
-          const repo = yield* repoService.getRepoById(pr.repositoryId, accountId);
-
-          return yield* githubService.prs.commits(repo.fullName, pr.externalId, token);
-        }),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  .post("/:id/sync-threads", async (ctx) => {
-    try {
-      await AppRuntime.runPromise(
-        Effect.flatMap(PollScheduler, (s) => s.syncThreadsNow(ctx.params.id)),
-      );
-      return { success: true };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  .post(
-    "/thread-summaries",
-    async (ctx) => {
-      try {
-        const rows = await db
-          .select({ githubLogin: user.githubLogin })
-          .from(user)
-          .where(eq(user.id, ctx.session.user.id));
-        const login = rows[0]?.githubLogin ?? null;
-
-        const summaries = await AppRuntime.runPromise(
-          Effect.flatMap(SyncService, (s) =>
-            Effect.forEach(ctx.body.prIds, (prId) =>
-              s.getThreadSummary(prId, login).pipe(
-                Effect.map((summary) => ({ prId, summary })),
-                Effect.orElseSucceed(() => null),
-              ),
-            ),
-          ),
-        );
-        return { summaries: summaries.filter((entry) => entry !== null) };
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
-    { body: t.Object({ prIds: t.Array(t.String(), { maxItems: 200 }) }) },
+  .post("/:id/refresh", (ctx) =>
+    runRoute(
+      Effect.flatMap(PollScheduler, (s) => s.refreshPr(ctx.params.id)).pipe(
+        Effect.as({ success: true }),
+      ),
+    ),
   )
 
-  // ── Owner-only PR mutations (draft toggle, close) ─────────────────────
-  //
-  // All three endpoints follow the same shape: resolve PR + repo + token,
-  // run the GitHub mutation, record its outcome on the local row, and
-  // broadcast `prs:updated` so other clients see the new state without
-  // waiting for the next poll cycle.
-  .post("/:id/convert-to-draft", async (ctx) => {
-    try {
-      await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const { accountId } = ctx.account;
-          yield* mutatePr(ctx.params.id, ctx.session.user.id, accountId, "convert-to-draft");
-        }),
-      );
-      return { success: true };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-  .post("/:id/ready-for-review", async (ctx) => {
-    try {
-      await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const { accountId } = ctx.account;
-          yield* mutatePr(ctx.params.id, ctx.session.user.id, accountId, "ready-for-review");
-        }),
-      );
-      return { success: true };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-  .post("/:id/close", async (ctx) => {
-    try {
-      await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const { accountId } = ctx.account;
-          yield* mutatePr(ctx.params.id, ctx.session.user.id, accountId, "close");
-        }),
-      );
-      return { success: true };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
+  .get("/:id/commits", (ctx) =>
+    runRoute(
+      Effect.gen(function* () {
+        const prContext = yield* PrContextService;
+        const github = yield* GitHubGateway;
+        const { pr, repo, client } = yield* prContext.forPr(ctx.params.id);
+        return yield* github.prs.commits(client, repo.fullName, pr.externalId);
+      }),
+    ),
+  )
 
-  .get("/:id/merge-eligibility", async (ctx) => {
-    try {
-      const eligibility = await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const prContext = yield* PrContextService;
-          const github = yield* GitHubGateway;
-          const { pr, repo, token } = yield* prContext.resolveBasic(
-            ctx.params.id,
-            ctx.session.user.id,
-          );
-          return yield* github.prs.mergeEligibility(repo.fullName, pr.externalId, token);
-        }),
-      );
-      return eligibility;
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
+  .post("/:id/sync-threads", (ctx) =>
+    runRoute(
+      Effect.flatMap(SyncService, (s) => s.syncThreadsNow(ctx.params.id)).pipe(
+        Effect.as({ success: true }),
+      ),
+    ),
+  )
+
+  .post("/:id/convert-to-draft", (ctx) =>
+    runRoute(mutatePr(ctx.params.id, "convert-to-draft").pipe(Effect.as({ success: true }))),
+  )
+  .post("/:id/ready-for-review", (ctx) =>
+    runRoute(mutatePr(ctx.params.id, "ready-for-review").pipe(Effect.as({ success: true }))),
+  )
+  .post("/:id/close", (ctx) =>
+    runRoute(mutatePr(ctx.params.id, "close").pipe(Effect.as({ success: true }))),
+  )
+
+  .get("/:id/merge-eligibility", (ctx) =>
+    runRoute(
+      Effect.gen(function* () {
+        const prContext = yield* PrContextService;
+        const { pr, repo, client } = yield* prContext.forPr(ctx.params.id);
+        return yield* checkMergeEligibility(
+          { prId: pr.id, repoFullName: repo.fullName, prNumber: pr.externalId },
+          client,
+        );
+      }),
+    ),
+  )
 
   .post(
     "/:id/merge",
-    async (ctx) => {
-      try {
-        await AppRuntime.runPromise(
-          Effect.gen(function* () {
-            const { accountId } = ctx.account;
-            const prContext = yield* PrContextService;
-            const github = yield* GitHubGateway;
-            const prService = yield* PullRequestService;
-            const broadcaster = yield* Broadcaster;
-            const { pr, repo, token } = yield* prContext.resolveBasic(
-              ctx.params.id,
-              ctx.session.user.id,
-            );
-            const mergeMethod = (ctx.body?.mergeMethod ??
-              "merge") as import("@revv/shared").MergeMethod;
-            yield* github.prs.merge(repo.fullName, pr.externalId, mergeMethod, token);
-            yield* prService.markPrsClosed([
-              { id: pr.id, status: "merged", closedAt: new Date().toISOString() },
-            ]);
-            const all = yield* prService.listPrs(accountId);
-            yield* broadcaster.broadcastToAccount(accountId, { type: "prs:updated", data: all });
-          }),
-        );
-        return { success: true };
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
+    (ctx) =>
+      runRoute(
+        Effect.gen(function* () {
+          const prContext = yield* PrContextService;
+          const github = yield* GitHubGateway;
+          const mirror = yield* PrMirror;
+          const { pr, repo, client } = yield* prContext.forPr(ctx.params.id);
+          yield* github.prs.merge(client, repo.fullName, pr.externalId, ctx.body.mergeMethod);
+          yield* mirror.recordMutation(pr.id, {
+            kind: "terminal",
+            status: "merged",
+            closedAt: new Date().toISOString(),
+          });
+        }).pipe(Effect.as({ success: true })),
+      ),
     {
       body: t.Object({
-        mergeMethod: t.Union([t.Literal("merge"), t.Literal("squash"), t.Literal("rebase")]),
+        mergeMethod: literalUnion(MERGE_METHODS),
       }),
     },
-  )
+  );
 
-  .get("/pinned", async (ctx) => {
-    try {
-      const rows = await db
-        .select({ prId: pinnedPullRequests.prId })
-        .from(pinnedPullRequests)
-        .where(eq(pinnedPullRequests.userId, ctx.session.user.id))
-        .orderBy(pinnedPullRequests.createdAt);
-      return rows.map((r) => r.prId);
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  .post(
-    "/pinned",
-    async (ctx) => {
-      try {
-        await db.insert(pinnedPullRequests).values({
-          userId: ctx.session.user.id,
-          prId: ctx.body.prId,
-        });
-        return { success: true };
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
-    { body: t.Object({ prId: t.String() }) },
-  )
-
-  .delete("/pinned/:prId", async (ctx) => {
-    try {
-      await db
-        .delete(pinnedPullRequests)
-        .where(
-          and(
-            eq(pinnedPullRequests.userId, ctx.session.user.id),
-            eq(pinnedPullRequests.prId, ctx.params.prId),
-          ),
-        );
-      return { success: true };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  });
-
-// ── Suggestions cache + resolver ─────────────────────────────────────────────
-//
-// In-memory cache for the right-panel suggestions endpoint. Keyed on
-// `${prId}:${headSha}:${agent}:${model}` so any of those changing produces a
-// fresh model call. TTL is soft — entries are cleaned up lazily on read.
-//
-// Compliant with CLAUDE.md invariant #1 (SQLite is authoritative): the cache
-// is reconstructible. Any miss re-derives by loading the PR + walkthrough
-// from DB and calling the model. The cache only exists to avoid re-spending
-// tokens when the user opens the same PR repeatedly within one server
-// session.
-//
-// Not invalidated server-side on settings change — the client invalidates
-// its store, and the next request lands on a different `model` key, so the
-// stale entry simply expires unused.
-
-interface SuggestionsCacheEntry {
-  readonly suggestions: string[];
-  readonly expiresAt: number;
-}
-
-const SUGGESTIONS_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
-const SUGGESTIONS_CACHE_MAX_ENTRIES = 256;
-const suggestionsCache = new Map<string, SuggestionsCacheEntry>();
-
-function suggestionsCacheKey(prId: string, headSha: string, agent: string, model: string): string {
-  return `${prId}:${headSha}:${agent}:${model}`;
-}
-
-function readSuggestionsCache(key: string): string[] | null {
-  const entry = suggestionsCache.get(key);
-  if (!entry) return null;
-  if (entry.expiresAt < Date.now()) {
-    suggestionsCache.delete(key);
-    return null;
-  }
-  return entry.suggestions;
-}
-
-function writeSuggestionsCache(key: string, suggestions: string[]): void {
-  // Bounded eviction: drop the oldest insertion when we hit the cap. Map
-  // preserves insertion order so deleting via `keys().next()` is O(1).
-  if (suggestionsCache.size >= SUGGESTIONS_CACHE_MAX_ENTRIES) {
-    const oldest = suggestionsCache.keys().next().value;
-    if (oldest !== undefined) suggestionsCache.delete(oldest);
-  }
-  suggestionsCache.set(key, {
-    suggestions,
-    expiresAt: Date.now() + SUGGESTIONS_CACHE_TTL_MS,
-  });
-}
-
-function resolveSuggestionsForPr(prId: string, accountId: string) {
-  return Effect.gen(function* () {
-    const settingsSvc = yield* SettingsService;
-    const prService = yield* PullRequestService;
-    const walkthroughSvc = yield* WalkthroughService;
-    const diffCache = yield* DiffCacheService;
-
-    const settings = yield* settingsSvc.getSettings();
-    const agent = yield* settingsSvc.resolveAgent();
-    const model = settings.aiSuggestionsModel;
-    if (!model || model.length === 0) {
-      return [...FALLBACK_PROMPTS];
-    }
-
-    const pr = yield* prService.getPr(prId, accountId);
-    const headSha = pr.headSha ?? "no-head";
-
-    // Cache check before any DB / model work.
-    const key = suggestionsCacheKey(prId, headSha, agent, model);
-    const cached = readSuggestionsCache(key);
-    if (cached !== null) return cached;
-
-    // Walkthrough context (best-effort) — only available when a
-    // walkthrough has reached `status='complete'` for the current head
-    // SHA. Without it we still produce PR-metadata-only suggestions.
-    let walkthroughContext: SuggestionsWalkthroughContext | null = null;
-    if (pr.headSha) {
-      const walkthrough = yield* walkthroughSvc.getCached(prId, pr.headSha);
-      if (walkthrough) {
-        walkthroughContext = {
-          summary: walkthrough.summary,
-          riskLevel: walkthrough.riskLevel,
-          sentiment: walkthrough.sentiment ?? null,
-          issues: walkthrough.issues.map((i) => ({
-            severity: i.severity,
-            title: i.title,
-            description: i.description,
-            filePath: i.filePath ?? null,
-          })),
-        };
-      }
-    }
-
-    // Diff files (best-effort, cache-only) — we explicitly do NOT
-    // hit GitHub here. If the diff isn't cached yet (e.g., the user
-    // just opened this PR for the first time), we still produce
-    // suggestions from title/body/walkthrough alone.
-    const cachedFiles = yield* diffCache.getCachedFiles(prId);
-    const changedFiles = (cachedFiles ?? []).map((f) => f.path);
-
-    // Suggestions run on the ACP transport. The resolved agent is already a
-    // registry id; the connection is pooled under the server cwd (no tools run,
-    // so the directory is irrelevant — and a shared cwd keeps one warm agent
-    // process serving suggestions across every repo).
-    const acpAgentId = agent;
-
-    const suggestions = yield* Effect.tryPromise({
-      try: () =>
-        generateSuggestions({
-          prTitle: pr.title,
-          prBody: pr.body,
-          changedFiles,
-          additions: pr.additions,
-          deletions: pr.deletions,
-          walkthrough: walkthroughContext,
-          acpAgentId,
-          cwd: process.cwd(),
-          model,
-          thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
-        }),
-      // Provider has its own internal fallback; this catch is
-      // belt-and-suspenders for the rare case where the Promise
-      // rejects despite the provider's try/catch.
-      catch: () => null as null,
-    }).pipe(
-      Effect.catch(() => Effect.succeed([...FALLBACK_PROMPTS] as string[])),
-      Effect.map((v) => (v === null ? [...FALLBACK_PROMPTS] : v)),
-    );
-
-    writeSuggestionsCache(key, suggestions);
-    return suggestions;
-  });
-}
+export const prRoutes = new Elysia().use(prListRoutes).use(prUserRoutes).use(prByIdRoutes);
 
 type PrMutationAction = "convert-to-draft" | "ready-for-review" | "close";
 
-/**
- * Shared executor for the three owner-only PR mutations above. Each one is
- * a thin wrapper over a single GitHubGateway call, so the
- * resolve → mutate → record → broadcast scaffolding is identical and
- * lifted here.
- */
-function mutatePr(prId: string, userId: string, accountId: string, action: PrMutationAction) {
+/** Run a PR mutation on GitHub as the repo's account, and record its outcome. */
+function mutatePr(prId: string, action: PrMutationAction) {
   return Effect.gen(function* () {
     const prContext = yield* PrContextService;
     const github = yield* GitHubGateway;
-    const prService = yield* PullRequestService;
-    const broadcaster = yield* Broadcaster;
+    const mirror = yield* PrMirror;
+    const { pr, repo, client } = yield* prContext.forPr(prId);
 
-    const { pr, repo, token } = yield* prContext.resolveBasic(prId, userId);
-
-    if (action === "convert-to-draft") {
-      yield* github.prs.convertToDraft(repo.fullName, pr.externalId, token);
-      yield* prService.setPrDraft(pr.id, true);
-    } else if (action === "ready-for-review") {
-      yield* github.prs.markReadyForReview(repo.fullName, pr.externalId, token);
-      yield* prService.setPrDraft(pr.id, false);
-    } else {
-      yield* github.prs.close(repo.fullName, pr.externalId, token);
-      yield* prService.markPrsClosed([
-        { id: pr.id, status: "closed", closedAt: new Date().toISOString() },
-      ]);
+    if (action === "close") {
+      yield* github.prs.close(client, repo.fullName, pr.externalId);
+      yield* mirror.recordMutation(pr.id, {
+        kind: "terminal",
+        status: "closed",
+        closedAt: new Date().toISOString(),
+      });
+      return;
     }
-
-    const all = yield* prService.listPrs(accountId);
-    yield* broadcaster.broadcastToAccount(accountId, { type: "prs:updated", data: all });
+    const isDraft = action === "convert-to-draft";
+    yield* (isDraft ? github.prs.convertToDraft : github.prs.markReadyForReview)(
+      client,
+      repo.fullName,
+      pr.externalId,
+    );
+    yield* mirror.recordMutation(pr.id, { kind: "draft", isDraft });
   });
 }

@@ -1,33 +1,33 @@
 <script lang="ts">
 import type { BaseConflictStrategy, PrConversation } from "@revv/shared";
+import { hasMergeConflicts } from "@revv/shared";
 import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwise";
-import CaretRight from "phosphor-svelte/lib/CaretRight";
 import CheckCircle from "phosphor-svelte/lib/CheckCircle";
 import FileText from "phosphor-svelte/lib/FileText";
 import Sparkle from "phosphor-svelte/lib/Sparkle";
 import Spinner from "phosphor-svelte/lib/Spinner";
+import Stop from "phosphor-svelte/lib/Stop";
 import Warning from "phosphor-svelte/lib/Warning";
 import XCircle from "phosphor-svelte/lib/XCircle";
 import { untrack } from "svelte";
+import Markdown from "$lib/components/markdown/Markdown.svelte";
+import DisclosureCaret from "$lib/components/shared/DisclosureCaret.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { gsapSlide } from "$lib/motion";
 import {
   checkBaseConflicts,
   dismissBaseConflictRun,
   getBaseConflicts,
-  getBaseConflictsCheck,
+  isStoppingBaseConflictRun,
   resolveBaseConflicts,
+  stopBaseConflictRun,
 } from "$lib/stores/base-conflicts.svelte";
-import {
-  askMergeEligibility,
-  getMergeAnswer,
-  mergeQuestionFor,
-} from "$lib/stores/merge-eligibility.svelte";
+import { useMergeEligibility } from "$lib/stores/merge-eligibility.svelte";
 import { getPrById } from "$lib/stores/prs.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
 import { openSettings } from "$lib/stores/settingsModal.svelte";
 import { plural } from "$lib/utils/plural";
-import MarkdownBody from "./MarkdownBody.svelte";
+import MergeBoxCard from "./MergeBoxCard.svelte";
 
 // "This branch has conflicts with main", where GitHub's merge box would say
 // it, plus the files and a way to hand the fix to the agent. GitHub's
@@ -49,23 +49,21 @@ const sourceBranch = $derived(pr?.sourceBranch ?? "this branch");
 // A stacked layer conflicts with the layer below; "Rebase stack" in the
 // sidebar is the fix for that, and a merge commit would bend the stack.
 const applies = $derived(pr?.status === "open" && pr.stack === null);
-const strategy = $derived<BaseConflictStrategy>(getSettings()?.baseConflictStrategy ?? "merge");
+const strategy = $derived<BaseConflictStrategy>(getSettings().baseConflictStrategy);
 
-const question = $derived(applies ? mergeQuestionFor(prId, headSha, conversation) : null);
-$effect(() => {
-  const q = question;
-  if (q) untrack(() => askMergeEligibility(q));
-});
-const githubDirty = $derived(getMergeAnswer(question)?.mergeStateStatus.toUpperCase() === "DIRTY");
-
-const entry = $derived(getBaseConflicts(prId));
-const local = $derived(getBaseConflictsCheck(prId, headSha));
-const checking = $derived(entry.headSha === headSha && entry.check.status === "loading");
-const checkError = $derived(
-  entry.headSha === headSha && entry.check.status === "error" ? entry.check.error : null,
+const eligibility = useMergeEligibility(
+  () => prId,
+  () => applies,
 );
-const run = $derived(entry.run);
+const githubDirty = $derived(applies && hasMergeConflicts(eligibility.current?.mergeStateStatus));
+
+const view = $derived(getBaseConflicts(prId, headSha));
+const local = $derived(view.check);
+const checking = $derived(view.checking);
+const checkError = $derived(view.error);
+const run = $derived(view.run);
 const running = $derived(run?.outcome.status === "loading" || local?.resolving === true);
+const stopping = $derived(isStoppingBaseConflictRun(prId));
 
 $effect(() => {
   if (!applies || !githubDirty) return;
@@ -139,49 +137,55 @@ function onResolveClick(): void {
 </script>
 
 {#if visible}
-	<section class="conflicts" aria-label="Conflicts with {baseBranch}">
-		<header class="conflicts-head">
-			<span
-				class="conflicts-mark"
-				class:conflicts-mark--ok={run?.outcome.status === 'ok'}
-				aria-hidden="true"
-			>
-				{#if running}
-					<Spinner size={16} class="motion-essential-spin" />
-				{:else if run?.outcome.status === 'ok'}
-					<CheckCircle size={18} weight="fill" />
-				{:else}
-					<Warning size={18} weight="fill" />
-				{/if}
-			</span>
-			<div class="conflicts-text">
-				<h2 class="conflicts-title">{headline}</h2>
-				<p class="conflicts-detail">{detail}</p>
-			</div>
-			<div class="conflicts-actions">
-				{#if local?.status === 'clean' && !running}
-					<Button
-						variant="ghost"
-						size="sm"
-						disabled={checking}
-						onclick={() => checkBaseConflicts(prId, headSha, { force: true })}
-					>
-						<ArrowClockwise />Recheck
-					</Button>
-				{/if}
-				{#if !running && run?.outcome.status !== 'ok' && !confirming}
-					<Button
-						variant="outline"
-						size="sm"
-						disabled={blockedReason !== null}
-						title={blockedReason ?? strategyCaption}
-						onclick={onResolveClick}
-					>
-						<Sparkle />Resolve with agent
-					</Button>
-				{/if}
-			</div>
-		</header>
+	<MergeBoxCard
+		label="Conflicts with {baseBranch}"
+		title={headline}
+		{detail}
+		markTone={run?.outcome.status === 'ok' ? 'success' : 'warning'}
+	>
+		{#snippet mark()}
+			{#if running}
+				<Spinner size={16} class="motion-essential-spin" />
+			{:else if run?.outcome.status === 'ok'}
+				<CheckCircle size={18} weight="fill" />
+			{:else}
+				<Warning size={18} weight="fill" />
+			{/if}
+		{/snippet}
+		{#snippet actions()}
+			{#if running}
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={stopping}
+					title="Stop the agent; nothing is pushed"
+					onclick={() => void stopBaseConflictRun(prId)}
+				>
+					<Stop />{stopping ? 'Stopping…' : 'Stop'}
+				</Button>
+			{/if}
+			{#if local?.status === 'clean' && !running}
+				<Button
+					variant="ghost"
+					size="sm"
+					disabled={checking}
+					onclick={() => checkBaseConflicts(prId, headSha, { force: true })}
+				>
+					<ArrowClockwise />Recheck
+				</Button>
+			{/if}
+			{#if !running && run?.outcome.status !== 'ok' && !confirming}
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={blockedReason !== null}
+					title={blockedReason ?? strategyCaption}
+					onclick={onResolveClick}
+				>
+					<Sparkle />Resolve with agent
+				</Button>
+			{/if}
+		{/snippet}
 
 		{#if files.length > 0}
 			<ul class="conflict-files">
@@ -254,9 +258,7 @@ function onResolveClick(): void {
 						aria-controls="base-conflicts-log"
 						onclick={() => (showLog = !logOpen)}
 					>
-						<span class="fold-caret" class:fold-caret--open={logOpen} aria-hidden="true">
-							<CaretRight size={10} weight="bold" />
-						</span>
+						<span class="fold-caret" aria-hidden="true"><DisclosureCaret open={logOpen} /></span>
 						{logOpen ? 'Hide' : 'Show'} what the agent did
 						{#if run.rows.length > 0}({plural(run.rows.length, 'step')}){/if}
 					</button>
@@ -273,7 +275,7 @@ function onResolveClick(): void {
 								</ol>
 							{/if}
 							{#if run.agentText.length > 0}
-								<MarkdownBody source={run.agentText} />
+								<Markdown source={run.agentText} trust="external" density="dense" class="wrap-anywhere" />
 							{/if}
 						</div>
 					{/if}
@@ -293,70 +295,10 @@ function onResolveClick(): void {
 				{/if}
 			</footer>
 		{/if}
-	</section>
+	</MergeBoxCard>
 {/if}
 
 <style>
-	.conflicts {
-		overflow: clip;
-		border: 1px solid var(--color-border);
-		border-radius: var(--radius-card);
-		background: var(--color-bg-primary);
-	}
-
-	.conflicts-head {
-		display: flex;
-		align-items: center;
-		gap: 12px;
-		padding: 12px 12px 12px 14px;
-	}
-
-	.conflicts-mark {
-		display: grid;
-		place-items: center;
-		flex-shrink: 0;
-		width: 32px;
-		height: 32px;
-		border-radius: 50%;
-		background: var(--color-bg-secondary);
-		color: var(--color-warning);
-	}
-
-	.conflicts-mark--ok {
-		color: var(--color-success);
-	}
-
-	.conflicts-text {
-		display: flex;
-		flex-direction: column;
-		gap: 1px;
-		flex: 1;
-		min-width: 0;
-	}
-
-	.conflicts-title {
-		margin: 0;
-		font-size: 0.875rem;
-		font-weight: 600;
-		line-height: 1.35;
-		color: var(--color-text-primary);
-	}
-
-	.conflicts-detail {
-		margin: 0;
-		font-size: 0.8125rem;
-		line-height: 1.4;
-		color: var(--color-text-secondary);
-		font-variant-numeric: tabular-nums;
-	}
-
-	.conflicts-actions {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		flex-shrink: 0;
-	}
-
 	.conflict-files {
 		margin: 0;
 		padding: 4px 0;
@@ -412,10 +354,6 @@ function onResolveClick(): void {
 		display: grid;
 		place-items: center;
 		width: 12px;
-	}
-
-	.fold-caret--open {
-		rotate: 90deg;
 	}
 
 	.conflicts-note {

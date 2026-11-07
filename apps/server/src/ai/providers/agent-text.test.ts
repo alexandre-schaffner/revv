@@ -3,8 +3,6 @@ import { decodePlainText } from "./agent-text";
 
 describe("decodePlainText", () => {
   it("decodes the entity agents actually emit in chapter titles", () => {
-    // The bug this exists for: stored verbatim, Svelte escapes the string a
-    // second time and the reader sees a literal `&amp;` in the header.
     expect(decodePlainText("Context &amp; design decisions")).toBe("Context & design decisions");
   });
 
@@ -21,7 +19,6 @@ describe("decodePlainText", () => {
   });
 
   it("decodes in a single pass, so double-escaped input keeps one layer", () => {
-    // Matches browser behaviour: `&amp;lt;` is the text `&lt;`, not `<`.
     expect(decodePlainText("&amp;lt;div&amp;gt;")).toBe("&lt;div&gt;");
   });
 
@@ -32,7 +29,7 @@ describe("decodePlainText", () => {
     expect(decodePlainText("&#1114112;")).toBe("&#1114112;");
   });
 
-  it("trims, replacing the plain .trim() the handlers used to do inline", () => {
+  it("trims surrounding whitespace", () => {
     expect(decodePlainText("  Migration safety  ")).toBe("Migration safety");
     expect(decodePlainText("   ")).toBe("");
   });

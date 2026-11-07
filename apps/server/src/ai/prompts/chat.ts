@@ -1,18 +1,16 @@
 /// <reference path="../../assets.d.ts" />
-// ── Chat prompt ─────────────────────────────────────────────────────────────
+// Right-pane chat. The agent runs inside the PR's git worktree with write
+// access so it can propose fixes as real commits on a working branch.
 //
-// Right-pane AI chat system prompt + user-message builders. The agent runs
-// inside the PR's git worktree, with read AND write tool access (Read, Grep,
-// Glob, Write, Edit, Bash) so it can propose fixes as actual commits on a
-// working branch.
-//
-// The system prompt is sent ONCE on session create — both the Claude Agent
-// SDK (`persistSession: true`) and the opencode daemon retain it for resumes.
+// The system prompt goes out only on a fresh ACP session; a resumed session
+// already holds it.
 
+import type { IssueSeverity } from "@revv/shared";
 import CHAT_RESOLVE_BASE_MERGE_TEMPLATE from "./chat-resolve-base-merge.md" with { type: "text" };
 import CHAT_RESOLVE_BASE_REBASE_TEMPLATE from "./chat-resolve-base-rebase.md" with { type: "text" };
 import CHAT_RESOLVE_CONFLICTS_TEMPLATE from "./chat-resolve-conflicts.md" with { type: "text" };
 import CHAT_SYSTEM_TEMPLATE from "./chat-system.md" with { type: "text" };
+import { fillTemplate } from "./fill-template";
 import { WALKTHROUGH_ARTIFACT_SPEC } from "./walkthrough";
 
 const ARTIFACT_SPEC_MARKER = "{{ARTIFACT_SPEC}}";
@@ -21,7 +19,7 @@ if (!CHAT_SYSTEM_TEMPLATE.includes(ARTIFACT_SPEC_MARKER)) {
 }
 
 export interface ChatWalkthroughIssue {
-  readonly severity: string; // 'info' | 'warning' | 'critical'
+  readonly severity: IssueSeverity;
   readonly title: string;
   readonly description: string;
   readonly filePath?: string | null;
@@ -49,13 +47,7 @@ export interface ChatSystemPromptParams {
   readonly branchName: string;
 }
 
-/**
- * System prompt for the right-pane chat agent. Embeds PR context + the
- * latest walkthrough (when available) and explains the write+commit
- * workflow. Sent only on session create.
- */
 export function buildChatSystemPrompt(params: ChatSystemPromptParams): string {
-  // Build PR section
   const prLines: string[] = [];
   prLines.push("## Pull Request");
   prLines.push(`**Title:** ${params.pr.title}`);
@@ -67,7 +59,6 @@ export function buildChatSystemPrompt(params: ChatSystemPromptParams): string {
   }
   const prSection = prLines.join("\n");
 
-  // Build walkthrough section (empty string when absent)
   let walkthroughSection = "";
   if (params.walkthrough) {
     const wt = params.walkthrough;
@@ -105,38 +96,25 @@ export function buildChatSystemPrompt(params: ChatSystemPromptParams): string {
     walkthroughSection = wtLines.join("\n");
   }
 
-  // Fill placeholders. The artifact craft spec is single-sourced in
-  // `walkthrough-artifacts.md` and shared with the review agent's system prompt —
-  // the chat agent writes artifact blocks through `add_block`/`update_block`, so
-  // the two must not drift.
-  //
-  // Every substitution goes through a replacer function, never a replacement
-  // string: `$&`, `$'` and `` $` `` are substitution patterns, and every value
-  // here is externally authored — the PR title and body, a branch name, the
-  // walkthrough's own prose. A PR titled "fix: escape $' in the parser" would
-  // otherwise splice the rest of the system prompt into itself.
-  let prompt = CHAT_SYSTEM_TEMPLATE.replace("{{PR_SECTION}}", () => prSection)
-    .replace("{{BRANCH_NAME}}", () => params.branchName)
-    .replace(ARTIFACT_SPEC_MARKER, () => WALKTHROUGH_ARTIFACT_SPEC);
+  // No walkthrough: the section goes, blank line and all.
+  const template = walkthroughSection
+    ? CHAT_SYSTEM_TEMPLATE
+    : CHAT_SYSTEM_TEMPLATE.replace("\n\n{{WALKTHROUGH_SECTION}}", "");
+  let prompt = fillTemplate(template, {
+    PR_SECTION: prSection,
+    BRANCH_NAME: params.branchName,
+    ARTIFACT_SPEC: WALKTHROUGH_ARTIFACT_SPEC,
+    WALKTHROUGH_SECTION: walkthroughSection,
+  });
 
-  if (walkthroughSection) {
-    prompt = prompt.replace("{{WALKTHROUGH_SECTION}}", () => walkthroughSection);
-  } else {
-    // Remove the placeholder along with its surrounding blank lines
-    prompt = prompt.replace("\n\n{{WALKTHROUGH_SECTION}}", "");
-  }
-
-  // Clean up any double-blank-lines that may result from empty sections
   prompt = prompt.replace(/\n{3,}/g, "\n\n");
 
   return prompt;
 }
 
 /**
- * A single entry from the persisted chat timeline that we re-inline into the
- * agent's user message. Mirrors the shape of `ChatTimelineEntry` from
- * `services/ChatSession`, but kept as a local interface so this prompt module
- * stays free of service-layer imports.
+ * Mirrors `ChatTimelineEntry` from `services/ChatSession`, declared locally so
+ * this prompt module stays free of service-layer imports.
  */
 export type ChatHistoryEntry =
   | {
@@ -154,12 +132,9 @@ export type ChatHistoryEntry =
 export interface ChatUserMessageParams {
   readonly message: string;
   /**
-   * Persisted timeline of the current chat session, in sequence order,
-   * NOT including the message being sent in this turn. When non-empty,
-   * it's serialized into a `## Conversation history` block prepended to
-   * the user's message so the agent sees the full transcript even when
-   * native session resume isn't available (fresh daemon, missing
-   * session id, agent switch, etc.).
+   * Persisted timeline of the session in sequence order, NOT including the
+   * message being sent this turn. Replayed into the prompt so the agent sees
+   * the transcript when native session resume isn't available.
    */
   readonly history?: ReadonlyArray<ChatHistoryEntry>;
 }
@@ -204,10 +179,8 @@ export type ResolveConflictsTask =
   | { readonly kind: "base-rebase"; readonly baseBranch: string; readonly sourceBranch: string };
 
 /**
- * Build the one-shot system prompt for the conflict resolver agent: the
- * task's template with its branches and the conflicting file list filled in.
- * The prompt is non-conversational and is NOT persisted into the chat
- * session — see {@link AiService.resolveMergeConflict}.
+ * One-shot and non-conversational: NOT persisted into the chat session — see
+ * {@link AiService.resolveMergeConflict}.
  */
 export function buildResolveConflictsPrompt(
   task: ResolveConflictsTask,
@@ -219,21 +192,24 @@ export function buildResolveConflictsPrompt(
       : conflictFiles.map((f) => `- \`${f}\``).join("\n");
 
   if (task.kind === "push-merge") {
-    return CHAT_RESOLVE_CONFLICTS_TEMPLATE.replace("{{AGENT_BRANCH}}", task.agentBranch)
-      .replace("{{SOURCE_BRANCH}}", task.sourceBranch)
-      .replace("{{CONFLICT_FILES}}", fileLines);
+    return fillTemplate(CHAT_RESOLVE_CONFLICTS_TEMPLATE, {
+      AGENT_BRANCH: task.agentBranch,
+      SOURCE_BRANCH: task.sourceBranch,
+      CONFLICT_FILES: fileLines,
+    });
   }
-  const template =
+  return fillTemplate(
     task.kind === "base-merge"
       ? CHAT_RESOLVE_BASE_MERGE_TEMPLATE
-      : CHAT_RESOLVE_BASE_REBASE_TEMPLATE;
-  return template
-    .replaceAll("{{BASE_BRANCH}}", task.baseBranch)
-    .replaceAll("{{SOURCE_BRANCH}}", task.sourceBranch)
-    .replace("{{CONFLICT_FILES}}", fileLines);
+      : CHAT_RESOLVE_BASE_REBASE_TEMPLATE,
+    {
+      BASE_BRANCH: task.baseBranch,
+      SOURCE_BRANCH: task.sourceBranch,
+      CONFLICT_FILES: fileLines,
+    },
+  );
 }
 
-/** Initial user message that nudges the agent into the resolve-conflicts task. */
 export function buildResolveConflictsUserMessage(task: ResolveConflictsTask): string {
   return task.kind === "base-rebase"
     ? "Resolve the rebase conflicts described in your system prompt, continuing the rebase until it completes."

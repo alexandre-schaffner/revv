@@ -6,8 +6,9 @@ import CircleNotch from "phosphor-svelte/lib/CircleNotch";
 import Clock from "phosphor-svelte/lib/Clock";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
 import XCircle from "phosphor-svelte/lib/XCircle";
-import { Shimmer } from "$lib/components/ai/shimmer";
+import { Shimmer } from "$lib/components/ui/shimmer";
 import { gsapFade, tokens } from "$lib/motion";
+import SpineGlyph from "./SpineGlyph.svelte";
 import StackLayerGlyph from "./StackLayerGlyph.svelte";
 
 interface Props {
@@ -43,7 +44,7 @@ function runLine(state: StackMergeLayerState, message: string | null): string {
 </script>
 
 <div class="layer-row" class:outside={!progress}>
-	<span class="stack-layer-glyph" aria-hidden="true">
+	<SpineGlyph>
 		{#if !progress}
 			<StackLayerGlyph status={layer.status} />
 		{:else if progress.state === 'merged'}
@@ -59,7 +60,7 @@ function runLine(state: StackMergeLayerState, message: string | null): string {
 		{:else}
 			<Circle size={14} class="tone-muted" />
 		{/if}
-	</span>
+	</SpineGlyph>
 	<span class="layer-text">
 		<span class="layer-title">{layer.title}</span>
 		<span class="layer-meta">

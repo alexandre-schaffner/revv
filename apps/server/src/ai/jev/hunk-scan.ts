@@ -1,8 +1,6 @@
-// ── First pass: per-hunk smell scan ─────────────────────────────────────────
-//
 // Before the agent starts, every substantive hunk gets one Jev call asking
-// eight yes/no questions, nine in a test file. Nothing here gates anything: the flags reach the
-// agent as leads it must verify (see `hunkScanLeads`), and the UI as their own
+// eight yes/no questions, nine in a test file. Nothing here gates anything: the
+// flags reach the agent as leads it must verify (see `hunkScanLeads`), and the UI as their own
 // layer. Leads rather than locked verdicts on purpose — Jev can't see past the
 // hunk, and a verdict the agent must adjudicate doubles the work it replaces.
 //
@@ -17,16 +15,17 @@ import {
   type HunkScanRow,
   type HunkSkipReason,
   type HunkSmell,
+  type PatchHunk,
+  splitHunks,
   type WalkthroughLead,
 } from "@revv/shared";
 import { noul } from "@typesafe-ai/sdk";
 import { Deferred, Effect } from "effect";
 import { type DbError, JevUnavailable } from "../../domain/errors";
 import { CacheService } from "../../services/Cache";
-import type { DbService } from "../../services/Db";
-import { type PatchHunk, splitHunks } from "../../services/diff-anchors";
-import type { HunkScanSeed } from "../../services/hunk-scan-store";
+import type { HunkScanSeed } from "../../services/hunk-scan/store";
 import { JEV_MODEL, JevService } from "../../services/Jev";
+import { GENERATED_TIER } from "./job-start";
 import { optionalJev } from "./optional";
 import { numericAnswerAt } from "./questions";
 import { buildHunkScanState, type FileLike, HUNK_PATCH_MAX_CHARS } from "./state";
@@ -38,7 +37,7 @@ import { buildHunkScanState, type FileLike, HUNK_PATCH_MAX_CHARS } from "./state
  */
 const HUNK_SCAN_CALL_TIMEOUT_MS = 5_000;
 
-/** Calls in flight. `JevService` paces the whole process under the request quota. */
+/** `JevService` paces the whole process under the request quota. */
 const HUNK_SCAN_CONCURRENCY = 8;
 
 /**
@@ -73,14 +72,12 @@ export const HUNK_SCAN_LEADS_PER_SMELL = 3;
  */
 const HUNK_SCAN_CACHE_NS = "jev:hunk-scan:v4";
 
-/** Closing line on every question: an answer Jev can't ground in the hunk must be no. */
 const HUNK_ONLY =
   "Judge only the added lines, and only what this hunk shows. If the judgment depends on code that is not visible here, answer no.";
 
 const ask = (instructions: string, yes: string, no: string) =>
   noul(`${instructions} ${HUNK_ONLY}`, { true: yes, false: no });
 
-/** Asked of every hunk. */
 const CODE_QUESTIONS = {
   vulnerability: ask(
     "Do the added lines in `hunk.patch` introduce a security vulnerability?",
@@ -146,7 +143,6 @@ export function isTestPath(filePath: string): boolean {
   return TEST_PATH.test(filePath);
 }
 
-/** One hunk the scan can ask about, with everything a Jev call needs. */
 export interface ScanTarget {
   readonly filePath: string;
   readonly status: string;
@@ -180,7 +176,7 @@ function toTarget(file: FileLike, hunk: PatchHunk): ScanTarget {
 }
 
 /**
- * Decide which hunks to ask about. Generated (tier-0) files, hunks that add
+ * Decide which hunks to ask about. Generated-tier files, hunks that add
  * nothing, and files without a patch are recorded but skipped; the rest are
  * ranked by file tier (unscored files last, as in `filePriorityOrder`), then
  * diff order — so if Jev stops answering partway, what's missing is the least
@@ -213,7 +209,7 @@ export function selectHunks(
       const target = toTarget(file, hunk);
       const addsCode = hunk.addedLines.some((line) => line.trim() !== "");
       const skipReason: HunkSkipReason | null =
-        tier === 0 ? "generated" : addsCode ? null : "deletion_only";
+        tier === GENERATED_TIER ? "generated" : addsCode ? null : "deletion_only";
       seeds.push({
         filePath: file.filename,
         hunkIndex: hunk.index,
@@ -228,12 +224,10 @@ export function selectHunks(
     }
   }
 
-  // `sort` is stable, so equal tiers keep diff order.
   ranked.sort((a, b) => b.tier - a.tier);
   return { seeds, targets: ranked.map((r) => r.target) };
 }
 
-/** One call's worth of a hunk: the whole of it, or one window of a long one. */
 interface HunkWindow {
   readonly body: string;
   readonly part: { readonly index: number; readonly count: number } | null;
@@ -241,10 +235,8 @@ interface HunkWindow {
 }
 
 /**
- * Cut a hunk into windows of at most {@link HUNK_PATCH_MAX_CHARS}, on line
- * boundaries, each repeating the header. Windows that add nothing are dropped
- * — there's nothing in them to judge. A hunk that fits is one window with the
- * hunk's own hash, so its cache entry is the same as an unwindowed call's.
+ * A hunk that fits is one window with the hunk's own hash, so its cache entry
+ * is the same as an unwindowed call's.
  */
 function hunkWindows(target: ScanTarget): HunkWindow[] {
   if (target.body.length <= HUNK_PATCH_MAX_CHARS) {
@@ -277,10 +269,9 @@ function hunkWindows(target: ScanTarget): HunkWindow[] {
 }
 
 /**
- * Ask about one window. Outside a test file `redundant_test` is 0 without
- * being asked — a hunk that isn't a test can't be a redundant one. A missing
- * answer fails the call rather than reading as 0. Fails only with
- * {@link JevUnavailable}.
+ * Outside a test file `redundant_test` is 0 without being asked — a hunk that
+ * isn't a test can't be a redundant one. A missing answer fails the call
+ * rather than reading as 0.
  */
 function askWindow(
   target: ScanTarget,
@@ -319,15 +310,10 @@ function askWindow(
   });
 }
 
-/** One window's answer, from the content-keyed cache when this exact text was asked before. */
 function judgeWindow(
   target: ScanTarget,
   window: HunkWindow,
-): Effect.Effect<
-  Record<HunkSmell, number>,
-  JevUnavailable | DbError,
-  JevService | CacheService | DbService
-> {
+): Effect.Effect<Record<HunkSmell, number>, JevUnavailable | DbError, JevService | CacheService> {
   return Effect.gen(function* () {
     const cache = yield* CacheService;
     return yield* cache.getOrFetch(
@@ -351,12 +337,11 @@ function strongest(
 }
 
 /**
- * Ask about every window of every target, {@link HUNK_SCAN_CONCURRENCY} at a
- * time. No cap and no time budget: every hunk is read. A failed call gets one
- * retry; once {@link HUNK_SCAN_BREAKER_FAILURES} failures land in a row the
- * scan stops starting calls — Jev is down, and asking the rest would only
- * stall the agent. A 429 isn't a failure: every call waits out the quota and
- * tries again. `onAnswer` runs once per hunk, when its last window lands, so
+ * No cap and no time budget: every hunk is read. Once
+ * {@link HUNK_SCAN_BREAKER_FAILURES} failures land in a row the scan stops
+ * starting calls — Jev is down, and asking the rest would only stall the
+ * agent. A 429 isn't a failure: every call waits out the quota and tries
+ * again. `onAnswer` runs once per hunk, when its last window lands, so
  * the caller can commit and broadcast each one; a hunk it never ran for is one
  * the scan didn't finish. Never fails.
  */
@@ -366,7 +351,7 @@ export function scanHunks<R>(
     target: ScanTarget,
     signals: Record<HunkSmell, number>,
   ) => Effect.Effect<void, never, R>,
-): Effect.Effect<void, never, JevService | CacheService | DbService | R> {
+): Effect.Effect<void, never, JevService | CacheService | R> {
   return Effect.gen(function* () {
     const progress = new Map<
       ScanTarget,
@@ -378,15 +363,11 @@ export function scanHunks<R>(
       return windows.map((window) => ({ target, window }));
     });
 
-    // The breaker. `round` counts the failures that counted; a call sent
-    // before the latest of them was already in flight when it landed, so its
-    // own failure is the same outage and doesn't count again.
     let round = 0;
     let failuresInARow = 0;
-    // Completed when the breaker trips. Racing every call against it stops
-    // the scan waiting on calls in flight; those still finish in the
-    // background (`CacheService` runs fetches detached), and their answers
-    // are cached for the next run.
+    // Calls in flight when the breaker trips still finish in the background
+    // (`CacheService` runs fetches detached), so their answers are cached for
+    // the next run.
     const stop = yield* Deferred.make<null>();
     let isTripped = false;
     let pausedUntil = 0;
@@ -406,7 +387,6 @@ export function scanHunks<R>(
         return Deferred.succeed(stop, null);
       });
 
-    /** One call, after any 429 pause, reporting its failure to the breaker. */
     const attempt = (target: ScanTarget, window: HunkWindow) =>
       Effect.suspend(() => {
         const sentInRound = round;
@@ -461,11 +441,8 @@ function smellProbability(lead: HunkLead, smell: HunkSmell): number {
 }
 
 /**
- * The flagged hunks worth handing the agent, strongest first, capped at
- * {@link HUNK_SCAN_MAX_LEADS}: each smell's strongest
- * {@link HUNK_SCAN_LEADS_PER_SMELL} first, then the strongest of the rest.
- * Only hunks in `promptFiles` count — the scan always covers the full PR,
- * while an incremental review's prompt shows only its range.
+ * Strongest first. Only hunks in `promptFiles` count — the scan always covers
+ * the full PR, while an incremental review's prompt shows only its range.
  */
 export function hunkScanLeads(
   rows: readonly HunkScanRow[],

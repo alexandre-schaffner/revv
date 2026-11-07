@@ -1,34 +1,27 @@
 <script lang="ts">
 import type { RecapPeriod } from "@revv/shared";
 import ArrowLeft from "phosphor-svelte/lib/ArrowLeft";
-import PenNib from "phosphor-svelte/lib/PenNib";
-import Spinner from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
 import { goto } from "$app/navigation";
-import { Shimmer } from "$lib/components/ai/shimmer";
+import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import { Button } from "$lib/components/ui/button";
-import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
-import { fetchRecapsForRepo, generateRecap, getRecapsForRepo } from "$lib/stores/recaps.svelte";
-import { getActionsFloatStyle } from "$lib/stores/sidebar.svelte";
+import { RECAP_PERIOD_COPY } from "$lib/recaps/copy";
 import {
-  addUtcDays,
-  dayKeyToUtcDate,
+  formatRecapTitle,
   isCurrentPeriod,
-  mondayKeyOf,
-  recapSlotKey,
+  recapSlotIndex,
   selectionBoundaries,
   slotKeyFor,
-} from "./period-window";
+  slotSpan,
+} from "$lib/recaps/period-window";
+import { generateRecap, useRecapsForRepo } from "$lib/recaps/store.svelte";
 import RecapArchivePopover from "./RecapArchivePopover.svelte";
+import RecapGeneratePill from "./RecapGeneratePill.svelte";
 
 /**
- * A recap window that holds nothing yet.
- *
- * Every cell in the archive calendar is a link, which means the empty ones
- * need somewhere to land. This is that page: it names the window, says there
- * is no recap for it, and offers to write one. As soon as a recap exists for
- * the window — because this page generated it, or because the scheduler did —
- * it hands off to that recap's permalink.
+ * A recap window that holds nothing yet: where an empty calendar cell lands.
+ * As soon as a recap exists for the window (generated here or by the
+ * scheduler) it hands off to that recap's permalink.
  */
 interface Props {
   repoId: string;
@@ -39,20 +32,9 @@ interface Props {
 
 let { repoId, period, dayKey }: Props = $props();
 
-let generating = $state(false);
-
-$effect(() => {
-  const id = repoId;
-  if (id) void untrack(() => fetchRecapsForRepo(id));
-});
-
-const recaps = $derived(getRecapsForRepo(repoId));
-const slotKey = $derived(slotKeyFor(period, dayKey));
-
-/** The recap occupying this window, if one has appeared. */
-const existing = $derived(
-  recaps.find((r) => r.status !== "superseded" && recapSlotKey(r) === slotKey) ?? null,
-);
+const repoRecaps = useRecapsForRepo(() => repoId);
+const recaps = $derived(repoRecaps.list);
+const existing = $derived(recapSlotIndex(recaps).get(slotKeyFor(period, dayKey)) ?? null);
 
 // Hand off the moment the window stops being empty. `replaceState` rather than
 // a push: this page was a placeholder for a recap that now exists, and leaving
@@ -63,55 +45,40 @@ $effect(() => {
   void untrack(() => goto(`/repo/${repoId}/recaps/${r.id}`, { replaceState: true }));
 });
 
-const DAY_MONTH_YEAR = new Intl.DateTimeFormat("en-GB", {
-  weekday: "short",
-  day: "2-digit",
-  month: "short",
-  year: "numeric",
-  timeZone: "UTC",
-});
-const DAY_MONTH = new Intl.DateTimeFormat("en-GB", {
-  day: "2-digit",
-  month: "short",
-  timeZone: "UTC",
-});
-
 // Same titles RecapHeroBig builds for a real recap, so arriving here and then
 // generating does not restyle the heading under the user.
-const title = $derived.by(() => {
-  if (period === "daily") return DAY_MONTH_YEAR.format(dayKeyToUtcDate(dayKey));
-  const monday = mondayKeyOf(dayKey);
-  const sunday = addUtcDays(monday, 6);
-  return `Week of ${DAY_MONTH.format(dayKeyToUtcDate(monday))} – ${DAY_MONTH.format(dayKeyToUtcDate(sunday))}`;
-});
+const title = $derived(formatRecapTitle(slotSpan(period, dayKey)));
 
-const unit = $derived(period === "daily" ? "day" : "week");
+const copy = $derived(RECAP_PERIOD_COPY[period]);
 
 /**
  * The window is still accumulating, so a recap generated now covers part of
- * it. That is the one thing worth saying under the date here — on a closed
- * window there is nothing, and the bare "UTC" that used to sit there was a
- * dangling word (on a real recap the same line reads "UTC · synced 10h ago").
+ * it; a closed window shows nothing under the date.
  */
 const windowStillOpen = $derived(isCurrentPeriod(period, dayKey, new Date()));
-const actionsFloatStyle = $derived(getActionsFloatStyle());
+useShellChrome(() => ({ actions: recapActions }));
 
 async function onGenerate(): Promise<void> {
-  if (generating) return;
-  generating = true;
-  try {
-    // A closed window goes out pinned and idempotent; a live one omits its
-    // boundaries so the server rolls its own [00:00Z, now]. Passing
-    // `undefined` rather than `{}` is load-bearing under
-    // `exactOptionalPropertyTypes` — see `selectionBoundaries`.
-    const boundaries = selectionBoundaries(period, dayKey, new Date());
-    const res = await generateRecap(repoId, period, boundaries ?? undefined);
-    if (res?.recapId) void goto(`/repo/${repoId}/recaps/${res.recapId}`);
-  } finally {
-    generating = false;
-  }
+  // A closed window goes out pinned and idempotent; a live one omits its
+  // boundaries so the server rolls its own [00:00Z, now]. Passing
+  // `undefined` rather than `{}` is load-bearing under
+  // `exactOptionalPropertyTypes` — see `selectionBoundaries`.
+  const boundaries = selectionBoundaries(period, dayKey, new Date());
+  const res = await generateRecap(repoId, period, boundaries ?? undefined);
+  if (res?.recapId) void goto(`/repo/${repoId}/recaps/${res.recapId}`);
 }
 </script>
+
+{#snippet recapActions()}
+<div class="actions-row" role="toolbar" aria-label="Recap actions">
+	<RecapGeneratePill
+		label="Generate recap"
+		busyLabel="Generating recap…"
+		title="Write the {period} recap for {title}"
+		run={onGenerate}
+	/>
+</div>
+{/snippet}
 
 <div class="window-route">
 	<div class="page">
@@ -126,7 +93,7 @@ async function onGenerate(): Promise<void> {
 			<header class="hero">
 				<span class="eyebrow">
 					<span class="ai-mark" aria-hidden="true"></span>
-					<span>{period === "daily" ? "Daily recap" : "Weekly recap"}</span>
+					<span>{copy.title}</span>
 				</span>
 				<div class="date-row">
 					<h1 class="date">{title}</h1>
@@ -138,7 +105,7 @@ async function onGenerate(): Promise<void> {
 			</header>
 
 			<div class="empty-card">
-				<p class="empty-title">No recap for this {unit} yet.</p>
+				<p class="empty-title">No recap for this {copy.unit} yet.</p>
 				<p class="empty-hint">
 					The agent reads every pull request that moved in the window and writes it
 					up. Takes about a minute.
@@ -146,31 +113,9 @@ async function onGenerate(): Promise<void> {
 			</div>
 		</div>
 	</div>
-
-	<div class="actions-float" style={actionsFloatStyle}>
-		<div class="actions-row" role="toolbar" aria-label="Recap actions">
-			<GlassPill
-				variant="accent"
-				onclick={onGenerate}
-				disabled={generating}
-				title="Write the {period} recap for {title}"
-			>
-				{#if generating}
-					<Spinner size={14} class="motion-essential-spin" aria-hidden="true" />
-				{:else}
-					<PenNib size={16} aria-hidden="true" />
-				{/if}
-				<Shimmer active={!generating}>
-					{generating ? "Generating recap…" : "Generate recap"}
-				</Shimmer>
-			</GlassPill>
-		</div>
-	</div>
 </div>
 
 <style>
-	/* Mirrors the recap route's wrapper: the fixed action bar must not be a
-	   descendant of the scroll container. */
 	.window-route {
 		position: relative;
 		height: 100%;

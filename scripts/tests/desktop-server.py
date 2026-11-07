@@ -23,7 +23,10 @@ class DesktopServerTest(unittest.TestCase):
         self.support = self.root / "support"
         self.config = self.support / "desktop-server.json"
         self.legacy = self.root / "legacy.plist"
-        self.env = {**os.environ, "REVV_SUPPORT_DIR": str(self.support)}
+        self.env = {
+            **{k: v for k, v in os.environ.items() if not k.startswith("REVV_GITHUB_")},
+            "REVV_SUPPORT_DIR": str(self.support),
+        }
 
     def write_config(self):
         subprocess.run([
@@ -33,7 +36,20 @@ class DesktopServerTest(unittest.TestCase):
         ], env=self.env, capture_output=True, text=True, check=True)
         return json.loads(self.config.read_text())
 
+    def install(self, overrides=None):
+        """The installer's GitHub step then its server step, as install.sh runs them."""
+        subprocess.run([
+            "bash", "-c", 'set -euo pipefail; source "$1"; save_github_overrides',
+            "test", str(REPO / "scripts/lib/common.sh"),
+        ], env={**self.env, **(overrides or {})}, capture_output=True, text=True, check=True)
+        return self.write_config()["env"]
+
+    def github_env(self, env):
+        return {k: v for k, v in env.items() if k.startswith("GITHUB_")}
+
     def test_config_preserves_paths_and_existing_overrides(self):
+        self.support.mkdir()
+        (self.support / "github.conf").write_text("GITHUB_HOST=github.company.test\n")
         self.legacy.write_bytes(plistlib.dumps({"EnvironmentVariables": {
             "REVV_DB_PATH": "/custom/revv.db", "GITHUB_HOST": "github.company.test",
             "PATH": "/custom/tools:/usr/bin:/bin",
@@ -48,8 +64,22 @@ class DesktopServerTest(unittest.TestCase):
         self.legacy.unlink()
         self.assertEqual(self.write_config()["env"], value["env"])
 
+    def test_reinstalling_without_a_github_override_removes_it(self):
+        ghe = {"REVV_GITHUB_HOST": "ghe.example.com", "REVV_GITHUB_CLIENT_ID": "Iv23li1234567890"}
+        self.assertEqual(self.github_env(self.install(ghe)),
+                         {"GITHUB_HOST": "ghe.example.com", "GITHUB_CLIENT_ID": "Iv23li1234567890"})
+        self.assertEqual(self.github_env(self.write_config()["env"]),
+                         {"GITHUB_HOST": "ghe.example.com", "GITHUB_CLIENT_ID": "Iv23li1234567890"},
+                         "revv update keeps the persisted override")
+        self.assertEqual(self.github_env(self.install({"REVV_GITHUB_HOST": "ghe2.example.com"})),
+                         {"GITHUB_HOST": "ghe2.example.com"})
+        env = self.install()
+        self.assertEqual(self.github_env(env), {})
+        self.assertFalse((self.support / "github.conf").exists())
+        self.assertEqual(env["REVV_CHANNEL"], "prod")
+
     def test_cli_start_and_stop_control_the_desktop_app(self):
-        cli = (REPO / "scripts/revv").read_text().split("# ── Dispatch")[0]
+        cli = (REPO / "scripts/revv").read_text().split('\ncase "${1:-help}" in')[0]
         functions = self.root / "cli-functions.sh"
         functions.write_text(cli)
         app = self.root / "Revv Fixture.app"

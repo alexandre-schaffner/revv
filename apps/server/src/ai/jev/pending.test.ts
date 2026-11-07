@@ -1,75 +1,58 @@
 import { describe, expect, it } from "bun:test";
-import {
-  awaitJudgments,
-  forgetWalkthrough,
-  markRetracted,
-  pendingCount,
-  trackJudgment,
-  wasRetracted,
-} from "./pending";
+import { makeJudgmentTracker } from "./pending";
 
 const tick = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-describe("pending judgments", () => {
+describe("judgment tracker", () => {
   it("drains work scheduled before the gate ran", async () => {
-    const id = `w-${crypto.randomUUID()}`;
+    const tracker = makeJudgmentTracker("w");
     let landed = false;
-    trackJudgment(
-      id,
+    tracker.track(
       tick(10).then(() => {
         landed = true;
       }),
     );
     expect(landed).toBe(false);
-    await awaitJudgments(id);
+    await tracker.drain();
     expect(landed).toBe(true);
-    expect(pendingCount(id)).toBe(0);
-    forgetWalkthrough(id);
+    expect(tracker.pending()).toBe(0);
   });
 
-  // A judgment can be scheduled mid-drain; one `Promise.all` over a single
-  // snapshot would miss it.
   it("drains work scheduled during the drain", async () => {
-    const id = `w-${crypto.randomUUID()}`;
+    const tracker = makeJudgmentTracker("w");
     let second = false;
-    trackJudgment(
-      id,
+    tracker.track(
       tick(5).then(() => {
-        trackJudgment(
-          id,
+        tracker.track(
           tick(5).then(() => {
             second = true;
           }),
         );
       }),
     );
-    await awaitJudgments(id);
+    await tracker.drain();
     expect(second).toBe(true);
-    forgetWalkthrough(id);
   });
 
   // A rejected judgment must not wedge the gate that later drains it.
   it("survives a rejected judgment", async () => {
-    const id = `w-${crypto.randomUUID()}`;
-    trackJudgment(id, Promise.reject(new Error("boom")));
-    await awaitJudgments(id);
-    expect(pendingCount(id)).toBe(0);
-    forgetWalkthrough(id);
+    const tracker = makeJudgmentTracker("w");
+    tracker.track(Promise.reject(new Error("boom")));
+    await tracker.drain();
+    expect(tracker.pending()).toBe(0);
   });
 
   it("returns immediately when nothing is in flight", async () => {
-    const id = `w-${crypto.randomUUID()}`;
-    await awaitJudgments(id);
-    expect(pendingCount(id)).toBe(0);
+    const tracker = makeJudgmentTracker("w");
+    await tracker.drain();
+    expect(tracker.pending()).toBe(0);
   });
 
-  it("tracks retractions per walkthrough and forgets them on job end", () => {
-    const a = `w-${crypto.randomUUID()}`;
-    const b = `w-${crypto.randomUUID()}`;
-    markRetracted(a, "issue-1");
-    expect(wasRetracted(a, "issue-1")).toBe(true);
-    expect(wasRetracted(b, "issue-1")).toBe(false);
-    forgetWalkthrough(a);
-    expect(wasRetracted(a, "issue-1")).toBe(false);
+  it("keeps retractions per run", () => {
+    const a = makeJudgmentTracker("a");
+    const b = makeJudgmentTracker("b");
+    a.markRetracted("issue-1");
+    expect(a.wasRetracted("issue-1")).toBe(true);
+    expect(b.wasRetracted("issue-1")).toBe(false);
   });
 });

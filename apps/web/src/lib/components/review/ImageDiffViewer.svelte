@@ -3,9 +3,10 @@ import ArrowsHorizontal from "phosphor-svelte/lib/ArrowsHorizontal";
 import ImageBroken from "phosphor-svelte/lib/ImageBroken";
 import { onDestroy } from "svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
+import { ApiError } from "$lib/api/errors";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
-import type { ReviewFile } from "$lib/types/review";
-import { authHeaders } from "$lib/utils/session-token";
+import { authHeaders } from "$lib/session/token.svelte";
+import type { ReviewFile } from "$lib/stores/diff-files.svelte";
 
 interface Props {
   prId: string;
@@ -35,9 +36,6 @@ const blank: SidePane = {
 let baseSide = $state<SidePane>({ ...blank });
 let headSide = $state<SidePane>({ ...blank });
 
-// Track every object URL we mint so onDestroy can revoke them. Without
-// this each PR diff visit would leak a blob URL per image until the tab
-// closes.
 const createdUrls: string[] = [];
 
 const showBase = $derived(!file.isNew);
@@ -59,15 +57,13 @@ async function loadSide(path: string, side: "base" | "head"): Promise<SidePane> 
     };
   }
 
+  // Raw fetch, not Eden: the success body is the image's bytes.
   if (!response.ok) {
-    let detail = `${response.status}`;
-    try {
-      const text = await response.text();
-      if (text) detail = text;
-    } catch {
-      // ignore — fall back to status code
-    }
-    return { ...blank, error: detail };
+    const value: unknown = await response.json().catch(() => null);
+    return {
+      ...blank,
+      error: new ApiError({ status: response.status, value }, "Couldn't load the image").message,
+    };
   }
 
   const blob = await response.blob();
@@ -95,10 +91,8 @@ function releaseUrls(): void {
   createdUrls.length = 0;
 }
 
-// `file.path` is the load key. When the user switches files, this $effect
-// re-runs. Revoke any previously-minted object URLs first so we don't leak
-// a blob per switch; the captured `path` then guards against a stale
-// fetch landing after a second switch.
+// Revoke the previous file's object URLs first; the captured `path` guards
+// against a stale fetch landing after another switch.
 $effect(() => {
   const path = file.path;
   const old = oldPath;

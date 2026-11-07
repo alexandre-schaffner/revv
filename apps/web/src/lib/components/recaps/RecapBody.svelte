@@ -1,23 +1,18 @@
 <script lang="ts">
 import type { ProjectRecap } from "@revv/shared";
+import {
+  buildChapters,
+  buildThemePalette,
+  paletteLookup,
+  sanitizeLedeHtml,
+} from "$lib/recaps/themes";
 import Chapter from "./Chapter.svelte";
-import { buildChapters, buildThemePalette, paletteLookup } from "./themes";
 
 interface Props {
   recap: ProjectRecap;
 }
 
 let { recap }: Props = $props();
-
-// Allowlist sanitizer: escape everything, then re-emit only <strong>/<em>.
-function sanitizeLedeHtml(raw: string): string {
-  const escaped = raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return escaped
-    .replace(/&lt;strong&gt;/gi, "<strong>")
-    .replace(/&lt;\/strong&gt;/gi, "</strong>")
-    .replace(/&lt;em&gt;/gi, "<em>")
-    .replace(/&lt;\/em&gt;/gi, "</em>");
-}
 
 const ledeHtml = $derived(sanitizeLedeHtml(recap.lede));
 const chapters = $derived(buildChapters(recap.entries));
@@ -39,10 +34,8 @@ const summaryByTheme = $derived.by(() => {
 <div class="body">
   {#if recap.lede}
     <span class="eyebrow">Overview</span>
-    <!-- The lede is a custom inline-only sanitized string (strong/em),
-         styled as display text by `.lede` below. It is intentionally not
-         inside a `.prose` surface, so it gets none of the typography-plugin
-         body styling. -->
+    <!-- The lede is an inline-only sanitized string (strong/em), deliberately
+         outside a `.prose` surface so the typography plugin leaves it alone. -->
     <p class="lede">{@html ledeHtml}</p>
   {/if}
 

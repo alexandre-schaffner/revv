@@ -8,7 +8,6 @@ import {
   routeSizing,
 } from "./routing";
 
-/** A confident, unambiguous answer — the baseline every case varies from. */
 function input(over: Partial<RouteSizingInput> = {}): RouteSizingInput {
   return {
     agent: "claude-code",
@@ -36,6 +35,14 @@ describe("routeSizing — model", () => {
   it("downgrades only when the user declined to pin a model", () => {
     const routed = routeSizing(input({ depth: "shallow", configuredModel: AUTO_SENTINEL }));
     expect(routed?.model).toBe("claude-haiku-5-5");
+  });
+
+  it("keeps an older catalog pin at its tier", () => {
+    const pinned = (configuredModel: string, depth: RouteSizingInput["depth"]) =>
+      routeSizing(input({ configuredModel, depth }))?.model;
+    expect(pinned("claude-sonnet-5", "standard")).toBeUndefined();
+    expect(pinned("claude-sonnet-5", "deep")).toBe("claude-opus-5-5");
+    expect(pinned("claude-haiku-4-5-20251001", "standard")).toBe("claude-sonnet-5-5");
   });
 
   it("leaves an off-ladder pinned model alone", () => {

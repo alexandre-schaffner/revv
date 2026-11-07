@@ -1,5 +1,3 @@
-// ── Job-start judgment ──────────────────────────────────────────────────────
-//
 // One request, every question the diff alone can answer: risk tier, depth
 // tier, reasoning effort, split recommendation, per-file attention score.
 // Batched because none depends on another's answer, and the state (patches)
@@ -7,22 +5,16 @@
 // per file.
 
 import { createHash } from "node:crypto";
-import type { AcpAgentId, RiskLevel, ThinkingEffortSetting } from "@revv/shared";
+import type { AcpAgentId, ReviewDepth, RiskLevel, ThinkingEffortSetting } from "@revv/shared";
 import { Effect } from "effect";
 import type { JevUnavailable } from "../../domain/errors";
-import { debug } from "../../logger";
-import { CacheService } from "../../services/Cache";
-import type { DbService } from "../../services/Db";
+import type { CacheService } from "../../services/Cache";
 import { JevService } from "../../services/Jev";
+import { riskCriteria } from "../prompts/risk-tiers";
+import { cachedJev } from "./optional";
 import { numericAnswerAt } from "./questions";
-import {
-  type GenerationLaunchOverride,
-  type ReasoningEffort,
-  type ReviewDepth,
-  routeSizing,
-} from "./routing";
-import type { JobStartStateInput } from "./state";
-import { buildJobStartState } from "./state";
+import { type GenerationLaunchOverride, type ReasoningEffort, routeSizing } from "./routing";
+import { buildJobStartState, commitSubjects, type JobStartStateInput } from "./state";
 
 /**
  * Ceiling for the job-start call. Sits on `startJobBody`'s critical path
@@ -35,25 +27,6 @@ export const JOB_START_TIMEOUT_MS = 8_000;
  * 32k-token state+question budget. Files past the cap fall back to path order.
  */
 export const FILE_PRIORITY_MAX_FILES = 50;
-
-// Mirrors "Risk tiers (drive review depth)" in
-// `ai/prompts/walkthrough-system-common.md` so orchestrator and agent can't drift.
-const RISK_CRITERIA = {
-  low: {
-    what: "A quick tour is enough. Small diffs (under roughly 150 changed lines), documentation, renames, whitespace, test-only additions, isolated dependency bumps with no behavior change.",
-    expect: "0-2 issues, 2-3 chapters, mostly passing verdicts.",
-  },
-  medium: {
-    what: "A standard review. Moderate diffs, new business logic, API additions, configuration changes, non-trivial refactors.",
-    expect: "1-5 issues, 4-6 chapters, a mix of pass and concern.",
-  },
-  high: {
-    what: "A deep audit. Security-sensitive code, concurrency, database migrations, breaking API changes, payments, cross-service contracts.",
-    not_for:
-      "Sheer line count alone. A 2000-line generated lockfile or a formatter-only reflow is not high risk.",
-    expect: "3-10+ issues, 7-11 chapters, multiple concerns and possibly a blocker.",
-  },
-} as const;
 
 const DEPTH_CRITERIA = {
   shallow:
@@ -74,16 +47,44 @@ const EFFORT_CRITERIA = {
 } as const;
 
 /**
- * Per-file attention rubric, lowest first; index = tier, order matters. Not a
- * size proxy: a 2000-line lockfile is tier 0, a 4-line permission check is tier 4.
+ * Per-file attention rubric, lowest first: a file's tier is its index here.
+ * The Jev question scores against the criteria, the first pass skips the
+ * generated tier, and the prompt labels each tier, all from this one table.
+ * Not a size proxy: a 2000-line lockfile is generated, a 4-line permission
+ * check is critical.
  */
-const FILE_PRIORITY_LEVELS = [
-  "Generated, vendored, or a lockfile. Do not read it — name the category and move on.",
-  "Mechanical: a rename, an import reshuffle, a formatting pass, a version bump with no behavior change.",
-  "A routine change whose blast radius stays inside this file or its immediate callers.",
-  "New or altered logic worth following: a branch, a state transition, an error path, a data transformation.",
-  "Security, authentication, payments, data migration, deletion, or a public contract other code depends on.",
+export const FILE_TIERS = [
+  {
+    label: "generated",
+    criterion:
+      "Generated, vendored, or a lockfile. Do not read it — name the category and move on.",
+  },
+  {
+    label: "mechanical",
+    criterion:
+      "Mechanical: a rename, an import reshuffle, a formatting pass, a version bump with no behavior change.",
+  },
+  {
+    label: "routine",
+    criterion:
+      "A routine change whose blast radius stays inside this file or its immediate callers.",
+  },
+  {
+    label: "logic",
+    criterion:
+      "New or altered logic worth following: a branch, a state transition, an error path, a data transformation.",
+  },
+  {
+    label: "critical",
+    criterion:
+      "Security, authentication, payments, data migration, deletion, or a public contract other code depends on.",
+  },
 ] as const;
+
+/** The tier of files nobody should read: the first pass skips them. */
+export const GENERATED_TIER = FILE_TIERS.findIndex((tier) => tier.label === "generated");
+
+const FILE_TIER_CRITERIA = FILE_TIERS.map((tier) => tier.criterion);
 
 const SPLIT_COUNT_CRITERIA = {
   two: "Two pull requests. One clean seam — typically a refactor or a migration that could land first, and the feature that builds on it.",
@@ -122,21 +123,29 @@ export const SPLIT_RECOMMENDATION_FLOOR = 0.75;
 export const JOB_START_CACHE_NS = "jev:job-start:v2";
 
 /**
- * Fingerprint of the changed-file set (path/status/line counts, sorted);
- * excludes patch bodies, truncated inconsistently across callers.
+ * Pins everything the state carries about the change besides the patch
+ * bodies, which are truncated inconsistently across callers: the changed-file
+ * set (path/status/line counts, sorted) and the commit subjects.
  *
- * Combined with head SHA in the cache key: the poller updates
+ * The diff rides alongside the head SHA because the poller updates
  * `pull_requests.head_sha` before invalidating the diff cache, so a preview
  * mid-window could write an old diff's answer under the new SHA — entries
  * are immutable, so that never self-corrects. Worst case: one wasted call,
  * never a wrong answer.
  */
-export function diffFingerprint(files: JobStartStateInput["files"]): string {
-  const parts = files.map((f) => `${f.filename}:${f.status}:${f.additions}:${f.deletions}`).sort();
-  return createHash("sha1").update(parts.join("\n")).digest("hex").slice(0, 16);
-}
-
-export function jobStartCacheKey(prId: string, headSha: string, fingerprint: string): string {
+export function jobStartCacheKey(
+  prId: string,
+  headSha: string,
+  state: Pick<JobStartStateInput, "files" | "commits">,
+): string {
+  const files = state.files
+    .map((f) => `${f.filename}:${f.status}:${f.additions}:${f.deletions}`)
+    .sort();
+  const commits = [`commits:${state.commits.length}`, ...commitSubjects(state.commits)];
+  const fingerprint = createHash("sha1")
+    .update([...files, "", ...commits].join("\n"))
+    .digest("hex")
+    .slice(0, 16);
   return `${prId}:${headSha}:${fingerprint}`;
 }
 
@@ -145,13 +154,11 @@ function filePriorityKey(index: number): string {
   return `file_${index}`;
 }
 
-/** Ask every job-start question in one request. Fails only with {@link JevUnavailable}. */
 export function askJobStart(
   input: JobStartStateInput,
 ): Effect.Effect<JobStartAnswers, JevUnavailable, JevService> {
   return Effect.gen(function* () {
     const jev = yield* JevService;
-    // Scored files are addressed by index into `state.files`; slice here must match the state builder's array.
     const scoredFiles = input.files.slice(0, FILE_PRIORITY_MAX_FILES);
     const fileQuestions = Object.fromEntries(
       scoredFiles.map((file, index) => [
@@ -159,7 +166,7 @@ export function askJobStart(
         {
           type: "score" as const,
           instructions: `How much of a reviewer's attention does \`${file.filename}\` deserve in this pull request? Judge what the change to it does, not how many lines it touches.`,
-          criteria: FILE_PRIORITY_LEVELS,
+          criteria: FILE_TIER_CRITERIA,
         },
       ]),
     );
@@ -173,7 +180,7 @@ export function askJobStart(
           type: "choice",
           instructions:
             "How much reviewer attention does this pull request need? Judge the substantive change, not the raw line count — generated output (lockfiles, snapshots, `.d.ts`, vendored bundles, formatter-only reflows) does not raise the tier.",
-          criteria: RISK_CRITERIA,
+          criteria: riskCriteria(),
         },
         review_depth: {
           type: "choice",
@@ -246,7 +253,6 @@ export function filePriorityOrder(
     .map(({ filename, tier }) => ({ filename, tier }));
 }
 
-/** The split recommendation, or `null` when it isn't confident enough to make. */
 export function splitRecommendation(answers: JobStartAnswers): { readonly pieces: number } | null {
   if (answers.splitScore === undefined || answers.splitScore < SPLIT_RECOMMENDATION_FLOOR) {
     return null;
@@ -266,11 +272,8 @@ export function routeFromAnswers(
     readonly agent: AcpAgentId;
     readonly configuredModel: string | null | undefined;
     readonly configuredEffort: ThinkingEffortSetting | null | undefined;
-    /** TypeSafe switch. Off: answers never move the launch. */
-    readonly autoSizing: boolean;
   },
 ): GenerationLaunchOverride | null {
-  if (!opts.autoSizing) return null;
   return routeSizing({
     agent: opts.agent,
     depth: answers.depth,
@@ -283,34 +286,24 @@ export function routeFromAnswers(
 }
 
 /**
- * Cached job-start answers for a PR at a head SHA, or `null` when TypeSafe
- * can't answer. The cache lets one judgment serve both the preview and the
- * run — whichever asks first pays, keeping Jev off `startJobBody`'s critical
- * path in the common case. Immutable: head SHA in the key means a new commit
- * is a new entry.
+ * Cached job-start answers for a PR at a head SHA, or `null` when TypeSafe is
+ * off or can't answer. The cache lets one judgment serve both the preview and
+ * the run — whichever asks first pays, keeping Jev off `startJobBody`'s
+ * critical path in the common case. Immutable: head SHA in the key means a new
+ * commit is a new entry. Failures aren't cached, so the next caller retries.
  */
 export function resolveJobStartAnswers(
   prId: string,
   headSha: string,
   state: JobStartStateInput,
-): Effect.Effect<JobStartAnswers | null, never, JevService | CacheService | DbService> {
-  return Effect.gen(function* () {
-    const cache = yield* CacheService;
-    return yield* cache
-      .getOrFetch<JobStartAnswers, JevUnavailable, JevService>(
-        JOB_START_CACHE_NS,
-        jobStartCacheKey(prId, headSha, diffFingerprint(state.files)),
-        () => askJobStart(state),
-        { immutable: true },
-      )
-      .pipe(
-        // Failures aren't cached; getOrFetch propagates so the next caller retries. Both preview and run degrade to null.
-        Effect.catch((e) =>
-          Effect.sync(() => {
-            debug("jev", `job-start unavailable for ${prId}@${headSha.slice(0, 7)}: ${String(e)}`);
-            return null;
-          }),
-        ),
-      );
-  });
+): Effect.Effect<JobStartAnswers | null, never, JevService | CacheService> {
+  return cachedJev(
+    `job-start for ${prId}@${headSha.slice(0, 7)}`,
+    {
+      ns: JOB_START_CACHE_NS,
+      key: jobStartCacheKey(prId, headSha, state),
+      options: { immutable: true },
+    },
+    () => askJobStart(state),
+  );
 }

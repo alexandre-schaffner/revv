@@ -1,5 +1,7 @@
 import type { ExternalAgentProvider, ExternalIntegrationStatus } from "@revv/shared";
 import { api } from "$lib/api/client";
+import { call } from "$lib/api/errors";
+import { thrownMessage } from "$lib/api/wire";
 
 let statuses = $state<ExternalIntegrationStatus[]>([]);
 let action = $state<{
@@ -20,27 +22,14 @@ export function getExternalIntegrationError(): string | null {
   return error;
 }
 
-function errorMessage(value: unknown): string {
-  if (value && typeof value === "object") {
-    const body = "value" in value ? value.value : value;
-    if (body && typeof body === "object" && "error" in body && typeof body.error === "string") {
-      return body.error;
-    }
-  }
-  return value instanceof Error ? value.message : String(value);
-}
-
 export async function fetchExternalIntegrationStatuses(): Promise<void> {
   try {
-    const result = await api.api.integrations.status.get();
-    if (result.error) throw new Error(errorMessage(result.error));
-    if (!Array.isArray(result.data)) {
-      throw new Error("Revv returned an invalid integration status response.");
-    }
-    statuses = [...result.data];
+    statuses = [
+      ...(await call(api.api.integrations.status.get(), "Couldn't read the integrations")),
+    ];
     error = null;
   } catch (cause) {
-    error = errorMessage(cause);
+    error = thrownMessage(cause);
   }
 }
 
@@ -53,12 +42,12 @@ export async function runExternalIntegrationAction(
   error = null;
   try {
     const route = api.api.integrations({ provider });
-    const result =
-      kind === "connect" ? await route.connect.post() : await route.disconnect.delete();
-    if (result.error) throw new Error(errorMessage(result.error));
+    await (kind === "connect"
+      ? call(route.connect.post(), `Couldn't connect ${provider}`)
+      : call(route.disconnect.delete(), `Couldn't disconnect ${provider}`));
     await fetchExternalIntegrationStatuses();
   } catch (cause) {
-    error = errorMessage(cause);
+    error = thrownMessage(cause);
   } finally {
     action = null;
   }

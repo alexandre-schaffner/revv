@@ -1,3 +1,32 @@
+<script module lang="ts">
+import GearSix from "phosphor-svelte/lib/GearSix";
+import { defineSettingsPane } from "../settings-panes";
+
+export const pane = defineSettingsPane({
+  id: "general",
+  title: "General",
+  description: "Appearance, how diffs render, and how often Revv checks GitHub.",
+  icon: GearSix,
+  rows: {
+    theme: { label: "Theme", keywords: ["appearance", "dark", "light", "mode"] },
+    diffTheme: { label: "Diff theme", keywords: ["syntax", "code", "colors", "dark", "light"] },
+    diffLayout: {
+      label: "Default layout",
+      keywords: ["diff", "split", "unified", "side by side", "view"],
+    },
+    diffWrap: { label: "Wrap long lines", keywords: ["wrap", "soft wrap", "overflow", "scroll"] },
+    syncInterval: {
+      label: "Refresh interval",
+      keywords: ["sync", "poll", "fetch", "github", "minutes"],
+    },
+    replayOnboarding: {
+      label: "Replay onboarding",
+      keywords: ["setup", "welcome", "tutorial", "reset"],
+    },
+  },
+});
+</script>
+
 <script lang="ts">
 import ArrowCounterClockwise from "phosphor-svelte/lib/ArrowCounterClockwise";
 import Columns from "phosphor-svelte/lib/Columns";
@@ -11,10 +40,9 @@ import { Button } from "$lib/components/ui/button/index.js";
 import { SegmentedControl, type SegmentedOption } from "$lib/components/ui/segmented-control";
 import * as Select from "$lib/components/ui/select";
 import { Switch } from "$lib/components/ui/switch";
-import { restartPolling } from "$lib/services/sync";
 import { resetOnboarding } from "$lib/stores/auth.svelte";
 import { getDiffWrap, setDiffWrap } from "$lib/stores/diff-prefs.svelte";
-import { getDiffMode, setDiffMode } from "$lib/stores/review.svelte";
+import { getDiffMode, setDiffMode } from "$lib/stores/diff-prefs.svelte";
 import { getSettings, updateSettings } from "$lib/stores/settings.svelte";
 import { closeSettings } from "$lib/stores/settingsModal.svelte";
 import {
@@ -28,7 +56,6 @@ import {
 import SettingsGroup from "../primitives/SettingsGroup.svelte";
 import SettingsPane from "../primitives/SettingsPane.svelte";
 import SettingsRow from "../primitives/SettingsRow.svelte";
-import { SETTINGS_PANES } from "../settings-index";
 
 const themeOptions: SegmentedOption<ThemePreference>[] = [
   { value: "system", label: "System", icon: Desktop },
@@ -56,7 +83,7 @@ const intervalOptions = [
   { label: "Every 30 minutes", value: 30 },
 ];
 
-const interval = $derived(getSettings()?.autoFetchInterval ?? 5);
+const interval = $derived(getSettings().autoFetchInterval);
 const intervalLabel = $derived(
   intervalOptions.find((o) => o.value === interval)?.label ?? `Every ${interval} minutes`,
 );
@@ -65,7 +92,6 @@ function handleIntervalChange(value: string | undefined): void {
   if (!value) return;
   const minutes = Number(value);
   void updateSettings({ autoFetchInterval: minutes });
-  restartPolling(minutes);
 }
 
 let replaying = $state(false);
@@ -82,9 +108,9 @@ async function handleReplayOnboarding(): Promise<void> {
 }
 </script>
 
-<SettingsPane {...SETTINGS_PANES.general}>
+<SettingsPane {pane}>
 	<SettingsGroup heading="Appearance">
-		<SettingsRow id="theme" label="Theme" hint="Follow the system, or pin light or dark.">
+		<SettingsRow row={pane.rows.theme} hint="Follow the system, or pin light or dark.">
 			{#snippet control()}
 				<SegmentedControl
 					aria-label="Theme"
@@ -95,8 +121,7 @@ async function handleReplayOnboarding(): Promise<void> {
 			{/snippet}
 		</SettingsRow>
 		<SettingsRow
-			id="diff-theme"
-			label="Diff theme"
+			row={pane.rows.diffTheme}
 			hint="Syntax colors in diffs. Pin one to read light code in a dark app, or the reverse."
 		>
 			{#snippet control()}
@@ -112,8 +137,7 @@ async function handleReplayOnboarding(): Promise<void> {
 
 	<SettingsGroup heading="Diffs">
 		<SettingsRow
-			id="diff-layout"
-			label="Default layout"
+			row={pane.rows.diffLayout}
 			hint="Also changes when you switch layouts from a review."
 		>
 			{#snippet control()}
@@ -126,8 +150,7 @@ async function handleReplayOnboarding(): Promise<void> {
 			{/snippet}
 		</SettingsRow>
 		<SettingsRow
-			id="diff-wrap"
-			label="Wrap long lines"
+			row={pane.rows.diffWrap}
 			hint="Soft-wrap lines that run past the pane instead of scrolling sideways."
 		>
 			{#snippet control()}
@@ -138,8 +161,7 @@ async function handleReplayOnboarding(): Promise<void> {
 
 	<SettingsGroup heading="Sync">
 		<SettingsRow
-			id="sync-interval"
-			label="Refresh interval"
+			row={pane.rows.syncInterval}
 			hint="How often Revv checks GitHub for new and updated pull requests."
 		>
 			{#snippet control()}
@@ -157,8 +179,7 @@ async function handleReplayOnboarding(): Promise<void> {
 
 	<SettingsGroup heading="Setup">
 		<SettingsRow
-			id="replay-onboarding"
-			label="Replay onboarding"
+			row={pane.rows.replayOnboarding}
 			hint="Walk through the setup flow again from the beginning."
 		>
 			{#snippet control()}

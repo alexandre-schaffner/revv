@@ -8,8 +8,9 @@ import {
 } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
-import { expectedHeads } from "$lib/api/wire";
+import { call } from "$lib/api/errors";
+import { thrownMessage } from "$lib/api/wire";
+import { expectedHeads } from "$lib/stacks/expected-heads";
 import { RequestState } from "./_types";
 import { refreshStack } from "./stacks.svelte";
 
@@ -54,17 +55,12 @@ export async function rebaseStack(prId: string, stack: PrStackDetail): Promise<v
   if (requests.get(key)?.status === "loading") return;
   setRequest(key, RequestState.loading());
   try {
-    const { data, error } = await api.api
-      .prs({ id: prId })
-      .stack.rebase.post({ expectedHeads: expectedHeads(stack.layers.filter(isOpenLayer)) });
-    if (error || !data || !("rebased" in data)) {
-      const message = error
-        ? apiErrorMessage(error, "Couldn't rebase the stack")
-        : "Unexpected response";
-      setRequest(key, RequestState.error(message));
-      toast.error(message);
-      return;
-    }
+    const data = await call(
+      api.api
+        .prs({ id: prId })
+        .stack.rebase.post({ expectedHeads: expectedHeads(stack.layers.filter(isOpenLayer)) }),
+      "Couldn't rebase the stack",
+    );
     setRequest(key, RequestState.ok(data));
     toast.success(
       data.rebased.length > 0
@@ -72,10 +68,14 @@ export async function rebaseStack(prId: string, stack: PrStackDetail): Promise<v
         : "The stack already sits on its base",
     );
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Couldn't rebase the stack";
+    const message = thrownMessage(e);
     setRequest(key, RequestState.error(message));
     toast.error(message);
   } finally {
     void refreshStack(prId);
   }
+}
+
+export function reset(): void {
+  requests = new Map();
 }

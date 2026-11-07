@@ -1,109 +1,171 @@
-import { isMaintainerLogin } from "@revv/shared";
-import { goto } from "$app/navigation";
-import { API_BASE_URL } from "$lib/api/base-url";
-import { authClient } from "$lib/auth-client";
-import { stopPolling, withSyncSuspended } from "$lib/services/sync";
-import {
-  connect as connectEvents,
-  disconnect as disconnectEvents,
-} from "$lib/stores/events.svelte";
-import { fetchOrgs, initForUser, reset as resetOrgs } from "$lib/stores/orgs.svelte";
-import { fetchPinnedPrs, fetchPrs, fetchRepos, reset as resetPrs } from "$lib/stores/prs.svelte";
-import { clearReviewFiles } from "$lib/stores/review.svelte";
-import { fetchSettings, reset as resetSettings } from "$lib/stores/settings.svelte";
+// Identity of the signed-in user, their GitHub account on each host, the
+// device-flow sign-in, and the list of local users on this machine. The session lifecycle that acts on them (start,
+// switch, end) lives in `$lib/session/lifecycle.svelte`; this store imports
+// no other store.
 
-const storedToken =
-  typeof localStorage !== "undefined" ? localStorage.getItem("rev_session_token") : null;
+import {
+  type ApiErrorCode,
+  type AuthReauthClearedEnvelope,
+  type AuthReauthRequiredEnvelope,
+  isMaintainerLogin,
+  normalizeGithubHost,
+  sameGithubHost,
+  type UserIdentity,
+  type UserUpdatedEnvelope,
+} from "@revv/shared";
+import { API_BASE_URL } from "$lib/api/base-url";
+import { api } from "$lib/api/client";
+import { ApiError, apiErrorCode, call } from "$lib/api/errors";
+import { type EdenData, thrownMessage } from "$lib/api/wire";
+import {
+  type Account,
+  accountOn,
+  reauthAsked,
+  reauthsCleared,
+  withIdentity,
+  withReauth,
+} from "$lib/session/accounts";
+import { getHeldSessions, holdSession, releaseSession } from "$lib/session/held-sessions";
+import { clearToken, getToken, setToken } from "$lib/session/token.svelte";
+import { surfaceWindow } from "$lib/utils/surface-window";
 
 const LOAD_USER_RETRY_DELAY_MS = 1000;
 const LOAD_USER_MAX_RETRIES = 10;
 
-let token = $state<string | null>(storedToken);
-let user = $state<{
-  name: string;
-  email: string;
+/** The signed-in user, shown as their account on the active host. */
+interface User extends UserIdentity {
+  githubLogin: string | null;
+  /** The cached avatar bytes as a data URL: GitHub Enterprise's signed avatar URLs expire. */
   image?: string;
-  githubLogin?: string | null;
-  onboardedAt?: string | null;
-} | null>(null);
-let isLoading = $state(false);
+}
+
+let identity = $state<UserIdentity | null>(null);
 /**
- * Set once `/api/user/identity` has been *attempted* for the current session
- * — on success and on failure alike, so a flaky identity call can never wedge
- * a caller that waits on it. Distinguishes "GitHub login not fetched yet" from
- * "fetched, and there is none", which `getCurrentUserLogin()` reports
- * identically. See {@link hasAttemptedIdentityLoad}.
+ * The user's accounts. Read with the identity, reconciled on every reconnect
+ * (`/api/auth/accounts` probes each flagged one), and updated live by
+ * `user:updated` and `auth:reauth-*` for their host.
  */
-let identityAttempted = $state(false);
+let accounts = $state<readonly Account[]>([]);
+
+/**
+ * Replace the accounts. A re-auth that no longer applies ends its sign-in: the
+ * modal it showed in is gone, and a waiting one doesn't come back unasked.
+ */
+function setAccounts(next: readonly Account[]): void {
+  for (const host of reauthsCleared(accounts, next)) {
+    cancelSignIn(host);
+    if (reauthOpenedFor !== null && sameGithubHost(reauthOpenedFor, host)) reauthOpenedFor = null;
+  }
+  accounts = next;
+}
+
+const user = $derived.by((): User | null => {
+  if (!identity) return null;
+  const shown = identity.host ? accountOn(accounts, identity.host) : undefined;
+  return {
+    ...identity,
+    githubLogin: shown?.githubLogin ?? null,
+    ...(shown?.avatarContent ? { image: shown.avatarContent } : {}),
+  };
+});
+let isLoading = $state(false);
 let isSwitching = $state(false);
 let error = $state<string | null>(null);
 
-export type SignInErrorCode = "invalid_github_client_id" | "missing_github_client_id";
+/** The host `error` is about, when it is a sign-in's on a known host. */
+let errorHost = $state<string | null>(null);
+
+/** A sign-in refused for its client id: the host needs one, or the one it has isn't valid. */
+export type SignInErrorCode = Extract<
+  ApiErrorCode,
+  "MISSING_GITHUB_CLIENT_ID" | "INVALID_GITHUB_CLIENT_ID"
+>;
 let signInErrorCode = $state<SignInErrorCode | null>(null);
 
-let deviceFlow = $state<{
-  userCode: string;
-  verificationUri: string;
-  deviceCode: string;
-  interval: number;
-  expiresAt: number;
-  host?: string;
-  clientId?: string;
-} | null>(null);
-let _isPolling = $state(false);
+interface DeviceFlow {
+  readonly userCode: string;
+  readonly verificationUri: string;
+  readonly deviceCode: string;
+  readonly interval: number;
+  readonly expiresAt: number;
+  /** The host and client `/device/init` resolved; the poll must use the same ones. */
+  readonly host: string;
+  readonly clientId: string;
+}
 
-export type ConnectedAccount = {
-  host: string;
-  connected: boolean;
-  githubLogin: string | null;
-  avatarUrl: string | null;
-};
+/**
+ * The device-flow sign-ins under way, one per host: a waiting account's
+ * re-sign-in and the shown host's can run at once, each showing its own code.
+ */
+let deviceFlows = $state<ReadonlyMap<string, DeviceFlow>>(new Map());
+const pollTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** A local user and its GitHub account on each host. */
+export type LocalAccount = EdenData<(typeof api.api.auth)["local-accounts"]["get"]>[number];
 
-export type LocalAccount = {
-  id: string;
-  name: string;
-  email: string;
-  image: string | null;
-  accounts: Array<{
-    host: string;
-    githubLogin: string | null;
-    avatarUrl: string | null;
-  }>;
-};
-
-let _connectedAccounts = $state<ConnectedAccount[]>([]);
-let localAccounts = $state<LocalAccount[]>([]);
-let localAccountsLoaded = $state(typeof localStorage === "undefined");
-let accountJustRemoved = $state(false);
+let localAccounts = $state<readonly LocalAccount[]>([]);
+/** Whether a signed-out window has finished checking the sessions it holds. */
+let localAccountsLoaded = $state(false);
+let localAccountsRead = 0;
+/**
+ * The signed-out window skips the account picker: the user asked to sign in
+ * with another account, changed host mid-onboarding, or removed the account
+ * the window was on. Lasts until the next sign-in.
+ */
+let accountPickerDismissed = $state(false);
 let loadUserRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let loadUserRetryAttempts = $state(0);
 let authRestoreError = $state<string | null>(null);
 let authRestoreExhausted = $state(false);
 
+const reauths = $derived(reauthAsked(accounts, identity?.host ?? null));
+/** The host of a waiting account the user chose to sign in again from the account menu. */
+let reauthOpenedFor = $state<string | null>(null);
+
 /**
- * Set when the active account's GitHub token is invalid and could not be
- * silently refreshed. Drives the blocking re-sign-in modal. Hydrated from
- * `/api/user/identity` on boot and updated live by the `auth:reauth-required`
- * / `auth:reauth-cleared` SSE handlers. Cleared on successful re-auth.
+ * The account the re-sign-in modal asks for: the shown host's, which blocks
+ * the window, else a waiting one the user opened, which they can dismiss.
  */
-let reauthRequired = $state<{ host: string | null; githubLogin: string | null } | null>(null);
-
-export function getReauthRequired(): { host: string | null; githubLogin: string | null } | null {
-  return reauthRequired;
+export function getReauthPrompt(): {
+  readonly account: Account;
+  readonly blocking: boolean;
+} | null {
+  if (reauths.blocking) return { account: reauths.blocking, blocking: true };
+  const host = reauthOpenedFor;
+  const opened = host === null ? undefined : accountOn(reauths.waiting, host);
+  return opened ? { account: opened, blocking: false } : null;
 }
 
-export function setReauthRequired(value: {
-  host: string | null;
-  githubLogin: string | null;
-}): void {
-  reauthRequired = value;
+/** Accounts on hosts this window doesn't show that must sign in again: they wait in the account menu. */
+export function getWaitingReauths(): readonly Account[] {
+  return reauths.waiting;
 }
 
-export function clearReauthRequired(): void {
-  reauthRequired = null;
+/** Sign a waiting account in again, in the dismissible re-sign-in modal. */
+export function openReauth(host: string): void {
+  reauthOpenedFor = host;
+  void signIn(host);
 }
 
-export function getLocalAccounts(): LocalAccount[] {
+export function closeReauth(): void {
+  const host = reauthOpenedFor;
+  reauthOpenedFor = null;
+  clearError();
+  if (host !== null) cancelSignIn(host);
+}
+
+export function onAuthReauthRequired(data: AuthReauthRequiredEnvelope["data"]): void {
+  setAccounts(withReauth(accounts, { ...data, reauthRequired: true }));
+}
+
+export function onAuthReauthCleared(data: AuthReauthClearedEnvelope["data"]): void {
+  setAccounts(withReauth(accounts, { host: data.host, reauthRequired: false }));
+}
+
+/**
+ * The accounts this window can switch to: every local user with a live
+ * session when signed in, else the ones whose session this machine holds.
+ */
+export function getLocalAccounts(): readonly LocalAccount[] {
   return localAccounts;
 }
 
@@ -111,25 +173,15 @@ export function getLocalAccountsLoaded(): boolean {
   return localAccountsLoaded;
 }
 
-export function getAccountJustRemoved(): boolean {
-  return accountJustRemoved;
+export function getAccountPickerDismissed(): boolean {
+  return accountPickerDismissed;
 }
 
-export function getForceOnboardingFlow(): boolean {
-  return forceOnboardingFlow;
+export function dismissAccountPicker(): void {
+  accountPickerDismissed = true;
 }
 
-export function resetForceOnboardingFlow(): void {
-  forceOnboardingFlow = false;
-}
-
-export function setForceOnboardingFlow(): void {
-  forceOnboardingFlow = true;
-}
-let pollTimer: ReturnType<typeof setTimeout> | null = null;
-
-const isAuthenticated = $derived(token !== null && token.length > 0);
-let forceOnboardingFlow = $state(false);
+const isAuthenticated = $derived((getToken() ?? "").length > 0);
 
 export function getIsAuthenticated(): boolean {
   return isAuthenticated;
@@ -146,7 +198,7 @@ export function getIsAuthenticated(): boolean {
  */
 export function getIsOnboarded(): boolean {
   if (isSwitching) return true;
-  return Boolean(user?.onboardedAt);
+  return Boolean(identity?.onboardedAt);
 }
 
 export function getIsSwitching(): boolean {
@@ -173,56 +225,46 @@ export function getError(): string | null {
   return error;
 }
 
-export function getSignInErrorCode(): SignInErrorCode | null {
-  return signInErrorCode;
+/** The error to show a sign-in on `host`: one about another host's sign-in isn't. */
+export function getErrorFor(host: string): string | null {
+  return errorHost === null || sameGithubHost(errorHost, host) ? error : null;
 }
 
-export function getDeviceFlow(): typeof deviceFlow {
-  return deviceFlow;
+export function getSignInErrorCode(host: string): SignInErrorCode | null {
+  return errorHost !== null && sameGithubHost(errorHost, host) ? signInErrorCode : null;
 }
 
-export function setToken(newToken: string): void {
+/** The sign-in under way on `host`; without one, any (a signed-out window runs one at most). */
+export function getDeviceFlow(host?: string): DeviceFlow | null {
+  if (host !== undefined) return deviceFlows.get(normalizeGithubHost(host)) ?? null;
+  return deviceFlows.values().next().value ?? null;
+}
+
+/**
+ * Forget the signed-in identity and its token, then list the held sessions a
+ * signed-out window offers. Called by the session lifecycle; stores holding
+ * account data are reset there, not here.
+ */
+export function clearIdentity(): void {
   resetLoadUserRetryState();
-  token = newToken;
-  if (typeof localStorage !== "undefined") {
-    localStorage.setItem("rev_session_token", newToken);
-  }
+  clearToken();
+  identity = null;
+  // The re-auth modal reads the accounts, so a dead session must not strand
+  // it with no session behind it.
+  setAccounts([]);
+  reauthOpenedFor = null;
+  localAccounts = [];
+  localAccountsLoaded = false;
+  clearError();
+  void fetchLocalAccounts();
 }
 
-export function clearToken(): void {
-  resetLoadUserRetryState();
-  token = null;
-  user = null;
-  identityAttempted = false;
-  _connectedAccounts = [];
-  // The re-auth modal is gated solely on `reauthRequired`, so an invalidated /
-  // signed-out session must clear it (and any stale sign-in error) — otherwise
-  // a dead session strands the modal with no account behind it.
-  reauthRequired = null;
-  error = null;
-  signInErrorCode = null;
-  if (typeof localStorage !== "undefined") {
-    localStorage.removeItem("rev_session_token");
-  }
-}
-
-function parseSignInErrorCode(value: unknown): SignInErrorCode | null {
-  return value === "missing_github_client_id" || value === "invalid_github_client_id"
-    ? value
-    : null;
-}
-
-async function signInHttpError(res: Response): Promise<Error> {
-  const body = await res.text().catch(() => "");
-  let detail = body.trim();
-  try {
-    const parsed = JSON.parse(body) as { error?: string; code?: unknown };
-    if (parsed?.error) detail = parsed.error;
-    signInErrorCode = parseSignInErrorCode(parsed?.code);
-  } catch {
-    // Plain-text body — use it as-is.
-  }
-  return new Error(`Sign-in request failed (${res.status})${detail ? `: ${detail}` : ""}`);
+function signInRefusal(refusal: ApiError): Error {
+  const code = apiErrorCode(refusal);
+  signInErrorCode =
+    code === "MISSING_GITHUB_CLIENT_ID" || code === "INVALID_GITHUB_CLIENT_ID" ? code : null;
+  const detail = refusal.serverMessage ?? "";
+  return new Error(`Sign-in request failed (${refusal.status})${detail ? `: ${detail}` : ""}`);
 }
 
 function signInErrorMessage(e: unknown): string {
@@ -233,22 +275,10 @@ function signInErrorMessage(e: unknown): string {
   return String(e);
 }
 
-function authErrorStatus(error: unknown): number | null {
-  if (typeof error !== "object" || error === null || !("status" in error)) return null;
-  const status = (error as { status: unknown }).status;
-  return typeof status === "number" ? status : null;
-}
-
-function authErrorMessage(error: unknown): string | null {
-  if (typeof error !== "object" || error === null || !("message" in error)) return null;
-  const message = (error as { message: unknown }).message;
-  return typeof message === "string" && message.length > 0 ? message : null;
-}
-
-function shouldClearTokenAfterSessionMiss(error: unknown): boolean {
-  if (error === null) return true;
-  const status = authErrorStatus(error);
-  return status === 401 || status === 403;
+/** The server no longer accepts this session's token: signing out beats retrying. */
+function isSessionMiss(e: unknown): boolean {
+  const code = apiErrorCode(e);
+  return code === "UNAUTHORIZED" || code === "GITHUB_AUTH_ERROR" || code === "FORBIDDEN";
 }
 
 function clearLoadUserRetryTimer(): void {
@@ -274,7 +304,7 @@ function scheduleLoadUserRetry(tokenSnapshot: string, message: string): void {
   loadUserRetryAttempts += 1;
   loadUserRetryTimer = setTimeout(() => {
     loadUserRetryTimer = null;
-    if (token === tokenSnapshot && !user) {
+    if (getToken() === tokenSnapshot && !identity) {
       void loadUser();
     }
   }, LOAD_USER_RETRY_DELAY_MS);
@@ -286,518 +316,425 @@ export function retryAuthRestore(): void {
 }
 
 export async function signIn(host?: string, clientId?: string): Promise<boolean> {
-  error = null;
-  signInErrorCode = null;
+  clearError();
   isLoading = true;
   try {
-    const res = await fetch(`${API_BASE_URL}/api/auth/device/init`, {
-      method: "POST",
-      ...(host
-        ? {
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ host, ...(clientId ? { client_id: clientId } : {}) }),
-          }
-        : {}),
-    });
-    if (!res.ok) throw await signInHttpError(res);
-    const data = (await res.json()) as {
-      device_code: string;
-      user_code: string;
-      verification_uri: string;
-      expires_in: number;
-      interval: number;
+    // A signed-in caller sends its session, so re-signing one of its accounts
+    // in uses the client that account was issued to.
+    const token = getToken();
+    const body = {
+      ...(host ? { host } : {}),
+      ...(host && clientId ? { client_id: clientId } : {}),
+      ...(token ? { session_token: token } : {}),
     };
-    deviceFlow = {
+    const data = await call(api.api.auth.device.init.post(body), "Sign-in request failed").catch(
+      (e: unknown) => {
+        throw e instanceof ApiError ? signInRefusal(e) : e;
+      },
+    );
+    const flow: DeviceFlow = {
       userCode: data.user_code,
       verificationUri: data.verification_uri,
       deviceCode: data.device_code,
       interval: data.interval ?? 5,
       expiresAt: Date.now() + (data.expires_in ?? 900) * 1000,
-      ...(host ? { host } : {}),
-      ...(clientId ? { clientId } : {}),
+      host: data.host,
+      clientId: data.client_id,
     };
+    cancelSignIn(flow.host);
+    setFlow(flow);
     try {
       const { openUrl } = await import("@tauri-apps/plugin-opener");
       await openUrl(data.verification_uri);
     } catch {
       // Opening browser is best-effort
     }
-    startPolling();
+    schedulePoll(flow);
     return true;
   } catch (e) {
-    error = `Failed to start sign-in: ${signInErrorMessage(e)}`;
+    setError(`Failed to start sign-in: ${signInErrorMessage(e)}`, host ?? null);
     return false;
   } finally {
     isLoading = false;
   }
 }
 
-function startPolling(): void {
-  if (!deviceFlow) return;
-  _isPolling = true;
-  schedulePoll(deviceFlow.interval);
+function setFlow(flow: DeviceFlow): void {
+  deviceFlows = new Map(deviceFlows).set(normalizeGithubHost(flow.host), flow);
 }
 
-function schedulePoll(intervalSeconds: number): void {
-  pollTimer = setTimeout(() => poll(), intervalSeconds * 1000);
+/** Whether `flow` is still its host's sign-in: not cancelled or restarted since. */
+function isCurrent(flow: DeviceFlow): boolean {
+  return deviceFlows.get(normalizeGithubHost(flow.host)) === flow;
 }
 
-async function poll(): Promise<void> {
-  if (!deviceFlow) return;
+function schedulePoll(flow: DeviceFlow): void {
+  const key = normalizeGithubHost(flow.host);
+  pollTimers.set(
+    key,
+    setTimeout(() => void poll(flow), flow.interval * 1000),
+  );
+}
 
-  if (Date.now() > deviceFlow.expiresAt) {
-    error = "Sign-in timed out. Please try again.";
-    signInErrorCode = null;
-    cancelSignIn();
+async function poll(flow: DeviceFlow): Promise<void> {
+  if (!isCurrent(flow)) return;
+
+  if (Date.now() > flow.expiresAt) {
+    endSignIn(flow.host, "Sign-in timed out. Please try again.");
     return;
   }
 
   try {
-    const res = await fetch(`${API_BASE_URL}/api/auth/device/poll`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(
-        (() => {
-          const body: Record<string, string> = { device_code: deviceFlow.deviceCode };
-          if (token) body.session_token = token;
-          if (deviceFlow.host) body.host = deviceFlow.host;
-          if (deviceFlow.clientId) body.client_id = deviceFlow.clientId;
-          return body;
-        })(),
-      ),
-    });
-    const data = (await res.json()) as {
-      status?: string;
-      token?: string;
-      error?: string;
-      interval?: number;
+    const token = getToken();
+    const body = {
+      device_code: flow.deviceCode,
+      ...(token ? { session_token: token } : {}),
+      host: flow.host,
+      client_id: flow.clientId,
     };
-
-    if (data.status === "pending") {
-      schedulePoll(deviceFlow.interval);
+    let data: EdenData<typeof api.api.auth.device.poll.post>;
+    try {
+      data = await call(api.api.auth.device.poll.post(body), "Sign-in failed");
+    } catch (e) {
+      if (!(e instanceof ApiError)) throw e;
+      if (!isCurrent(flow)) return;
+      endSignIn(
+        flow.host,
+        e.serverMessage
+          ? `Sign-in failed: ${e.serverMessage}`
+          : "Sign-in failed. Please try again.",
+      );
       return;
     }
-
-    if (data.status === "slow_down") {
-      const newInterval = data.interval ?? deviceFlow.interval + 5;
-      deviceFlow = { ...deviceFlow, interval: newInterval };
-      schedulePoll(newInterval);
-      return;
-    }
-
+    // GitHub's grant is final even when this sign-in was cancelled or its
+    // re-auth cleared while the answer was on its way.
     if (data.status === "linked") {
-      deviceFlow = null;
-      _isPolling = false;
-      // Re-auth of the active account lands here (session_token was sent).
-      // Clear the gate immediately; the server also broadcasts
-      // `auth:reauth-cleared`, but clearing here avoids modal flicker.
-      reauthRequired = null;
-      await fetchConnectedAccounts();
-      await focusWindow();
+      // A re-auth or a link of the account on `host`; the server also
+      // broadcasts `auth:reauth-cleared`, but clearing here avoids modal
+      // flicker.
+      setAccounts(withReauth(accounts, { host: flow.host, reauthRequired: false }));
+      if (isCurrent(flow)) cancelSignIn(flow.host);
+      await surfaceWindow();
       return;
     }
-
-    if (data.status === "success" && data.token) {
+    if (data.status === "success") {
+      resetLoadUserRetryState();
       setToken(data.token);
-      deviceFlow = null;
-      _isPolling = false;
-      reauthRequired = null;
+      if (isCurrent(flow)) cancelSignIn(flow.host);
       await loadUser();
-      await focusWindow();
-      // Auto-open-add-repo on sign-in used to live here. The onboarding
-      // flow now owns the repo step inline (StepRepo.svelte), so we
-      // intentionally don't pop a dialog — OnboardingGate stays mounted
-      // and advances to its repo step automatically.
+      await surfaceWindow();
       return;
     }
-
-    // Error cases. Surface the server-provided reason when it's anything
-    // other than the two well-known device-flow outcomes — otherwise every
-    // real failure (no email on account, GitHub API 4xx, DB error, etc.)
-    // gets flattened to the same useless "Sign-in failed" string.
-    error =
-      data.error === "expired"
-        ? "Sign-in timed out. Please try again."
-        : data.error === "access_denied"
-          ? "Sign-in was cancelled."
-          : data.error
-            ? `Sign-in failed: ${data.error}`
-            : "Sign-in failed. Please try again.";
-    signInErrorCode = null;
-    cancelSignIn();
+    if (!isCurrent(flow)) return;
+    switch (data.status) {
+      case "pending":
+        schedulePoll(flow);
+        return;
+      case "slow_down": {
+        const slower = { ...flow, interval: data.interval ?? flow.interval + 5 };
+        setFlow(slower);
+        schedulePoll(slower);
+        return;
+      }
+      case "expired":
+        endSignIn(flow.host, "Sign-in timed out. Please try again.");
+        return;
+      case "denied":
+        endSignIn(flow.host, "Sign-in was cancelled.");
+        return;
+    }
   } catch {
-    // Network error — retry after current interval
-    if (deviceFlow) schedulePoll(deviceFlow.interval);
+    if (isCurrent(flow)) schedulePoll(flow);
   }
 }
 
-export function cancelSignIn(): void {
-  if (pollTimer) clearTimeout(pollTimer);
-  pollTimer = null;
-  deviceFlow = null;
-  _isPolling = false;
+function endSignIn(host: string, message: string): void {
+  cancelSignIn(host);
+  signInErrorCode = null;
+  setError(message, host);
+}
+
+/** Stop the sign-in on `host`, or every one. */
+export function cancelSignIn(host?: string): void {
+  const keys = host === undefined ? [...deviceFlows.keys()] : [normalizeGithubHost(host)];
+  const next = new Map(deviceFlows);
+  for (const key of keys) {
+    clearTimeout(pollTimers.get(key));
+    pollTimers.delete(key);
+    next.delete(key);
+  }
+  if (next.size !== deviceFlows.size) deviceFlows = next;
+}
+
+/** Show `message`; with `host` when it is about the sign-in on that host. */
+function setError(message: string, host: string | null = null): void {
+  error = message;
+  errorHost = host;
 }
 
 export function clearError(): void {
   error = null;
+  errorHost = null;
   signInErrorCode = null;
 }
 
 export async function loadUser(): Promise<void> {
-  if (!token) return;
-  const tokenSnapshot = token;
+  const tokenSnapshot = getToken();
+  if (!tokenSnapshot) return;
   isLoading = true;
   try {
-    const session = await authClient.getSession();
-    if (session.data?.user) {
-      resetLoadUserRetryState();
-      const u = session.data.user;
-      user = {
-        name: u.name,
-        email: u.email,
-        ...(u.image != null ? { image: u.image } : {}),
-      };
-      // Fetch GitHub login + fresh avatar URL. The server refreshes
-      // `user.image` on each poll cycle (same pattern as repo avatars) so
-      // the signed-URL-expiry issue that used to break user avatars
-      // resolves itself without requiring re-auth.
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/user/identity`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (res.ok) {
-          const data = (await res.json()) as {
-            login: string | null;
-            avatarContent?: string | null;
-            onboardedAt?: string | null;
-            reauthRequired?: boolean;
-            host?: string | null;
-          };
-          if (user) {
-            const next: typeof user = {
-              ...user,
-              githubLogin: data.login,
-              onboardedAt: data.onboardedAt ?? null,
-            };
-            // Prefer the server's freshly-refreshed avatar content when available.
-            if (data.avatarContent != null) {
-              next.image = data.avatarContent;
-            }
-            user = next;
-            accountJustRemoved = false;
-          }
-          // Reconcile the re-auth gate from the authoritative server state.
-          reauthRequired = data.reauthRequired
-            ? { host: data.host ?? null, githubLogin: data.login }
-            : null;
-        }
-      } catch {
-        // best-effort
-      } finally {
-        identityAttempted = true;
-      }
-      // Init per-user org selection before fetching orgs
-      initForUser(u.id);
-      // Fire-and-forget org list fetch so the sidebar switcher has
-      // data ready when the user opens it. Failures degrade silently.
-      void fetchOrgs();
-      void fetchConnectedAccounts();
-      void fetchLocalAccounts();
-    } else if (shouldClearTokenAfterSessionMiss(session.error)) {
-      clearToken();
-    } else {
-      const message =
-        authErrorMessage(session.error) ??
-        "Could not restore your session. Revv will retry when the local server is available.";
-      error = message;
-      scheduleLoadUserRetry(tokenSnapshot, message);
-    }
+    const read = await readSession(
+      "Could not restore your session. Revv will retry when the local server is available.",
+    );
+    resetLoadUserRetryState();
+    applySession(read);
+    accountPickerDismissed = false;
+    holdCurrentSession();
+    void fetchLocalAccounts();
   } catch (e) {
+    if (isSessionMiss(e)) {
+      releaseSession({ token: tokenSnapshot });
+      clearIdentity();
+      return;
+    }
     // A freshly-updated desktop app can open while the restarted local API is
     // still booting. Treat that as a transient startup failure, not logout:
     // clearing the persisted token here makes OnboardingGate believe this is a
     // first-run install until the user closes and reopens the window.
     const message = signInErrorMessage(e);
-    error = message;
+    setError(message);
     scheduleLoadUserRetry(tokenSnapshot, message);
   } finally {
     isLoading = false;
   }
 }
 
-/**
- * Apply a server-pushed user update (e.g. avatar URL rotation).
- * Called by the SSE event handler when the poll scheduler detects that the
- * authenticated user's GitHub profile changed.
- */
-export function applyUserUpdate(update: {
-  image: string | null;
-  githubLogin: string | null;
-  name?: string;
-  email?: string;
-}): void {
-  if (!user) return;
-  const next: typeof user = {
-    name: update.name ?? user.name,
-    email: update.email ?? user.email,
-    githubLogin: update.githubLogin,
-    onboardedAt: user.onboardedAt ?? null,
-  };
-  if (update.image != null) {
-    next.image = update.image;
-  }
-  user = next;
+/** The identity and the accounts, read together: the shown login is the identity host's account's. */
+async function readSession(
+  fallback: string,
+): Promise<{ identity: UserIdentity; accounts: readonly Account[] }> {
+  const [identity, rows] = await Promise.all([
+    call(api.api.user.identity.get(), fallback),
+    call(api.api.auth.accounts.get(), fallback),
+  ]);
+  const read = rows
+    .filter((a) => a.connected)
+    .map(({ host, githubLogin, avatarContent, reauthRequired }) => ({
+      host,
+      githubLogin,
+      avatarContent,
+      reauthRequired,
+    }));
+  return { identity, accounts: read };
+}
+
+function applySession(read: { identity: UserIdentity; accounts: readonly Account[] }): void {
+  setAccounts(read.accounts);
+  identity = read.identity;
+}
+
+/** Re-read what a missed push would have changed. A failed read keeps what's shown. */
+async function reconcileSession(): Promise<void> {
+  const shown = identity?.id;
+  try {
+    const read = await readSession("Identity read failed");
+    if (shown !== undefined && identity?.id === shown) applySession(read);
+  } catch {}
+  void fetchLocalAccounts();
+}
+
+/** `auth:reauth-*` and `user:updated` sent while the stream was down reached no one. */
+export function onEventsReconnected(): void {
+  if (identity) void reconcileSession();
+}
+
+/** Keep the signed-in session, so a signed-out window can offer it again. */
+function holdCurrentSession(): void {
+  const token = getToken();
+  if (!user || !token) return;
+  holdSession({ userId: user.id, token, name: user.name, email: user.email });
+}
+
+export function onUserUpdated(data: UserUpdatedEnvelope["data"]): void {
+  if (identity?.id !== data.id) return;
+  // The account switchers show every account's login and avatar.
+  void fetchLocalAccounts();
+  identity = { ...identity, name: data.name, email: data.email };
+  setAccounts(withIdentity(accounts, data));
+  holdCurrentSession();
 }
 
 /**
- * Mark the user as onboarded. Called by `StepDone` once the first repo has
- * been added; flips `onboardedAt` to the server-supplied timestamp so the
- * gate stops rendering the onboarding flow on next render.
- *
- * Failures are silent: the in-memory `user.onboardedAt` is set optimistically
- * so the UI advances; the next identity refresh will reconcile if the POST
- * actually failed.
+ * Optimistic and silent on failure: the UI advances at once, and the next
+ * identity read reconciles if the POST didn't land.
  */
 export async function completeOnboarding(): Promise<void> {
-  if (!token || !user) return;
+  if (!getToken() || !identity) return;
   const localStamp = new Date().toISOString();
-  user = { ...user, onboardedAt: localStamp };
+  identity = { ...identity, onboardedAt: localStamp };
   try {
-    const res = await fetch(`${API_BASE_URL}/api/onboarding/complete`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (res.ok) {
-      const data = (await res.json()) as { onboardedAt: string };
-      if (user) user = { ...user, onboardedAt: data.onboardedAt };
-    }
+    const data = await call(api.api.onboarding.complete.post(), "Onboarding failed");
+    if (identity) identity = { ...identity, onboardedAt: data.onboardedAt };
   } catch {
     // best-effort — optimistic local stamp keeps the UI moving
   }
 }
 
 /**
- * Reset the user's onboarded flag so the OnboardingGate re-shows the flow.
- * Auth and tracked repos are kept — this is a "replay" affordance for the
- * settings page, not a destructive reset.
- *
- * Pairs with `sessionStorage['revv-onboarding-replay']`, which the
- * OnboardingFlow reads to bypass its usual "resume on the right step"
- * logic and always start from the welcome step.
+ * A replay started from settings: the flow starts from welcome instead of
+ * resuming on the step the account's state points at. Lives until the flow
+ * reaches its last step.
+ */
+const ONBOARDING_REPLAY_KEY = "revv-onboarding-replay";
+
+export function isOnboardingReplay(): boolean {
+  return (
+    typeof sessionStorage !== "undefined" && sessionStorage.getItem(ONBOARDING_REPLAY_KEY) === "1"
+  );
+}
+
+export function endOnboardingReplay(): void {
+  if (typeof sessionStorage !== "undefined") sessionStorage.removeItem(ONBOARDING_REPLAY_KEY);
+}
+
+/**
+ * Reset the user's onboarded flag so the OnboardingGate re-shows the flow,
+ * as a replay. Auth and tracked repos are kept — this is a "replay"
+ * affordance for the settings page, not a destructive reset.
  */
 export async function resetOnboarding(): Promise<void> {
-  if (!token || !user) return;
+  if (!getToken() || !identity) return;
   if (typeof sessionStorage !== "undefined") {
-    sessionStorage.setItem("revv-onboarding-replay", "1");
+    sessionStorage.setItem(ONBOARDING_REPLAY_KEY, "1");
   }
-  user = { ...user, onboardedAt: null };
+  identity = { ...identity, onboardedAt: null };
   try {
-    await fetch(`${API_BASE_URL}/api/onboarding/reset`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    await call(api.api.onboarding.reset.post(), "Onboarding reset failed");
   } catch {
     // best-effort — local mirror already flipped; the gate is showing.
   }
 }
 
-export async function fetchConnectedAccounts(): Promise<void> {
-  if (!token) return;
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/auth/accounts`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (res.ok) {
-      _connectedAccounts = (await res.json()) as ConnectedAccount[];
-    }
-  } catch {
-    // best-effort
-  }
-}
-
+/**
+ * Read the accounts this window can switch to. Signed in, the server lists
+ * them; signed out, each held session is asked for its own accounts with its
+ * own token, and one the server no longer honours is forgotten.
+ */
 export async function fetchLocalAccounts(): Promise<void> {
+  const read = ++localAccountsRead;
+  const next = getToken() ? await signedInLocalAccounts() : await heldLocalAccounts();
+  if (read !== localAccountsRead || next === null) return;
+  localAccounts = next;
+  localAccountsLoaded = true;
+}
+
+async function signedInLocalAccounts(): Promise<readonly LocalAccount[] | null> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/auth/local-accounts`);
-    if (res.ok) {
-      localAccounts = (await res.json()) as LocalAccount[];
-    }
+    return await call(api.api.auth["local-accounts"].get(), "Accounts read failed");
   } catch {
-    // best-effort
-  } finally {
-    localAccountsLoaded = true;
+    return null;
   }
 }
 
-// Pre-fetch local accounts on module load so the account picker has data
-// before the user has a token (lock-screen scenario).
-if (typeof localStorage !== "undefined") {
-  void fetchLocalAccounts();
+async function heldLocalAccounts(): Promise<readonly LocalAccount[]> {
+  const rows = await Promise.all(
+    getHeldSessions().map(async (held): Promise<LocalAccount | null> => {
+      try {
+        const data = await call(
+          api.api.auth.accounts.get({ headers: { Authorization: `Bearer ${held.token}` } }),
+          "Accounts read failed",
+        );
+        const accounts = data
+          .filter((a) => a.connected)
+          .map(({ host, githubLogin, avatarContent }) => ({ host, githubLogin, avatarContent }));
+        return accounts.length > 0
+          ? { id: held.userId, name: held.name, email: held.email, accounts }
+          : null;
+      } catch (e) {
+        if (apiErrorCode(e) === "UNAUTHORIZED") releaseSession({ token: held.token });
+        return null;
+      }
+    }),
+  );
+  return rows.filter((row) => row !== null);
 }
 
-export async function switchAccount(userId: string, host?: string): Promise<void> {
+/**
+ * Run an account switch with the identity marked as switching, so the
+ * onboarding gate holds while the new user's identity loads. A failure is
+ * recorded as the sign-in error; resolves `true` when `run` succeeded.
+ */
+export async function runAccountSwitch(run: () => Promise<void>): Promise<boolean> {
   resetLoadUserRetryState();
   isSwitching = true;
   isLoading = true;
-  // Suspend background sync for the duration of the switch — an in-flight
-  // syncPrs() racing the new account's hydration can hang the swap.
-  await withSyncSuspended(async () => {
-    try {
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (token) headers.Authorization = `Bearer ${token}`;
-      const res = await fetch(`${API_BASE_URL}/api/auth/switch`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ userId }),
-      });
-      if (!res.ok) throw new Error("Switch failed");
-      const data = (await res.json()) as { token: string };
-      setToken(data.token);
-      resetPrs();
-      resetSettings();
-      resetOrgs();
-      clearReviewFiles();
-      // Fire-and-forget navigation. Awaiting `goto` blocks on SvelteKit's
-      // load/render cycle which can sit behind any number of in-flight
-      // route effects — and the data hydration below works regardless of
-      // which route we end up on.
-      if (
-        typeof window !== "undefined" &&
-        /^\/(repo|review)(\/|$)/.test(window.location.pathname)
-      ) {
-        void goto("/", { replaceState: true });
-      }
-      // Reconnect realtime channels with the new session token AND explicit
-      // host so the server binds them to the target user's correct account on
-      // the first attempt, even though the local settings store is still null.
-      disconnectEvents();
-      connectEvents(data.token, host);
-      const persistHost = host
-        ? fetch(`${API_BASE_URL}/api/settings`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.token}` },
-            body: JSON.stringify({ githubHost: host }),
-          }).catch(() => {
-            // best-effort — a missed PUT self-heals once the user updates
-            // settings explicitly.
-          })
-        : Promise.resolve();
-      // Block the switch UX only on the identity round-trip. Everything else
-      // hydrates in the background; awaiting the full payload here turned
-      // every slow /api/prs into a multi-second freeze that looked like the
-      // switch had hung.
-      await loadUser();
-      isSwitching = false;
-      void Promise.allSettled([
-        persistHost,
-        fetchSettings(),
-        fetchPrs(),
-        fetchRepos(),
-        fetchPinnedPrs(),
-      ]);
-    } catch (e) {
-      error = `Failed to switch account: ${e}`;
-    } finally {
-      isLoading = false;
-      isSwitching = false;
-    }
-  });
-}
-
-export async function removeAccount(): Promise<void> {
-  if (!token) return;
-  stopPolling();
-  const res = await fetch(`${API_BASE_URL}/api/user/account`, {
-    method: "DELETE",
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to remove account: ${res.status}`);
-  }
-  // Server confirmed deletion — now clean up local state
-  accountJustRemoved = true;
-  disconnectEvents();
-  clearToken();
-  resetPrs();
-  resetSettings();
-  resetOrgs();
-  clearReviewFiles();
-  await fetchLocalAccounts();
-  forceOnboardingFlow = true;
-  await goto("/");
-}
-
-export async function signOut(): Promise<void> {
-  stopPolling();
-
-  // Soft sign-out: tell server (no-op), then clear local state
   try {
-    await fetch(`${API_BASE_URL}/api/auth/revoke-and-sign-out`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-  } catch {
-    // best-effort
+    await run();
+    return true;
+  } catch (e) {
+    setError(`Failed to switch account: ${thrownMessage(e)}`);
+    return false;
+  } finally {
+    isLoading = false;
+    isSwitching = false;
   }
-
-  clearToken();
-  resetPrs();
-  resetSettings();
-  resetOrgs();
-
-  await goto("/");
 }
 
-export function getToken(): string | null {
+/** Ask the server for a session token for another local user. */
+export async function requestAccountSwitch(userId: string): Promise<string> {
+  const { token } = await call(api.api.auth.switch.post({ userId }), "Switch failed");
   return token;
 }
 
-export function getUser(): {
-  name: string;
-  email: string;
-  image?: string;
-  githubLogin?: string | null;
-  onboardedAt?: string | null;
-} | null {
+export async function deleteAccount(): Promise<void> {
+  await call(api.api.user.account.delete(), "Failed to remove account");
+}
+
+export function getUser(): User | null {
   return user;
 }
 
-/** Current user's GitHub login, or null if not yet loaded or missing. */
+/**
+ * Whether a push about the account on `host` is about the lists on screen:
+ * those of the active host's account. The stream carries every account.
+ */
+export function isShownHost(host: string): boolean {
+  return user?.host == null || sameGithubHost(user.host, host);
+}
+
+/** Who "me" is on the active host: the login of the user's account there. */
 export function getCurrentUserLogin(): string | null {
   return user?.githubLogin ?? null;
 }
 
 /**
- * Whether the GitHub identity fetch has run for this session (successfully or
- * not). Callers that *branch* on `getCurrentUserLogin()` — rather than merely
- * displaying it — should wait for this, otherwise they act on a provisional
- * `null` and have to redo the work when the real answer lands.
+ * Who "me" is on `host`'s repositories: the login of the user's account
+ * there. Without a host, the active host's.
  */
-export function hasAttemptedIdentityLoad(): boolean {
-  return identityAttempted;
+export function loginOnHost(host: string | null): string | null {
+  return host === null ? getCurrentUserLogin() : (accountOn(accounts, host)?.githubLogin ?? null);
 }
 
 /**
- * Whether the current user's GitHub login is on the maintainer allowlist.
+ * Whether the identity has loaded for this session: the user and their login
+ * arrive together. Callers that *branch* on `getCurrentUserLogin()` — rather
+ * than merely displaying it — should wait for this, otherwise they act on a
+ * provisional `null` and have to redo the work when the real answer lands.
+ */
+export function isIdentityLoaded(): boolean {
+  return identity !== null;
+}
+
+/**
  * Maintainers bypass the 48h stable-channel cooldown in the in-app updater.
- * Computed locally from `MAINTAINER_LOGINS` so client and server agree without
- * a round-trip — the `/api/user/identity` response also carries this flag,
- * but recomputing here keeps the answer correct even before the first fetch
- * completes (returns `false` until `githubLogin` is loaded).
+ * Computed locally from `MAINTAINER_LOGINS` rather than read from
+ * `/api/user/identity`, so client and server agree without a round-trip
+ * (false until `githubLogin` loads).
  */
 export function getIsMaintainer(): boolean {
-  return isMaintainerLogin(user?.githubLogin ?? null);
+  return isMaintainerLogin(getCurrentUserLogin());
 }
 
 export function getIsLoading(): boolean {
   return isLoading;
-}
-
-/** Bring the app window to the foreground after auth completes. */
-export async function focusWindow(): Promise<void> {
-  try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    await getCurrentWindow().setFocus();
-  } catch {
-    // Focus is best-effort
-  }
 }

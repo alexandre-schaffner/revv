@@ -1,15 +1,16 @@
 <script lang="ts">
-import { flaggedHunkSmells } from "@revv/shared";
+import { flaggedHunkSmells, splitHunks } from "@revv/shared";
 import HunkSmellChip from "$lib/components/walkthrough/first-pass/HunkSmellChip.svelte";
-import { getHunkScanForFile } from "$lib/stores/hunk-scan.svelte";
-import { getLoadedHeadSha, jumpToDiffLine } from "$lib/stores/review.svelte";
+import { hunkRangeLabel, leadOutcome, rowMatchesHunk } from "$lib/hunk-scan/first-pass";
+import { getHunkScanForFile } from "$lib/hunk-scan/store.svelte";
+import { getLoadedHeadSha } from "$lib/stores/diff-files.svelte";
+import { openInDiff } from "$lib/stores/review-nav.svelte";
 import {
   getIsStreaming,
   getIssuesForFile,
   getLeads,
   getReviewsLoadedHead,
-} from "$lib/stores/walkthrough.svelte";
-import { hunkRangeLabel, leadOutcome, patchHunkRanges, rowMatchesHunk } from "$lib/utils/hunk-scan";
+} from "$lib/walkthrough/store.svelte";
 
 /**
  * The first pass's flagged hunks for one file, as a strip of jump targets
@@ -27,14 +28,14 @@ interface Props {
 
 let { prId, filePath, patch }: Props = $props();
 
-const hunkRanges = $derived(patch === null ? [] : patchHunkRanges(patch));
+const hunkRanges = $derived(patch === null ? [] : splitHunks(patch));
 
-const reviewed = $derived(getReviewsLoadedHead());
+const reviewed = $derived(getReviewsLoadedHead(prId));
 
 const hunks = $derived.by(() => {
-  const issues = getIssuesForFile(filePath);
-  const isComplete = !getIsStreaming();
-  const leads = getLeads();
+  const issues = getIssuesForFile(prId, filePath);
+  const isComplete = !getIsStreaming(prId);
+  const leads = getLeads(prId);
   return getHunkScanForFile(prId, getLoadedHeadSha(prId), filePath)
     .filter((row) => {
       const hunk = hunkRanges[row.hunkIndex];
@@ -60,7 +61,7 @@ const hunks = $derived.by(() => {
 					type="button"
 					class="file-first-pass-hunk"
 					title="Jump to {hunkRangeLabel(row)}"
-					onclick={() => jumpToDiffLine(row.filePath, row.newStart)}
+					onclick={() => openInDiff(prId, row.filePath, row.newStart)}
 				>
 					<span class="file-first-pass-range">{hunkRangeLabel(row)}</span>
 					{#each smells as { smell, probability } (smell)}

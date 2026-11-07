@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { RecapPrEntry } from "@revv/shared";
+import { formatCount } from "$lib/utils/format-count";
 import InlineText from "./InlineText.svelte";
 
 interface Props {
@@ -12,10 +13,6 @@ const prNumberLabel = $derived(entry.prExternalId > 0 ? `#${entry.prExternalId}`
 const title = $derived(entry.prTitle || "(PR removed)");
 const href = $derived(`/review/${entry.prId}`);
 const showDiff = $derived(entry.linesAdded > 0 || entry.linesRemoved > 0);
-
-function fmt(n: number): string {
-  return n.toLocaleString("en-US");
-}
 </script>
 
 <div class="pr-row">
@@ -27,8 +24,8 @@ function fmt(n: number): string {
     {/if}
     {#if showDiff}
       <span class="diff">
-        <span class="plus">+{fmt(entry.linesAdded)}</span>
-        <span class="minus">−{fmt(entry.linesRemoved)}</span>
+        <span class="plus">+{formatCount(entry.linesAdded)}</span>
+        <span class="minus">−{formatCount(entry.linesRemoved)}</span>
       </span>
     {/if}
   </div>

@@ -1,25 +1,12 @@
-// ─── BlobStore ───────────────────────────────────────────────────────────────
-//
-// Backend-agnostic interface over the team-shared object storage that
-// holds gzipped walkthrough snapshots. V1 ships a `GcsBlobStore` only;
-// future variants (`S3BlobStore`, `R2BlobStore`, `HostedBlobStore`) can
-// land behind this interface with zero protocol change.
-//
-// All ops are `Effect.Effect<…, BlobStoreUnavailable | BlobCorrupt>`. The
-// orchestrator never lets these errors escape — every cache failure
-// downgrades to a local agent run.
+// Team-shared object storage holding gzipped walkthrough snapshots. Callers
+// never let its errors escape: every cache failure downgrades to a local
+// agent run.
 
 import type { Effect, Option } from "effect";
 import { Context } from "effect";
-import type { BlobCorrupt, BlobStoreUnavailable } from "../../domain/errors";
+import type { BlobStoreUnavailable } from "../../domain/errors";
 
-/**
- * Free-form key/value metadata attached to every blob. We use it for:
- *   • integrity tracking (`contentSha256`)
- *   • forward-compat versioning (`schemaVersion`)
- *   • advisory attribution (`uploadedByUserId`, `modelUsed`)
- * — see `CACHE_METADATA_KEYS` in `@revv/shared`.
- */
+/** Keys are `CACHE_METADATA_KEYS` in `../walkthrough/cache-format`. */
 export type BlobMetadata = Record<string, string>;
 
 export interface BlobRecord {
@@ -37,24 +24,14 @@ export class BlobStore extends Context.Service<
   BlobStore,
   {
     /**
-     * Probe object existence. Returns `false` on miss; raises
-     * `BlobStoreUnavailable` on network / auth failure. No body fetched.
+     * The body comes back unverified: `RemoteWalkthroughCache` gunzips it and
+     * checks its sha256 against the metadata.
      */
-    readonly exists: (key: string) => Effect.Effect<boolean, BlobStoreUnavailable>;
+    readonly get: (key: string) => Effect.Effect<Option.Option<BlobRecord>, BlobStoreUnavailable>;
 
     /**
-     * Download and verify a blob. Missing object → `Option.none()`.
-     * Network/auth failure → `BlobStoreUnavailable`. Corrupt body
-     * (gunzip failure, missing metadata, sha256 mismatch) → `BlobCorrupt`.
-     */
-    readonly get: (
-      key: string,
-    ) => Effect.Effect<Option.Option<BlobRecord>, BlobStoreUnavailable | BlobCorrupt>;
-
-    /**
-     * Upload a blob with the given content-type / encoding / metadata. GCS
-     * default semantics: last writer wins. Snapshots are content-addressed
-     * by `headSha`, so concurrent uploads converge to byte-identical bodies.
+     * Last writer wins (GCS default). Snapshots are content-addressed by
+     * `headSha`, so concurrent uploads converge to byte-identical bodies.
      */
     readonly put: (
       key: string,
@@ -63,10 +40,8 @@ export class BlobStore extends Context.Service<
     ) => Effect.Effect<void, BlobStoreUnavailable>;
 
     /**
-     * Health probe — used by the Settings UI's "Test connection" button.
-     * Always succeeds; the result discriminates healthy vs. why-not. Wraps
-     * `bucket.getMetadata()` so an IAM misconfig surfaces a readable error
-     * string to the user.
+     * Backs the Settings "Test connection" button: an IAM misconfiguration
+     * comes back as a readable `detail`, not a failure.
      */
     readonly status: () => Effect.Effect<BlobStoreStatus>;
   }

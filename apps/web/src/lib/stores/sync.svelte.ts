@@ -1,25 +1,25 @@
-import type { ThreadSummary } from "@revv/shared";
+import {
+  FRESHEN_MIN_INTERVAL_MS,
+  type PrsSyncFailedEnvelope,
+  type SyncChange,
+  type ThreadsSyncErrorEnvelope,
+  type ThreadsSyncedEnvelope,
+} from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
+import { call } from "$lib/api/errors";
+import { thrownMessage } from "$lib/api/wire";
 
-// Map keyed by PR id (`owner/repo:number`) — summary is recomputed server-side
-// on every sync tick and broadcast via `threads:synced`.
-let summaries = $state<Map<string, ThreadSummary>>(new Map());
-
-// Per-PR last-successful-thread-sync timestamps (ISO). The bottom bar's
-// "Synced Xm ago" reflects the currently selected PR's entry, not a global.
+// Per-PR last-successful-thread-sync timestamps (ISO): the review page's
+// status "Synced Xm ago" reads its own PR's entry.
 let lastSyncAtByPr = $state<Map<string, string>>(new Map());
 
-// Per-PR in-flight threads sync (set after the user clicks sync, cleared on
-// `threads:synced`).
 let threadsSyncingByPr = $state<Set<string>>(new Set());
 
-// Per-PR last error message. Reserved for request-level sync failures.
 let syncErrorByPr = $state<Map<string, string>>(new Map());
 
-// Separate flag for the global PR-list metadata poll (`prs:sync-started` →
-// `prs:sync-complete`). The sidebar spinner uses this; it is NOT tied to a
-// specific PR and does not affect the bottom bar's per-PR label.
+// The global PR-list poll (`prs:sync-started` → `prs:sync-complete`), for the
+// top bar's spinner. No PR's sync label reads it.
 let prListSyncing = $state(false);
 
 export function getLastSyncAt(prId: string | null): string | null {
@@ -41,26 +41,81 @@ export function getPrListSyncing(): boolean {
   return prListSyncing;
 }
 
-export function setPrListSyncing(v: boolean): void {
-  prListSyncing = v;
+export function onPrsSyncStarted(): void {
+  prListSyncing = true;
 }
 
-export function requestSync(): void {
-  setPrListSyncing(true);
-  void api.api.prs.sync.post().catch(() => {
-    setPrListSyncing(false);
-    toast.error("Failed to sync pull requests");
-  });
+export function onPrsSyncComplete(): void {
+  prListSyncing = false;
+}
+
+/** A sync failure is terminal for that sync, and no `prs:sync-complete` follows it. */
+export function onPrsSyncFailed({ message }: PrsSyncFailedEnvelope["data"]): void {
+  prListSyncing = false;
+  toast.error(message, { duration: 6000 });
+}
+
+export function onPrsSyncSummary(changes: SyncChange[]): void {
+  if (changes.length === 0) return;
+  if (changes.length > 3) {
+    toast.info(`${changes.length} pull request updates`);
+    return;
+  }
+  for (const change of changes) {
+    const description = `${change.repoFullName} #${change.prNumber}: ${change.prTitle}`;
+    switch (change.kind) {
+      case "review_requested":
+        toast.info("Review requested", { description });
+        break;
+      case "pr_updated":
+        toast.info("PR updated", { description });
+        break;
+      case "pr_closed":
+        toast.info("PR closed", { description });
+        break;
+      case "pr_authored":
+        toast.info("Your new PR", { description });
+        break;
+    }
+  }
+}
+
+/**
+ * The list just painted from SQLite can be a poll interval behind GitHub.
+ * Asked once the stream is open because the answer comes back over it.
+ */
+export function onEventsOpened(): void {
+  freshenPrList();
+}
+
+/** CONNECTING defers the freshen to `onEventsOpened`, once the stream that carries the answer is registered. */
+export function onWindowForeground(streamOpen: boolean): void {
+  if (streamOpen) freshenPrList();
+}
+
+/** Sync every tracked repo's PRs from GitHub now; `prs:sync-complete` clears the spinner. */
+export async function requestSync(): Promise<void> {
+  prListSyncing = true;
+  try {
+    await call(api.api.prs.sync.post(), "Failed to sync pull requests");
+  } catch (e) {
+    prListSyncing = false;
+    toast.error(thrownMessage(e));
+  }
 }
 
 export function requestThreadSync(prId: string): void {
   markThreadsSyncing(prId);
-  void api.api
-    .prs({ id: prId })
-    ["sync-threads"].post()
-    .catch(() => {
-      setSyncError(prId, "Failed to reach server");
-    });
+  void postThreadSync(prId);
+}
+
+/** `threads:synced` or `threads:sync-error` clears the spinner; a refused ask never gets either. */
+async function postThreadSync(prId: string): Promise<void> {
+  try {
+    await call(api.api.prs({ id: prId })["sync-threads"].post(), "Failed to sync comments");
+  } catch (e) {
+    setSyncError(prId, thrownMessage(e));
+  }
 }
 
 /**
@@ -75,24 +130,17 @@ export function requestThreadSync(prId: string): void {
  */
 export function requestFullSync(prId: string): void {
   markThreadsSyncing(prId);
-  setPrListSyncing(true);
-  void api.api
-    .prs({ id: prId })
-    .refresh.post()
-    .catch(() => {
-      toast.error("Failed to refresh pull request");
+  prListSyncing = true;
+  void call(api.api.prs({ id: prId }).refresh.post(), "Failed to refresh pull request")
+    .catch((e: unknown) => {
+      toast.error(thrownMessage(e));
     })
     .finally(() => {
       // This request is awaited server-side, so its completion IS the signal —
       // there's no `prs:sync-complete` coming to release the spinner.
-      setPrListSyncing(false);
+      prListSyncing = false;
     });
-  void api.api
-    .prs({ id: prId })
-    ["sync-threads"].post()
-    .catch(() => {
-      setSyncError(prId, "Failed to reach server");
-    });
+  void postThreadSync(prId);
 }
 
 // Per-PR debounce for `refreshPrHead`. The call reaches GitHub, so a rapid
@@ -132,21 +180,13 @@ export function refreshPrHead(prId: string): void {
     if (now - at >= HEAD_REFRESH_DEBOUNCE_MS) lastHeadRefreshAt.delete(id);
   }
   lastHeadRefreshAt.set(prId, now);
-  void api.api
-    .prs({ id: prId })
-    .refresh.post()
-    .catch(() => {
-      // Allow an immediate retry on the next trigger rather than holding the
-      // debounce open for a request that never landed.
-      lastHeadRefreshAt.delete(prId);
-    });
+  void call(api.api.prs({ id: prId }).refresh.post(), "Refresh failed").catch(() => {
+    lastHeadRefreshAt.delete(prId);
+  });
 }
 
-// Client-side throttle for `freshenPrList`, matching the server's: it skips a
-// freshen when any sync cycle started in the last 2 minutes, so asking more
-// often only spends requests. Every window focus calls this, so without it a
-// burst of alt-tabs is a burst of POSTs.
-const FRESHEN_MIN_INTERVAL_MS = 2 * 60 * 1000;
+// Every window focus calls `freshenPrList`; without the throttle a burst of
+// alt-tabs is a burst of POSTs the server would skip anyway.
 let lastFreshenAt = 0;
 
 /**
@@ -164,7 +204,7 @@ let lastFreshenAt = 0;
  * arrives as an event, and an event sent before this client's stream is
  * registered is lost.
  */
-export function freshenPrList(): void {
+function freshenPrList(): void {
   const now = Date.now();
   if (now - lastFreshenAt < FRESHEN_MIN_INTERVAL_MS) return;
   lastFreshenAt = now;
@@ -173,13 +213,10 @@ export function freshenPrList(): void {
   void api.api.prs.freshen.post().catch(() => undefined);
 }
 
-/** Mark a PR's threads sync as in-flight (called when we send the request). */
-export function markThreadsSyncing(prId: string): void {
+function markThreadsSyncing(prId: string): void {
   const next = new Set(threadsSyncingByPr);
   next.add(prId);
   threadsSyncingByPr = next;
-  // Clear any stale error from a previous attempt so the UI doesn't flash
-  // "Sync failed" next to a spinner.
   if (syncErrorByPr.has(prId)) {
     const nextErr = new Map(syncErrorByPr);
     nextErr.delete(prId);
@@ -187,7 +224,7 @@ export function markThreadsSyncing(prId: string): void {
   }
 }
 
-export function setSyncError(prId: string, message: string): void {
+function setSyncError(prId: string, message: string): void {
   if (threadsSyncingByPr.has(prId)) {
     const nextSyncing = new Set(threadsSyncingByPr);
     nextSyncing.delete(prId);
@@ -198,11 +235,12 @@ export function setSyncError(prId: string, message: string): void {
   syncErrorByPr = nextErr;
 }
 
-export function applySynced(prId: string, summary: ThreadSummary, timestamp: string): void {
-  const nextSummaries = new Map(summaries);
-  nextSummaries.set(prId, summary);
-  summaries = nextSummaries;
+export function onThreadsSyncError({ prId, message }: ThreadsSyncErrorEnvelope["data"]): void {
+  setSyncError(prId, message);
+  toast.error("Comment sync failed", { description: message, duration: 6000 });
+}
 
+export function onThreadsSynced({ prId, timestamp }: ThreadsSyncedEnvelope["data"]): void {
   const nextTs = new Map(lastSyncAtByPr);
   nextTs.set(prId, timestamp);
   lastSyncAtByPr = nextTs;
@@ -220,8 +258,11 @@ export function applySynced(prId: string, summary: ThreadSummary, timestamp: str
   }
 }
 
-export function setBatchSummaries(entries: Array<{ prId: string; summary: ThreadSummary }>): void {
-  const next = new Map(summaries);
-  for (const { prId, summary } of entries) next.set(prId, summary);
-  summaries = next;
+export function reset(): void {
+  lastSyncAtByPr = new Map();
+  threadsSyncingByPr = new Set();
+  syncErrorByPr = new Map();
+  prListSyncing = false;
+  lastHeadRefreshAt.clear();
+  lastFreshenAt = 0;
 }

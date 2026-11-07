@@ -1,18 +1,17 @@
 <script lang="ts">
 import type { StackMergePlanLayer } from "@revv/shared";
 import { gsapFade, tokens } from "$lib/motion";
+import SpineGlyph from "./SpineGlyph.svelte";
 import StackLayerGlyph from "./StackLayerGlyph.svelte";
 
 interface Props {
   layer: StackMergePlanLayer;
-  /** Why this layer can't be the target; null when it can. */
-  refusal: string | null;
   inRange: boolean;
   isTarget: boolean;
   onpick: () => void;
 }
 
-let { layer, refusal, inRange, isTarget, onpick }: Props = $props();
+let { layer, inRange, isTarget, onpick }: Props = $props();
 </script>
 
 <button
@@ -21,13 +20,13 @@ let { layer, refusal, inRange, isTarget, onpick }: Props = $props();
 	class="layer-row layer-pick"
 	class:layer-pick--range={inRange && layer.readiness !== 'merged'}
 	aria-checked={isTarget}
-	disabled={refusal !== null}
-	title={refusal ?? `Merge everything through #${layer.number}`}
+	disabled={layer.refusal !== null}
+	title={layer.refusal ?? `Merge everything through #${layer.number}`}
 	onclick={onpick}
 >
-	<span class="stack-layer-glyph" aria-hidden="true">
+	<SpineGlyph>
 		<StackLayerGlyph status={layer.status} />
-	</span>
+	</SpineGlyph>
 	<span class="layer-text">
 		<span class="layer-title">{layer.title}</span>
 		<span class="layer-meta">

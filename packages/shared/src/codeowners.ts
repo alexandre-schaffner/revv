@@ -1,5 +1,3 @@
-// ── CODEOWNERS ──────────────────────────────────────────────────────────────
-//
 // GitHub tells us which review requests came from CODEOWNERS, but not which
 // owner covers which file. So the Conversation tab reads the base branch's
 // CODEOWNERS (the server parses it) and matches it against the PR's changed
@@ -28,10 +26,18 @@ export interface CodeownersFile {
 /** Where GitHub looks for the file, in the order it looks. */
 export const CODEOWNERS_PATHS = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"] as const;
 
+/** A `#` at the start of the line or after whitespace starts a comment. */
+function withoutComment(line: string): string {
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === "#" && (i === 0 || /\s/.test(line[i - 1] as string))) return line.slice(0, i);
+  }
+  return line;
+}
+
 export function parseCodeowners(text: string): CodeownersRule[] {
   const rules: CodeownersRule[] = [];
   text.split(/\r?\n/).forEach((raw, index) => {
-    const line = raw.replace(/(^|\s)#.*$/, "").trim();
+    const line = withoutComment(raw).trim();
     if (!line) return;
     // An escaped space (`\ `) belongs to the pattern.
     const [pattern, ...owners] = line.split(/(?<!\\)\s+/);

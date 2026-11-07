@@ -1,112 +1,47 @@
-// ── chat-edit-read-handler ───────────────────────────────────────────────────
-//
-// Read-only handler: get_walkthrough_for_edit.
-
-import { chapterNumbersByIndex, type WalkthroughBlock } from "@revv/shared";
-import { eq, inArray } from "drizzle-orm";
-import { commentThreads } from "../../../db/schema/comment-threads";
-import { threadMessages } from "../../../db/schema/thread-messages";
-import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
-import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
-import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
-import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
-import { findIssuesMissingInlineComment } from "../walkthrough-tools";
+import { chapterNumbersByIndex, RATING_AXES } from "@revv/shared";
+import { orchestratorCompletionBlocker } from "../../../services/walkthrough/completion";
 import {
   decodeBlock,
   decodeIssue,
   decodeRating,
-  fail,
-  ok,
-  resolveActiveWalkthroughId,
-} from "./helpers";
+  findIssuesMissingInlineComment,
+  isRatedAxis,
+  latestCompleteWalkthrough,
+  loadContentRows,
+  loadIssueThreads,
+} from "../../../services/walkthrough/content";
+import { fail, ok } from "../mcp-tool-gateway";
+import { NO_COMPLETE_WALKTHROUGH } from "./helpers";
 import type { ChatEditToolHandler, GetWalkthroughForEditInput } from "./spec";
-
-// ── Tool: get_walkthrough_for_edit ──────────────────────────────────────────
 
 export const getWalkthroughForEditHandler: ChatEditToolHandler<GetWalkthroughForEditInput> = async (
   ctx,
 ) => {
-  const row = resolveActiveWalkthroughId(ctx.db, ctx.prId);
-  if (!row) {
-    return fail(
-      `No complete walkthrough exists for this PR yet. Ask the user to generate one first.`,
-    );
-  }
+  const row = latestCompleteWalkthrough(ctx.db, ctx.prId);
+  if (!row) return fail(NO_COMPLETE_WALKTHROUGH);
 
-  const semanticRows = ctx.db
-    .select()
-    .from(walkthroughSemanticSteps)
-    .where(eq(walkthroughSemanticSteps.walkthroughId, row.id))
-    .orderBy(walkthroughSemanticSteps.semanticStepIndex)
-    .all();
-
-  const blockRows = ctx.db
-    .select()
-    .from(walkthroughBlocks)
-    .where(eq(walkthroughBlocks.walkthroughId, row.id))
-    .orderBy(walkthroughBlocks.semanticStepIndex, walkthroughBlocks.stepIndex)
-    .all();
-
-  const issueRows = ctx.db
-    .select()
-    .from(walkthroughIssues)
-    .where(eq(walkthroughIssues.walkthroughId, row.id))
-    .orderBy(walkthroughIssues.order)
-    .all();
-
-  const ratingRows = ctx.db
-    .select()
-    .from(walkthroughRatings)
-    .where(eq(walkthroughRatings.walkthroughId, row.id))
-    .all();
-
-  // Comment threads linked to issues in this walkthrough.
-  const issueIds = issueRows.map((i) => i.id);
-  const threadRows =
-    issueIds.length > 0
-      ? ctx.db
-          .select()
-          .from(commentThreads)
-          .where(inArray(commentThreads.walkthroughIssueId, issueIds))
-          .all()
-      : [];
-  const threadIds = threadRows.map((t) => t.id);
-  const messageRows =
-    threadIds.length > 0
-      ? ctx.db
-          .select()
-          .from(threadMessages)
-          .where(inArray(threadMessages.threadId, threadIds))
-          .orderBy(threadMessages.createdAt)
-          .all()
-      : [];
+  const content = loadContentRows(ctx.db, row.id);
+  const { threads, messages } = loadIssueThreads(
+    ctx.db,
+    content.issues.map((i) => i.id),
+  );
+  const threadById = new Map(threads.map((t) => [t.id, t]));
 
   const stepIndicesBySection = new Map<number, number[]>();
-  for (const b of blockRows) {
-    const arr = stepIndicesBySection.get(b.semanticStepIndex) ?? [];
-    arr.push(b.stepIndex);
-    stepIndicesBySection.set(b.semanticStepIndex, arr);
+  for (const b of content.blocks) {
+    const indices = stepIndicesBySection.get(b.semanticStepIndex) ?? [];
+    indices.push(b.stepIndex);
+    stepIndicesBySection.set(b.semanticStepIndex, indices);
   }
-
   const chapterNumbers = chapterNumbersByIndex(
-    semanticRows.map((s) => s.semanticStepIndex),
-    blockRows.map((b) => b.semanticStepIndex),
+    content.semanticSteps.map((s) => s.semanticStepIndex),
+    content.blocks.map((b) => b.semanticStepIndex),
   );
 
   const missingComments = findIssuesMissingInlineComment(ctx.db, row.id);
-  const ratedAxes = new Set(ratingRows.map((r) => r.axis));
-  const requiredAxes = [
-    "correctness",
-    "scope",
-    "tests",
-    "clarity",
-    "safety",
-    "consistency",
-    "api_changes",
-    "performance",
-    "description",
-  ];
-  const missingAxes = requiredAxes.filter((a) => !ratedAxes.has(a));
+  const ratedAxes = new Set(content.ratings.filter(isRatedAxis).map((r) => r.axis));
+  const missingAxes = RATING_AXES.filter((a) => !ratedAxes.has(a));
+  const blocker = orchestratorCompletionBlocker(ctx.db, row.id);
 
   const payload = {
     walkthroughId: row.id,
@@ -118,25 +53,18 @@ export const getWalkthroughForEditHandler: ChatEditToolHandler<GetWalkthroughFor
     summary: row.summary,
     riskLevel: row.riskLevel,
     sentiment: row.sentiment,
-    semanticSteps: semanticRows.map((s) => ({
+    semanticSteps: content.semanticSteps.map((s) => ({
       semanticStepIndex: s.semanticStepIndex,
       chapterNumber: chapterNumbers.get(s.semanticStepIndex) ?? null,
       title: s.title,
       summary: s.summary,
-      stepIndices: (stepIndicesBySection.get(s.semanticStepIndex) ?? [])
-        .slice()
-        .sort((a, b) => a - b),
+      stepIndices: stepIndicesBySection.get(s.semanticStepIndex) ?? [],
     })),
-    blocks: blockRows
-      .map((b) => {
-        const decoded = decodeBlock(b);
-        return decoded;
-      })
-      .filter((b): b is WalkthroughBlock => b !== null),
-    issues: issueRows.map(decodeIssue),
-    ratings: ratingRows.map(decodeRating),
-    comments: messageRows.map((m) => {
-      const thread = threadRows.find((t) => t.id === m.threadId);
+    blocks: content.blocks.flatMap((b) => decodeBlock(b) ?? []),
+    issues: content.issues.map(decodeIssue),
+    ratings: content.ratings.map(decodeRating),
+    comments: messages.map((m) => {
+      const thread = threadById.get(m.threadId);
       return {
         threadMessageId: m.id,
         threadId: m.threadId,
@@ -152,14 +80,9 @@ export const getWalkthroughForEditHandler: ChatEditToolHandler<GetWalkthroughFor
       };
     }),
     validation: {
-      passesCompletenessGate: missingComments.length === 0 && missingAxes.length === 0,
-      missingInlineComments: missingComments.map((m) => ({
-        id: m.id,
-        severity: m.severity,
-        title: m.title,
-        filePath: m.filePath,
-        startLine: m.startLine,
-      })),
+      passesCompletenessGate: blocker === null,
+      blocker,
+      missingInlineComments: missingComments,
       missingAxes,
     },
   };

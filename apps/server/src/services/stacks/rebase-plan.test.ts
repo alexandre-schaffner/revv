@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { GitHubStack, GitHubStackLayer } from "./map";
+import type { GitHubStack, GitHubStackLayer } from "../github/stacks";
 import { planStackRebase } from "./rebase-plan";
 
 function layer(position: number, over: Partial<GitHubStackLayer> = {}): GitHubStackLayer {

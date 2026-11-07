@@ -4,16 +4,16 @@ import CalendarDots from "phosphor-svelte/lib/CalendarDots";
 import CaretRight from "phosphor-svelte/lib/CaretRight";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
-import { pickLatestByWindow } from "$lib/components/recaps/period-window";
 import RecapStats from "$lib/components/recaps/RecapStats.svelte";
+import { RECAP_PERIOD_COPY } from "$lib/recaps/copy";
+import { formatRecapRange, pickLatestByWindow, recapSpan } from "$lib/recaps/period-window";
 import {
-  fetchRecapsForRepo,
   getRecapDetail,
   getRecapDetailLoading,
-  getRecapLoading,
-  getRecapsForRepo,
   loadRecap,
-} from "$lib/stores/recaps.svelte";
+  useRecapsForRepo,
+} from "$lib/recaps/store.svelte";
+import { sanitizeLedeHtml } from "$lib/recaps/themes";
 
 interface Props {
   repoId: string;
@@ -21,23 +21,15 @@ interface Props {
 
 let { repoId }: Props = $props();
 
-let fetched = false;
-$effect(() => {
-  if (!fetched && repoId) {
-    fetched = true;
-    void untrack(() => fetchRecapsForRepo(repoId));
-  }
-});
-
-const recaps = $derived(getRecapsForRepo(repoId));
-const listLoading = $derived(getRecapLoading(repoId));
+const repoRecaps = useRecapsForRepo(() => repoId);
+const recaps = $derived(repoRecaps.list);
+const listLoading = $derived(repoRecaps.loading);
 
 // Most recent non-superseded recap regardless of period — by *window*, not
 // by generation time, so a historical backfill doesn't take over this card.
 const latest = $derived<ProjectRecapSummary | null>(pickLatestByWindow(recaps));
 const latestId = $derived(latest?.id ?? null);
 
-// Hydrate the full markdown for the latest recap.
 $effect(() => {
   const id = latestId;
   if (id) {
@@ -48,42 +40,7 @@ $effect(() => {
 const latestDetail = $derived<ProjectRecap | null>(latestId ? getRecapDetail(latestId) : null);
 const detailLoading = $derived(latestId ? getRecapDetailLoading(latestId) : false);
 
-const DAY_MONTH_YEAR = new Intl.DateTimeFormat("en-GB", {
-  weekday: "short",
-  day: "2-digit",
-  month: "short",
-  year: "numeric",
-  timeZone: "UTC",
-});
-const DAY_MONTH = new Intl.DateTimeFormat("en-GB", {
-  day: "2-digit",
-  month: "short",
-  timeZone: "UTC",
-});
-
-function periodLabel(r: ProjectRecapSummary): string {
-  return r.period === "daily" ? "Daily recap" : "Weekly recap";
-}
-
-function periodWindow(r: ProjectRecapSummary): string {
-  const start = new Date(r.periodStart);
-  if (r.period === "daily") {
-    return DAY_MONTH_YEAR.format(start);
-  }
-  const lastDay = new Date(new Date(r.periodEnd).getTime() - 1);
-  return `${DAY_MONTH.format(start)} → ${DAY_MONTH.format(lastDay)}`;
-}
-
-// Allowlist sanitize the lede (matches RecapBody — only <strong>/<em>).
-let ledeHtml = $derived.by(() => {
-  const raw = latestDetail?.lede ?? "";
-  const escaped = raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return escaped
-    .replace(/&lt;strong&gt;/gi, "<strong>")
-    .replace(/&lt;\/strong&gt;/gi, "</strong>")
-    .replace(/&lt;em&gt;/gi, "<em>")
-    .replace(/&lt;\/em&gt;/gi, "</em>");
-});
+const ledeHtml = $derived(sanitizeLedeHtml(latestDetail?.lede ?? ""));
 </script>
 
 <section class="recap-card-section">
@@ -116,8 +73,8 @@ let ledeHtml = $derived.by(() => {
 	{:else if latestDetail && latestDetail.status === "generating"}
 		<div class="recap-card-paper">
 			<header class="recap-card-paper-header">
-				<span class="recap-card-eyebrow">{periodLabel(latest)}</span>
-				<span class="recap-card-window">{periodWindow(latest)}</span>
+				<span class="recap-card-eyebrow">{RECAP_PERIOD_COPY[latest.period].title}</span>
+				<span class="recap-card-window">{formatRecapRange(recapSpan(latest))}</span>
 			</header>
 			<div class="recap-card-generating">
 				<Spinner size={16} class="motion-essential-spin" aria-hidden="true" />
@@ -128,8 +85,8 @@ let ledeHtml = $derived.by(() => {
 	{:else if latestDetail}
 		<div class="recap-card-paper">
 			<header class="recap-card-paper-header">
-				<span class="recap-card-eyebrow">{periodLabel(latest)}</span>
-				<span class="recap-card-window">{periodWindow(latest)}</span>
+				<span class="recap-card-eyebrow">{RECAP_PERIOD_COPY[latest.period].title}</span>
+				<span class="recap-card-window">{formatRecapRange(recapSpan(latest))}</span>
 			</header>
 
 			<div class="recap-card-stats">
@@ -150,8 +107,8 @@ let ledeHtml = $derived.by(() => {
 	{:else}
 		<div class="recap-card-paper">
 			<header class="recap-card-paper-header">
-				<span class="recap-card-eyebrow">{periodLabel(latest)}</span>
-				<span class="recap-card-window">{periodWindow(latest)}</span>
+				<span class="recap-card-eyebrow">{RECAP_PERIOD_COPY[latest.period].title}</span>
+				<span class="recap-card-window">{formatRecapRange(recapSpan(latest))}</span>
 			</header>
 			<p class="recap-card-no-content">No overview content was written for this recap.</p>
 			<footer class="recap-card-paper-footer">
@@ -236,7 +193,6 @@ let ledeHtml = $derived.by(() => {
 		text-decoration: underline;
 	}
 
-	/* Paper-like container — subtle shadow, border, scrollable body. */
 	.recap-card-paper {
 		display: flex;
 		flex-direction: column;
@@ -245,9 +201,6 @@ let ledeHtml = $derived.by(() => {
 		background: var(--color-bg-primary);
 		border: 1px solid var(--color-border-subtle);
 		border-radius: var(--radius-card);
-		/* The system's Small tier. The hand-rolled `rgba(0, 0, 0, 0.04/0.06)`
-		   this replaces was near-invisible on the midnight canvas; the token
-		   carries its own dark-theme value. */
 		box-shadow: var(--color-shadow-sm);
 		max-height: 640px;
 		overflow-y: auto;
@@ -299,14 +252,8 @@ let ledeHtml = $derived.by(() => {
 		color: var(--color-text-muted);
 	}
 
-	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
-	   prose layer (see app.css). The recap lede reads as primary-weight body
-	   text rather than the muted prose default, and headings get a touch of
-	   negative tracking to match the card's display type. */
 	.recap-card-prose {
 		--tw-prose-body: var(--color-text-primary);
-		/* The page container is wider than a reading measure now that the queue
-		   table drives its width; keep the lede at a readable line length. */
 		max-width: 70ch;
 	}
 

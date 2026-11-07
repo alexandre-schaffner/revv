@@ -1,5 +1,3 @@
-// ── Server build identity ────────────────────────────────────────────────────
-//
 // The desktop app ships this server compiled inside its bundle, so both come
 // from one commit and update together. `/api/health` still reports the
 // server's commit: the app compares it with its own to catch a server it
@@ -10,10 +8,6 @@
 // when the server runs from source with `bun run`.
 declare const __REVV_BUILD_COMMIT__: string | undefined;
 
-/**
- * Full commit SHA of the source checkout this server runs from, or `null`
- * when it can't be read (no git, or not a git checkout).
- */
 export function readSourceCommit(cwd: string = import.meta.dir): string | null {
   try {
     const result = Bun.spawnSync(["git", "rev-parse", "HEAD"], {

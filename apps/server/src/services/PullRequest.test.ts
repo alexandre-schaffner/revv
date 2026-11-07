@@ -1,24 +1,24 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { eq } from "drizzle-orm";
-import { Effect, Layer } from "effect";
+import { type Context, Effect, Layer } from "effect";
 import { createDb, type Db } from "../db/index";
 import { account, pullRequests, repositories, user } from "../db/schema";
 import { type ObservedPr, STACK_UNSEEN, stackSeen } from "../domain/observed-pr";
 import { DbService } from "./Db";
 import { DiffCacheService, DiffCacheServiceLive } from "./DiffCache";
-import { GitHubGateway, GitHubGatewayLive } from "./GitHub";
-import { GitHubEtagCacheLive } from "./GitHubEtagCache";
+import { GitHubGateway } from "./github/gateway";
+import { pullsApi } from "./github/pulls";
+import { githubClient, makeHttp } from "./github/transport";
 import {
   type ListArchivedPrsParams,
   PullRequestService,
   PullRequestServiceLive,
 } from "./PullRequest";
-import { SettingsServiceLive } from "./Settings";
+import { Realtime } from "./Realtime";
 
 const ACCOUNT_ID = "acc-1";
 const REPO_ID = "repo-1";
 
-// Seed one account/repo and a spread of PRs across statuses and authors.
 // closedAt values are deliberately out of insertion order so tests also
 // assert the `closedAt DESC` ordering, not just membership.
 function seed(db: Db): void {
@@ -125,8 +125,8 @@ describe("listArchivedPrs author filter", () => {
     const db = createDb(":memory:");
     seed(db);
     const { prs } = await listArchived(db, { authorLogins: ["alice"] });
+    // Alice's open PR stays out: the filter narrows the archive, never widens it.
     expect(prs.map((p) => p.id)).toEqual(["pr-closed-alice"]);
-    expect(prs.every((p) => p.authorLogin === "alice")).toBe(true);
   });
 
   it("restricts to multiple authors, still ordered by closedAt desc", async () => {
@@ -134,13 +134,6 @@ describe("listArchivedPrs author filter", () => {
     seed(db);
     const { prs } = await listArchived(db, { authorLogins: ["alice", "bob"] });
     expect(prs.map((p) => p.id)).toEqual(["pr-merged-bob", "pr-closed-alice"]);
-  });
-
-  it("never surfaces an open PR, even when its author is in the filter", async () => {
-    const db = createDb(":memory:");
-    seed(db);
-    const { prs } = await listArchived(db, { authorLogins: ["alice"] });
-    expect(prs.some((p) => p.id === "pr-open-alice")).toBe(false);
   });
 
   it("returns nothing when the filtered author has no closed PRs", async () => {
@@ -158,12 +151,48 @@ describe("listArchivedPrs author filter", () => {
   });
 });
 
-// ── upsertPrs: what the poll is allowed to overwrite ────────────────────────
-//
-// The poll's only source for open PRs is GitHub's list-PRs endpoint, which
-// returns the "simple" PR object: no additions, deletions, or changed_files,
-// and therefore zeroes after mapping. These tests pin the two columns whose
-// prior values must survive that.
+describe("listArchivedPrs paging", () => {
+  it("pages through PRs that share a closedAt without skipping or repeating any", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+    db.insert(pullRequests)
+      .values(
+        Array.from({ length: 120 }, (_, i) => ({
+          id: `pr-settled-${String(i).padStart(3, "0")}`,
+          externalId: 100 + i,
+          repositoryId: REPO_ID,
+          title: "t",
+          authorLogin: "dave",
+          status: "closed",
+          closedAt: "2026-06-01T00:00:00Z",
+          sourceBranch: "feature",
+          targetBranch: "main",
+          url: "https://example.com",
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+          fetchedAt: "2026-01-01T00:00:00Z",
+        })),
+      )
+      .run();
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 10; page++) {
+      const result = await listArchived(db, cursor === undefined ? {} : { cursor });
+      seen.push(...result.prs.map((p) => p.id));
+      if (result.nextCursor === null) break;
+      cursor = result.nextCursor;
+    }
+
+    expect(seen).toHaveLength(123);
+    expect(new Set(seen).size).toBe(123);
+    expect(seen.slice(0, 2)).toEqual(["pr-merged-bob", "pr-closed-alice"]);
+  });
+});
+
+// The poll lists open PRs from GitHub's list-PRs endpoint, which returns the
+// "simple" PR object: no additions, deletions or changed_files, so zeroes after
+// mapping. Stored stats must survive that.
 
 /** A PR as it arrives from the *list* endpoint: real metadata, zeroed stats. */
 function listSourcedPr(overrides: Partial<ObservedPr> = {}): ObservedPr {
@@ -179,7 +208,6 @@ function listSourcedPr(overrides: Partial<ObservedPr> = {}): ObservedPr {
     requestedReviewers: [],
     mentionedUsers: [],
     status: "open",
-    reviewStatus: "pending",
     isDraft: false,
     sourceBranch: "feature",
     targetBranch: "main",
@@ -219,31 +247,48 @@ function readRow(db: Db, id: string) {
   return row;
 }
 
-/**
- * Seed real diff stats the way production does — by caching a changed-file
- * list, which records the PR's size in the same transaction.
- */
+/** Seed real diff stats by caching a changed-file list, which records the PR's size with it. */
 function seedDiffStats(
   db: Db,
   prId: string,
   files: ReadonlyArray<{ path: string; additions: number; deletions: number }>,
 ): Promise<void> {
+  const github = {
+    prs: {
+      files: () =>
+        Effect.succeed(
+          files.map((f) => ({
+            filename: f.path,
+            previousFilename: null,
+            status: "modified",
+            additions: f.additions,
+            deletions: f.deletions,
+            patch: null,
+          })),
+        ),
+      commits: () => Effect.succeed([]),
+    },
+  } as unknown as Context.Service.Shape<typeof GitHubGateway>;
+  const realtime = { toPr: () => Effect.void } as unknown as Context.Service.Shape<typeof Realtime>;
+  const pr = readRow(db, prId);
   return Effect.runPromise(
     Effect.gen(function* () {
       const svc = yield* DiffCacheService;
-      yield* svc.cacheFiles(
-        readRow(db, prId),
-        files.map((f) => ({
-          path: f.path,
-          oldPath: null,
-          status: "modified",
-          additions: f.additions,
-          deletions: f.deletions,
-          patch: null,
-          fetchedAt: "2026-02-01T00:00:00Z",
-        })),
-      );
-    }).pipe(Effect.provide(DiffCacheServiceLive), Effect.provide(Layer.succeed(DbService, { db }))),
+      yield* svc.getOrFetch(pr, "o/r", githubClient("github.com", "token", ACCOUNT_ID));
+    }).pipe(
+      Effect.provide(
+        DiffCacheServiceLive.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.succeed(DbService, { db }),
+              Layer.succeed(GitHubGateway, github),
+              Layer.succeed(Realtime, realtime),
+            ),
+          ),
+        ),
+      ),
+      Effect.asVoid,
+    ),
   );
 }
 
@@ -263,7 +308,6 @@ describe("upsertPrs diff stats", () => {
     expect(row.additions).toBe(15);
     expect(row.deletions).toBe(3);
     expect(row.changedFiles).toBe(2);
-    // Everything else on the row still tracks GitHub.
     expect(row.title).toBe("updated title");
     expect(row.headSha).toBe("sha-new");
   });
@@ -313,11 +357,8 @@ describe("upsertPrs mentioned users", () => {
   });
 });
 
-// ── listOpenPrsAsOfWindow: "in flight" reconstructed from timestamps ────────
-//
-// The `status` column only ever describes *now*, so a recap for a window three
-// weeks back must decide membership from createdAt/closedAt instead. These
-// pin the four corners of that predicate.
+// `status` only describes *now*, so a recap for a past window decides "in
+// flight" from createdAt/closedAt. These pin the four corners of that predicate.
 
 const WINDOW_END = "2026-07-04T00:00:00Z";
 
@@ -334,7 +375,6 @@ function seedInFlight(db: Db): void {
   };
   db.insert(pullRequests)
     .values([
-      // Opened before the window closed, still open today.
       {
         ...base,
         id: "pr-still-open",
@@ -343,7 +383,6 @@ function seedInFlight(db: Db): void {
         createdAt: "2026-06-20T00:00:00Z",
         closedAt: null,
       },
-      // Opened before, closed *after* — in flight at that instant.
       {
         ...base,
         id: "pr-closed-after",
@@ -352,7 +391,6 @@ function seedInFlight(db: Db): void {
         createdAt: "2026-06-20T00:00:00Z",
         closedAt: "2026-07-10T00:00:00Z",
       },
-      // Opened before, closed *before* — already done by then.
       {
         ...base,
         id: "pr-closed-before",
@@ -361,7 +399,6 @@ function seedInFlight(db: Db): void {
         createdAt: "2026-06-20T00:00:00Z",
         closedAt: "2026-07-02T00:00:00Z",
       },
-      // Didn't exist yet.
       {
         ...base,
         id: "pr-created-after",
@@ -415,7 +452,6 @@ describe("listOpenPrsAsOfWindow", () => {
     const db = createDb(":memory:");
     seed(db);
     seedInFlight(db);
-    // A PR created exactly at `until` hadn't opened when the window shut.
     db.insert(pullRequests)
       .values({
         repositoryId: REPO_ID,
@@ -433,7 +469,6 @@ describe("listOpenPrsAsOfWindow", () => {
         closedAt: null,
       })
       .run();
-    // A PR closed exactly at `until` was still open for the whole window.
     db.insert(pullRequests)
       .values({
         repositoryId: REPO_ID,
@@ -585,27 +620,23 @@ describe("upsertPrs stack membership", () => {
           ),
         { preconnect: realFetch.preconnect },
       );
-      const dbLayer = Layer.succeed(DbService, { db });
-      const layer = Layer.mergeAll(GitHubGatewayLive, PullRequestServiceLive).pipe(
-        Layer.provideMerge(
-          Layer.mergeAll(GitHubEtagCacheLive, SettingsServiceLive).pipe(
-            Layer.provideMerge(dbLayer),
-          ),
-        ),
-      );
-      const apiBase = "https://api.github.test";
+      const prs = pullsApi(makeHttp(null, null));
+      const client = githubClient("github.test", "t", null);
 
       await Effect.runPromise(
         Effect.gen(function* () {
-          const github = yield* GitHubGateway;
           const svc = yield* PullRequestService;
-          const detail = yield* github.prs.get("acme/web", 1, "t", apiBase);
-          yield* svc.upsertPrs([{ ...detail, id: "pr-open-alice", repositoryId: REPO_ID }]);
+          const detail = yield* prs.get(client, "acme/web", REPO_ID, 1);
+          yield* svc.upsertPrs([{ ...detail, id: "pr-open-alice" }]);
           expect(storedStack(db)).toEqual({ number: 7, position: 3 });
 
-          const batch = yield* github.prs.getMany("acme/web", REPO_ID, [1], "t", apiBase);
+          const batch = yield* prs.getMany(client, "acme/web", REPO_ID, [1]);
           yield* svc.upsertPrs([...batch.values()].map((pr) => ({ ...pr, id: "pr-open-alice" })));
-        }).pipe(Effect.orDie, Effect.provide(layer)),
+        }).pipe(
+          Effect.orDie,
+          Effect.provide(PullRequestServiceLive),
+          Effect.provideService(DbService, { db }),
+        ),
       );
 
       expect(storedStack(db)).toEqual({ number: 7, position: 3 });

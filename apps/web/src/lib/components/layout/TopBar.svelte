@@ -1,104 +1,70 @@
 <script lang="ts">
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import Check from "phosphor-svelte/lib/Check";
-import Desktop from "phosphor-svelte/lib/Desktop";
 import LinkSimple from "phosphor-svelte/lib/LinkSimple";
-import Moon from "phosphor-svelte/lib/Moon";
 import SidebarSimple from "phosphor-svelte/lib/SidebarSimple";
-import Sun from "phosphor-svelte/lib/Sun";
+import ThemeIcon from "$lib/components/shared/ThemeIcon.svelte";
+import { cycleThemePreference, themePreferenceLabel } from "$lib/components/shared/theme-cycle";
 import * as Tooltip from "$lib/components/ui/tooltip";
 import { gsapPop, gsapPress, tokens } from "$lib/motion";
-import { fetchOrgs } from "$lib/stores/orgs.svelte";
+import { commandShortcut } from "$lib/stores/commands.svelte";
 import { copySelectedPrLink, getPrLinkCopied } from "$lib/stores/pr-link.svelte";
-import {
-  getIsLoading,
-  getRepositories,
-  getSelectedPr,
-  getSelectedPrId,
-} from "$lib/stores/prs.svelte";
+import { getRepoById } from "$lib/stores/repos.svelte";
+import { getSelectedPr, getSelectedPrId } from "$lib/stores/route.svelte";
 import { getPrListSyncing, requestFullSync, requestSync } from "$lib/stores/sync.svelte";
-import {
-  getThemePreference,
-  setThemePreference,
-  type ThemePreference,
-} from "$lib/stores/theme.svelte";
-import { getTopbarSubtitle } from "$lib/stores/topbar.svelte";
 
 interface Props {
+  /** Appended to the PR title, e.g. the file the diff has scrolled to. */
+  subtitle: string | null;
   rightPanelOpen: boolean;
   onTogglePanel: () => void;
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
 }
 
-let { rightPanelOpen, onTogglePanel, sidebarCollapsed, onToggleSidebar }: Props = $props();
+let { subtitle, rightPanelOpen, onTogglePanel, sidebarCollapsed, onToggleSidebar }: Props =
+  $props();
 
 const pr = $derived(getSelectedPr());
-const repository = $derived(
-  pr ? (getRepositories().find((candidate) => candidate.id === pr.repositoryId) ?? null) : null,
-);
+const repository = $derived(pr ? getRepoById(pr.repositoryId) : null);
 const selectedPrId = $derived(getSelectedPrId());
-const theme = $derived(getThemePreference());
-const topbarSubtitle = $derived(getTopbarSubtitle());
 const linkCopied = $derived(getPrLinkCopied());
 
-// Combines direct-HTTP sync (`getIsLoading`) with SSE-driven
-// PR-list sync (`getPrListSyncing`) so the spinner reflects any in-flight
-// PR-list sync regardless of transport. Mirrors what Sidebar used to do.
-const isSyncing = $derived(getIsLoading() || getPrListSyncing());
+const isSyncing = $derived(getPrListSyncing());
+const copyLinkLabel = $derived(`Copy PR link (${commandShortcut("pr:copy-link").join("")})`);
+const panelLabel = $derived(
+  pr
+    ? `Toggle context panel (${commandShortcut("panel:toggle").join("")})`
+    : "Chat panel is only available when reviewing a PR",
+);
 
 function handleSyncPrs(): void {
   if (selectedPrId) {
     requestFullSync(selectedPrId);
   } else {
-    requestSync();
+    void requestSync();
   }
-  // Re-pull the org list — picks up newly-joined orgs and rotates
-  // any signed avatar URLs without requiring re-auth.
-  void fetchOrgs();
-}
-const cycle: Record<ThemePreference, ThemePreference> = {
-  system: "light",
-  light: "dark",
-  dark: "system",
-};
-
-const labels: Record<ThemePreference, string> = {
-  system: "System theme",
-  light: "Light theme",
-  dark: "Dark theme",
-};
-
-function cycleTheme() {
-  setThemePreference(cycle[theme]);
 }
 </script>
 
 <div class="topbar">
-	<!-- Dedicated drag layer — sits behind interactive elements via z-index -->
 	<div class="drag-layer" data-tauri-drag-region></div>
 
-	<!-- Sidebar collapse toggle. In Tauri, absolutely positioned in the
-		 traffic-light overlay row immediately to the right of the macOS
-		 buttons. In browser mode, lives flush-left in the topbar's flex row. -->
 	<button
 		class="left-toggle-btn"
 		onclick={onToggleSidebar}
 		aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
 		title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
 	>
-		<!-- One glyph; `fill` is the "panel is showing" state. Previously this
-			 was an {#if} whose two branches imported the same icon under
-			 different names, so the button never changed appearance. -->
+		<!-- One glyph; `fill` is the "panel is showing" state. -->
 		<SidebarSimple size={14} weight={sidebarCollapsed ? 'regular' : 'fill'} />
 	</button>
 
-	<!-- Left: app name / inline PR title when scrolled -->
 	<div class="title-block">
 		{#if pr}
 			<div class="title-row">
 				<span class="inline-title">
-					<span class="pr-number">#{pr.externalId}</span>{pr.title}{#if topbarSubtitle}<span class="title-separator"> / </span><span class="title-subtitle">{topbarSubtitle}</span>{/if}
+					<span class="pr-number">#{pr.externalId}</span>{pr.title}{#if subtitle}<span class="title-separator"> / </span><span class="title-subtitle">{subtitle}</span>{/if}
 				</span>
 				{#if repository}
 					<Tooltip.Root>
@@ -108,7 +74,7 @@ function cycleTheme() {
 									{...props}
 									class="copy-link-btn"
 									onclick={() => void copySelectedPrLink()}
-									aria-label={linkCopied ? 'Link copied' : 'Copy PR link (\u21e7\u2318C)'}
+									aria-label={linkCopied ? 'Link copied' : copyLinkLabel}
 									use:gsapPress
 								>
 									{#key linkCopied}
@@ -128,7 +94,7 @@ function cycleTheme() {
 						     the click lands, so swapping its text mid-hover resizes and
 						     re-centers the surface. The icon carries the confirmation. -->
 						<Tooltip.Content side="bottom" sideOffset={6}>
-							Copy PR link (&#x21e7;&#x2318;C)
+							{copyLinkLabel}
 						</Tooltip.Content>
 					</Tooltip.Root>
 				{/if}
@@ -138,7 +104,6 @@ function cycleTheme() {
 		{/if}
 	</div>
 
-	<!-- Right: sync PRs + theme toggle + panel toggle -->
 	<div class="panel-toggle-wrap">
 		<button
 			class="theme-btn"
@@ -151,25 +116,19 @@ function cycleTheme() {
 		</button>
 		<button
 			class="theme-btn"
-			onclick={cycleTheme}
-			aria-label={labels[theme]}
-			title={labels[theme]}
+			onclick={cycleThemePreference}
+			aria-label={themePreferenceLabel()}
+			title={themePreferenceLabel()}
 		>
-			{#if theme === 'light'}
-				<Sun size={14} />
-			{:else if theme === 'dark'}
-				<Moon size={14} />
-			{:else}
-				<Desktop size={14} />
-			{/if}
+			<ThemeIcon size={14} />
 		</button>
 
 		<button
 			class="panel-btn"
 			class:panel-btn--open={rightPanelOpen}
 			onclick={onTogglePanel}
-			aria-label={pr ? 'Toggle context panel (⌘⌥B)' : 'Chat panel is only available when reviewing a PR'}
-			title={pr ? 'Toggle context panel (⌘⌥B)' : 'Chat panel is only available when reviewing a PR'}
+			aria-label={panelLabel}
+			title={panelLabel}
 			disabled={!pr}
 		>
 			<SidebarSimple size={14} mirrored weight={rightPanelOpen ? 'fill' : 'regular'} />
@@ -282,7 +241,6 @@ function cycleTheme() {
 		justify-content: flex-end;
 	}
 
-	/* In Tauri, position elements in the traffic-light zone */
 	:global(html.tauri) .topbar {
 		position: static;
 	}
@@ -303,9 +261,7 @@ function cycleTheme() {
 		height: 22px;
 	}
 
-	/* Sidebar collapse toggle. In browser mode, lives in the static flex row
-	   at the left edge. In Tauri, anchored to the overlay row immediately
-	   right of the macOS traffic lights (which occupy ~0–72px). */
+	/* In Tauri, anchored right of the macOS traffic lights (~0–72px). */
 	.left-toggle-btn {
 		display: flex;
 		align-items: center;

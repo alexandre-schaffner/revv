@@ -2,35 +2,26 @@ import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core
 import { pullRequests } from "./pull-requests";
 
 /**
- * Persistent mapping for the right-pane AI chat session.
- *
- * Each row is the durable handle for a live agent conversation scoped to
- * `(pullRequestId, agent, model, prHeadSha)`:
- *   - `sessionId`     — the agent-side session UUID. Nullable so the route
- *                       can create the row eagerly when the user sends the
- *                       first message and patch in the agent-side id once
- *                       the SDK / daemon emits it. Required to be non-null
- *                       on follow-up turns (resume).
- *                       Claude Agent SDK: UUID under `~/.claude/projects/<dir>/`.
- *                       Opencode: the daemon's session id.
- *   - `worktreePath`  — absolute path to the chat worktree (`chat-{prId}-{sha12}`)
- *                       checked out at `prHeadSha`. The agent's `cwd`.
- *   - `branchName`    — the local PR tracking branch (`revv/pr-{prNumber}`) the
- *                       agent commits its proposed changes to.
- *   - `nextSequence`  — per-session monotonic counter shared by `chat_messages`
- *                       and `chat_activities`. Allocated atomically on every
- *                       insert so the timeline can be reconstructed in
- *                       arrival order without relying on timestamp resolution.
- *
- * A new commit on the PR ⇒ different `prHeadSha` ⇒ new row, new agent
- * session, fresh worktree on a fresh branch. The unique index makes the
- * orchestrator's upsert in the chat route naturally idempotent.
+ * The right-pane AI chat's durable handle on an agent conversation, scoped to
+ * `(pullRequestId, agent, model, prHeadSha)`. A new PR head means a new row
+ * and a new agent session, except where the conversation itself moved the
+ * head (the agent's push, or advancing past its commits): there the latest
+ * row's `prHeadSha` moves with it (`PrWorkspace.moveSession`). The unique
+ * index makes the chat turn's upsert idempotent.
+ *   - `sessionId`     — the agent's ACP session id. Null until the agent opens
+ *                       the session; follow-up turns resume it.
+ *   - `worktreePath`  — the PR's agent worktree (see `PrWorkspace`), the
+ *                       agent's `cwd`.
+ *   - `branchName`    — the agent branch (`revv/pr-{prNumber}`) the agent
+ *                       commits its proposed changes to.
+ *   - `nextSequence`  — per-session monotonic counter shared by the chat
+ *                       timeline tables. Allocated atomically on every insert
+ *                       so the timeline reconstructs in arrival order without
+ *                       relying on timestamp resolution.
  *
  * NOT a doctrine-bound jobs table (CLAUDE.md "Agent Subsystem Invariants"):
- * the only durable artefacts are this row + chat_messages + chat_activities
- * + the on-disk git worktree. Writes are confined to the worktree (a
- * reconstructible cache); `kill -9` mid-edit at worst loses an uncommitted
- * edit, which is acceptable for an in-progress AI suggestion.
+ * `kill -9` mid-edit at worst loses an uncommitted edit in the worktree,
+ * which is acceptable for an in-progress AI suggestion.
  */
 export const chatSessions = sqliteTable(
   "chat_sessions",
@@ -46,11 +37,9 @@ export const chatSessions = sqliteTable(
     worktreePath: text("worktree_path").notNull(),
     branchName: text("branch_name").notNull(),
     nextSequence: integer("next_sequence").notNull().default(0),
-    // 'default' | 'plan' — t3code-style session-level interaction toggle.
-    // In 'plan' mode the driver flips Claude into `permissionMode: 'plan'`
-    // or routes opencode through its named `plan` agent. The flag persists
-    // across turns until the user toggles it back or auto-flip happens on
-    // plan approval.
+    // 'default' | 'plan'. In 'plan' the turn opens the ACP session in the
+    // agent's plan mode. Persists across turns until the user toggles it back or
+    // approves a plan.
     interactionMode: text("interaction_mode").notNull().default("default"),
     createdAt: text("created_at").notNull(),
     lastActivityAt: text("last_activity_at").notNull(),

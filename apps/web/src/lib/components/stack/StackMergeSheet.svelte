@@ -1,5 +1,11 @@
 <script lang="ts">
-import type { MergeMethod, StackMergePlan, StackMergePlanLayer, StackMergeRun } from "@revv/shared";
+import {
+  isLiveStackMergeRun,
+  MERGE_METHODS,
+  type MergeMethod,
+  type StackMergePlan,
+  type StackMergeRun,
+} from "@revv/shared";
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import CheckCircle from "phosphor-svelte/lib/CheckCircle";
 import CircleNotch from "phosphor-svelte/lib/CircleNotch";
@@ -8,14 +14,14 @@ import Desktop from "phosphor-svelte/lib/Desktop";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
 import Warning from "phosphor-svelte/lib/Warning";
 import { untrack } from "svelte";
-import { expectedHeads } from "$lib/api/wire";
-import { Shimmer } from "$lib/components/ai/shimmer";
 import { Button } from "$lib/components/ui/button";
 import * as Dialog from "$lib/components/ui/dialog";
 import SegmentedControl, {
   type SegmentedOption,
 } from "$lib/components/ui/segmented-control/SegmentedControl.svelte";
+import { Shimmer } from "$lib/components/ui/shimmer";
 import { gsapFade, gsapFadeY, gsapPress, tokens } from "$lib/motion";
+import { expectedHeads } from "$lib/stacks/expected-heads";
 import { RequestState } from "$lib/stores/_types";
 import {
   cancelStackMerge,
@@ -83,7 +89,7 @@ const run = $derived.by<StackMergeRun | null>(() => {
   }
   return latest;
 });
-const runLive = $derived(run?.status === "running" || run?.status === "waiting");
+const runLive = $derived(run ? isLiveStackMergeRun(run.status) : false);
 const runStopped = $derived(run?.status === "failed" || run?.status === "expired");
 
 let wasLive = false;
@@ -100,28 +106,10 @@ $effect(() => {
 const bottomUp = $derived(plan ? [...plan.layers].sort((a, b) => a.position - b.position) : []);
 const topFirst = $derived([...bottomUp].reverse());
 
-const pickRefusal = $derived.by(() => {
-  const refusals = new Map<number, string>();
-  let blocker: StackMergePlanLayer | null = null;
-  for (const layer of bottomUp) {
-    if (layer.readiness === "merged") {
-      refusals.set(layer.position, "Already merged");
-      continue;
-    }
-    if (blocker) {
-      refusals.set(layer.position, `#${blocker.number} below can't merge yet`);
-      continue;
-    }
-    if (layer.readiness === "blocked") {
-      blocker = layer;
-      refusals.set(layer.position, layer.reasons[0] ?? "Can't merge yet");
-    }
-  }
-  return refusals;
-});
-
 const target = $derived(
-  through !== null && !pickRefusal.has(through) ? through : (plan?.defaultThrough ?? null),
+  through !== null && bottomUp.find((l) => l.position === through)?.refusal === null
+    ? through
+    : (plan?.defaultThrough ?? null),
 );
 const toMerge = $derived(
   bottomUp.filter((l) => target !== null && l.position <= target && l.readiness !== "merged"),
@@ -130,7 +118,7 @@ const targetLayer = $derived(bottomUp.find((l) => l.position === target) ?? null
 
 const methodOptions = $derived.by<SegmentedOption<MergeMethod>[]>(() => {
   const allowed = plan?.allowedMethods ?? [];
-  const all: MergeMethod[] = ["merge", "squash", "rebase"];
+  const all: readonly MergeMethod[] = MERGE_METHODS;
   return all
     .filter((m) => allowed.includes(m))
     .map((m) => ({
@@ -286,7 +274,6 @@ function onOpenChange(open: boolean): void {
 					{:else}
 						<MergePickerRow
 							{layer}
-							refusal={pickRefusal.get(layer.position) ?? null}
 							inRange={target !== null && layer.position <= target}
 							isTarget={layer.position === target}
 							onpick={() => (through = layer.position)}
@@ -475,7 +462,7 @@ function onOpenChange(open: boolean): void {
 		align-items: flex-start;
 		gap: 8px;
 		width: 100%;
-		padding: 6px 8px;
+		padding: 6px var(--stack-row-inset);
 		border: 1px solid transparent;
 		border-radius: 8px;
 	}

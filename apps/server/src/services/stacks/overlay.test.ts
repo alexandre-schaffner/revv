@@ -1,13 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { fingerprintFiles } from "./fingerprint";
-import type { GitHubStackLayer } from "./map";
-import {
-  fileOverlaps,
-  restackVerdict,
-  type TrackedLayer,
-  takeawayOf,
-  type WalkthroughFact,
-} from "./overlay";
+import type { GitHubStackLayer } from "../github/stacks";
+import { fingerprintFiles } from "../walkthrough/restack";
+import type { FinishedReview } from "../walkthrough/review-reads";
+import { fileOverlaps, restackVerdict, type TrackedLayer } from "./overlay";
 
 function layer(position: number, over: Partial<GitHubStackLayer> = {}): GitHubStackLayer {
   return {
@@ -39,15 +34,17 @@ function layer(position: number, over: Partial<GitHubStackLayer> = {}): GitHubSt
 const file = { filename: "a.ts", status: "modified", patch: "@@ -1 +1 @@\n-a\n+b" };
 const files = [file];
 
-function fact(over: Partial<WalkthroughFact> = {}): WalkthroughFact {
+function fact(over: Partial<FinishedReview> = {}): FinishedReview {
   return {
     id: "w1",
-    status: "complete",
+    prId: "p2",
     prHeadSha: "h2",
+    mode: "reviewer",
     riskLevel: "low",
     summary: "Adds the thing.",
-    openIssues: 0,
-    criticalIssues: 0,
+    takeaway: "Adds the thing.",
+    sentiment: null,
+    openIssues: [],
     stackContext: {
       number: 7,
       baseRefName: "main",
@@ -58,19 +55,24 @@ function fact(over: Partial<WalkthroughFact> = {}): WalkthroughFact {
       ],
       capturedAt: "",
     },
-    fingerprint: fingerprintFiles(files),
+    diffFingerprint: fingerprintFiles(files),
     carried: false,
     ...over,
   };
 }
 
-function tracked(f: WalkthroughFact | null, current = fingerprintFiles(files)): TrackedLayer {
+function tracked(
+  f: FinishedReview | null,
+  current = fingerprintFiles(files),
+  carries = false,
+): TrackedLayer {
   return {
     prId: "p2",
     currentFingerprint: current,
     files: files.map((x) => x.filename),
-    current: f,
-    latestComplete: f,
+    current: f && { id: f.id, status: "complete" },
+    latestFinished: f,
+    carries,
   };
 }
 
@@ -99,9 +101,19 @@ describe("restackVerdict", () => {
     });
   });
 
-  test("a new head with identical changes is restacked", () => {
+  test("a new head whose queued review would carry the old one over is restacked", () => {
     const now = [layer(1, { headSha: "h1b" }), layer(2, { headSha: "h2b" })];
-    expect(restackVerdict(second(now), now, tracked(fact())).kind).toBe("restacked");
+    expect(restackVerdict(second(now), now, tracked(fact(), undefined, true)).kind).toBe(
+      "restacked",
+    );
+  });
+
+  test("identical changes a review wouldn't carry over (an incremental source) aren't restacked", () => {
+    const now = [layer(1, { headSha: "h1b" }), layer(2, { headSha: "h2b" })];
+    expect(restackVerdict(second(now), now, tracked(fact()))).toEqual({
+      kind: "layer-changed",
+      files: [],
+    });
   });
 
   test("a new head with different changes names the files", () => {
@@ -127,14 +139,6 @@ describe("restackVerdict", () => {
   });
 });
 
-describe("takeawayOf", () => {
-  test("takes the first non-empty line, unformatted", () => {
-    expect(takeawayOf("\n**Adds retries** to the poller.\n\n**Context** …")).toBe(
-      "Adds retries to the poller.",
-    );
-  });
-});
-
 describe("fileOverlaps", () => {
   const stack = [layer(1, { status: "merged" }), layer(2), layer(3), layer(4), layer(5)];
   const withFiles = (prId: string, paths: string[]): TrackedLayer => ({
@@ -142,7 +146,8 @@ describe("fileOverlaps", () => {
     currentFingerprint: null,
     files: paths,
     current: null,
-    latestComplete: null,
+    latestFinished: null,
+    carries: false,
   });
 
   test("lists open layers sharing files, nearest first, above before below", () => {

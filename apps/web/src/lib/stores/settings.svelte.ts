@@ -3,63 +3,73 @@ import {
   type AcpAgentId,
   type AgentCheckResult,
   type AgentStatusReport,
+  agentChangeUpdate,
+  applySettingsUpdate,
+  DEFAULT_USER_SETTINGS,
   getAgentCapabilities,
   getModelThinkingEfforts,
-  isAutoSentinel,
-  mergeSettingsUpdate,
   type SettingsUpdate,
+  THINKING_EFFORT_ORDER,
   type ThinkingEffort,
   type UserSettings,
 } from "@revv/shared";
-import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
-import {
-  getDefaultModel,
-  getDefaultSuggestionsModel,
-  type ModelOption,
-  THINKING_EFFORT_OPTIONS,
-} from "$lib/constants/models";
-import { invalidateSuggestions } from "$lib/stores/suggestions.svelte";
-import { resetWalkthroughSizings } from "$lib/stores/walkthrough-sizing.svelte";
-import { authHeaders } from "$lib/utils/session-token";
+import { apiErrorCode, call } from "$lib/api/errors";
+import { thrownMessage } from "$lib/api/wire";
+import { createResource } from "./resource";
 
-/** The agent that drives chat / walkthrough / recap (single registry id). */
-export function resolveChatAgentId(s: UserSettings | null): AcpAgentId {
-  return s?.aiAgent ?? "opencode";
-}
+export type ModelOption = { label: string; value: string };
 
-/** A per-agent record seeded with `make()` for every registry agent. */
-function byAgent<T>(make: () => T): Record<AcpAgentId, T> {
-  return Object.fromEntries(ACP_AGENT_IDS.map((id) => [id, make()])) as Record<AcpAgentId, T>;
-}
+const THINKING_EFFORT_LABELS: Record<ThinkingEffort, string> = {
+  ultra: "Ultra",
+  ultrathink: "Ultrathink",
+  max: "Max",
+  "extra-high": "Extra High",
+  high: "High",
+  medium: "Medium",
+  low: "Low",
+};
 
-let settings = $state<UserSettings | null>(null);
-let _isLoading = $state(false);
-let modelsByAgent = $state<Record<AcpAgentId, ModelOption[]>>(byAgent(() => []));
-let modelsLoadedByAgent = $state<Record<AcpAgentId, boolean>>(byAgent(() => false));
-let modelsInFlight: Partial<Record<AcpAgentId, Promise<ModelOption[]>>> = {};
+const THINKING_EFFORT_OPTIONS: { label: string; value: ThinkingEffort }[] =
+  THINKING_EFFORT_ORDER.map((value) => ({ label: THINKING_EFFORT_LABELS[value], value }));
 
-export function getSettings(): UserSettings | null {
-  return settings;
-}
+let loaded = $state<UserSettings | null>(null);
 
 /**
- * GitHub host the app authenticates against. Returns `null` until the
- * settings file has been fetched at least once. The onboarding flow reads
- * this to decide whether to start at the Welcome step (no host yet) or
- * resume at Sign-In (host already picked).
+ * The model catalog needs a session: the session lifecycle reads it when a
+ * session starts and resets it when one ends.
  */
-export function getGithubHost(): string | null {
-  return settings?.githubHost ?? null;
+const models = createResource<AcpAgentId, ModelOption[]>({
+  keepDataOnError: true,
+  fetch: async (key, agent) => {
+    try {
+      const data = await call(
+        api.api.settings.models.get({ query: { agent } }),
+        "Couldn't load models",
+      );
+      return { status: "ok", data: data.models };
+    } catch (e) {
+      // Nothing was read, so nothing counts as loaded.
+      if (apiErrorCode(e) === "UNAUTHORIZED") models.invalidate(key);
+      throw e;
+    }
+  },
+});
+
+export function getSettings(): UserSettings {
+  return loaded ?? DEFAULT_USER_SETTINGS;
 }
 
-/**
- * BYO OAuth/App client ID for a user-added GitHub Enterprise host. Empty for
- * github.com. The onboarding host step writes this alongside `githubHost`
- * when the user points Revv at their own GHE instance.
- */
+export function isSettingsLoaded(): boolean {
+  return loaded !== null;
+}
+
+export function getGithubHost(): string {
+  return getSettings().githubHost;
+}
+
 export function getGithubClientId(): string {
-  return settings?.githubClientId ?? "";
+  return getSettings().githubClientId;
 }
 
 /**
@@ -68,29 +78,26 @@ export function getGithubClientId(): string {
  * to public GitHub.
  */
 export async function setGithubConfig(host: string, clientId: string): Promise<void> {
-  await updateSettings({ githubHost: host, githubClientId: clientId });
+  await persist({ githubHost: host, githubClientId: clientId }, {}, sendGithubConfig);
 }
 
 export async function setGithubConfigStrict(host: string, clientId: string): Promise<void> {
-  await updateSettings({ githubHost: host, githubClientId: clientId }, { strict: true });
+  await persist({ githubHost: host, githubClientId: clientId }, { strict: true }, sendGithubConfig);
 }
 
 /**
- * Read the cached model list for a given agent (or the currently selected
- * agent when `agent` is omitted). Returns an empty array if models have not
- * been fetched yet — callers can use `areModelsLoaded` to disambiguate
- * "loading" from "genuinely empty".
+ * The cached model list for `agent` (default: the selected one); empty until
+ * fetched. `areModelsLoaded` tells "loading" from "genuinely empty".
  */
-export function getAvailableModels(agent?: AcpAgentId): ModelOption[] {
-  const a = agent ?? settings?.aiAgent ?? "opencode";
-  return modelsByAgent[a] ?? [];
+export function getAvailableModels(agent: AcpAgentId = getSettings().aiAgent): ModelOption[] {
+  return models.data(agent) ?? [];
 }
 
 export function areModelsLoaded(agent: AcpAgentId): boolean {
-  return modelsLoadedByAgent[agent] ?? false;
+  const { request } = models.entry(agent);
+  return request.status === "ok" || request.status === "error";
 }
 
-// ── Review model / thinking-effort choices ───────────────────────────────────
 // One definition for every picker (the chat bottom bar and Settings → AI
 // agent), so the two can never offer different options.
 
@@ -111,33 +118,27 @@ export function getReviewModelOptions(agent: AcpAgentId): ModelOption[] {
  * a live-fetched catalog has no ladder. See `ai/jev/routing.ts`.
  */
 export function isAutoModelOffered(agent: AcpAgentId): boolean {
-  return (settings?.jev.enabled ?? false) && getAgentCapabilities(agent).models !== "dynamic";
+  return getSettings().jev.enabled && getAgentCapabilities(agent).models !== "dynamic";
 }
 
 /** Thinking-effort tiers `agent` supports, strongest first. Empty when it has no effort knob. */
 export function getThinkingEffortOptions(agent: AcpAgentId): typeof THINKING_EFFORT_OPTIONS {
-  const allowed = getModelThinkingEfforts(agent, settings?.aiModel);
+  const allowed = getModelThinkingEfforts(agent, getSettings().aiModel);
   return THINKING_EFFORT_OPTIONS.filter((o) => allowed.includes(o.value));
 }
 
 /** Effort Auto only needs TypeSafe on: effort routing skips the depth ladder. */
 export function isAutoEffortOffered(): boolean {
-  return settings?.jev.enabled ?? false;
+  return getSettings().jev.enabled;
 }
 
 export async function fetchSettings(): Promise<void> {
-  _isLoading = true;
   try {
-    const { data } = await api.api.settings.get();
-    if (data) settings = data as UserSettings;
+    loaded = await call(api.api.settings.get(), "Couldn't load settings");
   } catch {
-    // handle silently
-  } finally {
-    _isLoading = false;
+    // Unreachable server: keep what we have; the defaults render meanwhile.
   }
 }
-
-export type { SettingsUpdate } from "@revv/shared";
 
 type UpdateSettingsOptions = {
   /**
@@ -147,168 +148,65 @@ type UpdateSettingsOptions = {
   strict?: boolean;
 };
 
-function settingsErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (error && typeof error === "object") {
-    const value = "value" in error ? (error as { value?: unknown }).value : error;
-    if (value && typeof value === "object" && "message" in value) {
-      const message = (value as { message?: unknown }).message;
-      if (typeof message === "string") return message;
-    }
-    try {
-      return JSON.stringify(value);
-    } catch {
-      // fall through
-    }
-  }
-  return String(error);
-}
-
 export async function updateSettings(
-  partial: SettingsUpdate,
+  patch: SettingsUpdate,
   options: UpdateSettingsOptions = {},
 ): Promise<void> {
-  const previous = settings;
-  // Optimistic local merge — apply the partial immediately so concurrent calls
-  // don't clobber each other when server responses arrive out of order.
-  if (settings) {
-    settings = mergeSettingsUpdate(settings, partial);
-  }
-  // Drop the cached right-panel suggestions whenever the model or agent
-  // changes — the previously-fetched prompts were generated by a
-  // different model and the user expects the new selection to take effect
-  // on the next PR open without a refresh. Server keeps its own cache
-  // keyed on `(prId, headSha, model)` so the client miss simply lands on
-  // a different cache row.
-  if ("aiSuggestionsModel" in partial || "aiAgent" in partial) {
-    invalidateSuggestions();
-  }
-  // Sizing is routed against agent/model and gated on the TypeSafe switch, so
-  // any of these invalidate the client copy. Cached server-side, not re-paid for.
-  if (
-    "aiModel" in partial ||
-    "aiThinkingEffort" in partial ||
-    "aiAgent" in partial ||
-    partial.jev?.enabled !== undefined
-  ) {
-    resetWalkthroughSizings();
-  }
+  await persist(patch, options, (p) => call(api.api.settings.put(p), "Couldn't save settings"));
+}
+
+// Onboarding picks the host before sign-in, so the host and client id have
+// their own unauthenticated write; every other field needs a session.
+const sendGithubConfig = (patch: Pick<UserSettings, "githubHost" | "githubClientId">) =>
+  call(api.api.settings.github.put(patch), "Couldn't save settings");
+
+async function persist<P extends SettingsUpdate>(
+  patch: P,
+  options: UpdateSettingsOptions,
+  /** Throws on a refusal (see `call`). */
+  send: (patch: P) => Promise<unknown>,
+): Promise<void> {
+  const previous = loaded;
+  // Apply locally first, with the same rules the server applies, so
+  // concurrent writes don't clobber each other when responses arrive out of
+  // order. The response body is ignored for the same reason.
+  if (loaded) loaded = applySettingsUpdate(loaded, patch);
   try {
-    const result = await api.api.settings.put(partial as Record<string, unknown>);
-    if (result.error) throw new Error(settingsErrorMessage(result.error));
-    // Intentionally ignore the response body: merging a full settings object
-    // here would reintroduce the race described above.
+    await send(patch);
   } catch (e) {
     if (options.strict) {
-      settings = previous;
-      throw e instanceof Error ? e : new Error(settingsErrorMessage(e));
+      loaded = previous;
+      throw e;
     }
-    // Non-strict settings controls are best-effort.
   }
 }
 
-export function reset(): void {
-  settings = null;
-  _isLoading = false;
-  modelsByAgent = byAgent(() => []);
-  modelsLoadedByAgent = byAgent(() => false);
-  modelsInFlight = {};
-  agentStatus = null;
+/**
+ * The patch for picking `agent`: its dependent model, suggestions model and
+ * effort come along. Opencode's catalog is live, so its first fetched model
+ * is used when there is one.
+ */
+export function agentChange(agent: AcpAgentId): SettingsUpdate {
+  return agentChangeUpdate(
+    getSettings(),
+    agent,
+    getAvailableModels(agent).map((m) => m.value),
+  );
 }
 
-/**
- * Fetch the model list for a specific agent and cache it. Concurrent calls for
- * the same agent de-dupe onto a single in-flight request so rapid agent toggles
- * don't thrash the server.
- */
 export async function fetchModels(agent: AcpAgentId): Promise<ModelOption[]> {
-  const existing = modelsInFlight[agent];
-  if (existing) return existing;
-
-  const url = `${API_BASE_URL}/api/settings/models?agent=${encodeURIComponent(agent)}`;
-  const promise = (async () => {
-    try {
-      const res = await fetch(url, { headers: authHeaders() });
-      if (!res.ok) return modelsByAgent[agent] ?? [];
-      const data = (await res.json()) as { models: ModelOption[] };
-      const list = data.models ?? [];
-      modelsByAgent = { ...modelsByAgent, [agent]: list };
-      return list;
-    } catch {
-      return modelsByAgent[agent] ?? [];
-    } finally {
-      // Mark loaded on every path (success, non-2xx, or thrown exception) so
-      // the UI doesn't stay in "Loading…" forever; the cached (possibly
-      // empty) list is the best fallback.
-      modelsLoadedByAgent = { ...modelsLoadedByAgent, [agent]: true };
-      delete modelsInFlight[agent];
-    }
-  })();
-
-  modelsInFlight[agent] = promise;
-  return promise;
+  await models.load(agent, agent);
+  return models.data(agent) ?? [];
 }
 
-/**
- * Prefetch models for every supported agent in parallel. Call this once at
- * app start so agent/model dropdowns render instantly without round-trips.
- */
+/** Read every agent's catalog, so the pickers open without a round-trip. */
 export async function fetchAllModels(): Promise<void> {
   await Promise.all(ACP_AGENT_IDS.map((id) => fetchModels(id)));
 }
 
-/**
- * Cascade for the agent picker. There is a single `aiAgent` now (it drives
- * chat, walkthrough, and recap), so picking an ACP agent must:
- *   - set `aiAgent`;
- *   - re-pick `aiModel` from that agent's capability catalog (dynamic = opencode
- *     → cached list / default) so the shared model stays compatible;
- *   - re-pick the low-cost `aiSuggestionsModel` default for the new agent;
- *   - clamp `aiThinkingEffort` to a tier the new agent supports.
- * Side-effect free — callers pass the result to `updateSettings()`.
- */
-export function cascadeChatAgentChange(acpId: AcpAgentId): SettingsUpdate {
-  const caps = getAgentCapabilities(acpId);
-  const update: SettingsUpdate = {
-    aiAgent: acpId,
-    aiSuggestionsModel: getDefaultSuggestionsModel(acpId),
-  };
-
-  if (caps.models === "dynamic") {
-    // Auto included: opencode's catalog is fetched live, so there's no ladder to
-    // route on and Auto would leave generation pinned on a stale model forever.
-    const cached = getAvailableModels(acpId);
-    update.aiModel = cached[0]?.value ?? getDefaultModel(acpId);
-  } else if (!isAutoSentinel(getSettings()?.aiModel)) {
-    // "Auto" is agent-independent, so it's left alone here.
-    const defaultModel = getDefaultModel(acpId);
-    const fallback = caps.models[0]?.value;
-    if (caps.models.some((m) => m.value === defaultModel)) {
-      update.aiModel = defaultModel;
-    } else if (fallback) {
-      update.aiModel = fallback;
-    }
-  }
-
-  if (caps.thinkingEfforts.length > 0) {
-    const cur = getSettings()?.aiThinkingEffort;
-    // "Auto" survives for the same reason as the model sentinel; unlike the
-    // model, there's no dynamic-catalog exception here.
-    if (!isAutoSentinel(cur) && (!cur || !caps.thinkingEfforts.includes(cur as ThinkingEffort))) {
-      const fallback = caps.thinkingEfforts.includes("high") ? "high" : caps.thinkingEfforts[0];
-      if (fallback) update.aiThinkingEffort = fallback;
-    }
-  }
-
-  return update;
+export function resetModels(): void {
+  models.reset();
 }
-
-// ── Agent status ──────────────────────────────────────────────────────────────
-// Cached one-shot detection snapshot — per-agent installed + authed + login
-// command, plus whether this host supports the embedded PTY login. Used by the
-// onboarding agent step to render the picker tags and the adaptive CTA. Stays
-// null until `fetchAgentStatus()` runs, since first render has nothing useful to
-// show.
 
 let agentStatus = $state<AgentStatusReport | null>(null);
 
@@ -320,40 +218,24 @@ export async function fetchAgentStatus(
   options: { refresh?: boolean } = {},
 ): Promise<AgentStatusReport | null> {
   try {
-    const suffix = options.refresh ? "?refresh=1" : "";
-    const res = await fetch(`${API_BASE_URL}/api/onboarding/agent-status${suffix}`, {
-      headers: authHeaders(),
-    });
-    if (!res.ok) return agentStatus;
-    const data = (await res.json()) as AgentStatusReport;
-    agentStatus = data;
-    return data;
+    agentStatus = await call(
+      api.api.onboarding["agent-status"].get({ query: options.refresh ? { refresh: "1" } : {} }),
+      "Couldn't read the agent's status",
+    );
+    return agentStatus;
   } catch {
     return agentStatus;
   }
 }
 
-// ── Agent test ───────────────────────────────────────────────────────────────
-// One real turn through the review path, run by the server (see the server's
-// `agent-check.ts`). Explicit and user-triggered: it starts the agent and
+// One real turn through the review path, run by the server
+// (`ai/providers/agent-check.ts`). Explicit and user-triggered: it starts the agent and
 // spends a few tokens, so opening Settings must never run it.
 
 export async function runAgentCheck(agent: AcpAgentId): Promise<AgentCheckResult> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/agent/check`, {
-      method: "POST",
-      headers: { ...authHeaders(), "Content-Type": "application/json" },
-      body: JSON.stringify({ agent }),
-    });
-    if (!res.ok) {
-      return { ok: false, error: `Revv's service answered HTTP ${res.status}.`, guidance: null };
-    }
-    return (await res.json()) as AgentCheckResult;
+    return await call(api.api.agent.check.post({ agent }), "Revv's service refused the check");
   } catch (err) {
-    return {
-      ok: false,
-      error: err instanceof Error ? err.message : "Revv's service is unreachable.",
-      guidance: null,
-    };
+    return { ok: false, error: thrownMessage(err), guidance: null };
   }
 }

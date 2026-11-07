@@ -1,5 +1,69 @@
+import type { RecapPeriod, RecapSummaryStats } from "@revv/shared";
 import { type AnySQLiteColumn, index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { repositories } from "./repositories";
+
+export interface RecapSourcePrDigest {
+  readonly source: "cache" | "github" | "unavailable";
+  readonly digest: string;
+  readonly files: ReadonlyArray<{
+    readonly path: string;
+    readonly status: string;
+    readonly additions: number;
+    readonly deletions: number;
+    readonly patchAvailable: boolean;
+    readonly patchTruncated: boolean;
+  }>;
+  readonly note: string | null;
+}
+
+export interface RecapSourcePr {
+  readonly id: string;
+  readonly externalId: number;
+  readonly title: string;
+  readonly authorLogin: string;
+  readonly status: "closed" | "merged" | "open";
+  readonly closedAt: string;
+  readonly sourceBranch: string;
+  readonly targetBranch: string;
+  readonly additions: number;
+  readonly deletions: number;
+  readonly changedFiles: number;
+  readonly url: string;
+  /**
+   * Body of the PR description, truncated if very long. Null if GitHub
+   * never had one or it was empty.
+   */
+  readonly body: string | null;
+  /**
+   * The PR's latest non-superseded complete walkthrough, if any. Null when
+   * no human ever generated a walkthrough or all of them are
+   * superseded/error/generating. Recap agent should still include the PR
+   * in the narrative — just without walkthrough-derived insight.
+   */
+  readonly walkthrough: {
+    readonly id: string;
+    readonly summary: string;
+    readonly sentiment: string | null;
+    readonly riskLevel: "low" | "medium" | "high";
+    readonly completedAt: string | null;
+  } | null;
+  /** Compact pre-ingested diff context for PRs without walkthroughs. */
+  readonly diffDigest: RecapSourcePrDigest | null;
+}
+
+export interface RecapSourceBundle {
+  readonly repoId: string;
+  readonly repoFullName: string;
+  readonly period: RecapPeriod;
+  readonly periodStart: string;
+  readonly periodEnd: string;
+  /** Archived (closed/merged) PRs in the period window. */
+  readonly prs: ReadonlyArray<RecapSourcePr>;
+  /** Currently open PRs with walkthrough context, sorted by relevancy. */
+  readonly openPrs: ReadonlyArray<RecapSourcePr>;
+  /** Pre-computed summary stats — same shape persisted on the recap row. */
+  readonly stats: RecapSummaryStats;
+}
 
 /**
  * Daily / weekly recap of recently-archived PRs in a repository.
@@ -16,16 +80,11 @@ import { repositories } from "./repositories";
  * `supersededBy` pointing at the replacement) and a fresh row is inserted —
  * mirroring the walkthrough supersession pattern so audit trails survive.
  *
- * Empty windows do not produce rows: the scheduler skips a `(repo, period,
- * start)` tuple when `listArchivedPrsForWindow` returns zero PRs, so the
- * recap list shows a gap rather than a "nothing to report" placeholder.
+ * A closed window with no PRs completes without an agent run; a window still
+ * in progress with none fails, so the user comes back later.
  *
- * Cross-cutting decisions baked into the schema:
- *   • Period boundaries are stored as ISO UTC strings, inclusive lower /
- *     exclusive upper. No timezone column — UTC for v1 (CLAUDE.md plan).
- *   • Source PR / walkthrough provenance is JSON arrays on the row, not a
- *     child table. Promotable later if querying provenance becomes a hot
- *     path; for now the read pattern is "fetch one recap, render it".
+ * Period boundaries are ISO UTC strings, inclusive lower / exclusive upper.
+ * There is no timezone column.
  */
 export const projectRecaps = sqliteTable(
   "project_recaps",
@@ -34,26 +93,24 @@ export const projectRecaps = sqliteTable(
     repositoryId: text("repository_id")
       .notNull()
       .references(() => repositories.id, { onDelete: "cascade" }),
-    /** `'daily' | 'weekly'`. Application-level enum; SQLite has no native enum. */
+    /** `'daily' | 'weekly'`. */
     period: text("period").notNull(),
     /** Inclusive lower bound on the period window (ISO 8601 UTC). */
     periodStart: text("period_start").notNull(),
     /** Exclusive upper bound on the period window (ISO 8601 UTC). */
     periodEnd: text("period_end").notNull(),
     /**
-     * Short (1–3 sentences) model-written lede for the structured recap. May
-     * contain `<strong>` / `<em>` tags only; everything else is stripped at
-     * render time. Written atomically by the `set_lede` MCP tool. Validation
-     * gate (`complete_recap`) requires non-empty before transitioning status.
+     * Short (1–3 sentences) model-written lede. May contain `<strong>` / `<em>`
+     * tags only: the `set_lede` handler strips every other tag, and the UI
+     * applies the same allowlist. `complete_recap` requires it non-empty.
      */
     lede: text("lede").notNull().default(""),
     /**
-     * Job lifecycle status — owned exclusively by
-     * `ProjectRecapJobs.setStatus` (single-writer per CLAUDE.md
-     * invariant #11). Agents NEVER write this field.
+     * Orchestrator-only (CLAUDE.md invariant 11); agents never write it.
      *   `generating` — job running or resumable
      *   `complete`   — `complete_recap` validation passed
      *   `error`      — terminal failure (exceeded retries / unrecoverable)
+     *   `stopped`    — the user stopped generation
      *   `superseded` — a regenerate produced a newer row (see `supersededBy`)
      */
     status: text("status").notNull().default("generating"),
@@ -83,17 +140,22 @@ export const projectRecaps = sqliteTable(
      */
     summaryStats: text("summary_stats").notNull().default("{}"),
     /**
-     * Resume-on-boot counter, bounded by `RECAP_MAX_RESUME_ATTEMPTS`. Rows
-     * exceeding the cap transition to `'error'` and the orchestrator stops
-     * relaunching them.
+     * Resume-on-boot counter, bounded by `MAX_RESUME_ATTEMPTS`
+     * (`services/jobs/agent-jobs.ts`). A row past the cap goes to `'error'`.
      */
     resumeAttempts: integer("resume_attempts").notNull().default(0),
     /**
-     * Human-readable failure reason when `status='error'`. Written by the
-     * orchestrator (single-writer per CLAUDE.md invariant #11) so the UI can
-     * show a specific message instead of a generic "Generation failed."
+     * Why `status='error'`, shown to the user instead of a generic "Generation
+     * failed." Orchestrator-written.
      */
     errorMessage: text("error_message"),
+    /**
+     * The window's pull requests and their digests as the first run assembled
+     * them. A resumed run reads this rather than re-querying, so it sees the
+     * same set its earlier attempt was writing entries for. Null until the
+     * first run has assembled it.
+     */
+    sourceBundle: text("source_bundle", { mode: "json" }).$type<RecapSourceBundle>(),
   },
   (t) => ({
     /**

@@ -4,7 +4,11 @@ import { eq } from "drizzle-orm";
 import { createDb, type Db } from "../../../db/index";
 import { prDiffFiles } from "../../../db/schema/pr-diff-files";
 import { pullRequests } from "../../../db/schema/pull-requests";
-import { stackBriefLayers, stackBriefs } from "../../../db/schema/stack-briefs";
+import {
+  type StackBriefSnapshot,
+  stackBriefLayers,
+  stackBriefs,
+} from "../../../db/schema/stack-briefs";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
 import {
@@ -15,7 +19,7 @@ import {
   setLayerRoleHandler,
   stackBriefCompletionBlocker,
 } from "./handlers";
-import type { StackBriefSnapshot, StackBriefToolContext } from "./spec";
+import type { StackBriefToolContext } from "./spec";
 
 const BRIEF = "brief-1";
 
@@ -65,7 +69,6 @@ function seed(status: StackBriefStatus = "generating"): Db {
       signature: "sig",
       stackSnapshot: SNAPSHOT,
       status,
-      userId: "u",
       createdAt: new Date().toISOString(),
     })
     .run();

@@ -1,924 +1,431 @@
+// The review of each open PR: its comment threads and their messages.
+
 import type {
-  AuthorRole,
   CommentThread,
-  MessageType,
-  ReviewMode,
+  ThreadCreatedEnvelope,
+  ThreadDeletedEnvelope,
   ThreadMessage,
-  ThreadStatus,
-  WalkthroughMode,
+  ThreadMessageDeletedEnvelope,
+  ThreadMessageEditedEnvelope,
+  ThreadMessageEnvelope,
+  ThreadsLinkedEnvelope,
+  ThreadsSyncedEnvelope,
+  ThreadUpdatedEnvelope,
 } from "@revv/shared";
+import { SvelteMap } from "svelte/reactivity";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
-import { reviewNewCommits } from "$lib/review/review-new-commits";
-import { RequestState, type RequestState as RequestStateType } from "$lib/stores/_types";
-import { invalidateChatHistory } from "$lib/stores/chat.svelte";
-import { enterSidebarMode } from "$lib/stores/focus-mode.svelte";
-import { getPrById, getReviewModeForPr } from "$lib/stores/prs.svelte";
-import { getSettings, updateSettings } from "$lib/stores/settings.svelte";
-import { invalidateForPull, regenerate } from "$lib/stores/walkthrough.svelte";
-import type { ReviewFile } from "$lib/types/review";
+import { call } from "$lib/api/errors";
+import { thrownMessage } from "$lib/api/wire";
+import { refreshPrHead, requestThreadSync } from "$lib/stores/sync.svelte";
+import { createResource } from "./resource";
 
-// --- Review files (shared between sidebar tree + review page) ---
-let reviewFiles = $state<ReviewFile[]>([]);
-let isLoadingFiles = $state(false);
-let filesError = $state<string | null>(null);
-
-export function getReviewFiles(): ReviewFile[] {
-  return reviewFiles;
+interface PrReview {
+  readonly threads: readonly CommentThread[];
+  readonly messages: Readonly<Record<string, readonly ThreadMessage[]>>;
 }
 
-export function getIsLoadingFiles(): boolean {
-  return isLoadingFiles;
+const EMPTY_REVIEW: PrReview = { threads: [], messages: {} };
+const NO_THREADS: readonly CommentThread[] = [];
+const NO_MESSAGES: readonly ThreadMessage[] = [];
+
+const reviews = new SvelteMap<string, PrReview>();
+/** The PRs whose review is open; a read for a PR released meanwhile is dropped. */
+const followed = new Set<string>();
+
+function readReview(prId: string) {
+  return call(api.api.reviews.active({ prId }).get(), "Failed to load review session");
 }
 
-export function getFilesError(): string | null {
-  return filesError;
-}
-
-export function setReviewFiles(files: ReviewFile[]): void {
-  reviewFiles = files;
-}
-
-export function setIsLoadingFiles(v: boolean): void {
-  isLoadingFiles = v;
-}
-
-export function setFilesError(e: string | null): void {
-  filesError = e;
-}
-
-export function clearReviewFiles(): void {
-  reviewFiles = [];
-  isLoadingFiles = false;
-  filesError = null;
-  // `activeFilePath` is owned by the per-PR `prViewStates` record now, so
-  // we deliberately don't null it here — `switchPrViewState` already loaded
-  // the new PR's saved file path (or `null` for first visits) before this
-  // runs. Wiping it would lose that restore.
-  clearRepoFile();
-  clearSession();
-}
-
-// --- Unchanged-file content viewer ------------------------------------------
-//
-// When the user clicks a file in the sidebar repo tree that ISN'T part of the
-// PR's diff, we still want the main pane to show something useful: the file's
-// content at the PR's head SHA. The endpoint reads from the local clone via
-// `git cat-file`, so this is fast and rate-limit-free.
-
-type RepoFileData =
-  | { readonly status: "ready"; readonly content: string; readonly size: number }
-  | { readonly status: "binary"; readonly size: number }
-  | { readonly status: "too-large"; readonly size: number }
-  | { readonly status: "not-found"; readonly size: number };
-
-let repoFile = $state<RequestStateType<RepoFileData>>(RequestState.idle());
-let repoFilePath = $state<string | null>(null);
-
-export function getRepoFile(): RequestStateType<RepoFileData> {
-  return repoFile;
-}
-export function getRepoFilePath(): string | null {
-  return repoFilePath;
-}
-
-export function clearRepoFile(): void {
-  repoFile = RequestState.idle();
-  repoFilePath = null;
-}
-
-// --- New-commit-available detection ------------------------------------------
-//
-// Tracks which git SHA the currently-rendered `reviewFiles[]` correspond to,
-// per-PR. When a `prs:updated` SSE event swaps in a new `pr.headSha`, the
-// in-memory PR changes but the on-screen diff still reflects the older SHA.
-// Comparing `pr.headSha` to the stamped value tells the FloatingTabs dot
-// whether to morph into a "Pull" button.
-//
-// Map reassignment is the Svelte-5 idiom for making a Map reactive — same
-// pattern walkthrough.svelte.ts uses for its `entries` map.
-let loadedHeadShas = $state(new Map<string, string>());
-
-export function setLoadedHeadSha(prId: string, sha: string): void {
-  loadedHeadShas.set(prId, sha);
-  loadedHeadShas = new Map(loadedHeadShas);
-}
-
-export function getLoadedHeadSha(prId: string): string | null {
-  return loadedHeadShas.get(prId) ?? null;
-}
-
-// Per-PR in-flight flag so the pull button can show a spinner without
-// racing a second click. Set-reassignment for reactivity, matching the
-// loadedHeadShas pattern above.
-let isPullingCommit = $state(new Set<string>());
-const pullCommitRequests = new Map<string, Promise<boolean>>();
-
-export function getIsPullingCommit(prId: string): boolean {
-  return isPullingCommit.has(prId);
-}
-
-/**
- * Refetch the PR's diff files against the current `pr.headSha`, restamp
- * the loaded SHA, and invalidate the walkthrough against the old content.
- * The server's PollScheduler has already invalidated + repopulated its diff
- * cache on SHA change, so the `files.get()` call returns the fresh diff.
- * Coalesces concurrent calls for the same PR and resolves true only when the
- * fresh diff has been installed successfully.
- */
-export function pullLatestCommit(prId: string): Promise<boolean> {
-  const inFlight = pullCommitRequests.get(prId);
-  if (inFlight) return inFlight;
-
-  isPullingCommit.add(prId);
-  isPullingCommit = new Set(isPullingCommit);
-
-  const request = runPullLatestCommit(prId).finally(() => {
-    pullCommitRequests.delete(prId);
-    setIsLoadingFiles(false);
-    isPullingCommit.delete(prId);
-    isPullingCommit = new Set(isPullingCommit);
-  });
-  pullCommitRequests.set(prId, request);
-  return request;
-}
-
-async function runPullLatestCommit(prId: string): Promise<boolean> {
-  try {
-    setIsLoadingFiles(true);
-    setFilesError(null);
-
-    const activePath = getActiveFilePath();
-    const mode = getReviewMode(prId);
-    const { data, error } = await api.api.prs({ id: prId }).files.get({
-      query: activePath === null ? { mode } : { active: activePath, mode },
-    });
-    if (error || !Array.isArray(data)) {
-      throw new Error(
-        error ? apiErrorMessage(error, "Failed to refetch files") : "Failed to refetch files",
-      );
+const loads = createResource<void, true>({
+  freshForMs: 60_000,
+  fetch: async (prId) => {
+    let data: Awaited<ReturnType<typeof readReview>>;
+    try {
+      data = await readReview(prId);
+    } catch (e) {
+      if (!followed.has(prId)) return { status: "error", error: "Released" };
+      console.error("[review] Failed to load review:", e);
+      const message = thrownMessage(e);
+      toast.error(message);
+      return { status: "error", error: message };
     }
-
-    const mapped: ReviewFile[] = data.map((f) => ({
-      path: f.path,
-      patch: f.patch ?? null,
-      additions: f.additions,
-      deletions: f.deletions,
-      ...(f.oldPath ? { oldPath: f.oldPath } : {}),
-      ...(f.isNew ? { isNew: true as const } : {}),
-      ...(f.isDeleted ? { isDeleted: true as const } : {}),
-      ...(f.prerenderedHtml ? { prerenderedHtml: f.prerenderedHtml } : {}),
-    }));
-
-    setReviewFiles(mapped);
-    // If the user has an active file that's gone in the new diff, fall back
-    // to the first file. If the active file still exists, leave it alone so
-    // the user's scroll position in the diff tab isn't reset.
-    const stillExists = activePath !== null && mapped.some((f) => f.path === activePath);
-    if (!stillExists && mapped.length > 0) {
-      // biome-ignore lint/style/noNonNullAssertion: length > 0 guarantees [0] exists
-      setActiveFilePath(mapped[0]!.path);
-    }
-
-    // Stamp the current PR head SHA. Read from the live PR lists so we pick
-    // up whatever `prs:updated` has already merged — even if another
-    // `prs:updated` has landed since the UI signalled "new commit available."
-    // `getPrById` spans open *and* archived rows: a PR that merged while the
-    // page was open has moved to the archive, and missing it here would leave
-    // the loaded SHA stamped at the old commit forever (pull button stuck on).
-    const pr = getPrById(prId);
-    if (pr?.headSha) setLoadedHeadSha(prId, pr.headSha);
-
-    // Invalidate the walkthrough so the user sees the "Generate walkthrough"
-    // button and opts in explicitly. This avoids burning tokens on every pull
-    // and unblocks the page immediately — we no longer await the SSE stream.
-    await invalidateForPull(prId);
-    invalidateChatHistory(prId);
-    return true;
-  } catch (e) {
-    setFilesError(e instanceof Error ? e.message : "Failed to pull latest commit");
-    return false;
-  }
-}
-
-/**
- * Pull the current head through the same path as the tab-side Pull button,
- * then start the incremental walkthrough requested by the superseded toast.
- */
-export async function reviewLatestCommit(prId: string, mode: WalkthroughMode): Promise<void> {
-  await reviewNewCommits({
-    pull: () => pullLatestCommit(prId),
-    regenerate: () => regenerate(prId, mode, "incremental"),
-  });
-}
-
-// --- Session state ---
-let sessionId = $state<string | null>(null);
-let _sessionLoading = $state(false);
-/**
- * The review-session lens for a PR. Derived purely from identity (PR author
- * vs. the signed-in user) via `getReviewModeForPr` — there is no manual
- * override: comments, threads and the diff are keyed on it. The walkthrough's
- * perspective is separate and user-picked; see `getSelectedMode` in the
- * walkthrough store.
- */
-export function getReviewMode(prId: string): ReviewMode {
-  return getReviewModeForPr(prId);
-}
-
-function clearSession(): void {
-  sessionId = null;
-  threads = [];
-  threadMessages = {};
-  threadsVersion++;
-  // Reset the short-circuit window too — an explicit clear means callers
-  // want a fresh hydration on the next `loadSession` call.
-  lastSessionKey = null;
-  lastSessionAt = 0;
-}
-
-let loadSessionSeq = 0;
-
-// Phase 1 stopgap: skip redundant session loads when the same PR was hydrated
-// within the last minute AND we still have a live session id. Phase 3's
-// queryStore replaces this with per-key cache semantics.
-let lastSessionKey: string | null = null;
-let lastSessionAt = 0;
-const SESSION_REFETCH_WINDOW_MS = 60_000;
-
-/** Load (or create) the active review session for a PR, hydrating all state. */
-export async function loadSession(
-  prId: string,
-  mode: ReviewMode = getReviewMode(prId),
-  force = false,
-): Promise<void> {
-  const sessionKey = `${prId}:${mode}`;
-  // Short-circuit: same PR, recent hydration, session still live. Callers that
-  // just mutated server state (e.g. submitting a review) pass `force` to skip
-  // it — otherwise stale local rows (missing the externalId stamped on
-  // just-pushed comments) would survive and get re-submitted as duplicates.
-  if (
-    !force &&
-    sessionKey === lastSessionKey &&
-    Date.now() - lastSessionAt < SESSION_REFETCH_WINDOW_MS &&
-    sessionId !== null
-  ) {
-    return;
-  }
-
-  const seq = ++loadSessionSeq;
-  _sessionLoading = true;
-  try {
-    const { data, error } = await api.api.reviews.active({ prId }).get({
-      query: { mode },
-    });
-
-    // Discard if a newer call has started
-    if (seq !== loadSessionSeq) return;
-
-    if (error || !data) {
-      console.error("[review] Failed to load session:", error);
-      toast.error("Failed to load review session");
-      return;
-    }
-
-    // Type-narrow: the response is the full hydration payload
-    const payload = data as {
-      session: { id: string; mode?: ReviewMode };
-      threads: CommentThread[];
-      messages: Record<string, ThreadMessage[]>;
-    };
-
-    sessionId = payload.session.id;
-    threads = payload.threads;
-
-    // Populate thread messages
-    const msgs: Record<string, ThreadMessage[]> = {};
-    for (const [tid, msgList] of Object.entries(payload.messages)) {
-      msgs[tid] = msgList;
-    }
-    threadMessages = msgs;
-
-    threadsVersion++;
-    lastSessionKey = sessionKey;
-    lastSessionAt = Date.now();
-  } finally {
-    // Only clear loading if this is still the active request
-    if (seq === loadSessionSeq) {
-      _sessionLoading = false;
-    }
-  }
-}
-
-// --- Per-PR view state ---
-//
-// Single canonical record per PR holding everything that needs to survive a
-// PR switch: which tab is active, which file is open, and scroll positions
-// for each of the three panes. Treat `prViewStates` as a Map<prId, PrViewState>
-// keyed off the PR's id — the user's "PR set with one record per PR".
-//
-// Mirrored singletons (`activeTab`, `activeFilePath`) are the reactive
-// surface read by Svelte components; they're kept in sync with the entry for
-// `currentPrId`. Scroll positions are write-only persistence — components
-// read them imperatively on mount and write on scroll, no reactivity needed.
-
-/** The review page's tabs, in the order the tab bar shows them (and ⌘1–3 picks them). */
-export const REVIEW_TABS = ["conversation", "walkthrough", "diff"] as const;
-export type ReviewTab = (typeof REVIEW_TABS)[number];
-type ActiveTab = ReviewTab;
-type ScrollPaneKey = "walkthrough" | "diff" | "conversation" | "sidebar";
-
-interface PrViewState {
-  activeTab: ActiveTab;
-  activeFilePath: string | null;
-  scroll: Partial<Record<ScrollPaneKey, number>>;
-}
-
-/** A PR opened for the first time lands here. */
-const FIRST_VISIT_TAB: ActiveTab = "conversation";
-
-function emptyState(): PrViewState {
-  return { activeTab: FIRST_VISIT_TAB, activeFilePath: null, scroll: {} };
-}
-
-// The tab each PR was last left on survives an app restart, so "first
-// visit" means first ever, not first since launch. Capped so the record of
-// long-closed PRs can't grow forever; oldest visits drop first.
-const LAST_TAB_KEY = "revv:pr-last-tab";
-const LAST_TAB_CAP = 300;
-
-function readLastTabs(): Record<string, ActiveTab> {
-  if (typeof localStorage === "undefined") return {};
-  try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(LAST_TAB_KEY) ?? "{}");
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, ActiveTab>) : {};
-  } catch {
-    return {};
-  }
-}
-
-function rememberLastTab(prId: string, tab: ActiveTab): void {
-  if (typeof localStorage === "undefined") return;
-  const tabs = readLastTabs();
-  delete tabs[prId];
-  tabs[prId] = tab;
-  const ids = Object.keys(tabs);
-  for (const id of ids.slice(0, Math.max(0, ids.length - LAST_TAB_CAP))) delete tabs[id];
-  try {
-    localStorage.setItem(LAST_TAB_KEY, JSON.stringify(tabs));
-  } catch {
-    // Storage full or unavailable: the in-memory state still holds this session.
-  }
-}
-
-function lastTabFor(prId: string): ActiveTab | null {
-  const tab = readLastTabs()[prId];
-  return REVIEW_TABS.find((known) => known === tab) ?? null;
-}
-
-// Single reactive store for per-PR view state. Follows the walkthrough-store
-// idiom: entries is a Map keyed by prId; every write is followed by
-// reassignment so Svelte 5 tracks it.
-const store = $state({
-  entries: new Map<string, PrViewState>(),
-  activePrId: null as string | null,
+    if (!followed.has(prId)) return { status: "error", error: "Released" };
+    reviews.set(prId, { threads: data.threads, messages: { ...data.messages } });
+    return { status: "ok", data: true };
+  },
 });
 
-function getOrCreate(prId: string): PrViewState {
-  let s = store.entries.get(prId);
-  if (!s) {
-    s = emptyState();
-    store.entries.set(prId, s);
-    store.entries = new Map(store.entries);
+function review(prId: string): PrReview {
+  return reviews.get(prId) ?? EMPTY_REVIEW;
+}
+
+function updateReview(prId: string, update: (r: PrReview) => PrReview): void {
+  if (!reviews.has(prId)) return;
+  reviews.set(prId, update(review(prId)));
+}
+
+/** The open PR holding `threadId`, if any. */
+function prOfThread(threadId: string): string | null {
+  for (const [prId, r] of reviews) {
+    if (r.threads.some((t) => t.id === threadId)) return prId;
   }
-  return s;
+  return null;
 }
 
-export function getActiveTab(): ActiveTab {
-  if (store.activePrId === null) return FIRST_VISIT_TAB;
-  return store.entries.get(store.activePrId)?.activeTab ?? FIRST_VISIT_TAB;
+function updateThreadReview(threadId: string, update: (r: PrReview) => PrReview): void {
+  const prId = prOfThread(threadId);
+  if (prId) updateReview(prId, update);
 }
 
-export function setActiveTab(tab: ActiveTab): void {
-  const currentTab = getActiveTab();
-  if (tab === currentTab) return;
-  // When leaving diff, reset focus-mode to sidebar to prevent stale state
-  // when ReviewLayout is destroyed and later recreated
-  if (currentTab === "diff") {
-    enterSidebarMode();
-  }
-  // Persist for the current PR
-  if (store.activePrId !== null) {
-    getOrCreate(store.activePrId).activeTab = tab;
-    store.entries = new Map(store.entries);
-    rememberLastTab(store.activePrId, tab);
-  }
+function withMessages(
+  r: PrReview,
+  threadId: string,
+  update: (messages: readonly ThreadMessage[]) => readonly ThreadMessage[],
+): PrReview {
+  return { ...r, messages: { ...r.messages, [threadId]: update(r.messages[threadId] ?? []) } };
 }
 
-export function getActiveFilePath(): string | null {
-  if (store.activePrId === null) return null;
-  return store.entries.get(store.activePrId)?.activeFilePath ?? null;
+/**
+ * Load a PR's review: every comment thread with its messages. Callers told the
+ * server state moved (a pull or a push announced it) pass `force`, otherwise
+ * stale local rows (missing the externalId stamped on just-pushed comments)
+ * would survive the freshness window and get re-submitted as duplicates.
+ */
+export async function loadSession(prId: string, force = false): Promise<void> {
+  followed.add(prId);
+  await (force ? loads.refresh(prId, undefined) : loads.load(prId, undefined));
 }
 
-export function setActiveFilePath(path: string | null): void {
-  if (store.activePrId !== null) {
-    getOrCreate(store.activePrId).activeFilePath = path;
-    store.entries = new Map(store.entries);
-  }
+/** Forget the review of `prId`; a read still in flight can't write it back. */
+export function releaseSession(prId: string): void {
+  followed.delete(prId);
+  loads.invalidate(prId);
+  reviews.delete(prId);
 }
 
-/** Call when navigating to a PR. Saves state for the previous PR, restores (or defaults) for the new one. */
-export function switchPrViewState(newPrId: string): void {
-  // Only save current state if we're actually leaving a different PR
-  const prevId = store.activePrId;
-  if (prevId !== null && prevId !== newPrId) {
-    const prev = getOrCreate(prevId);
-    prev.activeTab = getActiveTab();
-    prev.activeFilePath = getActiveFilePath();
-    store.entries = new Map(store.entries);
-  }
-  store.activePrId = newPrId;
-  // Restore saved state, or default for first visit
-  const saved = store.entries.get(newPrId);
-  const restoredTab = saved?.activeTab ?? lastTabFor(newPrId) ?? FIRST_VISIT_TAB;
-  const restoredFilePath = saved?.activeFilePath ?? null;
-  // Use direct entry mutation to bypass the guard in setActiveTab (no focus reset needed here)
-  if (getActiveTab() === "diff" && restoredTab !== "diff") {
-    enterSidebarMode();
-  }
-  getOrCreate(newPrId).activeTab = restoredTab;
-  getOrCreate(newPrId).activeFilePath = restoredFilePath;
-  store.entries = new Map(store.entries);
-  rememberLastTab(newPrId, restoredTab);
+export function getThreads(prId: string): readonly CommentThread[] {
+  return reviews.get(prId)?.threads ?? NO_THREADS;
 }
 
-// --- Diff scroll reset signal -----------------------------------------------
-//
-// Monotonic counter bumped whenever the user explicitly selects a file from
-// the sidebar tree — even if it's the same file already active. ReviewLayout
-// watches this to scroll the diff pane back to the top.
-let diffScrollResetSeq = $state(0);
-
-export function getDiffScrollResetSeq(): number {
-  return diffScrollResetSeq;
+export function getThreadsForFile(prId: string, filePath: string): CommentThread[] {
+  return getThreads(prId).filter((t) => t.filePath === filePath);
 }
 
-export function requestDiffScrollReset(): void {
-  diffScrollResetSeq++;
+export function getThreadMessages(prId: string, threadId: string): readonly ThreadMessage[] {
+  return reviews.get(prId)?.messages[threadId] ?? NO_MESSAGES;
 }
 
-// --- Per-PR scroll persistence ---------------------------------------------
-//
-// Read once on mount (or on the trailing edge of a tab/PR switch); write on
-// every scroll event. Components are responsible for plumbing these into the
-// right scroll container — see +page.svelte (walkthrough/conversation),
-// ReviewLayout.svelte (diff), Sidebar.svelte (sidebar), RightPanel.svelte
-// (rightPanel).
-
-export function getPrScrollPosition(prId: string, key: ScrollPaneKey): number {
-  return store.entries.get(prId)?.scroll[key] ?? 0;
-}
-
-export function setPrScrollPosition(prId: string, key: ScrollPaneKey, value: number): void {
-  getOrCreate(prId).scroll[key] = value;
-  store.entries = new Map(store.entries);
-}
-
-// --- Comment threads ---
-let threads = $state<CommentThread[]>([]);
-let threadMessages = $state<Record<string, ThreadMessage[]>>({});
-// Monotonic counter bumped on every thread mutation. Consumed inside reactive
-// derivations that need to force-recompute (e.g. DiffViewer's annotations),
-// because @pierre/diffs caches annotations by metadata reference.
-let threadsVersion = $state(0);
-
-export function getThreadsVersion(): number {
-  return threadsVersion;
-}
-
-export function getThreads(): CommentThread[] {
-  return threads;
-}
-
-export function getThreadMessages(threadId: string): ThreadMessage[] {
-  return threadMessages[threadId] ?? [];
-}
-
-export interface AddThreadParams {
+export interface NewThread {
   filePath: string;
   startLine: number;
   endLine: number;
   diffSide: "old" | "new";
-  message: {
-    authorRole: AuthorRole;
-    authorName: string;
-    authorLogin?: string | null;
-    body: string;
-    messageType: MessageType;
-    codeSuggestion?: string;
-  };
+  body: string;
 }
 
-/**
- * Create a new comment thread with an initial message.
- * Pessimistic: waits for server to create and return IDs.
- * Returns the created thread and message, or null on error.
- */
-export async function addThread(
-  params: AddThreadParams,
-): Promise<{ thread: CommentThread; message: ThreadMessage } | null> {
-  if (!sessionId) {
-    console.error("[review] No active session — cannot create thread");
-    return null;
-  }
-
-  const { data, error } = await api.api.reviews({ id: sessionId }).threads.post({
-    filePath: params.filePath,
-    startLine: params.startLine,
-    endLine: params.endLine,
-    diffSide: params.diffSide,
-    message: {
-      authorRole: params.message.authorRole,
-      authorName: params.message.authorName,
-      body: params.message.body,
-      messageType: params.message.messageType,
-      ...(params.message.authorLogin ? { authorLogin: params.message.authorLogin } : {}),
-      ...(params.message.codeSuggestion ? { codeSuggestion: params.message.codeSuggestion } : {}),
-    },
+function addThreadLocally(prId: string, thread: CommentThread, message: ThreadMessage): void {
+  updateReview(prId, (r) => {
+    const threads = r.threads.some((t) => t.id === thread.id) ? r.threads : [...r.threads, thread];
+    return withMessages({ ...r, threads }, thread.id, (existing) =>
+      existing.some((m) => m.id === message.id) ? existing : [...existing, message],
+    );
   });
+}
 
-  if (error || !data) {
-    console.error("[review] Failed to create thread:", error);
+/** Start a comment thread on a line range. Pessimistic: waits for the server's ids. */
+export async function addThread(prId: string, params: NewThread): Promise<CommentThread | null> {
+  let data: { thread: CommentThread; message: ThreadMessage };
+  try {
+    data = await call(
+      api.api.reviews({ id: prId }).threads.post({
+        filePath: params.filePath,
+        startLine: params.startLine,
+        endLine: params.endLine,
+        diffSide: params.diffSide,
+        message: { body: params.body },
+      }),
+      "Failed to create thread",
+    );
+  } catch (e) {
+    console.error("[review] Failed to create thread:", e);
     return null;
   }
 
-  const result = data as { thread: CommentThread; message: ThreadMessage };
-
-  // Update local state — guard against SSE broadcast arriving first
-  if (!threads.some((t) => t.id === result.thread.id)) {
-    threads = [...threads, result.thread];
-    threadMessages = {
-      ...threadMessages,
-      [result.thread.id]: [result.message],
-    };
-    threadsVersion++;
-  }
-
-  return result;
+  // The SSE broadcast may have landed first.
+  addThreadLocally(prId, data.thread, data.message);
+  return data.thread;
 }
 
-/**
- * Add a message to an existing thread.
- * Pessimistic: waits for server response.
- */
-export async function addThreadMessage(
-  threadId: string,
-  params: {
-    authorRole: AuthorRole;
-    authorName: string;
-    authorLogin?: string | null;
-    body: string;
-    messageType: MessageType;
-    codeSuggestion?: string;
-  },
-): Promise<ThreadMessage | null> {
-  const { data, error } = await api.api.threads({ id: threadId }).messages.post({
-    authorRole: params.authorRole,
-    authorName: params.authorName,
-    body: params.body,
-    messageType: params.messageType,
-    ...(params.authorLogin ? { authorLogin: params.authorLogin } : {}),
-    ...(params.codeSuggestion ? { codeSuggestion: params.codeSuggestion } : {}),
-  });
-
-  if (error || !data) {
-    console.error("[review] Failed to add message:", error);
-    return null;
-  }
-
-  const message = data as ThreadMessage;
-
-  // Guard against SSE broadcast arriving first
-  const existing = threadMessages[threadId] ?? [];
-  if (!existing.some((m) => m.id === message.id)) {
-    threadMessages = {
-      ...threadMessages,
-      [threadId]: [...existing, message],
-    };
-  }
-
-  return message;
-}
-
-/**
- * Resolve a thread. Optimistic: updates UI immediately, reverts on API failure.
- */
-export async function resolveThread(threadId: string): Promise<void> {
-  // Optimistic update
-  const prevThreads = threads;
-  threads = threads.map((t) =>
-    t.id === threadId
-      ? { ...t, status: "resolved" as const, resolvedAt: new Date().toISOString() }
-      : t,
+function addMessageLocally(threadId: string, message: ThreadMessage): void {
+  updateThreadReview(threadId, (r) =>
+    withMessages(r, threadId, (existing) =>
+      existing.some((m) => m.id === message.id) ? existing : [...existing, message],
+    ),
   );
-  threadsVersion++;
-
-  const { error } = await api.api.threads({ id: threadId }).patch({ status: "resolved" });
-
-  if (error) {
-    console.error("[review] Failed to resolve thread, reverting:", error);
-    threads = prevThreads;
-    threadsVersion++;
-    toast.error("Failed to resolve thread");
-  }
 }
 
-/**
- * Reopen a resolved thread. Optimistic: updates UI immediately, reverts on API failure.
- */
-export async function reopenThread(threadId: string): Promise<void> {
-  // Optimistic update
-  const prevThreads = threads;
-  threads = threads.map((t) =>
-    t.id === threadId ? { ...t, status: "open" as const, resolvedAt: null } : t,
-  );
-  threadsVersion++;
-
-  const { error } = await api.api.threads({ id: threadId }).patch({ status: "open" });
-
-  if (error) {
-    console.error("[review] Failed to reopen thread, reverting:", error);
-    threads = prevThreads;
-    threadsVersion++;
-  }
-}
-
-/**
- * Update a thread's status from an SSE event (no API call needed).
- */
-export function onThreadUpdated(threadId: string, status: ThreadStatus): void {
-  const isResolved = status === "resolved" || status === "wont_fix";
-  threads = threads.map((t) =>
-    t.id === threadId
-      ? {
-          ...t,
-          status,
-          resolvedAt: isResolved ? new Date().toISOString() : null,
-        }
-      : t,
-  );
-  threadsVersion++;
-}
-
-/**
- * Push a thread and message from an SSE broadcast (no API call needed).
- */
-export function onThreadCreated(thread: CommentThread, message: ThreadMessage): void {
-  if (!threads.some((t) => t.id === thread.id)) {
-    threads = [...threads, thread];
-    threadsVersion++;
-  }
-  // Always add the message if not already present
-  const existing = threadMessages[thread.id] ?? [];
-  if (!existing.some((m) => m.id === message.id)) {
-    threadMessages = {
-      ...threadMessages,
-      [thread.id]: [...existing, message],
-    };
-  }
-}
-
-/**
- * Push a message from an SSE broadcast (no API call needed).
- */
-export function onThreadMessage(threadId: string, message: ThreadMessage): void {
-  // Avoid duplicates
-  const existing = threadMessages[threadId] ?? [];
-  if (existing.some((m) => m.id === message.id)) return;
-  threadMessages = {
-    ...threadMessages,
-    [threadId]: [...existing, message],
-  };
-}
-
-export function getThreadsForFile(filePath: string): CommentThread[] {
-  return threads.filter((t) => t.filePath === filePath);
-}
-
-// --- Diff view mode ---
-// Persisted as `settings.diffViewMode`, so the review toggle and the Settings
-// default are one value. The override only covers the window before settings
-// load, when there is nothing to merge the optimistic write into yet.
-type DiffMode = "unified" | "split";
-let diffModeOverride = $state<DiffMode | null>(null);
-
-export function getDiffMode(): DiffMode {
-  return diffModeOverride ?? getSettings()?.diffViewMode ?? "unified";
-}
-
-export function setDiffMode(mode: DiffMode): void {
-  diffModeOverride = getSettings() ? null : mode;
-  void updateSettings({ diffViewMode: mode });
-}
-
-// --- Pending diff jump ---
-interface PendingDiffJump {
-  filePath: string;
-  lineNumber: number;
-}
-
-let pendingDiffJump = $state<PendingDiffJump | null>(null);
-
-export function getPendingDiffJump(): PendingDiffJump | null {
-  return pendingDiffJump;
-}
-
-export function jumpToDiffLine(filePath: string, lineNumber: number): void {
-  pendingDiffJump = { filePath, lineNumber };
-  setActiveFilePath(filePath);
-  setActiveTab("diff");
-}
-
-export function clearPendingDiffJump(): void {
-  pendingDiffJump = null;
-}
-
-/**
- * Open a changed file in the diff tab, optionally scrolling to a line. Used by
- * clickable file references in the chat panel: with a line we reuse the
- * pending-jump scroll machinery; without one we just select the file and switch
- * tabs. No-ops when the path isn't part of the current review (the file
- * reference resolver only emits known paths, but a stale render could lag a
- * fresh pull). Matches against `oldPath` too so a renamed file still resolves.
- */
-export function openFileInDiff(filePath: string, lineNumber?: number): void {
-  const match = reviewFiles.find((f) => f.path === filePath || f.oldPath === filePath);
-  if (!match) return;
-  if (typeof lineNumber === "number") {
-    jumpToDiffLine(match.path, lineNumber);
+/** Reply on a thread. Pessimistic: waits for the server's id. */
+export async function addThreadMessage(threadId: string, body: string): Promise<void> {
+  let message: ThreadMessage;
+  try {
+    message = await call(
+      api.api.threads({ id: threadId }).messages.post({ body }),
+      "Failed to add reply",
+    );
+  } catch (e) {
+    console.error("[review] Failed to add message:", e);
     return;
   }
-  setActiveFilePath(match.path);
-  setActiveTab("diff");
+
+  // The SSE broadcast may have landed first.
+  addMessageLocally(threadId, message);
 }
 
-// --- Pending walkthrough-block jump ---
-// Mirrors the pending-diff-jump pattern: YourReview (and potentially other
-// tabs) can request a scroll to a specific walkthrough block without needing a
-// direct ref to the walkthrough's scroll root. GuidedWalkthrough consumes this
-// when it becomes active and clears it after scrolling.
+type ThreadStatusFields = Pick<CommentThread, "status" | "resolvedAt">;
 
-let pendingWalkthroughBlockJump = $state<string | null>(null);
-
-export function getPendingWalkthroughBlockJump(): string | null {
-  return pendingWalkthroughBlockJump;
+function patchThread(threadId: string, fields: ThreadStatusFields): void {
+  updateThreadReview(threadId, (r) => ({
+    ...r,
+    threads: r.threads.map((t) => (t.id === threadId ? { ...t, ...fields } : t)),
+  }));
 }
 
-export function jumpToWalkthroughBlock(blockId: string): void {
-  pendingWalkthroughBlockJump = blockId;
-  setActiveTab("walkthrough");
+function findThread(threadId: string): CommentThread | null {
+  const prId = prOfThread(threadId);
+  return prId ? (review(prId).threads.find((t) => t.id === threadId) ?? null) : null;
 }
 
-export function clearPendingWalkthroughBlockJump(): void {
-  pendingWalkthroughBlockJump = null;
+/** Optimistic: on failure only this thread's status fields go back. */
+async function setThreadStatus(
+  threadId: string,
+  next: ThreadStatusFields,
+  failure: string | null,
+): Promise<void> {
+  const thread = findThread(threadId);
+  if (!thread) return;
+  const previous: ThreadStatusFields = { status: thread.status, resolvedAt: thread.resolvedAt };
+  patchThread(threadId, next);
+  const status = next.status === "open" ? "open" : "resolved";
+  try {
+    await call(
+      api.api.threads({ id: threadId }).patch({ status }),
+      failure ?? "Failed to reopen thread",
+    );
+  } catch (e) {
+    console.error(`[review] Failed to set thread ${status}, reverting:`, e);
+    patchThread(threadId, previous);
+    if (failure) toast.error(thrownMessage(e));
+  }
+}
+
+export function resolveThread(threadId: string): Promise<void> {
+  return setThreadStatus(
+    threadId,
+    { status: "resolved", resolvedAt: new Date().toISOString() },
+    "Failed to resolve thread",
+  );
+}
+
+export function reopenThread(threadId: string): Promise<void> {
+  return setThreadStatus(threadId, { status: "open", resolvedAt: null }, null);
+}
+
+export function onThreadUpdated({
+  threadId,
+  status,
+  resolvedAt,
+}: ThreadUpdatedEnvelope["data"]): void {
+  patchThread(threadId, { status, resolvedAt });
+}
+
+export function onThreadCreated({ prId, thread, message }: ThreadCreatedEnvelope["data"]): void {
+  addThreadLocally(prId, thread, message);
+}
+
+/** A new message; a changed one comes as `thread:message:edited`. */
+export function onThreadMessage({ threadId, message }: ThreadMessageEnvelope["data"]): void {
+  addMessageLocally(threadId, message);
+}
+
+function removeThreadLocally(threadId: string): void {
+  updateThreadReview(threadId, (r) => {
+    const { [threadId]: _, ...messages } = r.messages;
+    return { threads: r.threads.filter((t) => t.id !== threadId), messages };
+  });
 }
 
 /**
- * Delete a pending (unsynced) thread. Optimistic: removes from local state
- * immediately and reverts on API failure.
+ * Delete a pending (unsynced) thread. Optimistic: on failure the thread and
+ * its messages come back where they were, unless an event re-added them.
  */
 export async function deleteThread(threadId: string): Promise<boolean> {
-  const prev = threads;
-  threads = threads.filter((t) => t.id !== threadId);
-  const prevMessages = { ...threadMessages };
-  const { [threadId]: _, ...rest } = threadMessages;
-  threadMessages = rest;
-  threadsVersion++;
+  const prId = prOfThread(threadId);
+  const before = prId ? review(prId) : null;
+  const index = before?.threads.findIndex((t) => t.id === threadId) ?? -1;
+  const thread = before?.threads[index];
+  const messages = before?.messages[threadId];
+  removeThreadLocally(threadId);
 
-  const { error } = await api.api.threads({ id: threadId }).delete();
-  if (error) {
-    threads = prev;
-    threadMessages = prevMessages;
-    threadsVersion++;
-    toast.error("Failed to discard comment");
+  try {
+    await call(api.api.threads({ id: threadId }).delete(), "Failed to discard comment");
+  } catch (e) {
+    if (prId && thread) {
+      updateReview(prId, (r) => {
+        if (r.threads.some((t) => t.id === threadId)) return r;
+        const threads = [...r.threads.slice(0, index), thread, ...r.threads.slice(index)];
+        return messages
+          ? { threads, messages: { ...r.messages, [threadId]: messages } }
+          : { ...r, threads };
+      });
+    }
+    toast.error(thrownMessage(e));
     return false;
   }
   return true;
 }
 
-/** Push one local draft comment to GitHub under the active account's identity. */
+/** Push one local draft comment to GitHub as the account that owns the PR's repository. */
 export async function pushThreadToGitHub(threadId: string): Promise<boolean> {
-  const { error } = await api.api.threads({ id: threadId }).push.post();
-  if (error) {
-    toast.error("Failed to send comment to GitHub");
+  try {
+    await call(api.api.threads({ id: threadId }).push.post(), "Failed to send comment to GitHub");
+  } catch (e) {
+    toast.error(thrownMessage(e));
     return false;
   }
-
-  const prId = store.activePrId;
-  if (prId !== null) {
-    await loadSession(prId, undefined, true);
-  }
+  // The server announces `threads:linked` once the thread is linked; the
+  // re-read it triggers makes the posted draft read-only.
   toast.success("Comment sent to GitHub");
   return true;
 }
 
-/**
- * Remove a thread from local state in response to an SSE broadcast.
- */
-export function onThreadDeleted(threadId: string): void {
-  threads = threads.filter((t) => t.id !== threadId);
-  const { [threadId]: _, ...rest } = threadMessages;
-  threadMessages = rest;
-  threadsVersion++;
+export function onThreadDeleted({ threadId }: ThreadDeletedEnvelope["data"]): void {
+  removeThreadLocally(threadId);
+}
+
+export function onThreadMessageEdited({
+  threadId,
+  message,
+}: ThreadMessageEditedEnvelope["data"]): void {
+  updateThreadReview(threadId, (r) =>
+    withMessages(r, threadId, (existing) =>
+      existing.map((m) => (m.id === message.id ? message : m)),
+    ),
+  );
+}
+
+export function onThreadMessageDeleted({
+  threadId,
+  messageId,
+}: ThreadMessageDeletedEnvelope["data"]): void {
+  updateThreadReview(threadId, (r) =>
+    withMessages(r, threadId, (existing) => existing.filter((m) => m.id !== messageId)),
+  );
 }
 
 /**
- * Update a message body from an SSE broadcast (no API call needed).
- */
-export function onThreadMessageEdited(threadId: string, message: ThreadMessage): void {
-  threadMessages = {
-    ...threadMessages,
-    [threadId]: (threadMessages[threadId] ?? []).map((m) => (m.id === message.id ? message : m)),
-  };
-}
-
-/**
- * Remove a message from local state in response to an SSE broadcast.
- */
-export function onThreadMessageDeleted(threadId: string, messageId: string): void {
-  const existing = threadMessages[threadId];
-  if (!existing) return;
-  threadMessages = {
-    ...threadMessages,
-    [threadId]: existing.filter((m) => m.id !== messageId),
-  };
-}
-
-/**
- * Discard a pending (unsynced) reply message on a thread.
- * Optimistic: removes from local state immediately, reverts on API failure.
- * Server enforces that the message is unsynced and isn't the thread's first
- * message — those guards are intentionally duplicated client-side so the
- * Discard button only surfaces when this call is expected to succeed.
+ * Discard a pending (unsynced) reply message on a thread. Optimistic: on
+ * failure the message comes back where it was. The server refuses a synced
+ * message or a thread's first one; the Discard button applies the same rules
+ * so it only shows when this is expected to succeed.
  */
 export async function deleteThreadMessage(threadId: string, messageId: string): Promise<boolean> {
-  const prevMessages = { ...threadMessages };
-  const existing = threadMessages[threadId] ?? [];
-  threadMessages = {
-    ...threadMessages,
-    [threadId]: existing.filter((m) => m.id !== messageId),
-  };
+  const prId = prOfThread(threadId);
+  const existing = prId ? (review(prId).messages[threadId] ?? []) : [];
+  const index = existing.findIndex((m) => m.id === messageId);
+  const message = existing[index];
+  onThreadMessageDeleted({ threadId, messageId });
 
-  const { error } = await api.api.threads({ id: threadId }).messages({ messageId }).delete();
-
-  if (error) {
-    threadMessages = prevMessages;
-    toast.error("Failed to discard reply");
+  try {
+    await call(
+      api.api.threads({ id: threadId }).messages({ messageId }).delete(),
+      "Failed to discard reply",
+    );
+  } catch (e) {
+    if (message) {
+      updateThreadReview(threadId, (r) =>
+        withMessages(r, threadId, (current) =>
+          current.some((m) => m.id === messageId)
+            ? current
+            : [...current.slice(0, index), message, ...current.slice(index)],
+        ),
+      );
+    }
+    toast.error(thrownMessage(e));
     return false;
   }
   return true;
 }
 
-/**
- * Edit the body of a pending thread's first message.
- * Optimistic: updates UI immediately, reverts on API failure.
- */
+function setMessageBody(threadId: string, messageId: string, body: string): void {
+  updateThreadReview(threadId, (r) =>
+    withMessages(r, threadId, (existing) =>
+      existing.map((m) => (m.id === messageId ? { ...m, body } : m)),
+    ),
+  );
+}
+
+/** Edit the body of a pending thread's first message. Optimistic: on failure the old body comes back. */
 export async function editThreadMessage(
   threadId: string,
   messageId: string,
   body: string,
 ): Promise<boolean> {
-  const prev = { ...threadMessages };
-  threadMessages = {
-    ...threadMessages,
-    [threadId]: (threadMessages[threadId] ?? []).map((m) =>
-      m.id === messageId ? { ...m, body } : m,
-    ),
-  };
+  const prId = prOfThread(threadId);
+  const previous = prId
+    ? review(prId).messages[threadId]?.find((m) => m.id === messageId)?.body
+    : undefined;
+  setMessageBody(threadId, messageId, body);
 
-  const { error } = await api.api.threads({ id: threadId }).messages({ messageId }).patch({ body });
-  if (error) {
-    threadMessages = prev;
-    toast.error("Failed to save edit");
+  try {
+    await call(
+      api.api.threads({ id: threadId }).messages({ messageId }).patch({ body }),
+      "Failed to save edit",
+    );
+  } catch (e) {
+    if (previous !== undefined) setMessageBody(threadId, messageId, previous);
+    toast.error(thrownMessage(e));
     return false;
   }
   return true;
 }
 
 /**
- * Apply the suggestion from a comment thread's first message.
- * Replaces content with the suggested code.
+ * The server only emits this when the pull actually moved something (or the
+ * user asked for the sync), so an open review re-reads its session even
+ * inside the freshness window.
  */
-export async function applyCommentSuggestion(threadId: string, suggestion: string): Promise<void> {
-  const messages = threadMessages[threadId];
-  if (!messages || messages.length === 0) return;
+export function onThreadsSynced({ prId }: ThreadsSyncedEnvelope["data"]): void {
+  if (followed.has(prId)) void loadSession(prId, true);
+}
 
-  const updated = messages.map((msg, i) =>
-    i === 0 ? { ...msg, codeSuggestion: suggestion } : msg,
-  );
-  threadMessages = { ...threadMessages, [threadId]: updated };
+export function onThreadsLinked({ prId }: ThreadsLinkedEnvelope["data"]): void {
+  if (followed.has(prId)) void loadSession(prId, true);
+}
 
-  // Resolve the thread
-  await resolveThread(threadId);
+/**
+ * Thread events sent while the stream was down are gone. The session read is
+ * DB-only, so each open review also asks GitHub for its threads and its head
+ * (a dropped connection may have hidden a push).
+ */
+export function onEventsReconnected(): void {
+  for (const prId of followed) {
+    requestThreadSync(prId);
+    void loadSession(prId, true);
+    refreshPrHead(prId);
+  }
+}
+
+/**
+ * Coming back to the window is when the user may have pushed from a terminal,
+ * and a DB read can't see a commit the poll fiber hasn't fetched yet.
+ */
+export function onWindowForeground(): void {
+  for (const prId of followed) refreshPrHead(prId);
+}
+
+export function reset(): void {
+  followed.clear();
+  loads.reset();
+  reviews.clear();
 }

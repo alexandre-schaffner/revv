@@ -1,14 +1,14 @@
-// ─── JevService ──────────────────────────────────────────────────────────────
-//
 // Thin Effect wrapper over TypeSafe System One (`POST /v1/systemone`): one
 // state blob plus named questions, answered in parallel as typed
 // choice/score/noul judgments, never prose.
 //
 // Two invariants: (1) off is free — disabled toggle or missing key
-// short-circuits with no network call, like `RemoteWalkthroughCache` gating
-// on `cache.enabled`. (2) never fails a walkthrough — every call site
-// collapses failure to `null` (`ai/jev/optional.ts`); `ask` fails with
-// exactly one error type so that collapse is total.
+// short-circuits with no network call. The switch is checked here (and, for
+// judgments memoized in the cache, in `cachedJev`), so no caller has to; one
+// may still read it to decide what to show.
+// (2) never fails a walkthrough — every call site collapses failure to `null`
+// (`ai/jev/optional.ts`); `ask` fails with exactly one error type so that
+// collapse is total.
 
 import type { JsonValue, Questions, SystemOneResult } from "@typesafe-ai/sdk";
 import {
@@ -76,10 +76,7 @@ export class JevService extends Context.Service<
       req: JevRequest<Q>,
     ) => Effect.Effect<SystemOneResult<Q>, JevUnavailable>;
 
-    /**
-     * Whether the master switch is on *and* a key is present. Per-feature
-     * toggles are the caller's to check.
-     */
+    /** Whether the master switch is on *and* a key is present. */
     readonly isAvailable: () => Effect.Effect<boolean>;
 
     /**
@@ -106,7 +103,6 @@ const RETRIED_STATUSES: ReadonlySet<number> = new Set([
   ...Array.from({ length: 100 }, (_, i) => 500 + i),
 ]);
 
-/** Map an SDK rejection onto the closed reason set. */
 function classify(cause: unknown): JevUnavailable {
   if (cause instanceof APITimeoutError || cause instanceof APIUserAbortError) {
     return new JevUnavailable({ reason: "timeout", cause });
@@ -155,11 +151,7 @@ export const JevServiceLive: Layer.Layer<JevService, never, SettingsService | Se
         return client;
       };
 
-      /** Settings read that can't fail the caller — a broken row means "off". */
-      const jevSettings = settingsSvc.getSettings().pipe(
-        Effect.map((s) => s.jev),
-        Effect.orElseSucceed(() => ({ enabled: false }) as const),
-      );
+      const jevSettings = settingsSvc.getSettings().pipe(Effect.map((s) => s.jev));
 
       const requireKey = Effect.gen(function* () {
         const apiKey = yield* resolveJevApiKey;

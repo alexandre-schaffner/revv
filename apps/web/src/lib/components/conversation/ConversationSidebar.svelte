@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { PrConversation, PrLabel, ReviewerEntry } from "@revv/shared";
+import { reviewerVerdict } from "@revv/shared";
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import CheckCircle from "phosphor-svelte/lib/CheckCircle";
 import Circle from "phosphor-svelte/lib/Circle";
@@ -7,28 +8,31 @@ import CircleDashed from "phosphor-svelte/lib/CircleDashed";
 import ShieldCheck from "phosphor-svelte/lib/ShieldCheck";
 import UsersThree from "phosphor-svelte/lib/UsersThree";
 import Avatar from "$lib/components/shared/Avatar.svelte";
+import StackLayersPanel from "$lib/components/stack/StackLayersPanel.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
+import type { ReviewerChange } from "$lib/conversation/patches";
+import { REVIEW_DECISION_LABEL, VERDICT_LABEL } from "$lib/conversation/verdict";
 import {
+  changeAssignees,
+  changeLabels,
+  changeReviewers,
+  getAbilities,
   loadAssigneeOptions,
   loadLabelOptions,
   loadReviewerOptions,
 } from "$lib/stores/conversation.svelte";
 import { getStack } from "$lib/stores/stacks.svelte";
-import type { ReviewerChange } from "$lib/utils/conversation-patches";
 import { openExternal } from "$lib/utils/open-external";
 import CodeOwnersSection from "./CodeOwnersSection.svelte";
 import LabelChip from "./LabelChip.svelte";
 import MetaPicker, { type PickerOption } from "./MetaPicker.svelte";
-import StackSection from "./StackSection.svelte";
-import VerdictGlyph, { VERDICT_LABEL } from "./VerdictGlyph.svelte";
+import SidebarSection from "./SidebarSection.svelte";
+import VerdictGlyph from "./VerdictGlyph.svelte";
 
 interface Props {
   prId: string;
   conversation: PrConversation;
-  canEdit: boolean;
-  onReviewers: (added: ReviewerChange, removed: ReviewerChange) => void;
-  onAssignees: (added: string[], removed: string[]) => void;
-  onLabels: (added: PrLabel[], removed: string[]) => void;
+  /** Bindable so the tab's keyboard shortcuts can open the pickers. */
   reviewersOpen?: boolean;
   assigneesOpen?: boolean;
   labelsOpen?: boolean;
@@ -37,16 +41,25 @@ interface Props {
 let {
   prId,
   conversation,
-  canEdit,
-  onReviewers,
-  onAssignees,
-  onLabels,
   reviewersOpen = $bindable(false),
   assigneesOpen = $bindable(false),
   labelsOpen = $bindable(false),
 }: Props = $props();
 
+const canEdit = $derived(getAbilities(prId).canEdit);
 const stack = $derived(getStack(prId));
+
+function onReviewers(added: ReviewerChange, removed: ReviewerChange): void {
+  void changeReviewers(prId, added, removed);
+}
+
+function onAssignees(added: string[], removed: string[]): void {
+  void changeAssignees(prId, added, removed);
+}
+
+function onLabels(added: PrLabel[], removed: string[]): void {
+  void changeLabels(prId, added, removed);
+}
 
 /** Who a review can be requested from. */
 type ReviewerRef =
@@ -79,12 +92,6 @@ const requestedReviewers = $derived(
 );
 const assigneeLogins = $derived(new Map(conversation.assignees.map((a) => [a.login, a.login])));
 const appliedLabels = $derived(new Map(conversation.labels.map((l) => [l.name, l])));
-
-const DECISION: Record<NonNullable<PrConversation["reviewDecision"]>, string> = {
-  approved: "Approved",
-  changes_requested: "Changes requested",
-  review_required: "An approving review is required to merge",
-};
 
 async function reviewerOptions(q: string): Promise<PickerOption<ReviewerRef>[]> {
   const { users, teams } = await loadReviewerOptions(prId, q);
@@ -145,14 +152,16 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 
 <div class="sidebar">
 	{#if stack}
-		<div class="side-section side-section--stack">
-			<StackSection {stack} number={conversation.number} />
-		</div>
+		<SidebarSection id="side-stack" title="Stack #{stack.number}" align="baseline" span>
+			{#snippet aside()}
+				<span class="side-count">{stack.layers.length} pull requests</span>
+			{/snippet}
+			<StackLayersPanel {prId} {stack} />
+		</SidebarSection>
 	{/if}
 
-	<section class="side-section" aria-labelledby="side-reviewers">
-		<header class="side-head">
-			<h3 id="side-reviewers">Reviewers</h3>
+	<SidebarSection id="side-reviewers" title="Reviewers">
+		{#snippet aside()}
 			{#if canEdit}
 				<MetaPicker
 					label="Edit reviewers"
@@ -165,7 +174,7 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 					bind:open={reviewersOpen}
 				/>
 			{/if}
-		</header>
+		{/snippet}
 		{#if conversation.reviewers.length === 0}
 			<p class="side-empty">No reviews requested</p>
 		{:else}
@@ -181,7 +190,7 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 							</span>
 						{:else}
 							{@const login = reviewer.actor.login}
-							<Avatar handle={login} avatarContent={reviewer.actor.avatarContent} size={20} />
+							<Avatar name={login} src={reviewer.actor.avatarContent} size={20} />
 							<span class="side-name">{login}</span>
 							{#if reviewer.asCodeOwner}{@render codeOwnerMark()}{/if}
 							{#if canEdit && reviewer.verdict !== null && !reviewer.requested}
@@ -195,12 +204,10 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 									<ArrowsClockwise />
 								</Button>
 							{/if}
-							<span
-								class="side-state"
-								title={reviewer.verdict ? VERDICT_LABEL[reviewer.verdict] : 'Awaiting review'}
-							>
-								{#if reviewer.verdict && !(reviewer.requested && reviewer.verdict === 'commented')}
-									<VerdictGlyph verdict={reviewer.verdict} size={14} />
+							{@const verdict = reviewerVerdict(reviewer)}
+							<span class="side-state" title={verdict ? VERDICT_LABEL[verdict] : 'Awaiting review'}>
+								{#if verdict}
+									<VerdictGlyph {verdict} size={14} />
 								{:else}
 									<CircleDashed size={14} weight="bold" class="side-awaiting" />
 								{/if}
@@ -212,24 +219,22 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 		{/if}
 		{#if conversation.reviewDecision}
 			<p class="side-note side-note--{conversation.reviewDecision}">
-				{DECISION[conversation.reviewDecision]}
+				{REVIEW_DECISION_LABEL[conversation.reviewDecision]}
 			</p>
 		{/if}
-	</section>
+	</SidebarSection>
 
 	{#if conversation.codeowners}
-		<div class="side-section">
-			<CodeOwnersSection
-				codeowners={conversation.codeowners}
-				reviewers={conversation.reviewers}
-				avatars={conversation.avatars}
-			/>
-		</div>
+		<CodeOwnersSection
+			{prId}
+			codeowners={conversation.codeowners}
+			reviewers={conversation.reviewers}
+			avatars={conversation.avatars}
+		/>
 	{/if}
 
-	<section class="side-section" aria-labelledby="side-assignees">
-		<header class="side-head">
-			<h3 id="side-assignees">Assignees</h3>
+	<SidebarSection id="side-assignees" title="Assignees">
+		{#snippet aside()}
 			{#if canEdit}
 				<MetaPicker
 					label="Edit assignees"
@@ -242,7 +247,7 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 					bind:open={assigneesOpen}
 				/>
 			{/if}
-		</header>
+		{/snippet}
 		{#if conversation.assignees.length === 0}
 			<p class="side-empty">
 				<span>No one</span>
@@ -261,17 +266,16 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 			<ul class="side-list">
 				{#each conversation.assignees as assignee (assignee.login)}
 					<li class="side-person">
-						<Avatar handle={assignee.login} avatarContent={assignee.avatarContent} size={20} />
+						<Avatar name={assignee.login} src={assignee.avatarContent} size={20} />
 						<span class="side-name">{assignee.login}</span>
 					</li>
 				{/each}
 			</ul>
 		{/if}
-	</section>
+	</SidebarSection>
 
-	<section class="side-section" aria-labelledby="side-labels">
-		<header class="side-head">
-			<h3 id="side-labels">Labels</h3>
+	<SidebarSection id="side-labels" title="Labels">
+		{#snippet aside()}
 			{#if canEdit}
 				<MetaPicker
 					label="Edit labels"
@@ -283,7 +287,7 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 					bind:open={labelsOpen}
 				/>
 			{/if}
-		</header>
+		{/snippet}
 		{#if conversation.labels.length === 0}
 			<p class="side-empty">None</p>
 		{:else}
@@ -293,24 +297,22 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 				{/each}
 			</div>
 		{/if}
-	</section>
+	</SidebarSection>
 
 	{#if conversation.milestone}
 		{@const milestone = conversation.milestone}
-		<section class="side-section" aria-labelledby="side-milestone">
-			<header class="side-head"><h3 id="side-milestone">Milestone</h3></header>
+		<SidebarSection id="side-milestone" title="Milestone">
 			<button type="button" class="side-link side-row" onclick={() => void openExternal(milestone.url)}>
 				{milestone.title}
 				{#if milestone.dueOn}
 					<span class="side-muted">due {new Date(milestone.dueOn).toLocaleDateString()}</span>
 				{/if}
 			</button>
-		</section>
+		</SidebarSection>
 	{/if}
 
 	{#if conversation.linkedIssues.length > 0}
-		<section class="side-section" aria-labelledby="side-issues">
-			<header class="side-head"><h3 id="side-issues">Closes</h3></header>
+		<SidebarSection id="side-issues" title="Closes">
 			<ul class="side-list">
 				{#each conversation.linkedIssues as issue (issue.url)}
 					<li>
@@ -326,22 +328,19 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 					</li>
 				{/each}
 			</ul>
-		</section>
+		</SidebarSection>
 	{/if}
 
 	{#if conversation.participants.length > 0}
-		<section class="side-section" aria-labelledby="side-participants">
-			<header class="side-head">
-				<h3 id="side-participants">{conversation.participants.length} participants</h3>
-			</header>
+		<SidebarSection id="side-participants" title="{conversation.participants.length} participants">
 			<div class="side-avatars">
 				{#each conversation.participants as person (person.login)}
 					<span title={person.login}>
-						<Avatar handle={person.login} avatarContent={person.avatarContent} size={24} />
+						<Avatar name={person.login} src={person.avatarContent} size={24} />
 					</span>
 				{/each}
 			</div>
-		</section>
+		</SidebarSection>
 	{/if}
 </div>
 
@@ -351,33 +350,9 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 		flex-direction: column;
 	}
 
-	.side-section {
-		padding: 12px 0;
-	}
-
-	.side-section + .side-section {
-		border-top: 1px solid var(--color-border-subtle);
-	}
-
-	.side-section:first-child {
-		padding-top: 0;
-	}
-
-	.side-head {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		min-height: 24px;
-		margin-bottom: 6px;
-		color: var(--color-text-secondary);
-	}
-
-	.side-head h3 {
-		margin: 0;
+	.side-count {
 		font-size: 0.75rem;
-		font-weight: 600;
-		letter-spacing: 0.01em;
-		color: var(--color-text-secondary);
+		color: var(--color-text-muted);
 	}
 
 	.side-empty,
@@ -525,16 +500,6 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 			display: grid;
 			grid-template-columns: 1fr 1fr;
 			column-gap: 28px;
-		}
-
-		.side-section--stack {
-			grid-column: 1 / -1;
-		}
-
-		/* Without a stack, the second section starts the right column. */
-		.side-section:nth-child(2):not(.side-section--stack + .side-section) {
-			padding-top: 0;
-			border-top: none;
 		}
 	}
 </style>

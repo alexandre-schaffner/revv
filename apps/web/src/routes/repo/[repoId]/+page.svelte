@@ -1,28 +1,26 @@
 <script lang="ts">
 import { page } from "$app/state";
-import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import RepoHomeSection from "$lib/components/repo/RepoHomeSection.svelte";
-import { getSelectedRepo } from "$lib/stores/prs.svelte";
+import { getReposFetchAttempted } from "$lib/stores/repos.svelte";
+import { getSelectedRepo } from "$lib/stores/route.svelte";
 
 const repo = $derived(getSelectedRepo());
 const repoIdFromUrl = $derived(page.params.repoId ?? "");
 </script>
 
-<AuthGuard>
-	<div class="repo-scroll">
-	<div class="repo-landing">
-		{#if repo}
-			<RepoHomeSection {repo} variant="page" />
-		{:else}
-			<div class="missing">
-				<h1 class="missing-title">Repository not found</h1>
-				<p class="missing-text">No repo matches <code>{repoIdFromUrl}</code> in your visible workspace.</p>
-				<p class="missing-text">Pick another project from the rail on the left.</p>
-			</div>
-		{/if}
-	</div>
-	</div>
-</AuthGuard>
+<div class="repo-scroll">
+<div class="repo-landing">
+	{#if repo}
+		<RepoHomeSection {repo} variant="page" />
+	{:else if getReposFetchAttempted()}
+		<div class="missing">
+			<h1 class="missing-title">Repository not found</h1>
+			<p class="missing-text">No repo matches <code>{repoIdFromUrl}</code> in your visible workspace.</p>
+			<p class="missing-text">Pick another project from the rail on the left.</p>
+		</div>
+	{/if}
+</div>
+</div>
 
 <style>
 	.repo-scroll {

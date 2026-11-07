@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { Cause, Data, Deferred, Effect, Exit, Fiber, Layer, Option } from "effect";
 import { createDb } from "../db";
-import { CacheService, CacheServiceLive } from "./Cache";
+import { kvCache } from "../db/schema/index";
+import { CacheService, CacheServiceLive, kvCacheRetention } from "./Cache";
 import { DbService } from "./Db";
 
 class FetchFailed extends Data.TaggedError("FetchFailed")<{ readonly reason: string }> {}
@@ -14,10 +15,7 @@ function run<A, E>(effect: Effect.Effect<A, E, CacheService | DbService>) {
 }
 
 describe("CacheService.getOrFetch", () => {
-  // A caller that joins an in-flight fetch must see the fetcher's failure as a
-  // typed failure, same as the caller that started it. Surfacing it as a
-  // defect slipped past every `catchAll` that degrades an optional lookup —
-  // a walkthrough start racing the sizing poll 500'd on a TypeSafe 402.
+  // A defect would slip past every `catchAll` that degrades an optional lookup.
   it("fails a deduplicated caller through the error channel", async () => {
     const [first, second] = await run(
       Effect.gen(function* () {
@@ -48,7 +46,6 @@ describe("CacheService.getOrFetch", () => {
     }
   });
 
-  // Failures aren't cached, in memory either: the next caller fetches again.
   it("lets the next caller retry after a failed fetch", async () => {
     let calls = 0;
     const fetcher = () =>
@@ -69,8 +66,6 @@ describe("CacheService.getOrFetch", () => {
     expect(calls).toBe(2);
   });
 
-  // The fetch runs detached, so interrupting the caller that started it
-  // doesn't stop it; a later caller must join it, not send a second one.
   it("keeps an interrupted owner's fetch joinable", async () => {
     let calls = 0;
     const value = await run(
@@ -124,5 +119,23 @@ describe("CacheService.getOrFetch", () => {
     );
     expect([a, b]).toEqual(["value", "value"]);
     expect(calls).toBe(1);
+  });
+});
+
+describe("kvCacheRetention", () => {
+  it("ages out entries that never expire once they are old, and keeps fresh ones", async () => {
+    const db = createDb(":memory:");
+    const now = new Date("2026-06-01T00:00:00Z");
+    const at = (days: number) => new Date(now.getTime() - days * 86_400_000).toISOString();
+    db.insert(kvCache)
+      .values([
+        { ns: "jev", key: "old", valueJson: "1", fetchedAt: at(31), expiresAt: null },
+        { ns: "jev", key: "fresh", valueJson: "1", fetchedAt: at(2), expiresAt: null },
+        { ns: "ttl", key: "expired", valueJson: "1", fetchedAt: at(1), expiresAt: at(0.5) },
+      ])
+      .run();
+
+    expect(kvCacheRetention.sweep(db, now)).toBe(2);
+    expect(db.select({ key: kvCache.key }).from(kvCache).all()).toEqual([{ key: "fresh" }]);
   });
 });

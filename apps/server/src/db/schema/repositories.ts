@@ -1,6 +1,5 @@
 import type { CloneStatus } from "@revv/shared";
 import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
-import { serverEnv } from "../../config";
 import { account } from "./auth";
 
 export const repositories = sqliteTable(
@@ -12,19 +11,25 @@ export const repositories = sqliteTable(
     name: text("name").notNull(),
     fullName: text("full_name").notNull(),
     defaultBranch: text("default_branch").notNull().default("main"),
-    /** Raw owner avatar URL from the provider. For GitHub Enterprise this is a
-     *  signed, short-lived URL whose token expires — kept only for change
-     *  detection, never served to the client directly. */
+    /** Raw owner avatar URL from the provider. On GitHub Enterprise it is signed
+     *  and expires, so it is served only for github.com repos. */
     avatarUrl: text("avatar_url"),
-    /** Base64 data URL of the fetched owner avatar so the client never depends
-     *  on an expiring signed `avatar_url`. Mirrors `remote_users.avatar_content`. */
+    /** Retired: owner avatars are cached in `remote_users` (migration 0500). */
     avatarContent: text("avatar_content"),
     addedAt: text("added_at").notNull(),
     cloneStatus: text("clone_status").notNull().default("pending").$type<CloneStatus>(),
     clonePath: text("clone_path"),
     cloneError: text("clone_error"),
     managed: integer("managed", { mode: "boolean" }).notNull().default(true),
-    githubHost: text("github_host").notNull().default(serverEnv.githubHost),
+    /**
+     * Revv wrote the folder at `clone_path`: set before a clone writes into it
+     * (or when Revv adopts its own leftover), cleared when Revv refuses or
+     * lets go of the folder. A clone cut off mid-way keeps it, so a retry
+     * clears the partial clone instead of refusing it, and removing the repo
+     * deletes the folder only when it is set.
+     */
+    revvWroteClone: integer("revv_wrote_clone", { mode: "boolean" }).notNull().default(false),
+    githubHost: text("github_host").notNull().default("github.com"),
     accountId: text("account_id")
       .notNull()
       .references(() => account.id, { onDelete: "cascade" }),

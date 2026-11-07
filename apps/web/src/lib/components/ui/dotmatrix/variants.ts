@@ -1,24 +1,17 @@
-// ── Square dot-matrix variant registry ──────────────────────────────────────
-// Faithful Svelte port of dotm-square-1..20 from the upstream dotmatrix
-// library (https://dotmatrix.zzzzshawn.cloud, github.com/zzzzshawn/matrix).
+// A Svelte port of dotm-square-1..20 from the upstream dotmatrix library
+// (https://dotmatrix.zzzzshawn.cloud, github.com/zzzzshawn/matrix).
 //
-// Each entry tells `Dotmatrix.svelte` how to animate the 5×5 grid:
+//   kind: 'css'      — CSS keyframes own the animation (in
+//                      `dotmatrix-loader.css`); we supply a class name and
+//                      optionally per-dot CSS vars.
+//   kind: 'stepped'  — JS ticks a discrete step and computes opacity per dot,
+//                      for patterns keyframes can't express (snake trails,
+//                      Tetris fills).
+//   kind: 'phase'    — JS continuous phase 0..1 via rAF, for trigonometric
+//                      variants (helix strands, sound bars).
 //
-//   kind: 'css'      — CSS keyframes own the animation. We supply a class
-//                      name (and optionally per-dot CSS vars). The actual
-//                      keyframes live in `dotmatrix-loader.css`.
-//
-//   kind: 'stepped'  — JS frame-stepping. We tick a discrete step counter
-//                      and compute opacity per dot per step. Used for
-//                      variants whose patterns can't be expressed as
-//                      CSS keyframes (e.g. snake trails, Tetris fills).
-//
-//   kind: 'phase'    — JS continuous phase 0..1 via rAF. Used for variants
-//                      driven by trigonometry (helix strands, sound bars).
-//
-// Reduced motion: `Dotmatrix.svelte` checks `prefers-reduced-motion: reduce`
-// and renders `idleOpacity(...)` instead of running the JS loop. CSS variants
-// are caught by the global motion reset in `app.css`.
+// Reduced motion: `Dotmatrix.svelte` renders `idleOpacity(...)` instead of
+// running the JS loop; CSS variants are caught by the global reset in `app.css`.
 //
 // Geometry: cell index = row*5 + col, 0..24. Center is index 12 (row 2, col 2).
 
@@ -40,7 +33,7 @@ function at<T>(arr: readonly T[], index: number): T {
   return val;
 }
 
-// ── Precomputed path-order tables (each table[idx] = order along the path) ──
+// Path-order tables: table[idx] = the cell's order along the path.
 
 const TR_BL_PATH_NORM: number[] = Array.from({ length: N * N }, (_, idx) => {
   const { row, col } = indexToCoord(idx);
@@ -127,7 +120,6 @@ const DIAGONAL_SNAKE_ORDER: number[] = (() => {
   return order;
 })();
 
-// ── square-2: snake path (16-segment cycle) ─────────────────────────────────
 const SQUARE2_PATH: number[] = (() => {
   const path: number[] = [];
   const push = (r: number, c: number) => path.push(rowMajorIndex(r, c));
@@ -158,7 +150,6 @@ const SQUARE2_VISITS: Map<number, number[]> = (() => {
 })();
 const SQUARE2_TAIL = [1, 0.82, 0.68, 0.54, 0.42, 0.31, 0.22, 0.14];
 
-// ── square-7: tetromino fill / blink / drain ────────────────────────────────
 const SQUARE7_MASKS = [
   "....................ooooo",
   "...............oooooooooo",
@@ -173,7 +164,6 @@ const SQUARE7_MASKS = [
 ];
 const SQUARE7_SEQUENCE = [0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9];
 
-// ── square-8: Tetris column stack ───────────────────────────────────────────
 const SQUARE8_ROWS = N;
 const SQUARE8_COLS = N;
 const SQUARE8_FILL_LAST = SQUARE8_ROWS + SQUARE8_COLS - 1;
@@ -189,7 +179,6 @@ function square8DrainH(col: number, tick: number): number {
   return Math.max(0, Math.min(SQUARE8_ROWS, SQUARE8_ROWS - Math.max(0, tick - col)));
 }
 
-// ── square-13: 8-direction beacon ───────────────────────────────────────────
 // 8 frames, each 25 chars (5 rows × 5 cols, row-major).
 // `x` = peak, `o` = hub, `.` = base.
 const SQUARE13_FRAMES: readonly string[] = [
@@ -204,7 +193,6 @@ const SQUARE13_FRAMES: readonly string[] = [
 ];
 const SQUARE13_SEQUENCE = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7];
 
-// ── square-19: figure-8 path (Lissajous-like) ───────────────────────────────
 const SQUARE19_STEP_COUNT = 48;
 const SQUARE19_CURVE_SAMPLES = Array.from({ length: 96 }, (_, idx) => {
   const t = (idx / 96) * Math.PI * 2;
@@ -236,7 +224,6 @@ function square19HeadInfluence(dot: { x: number; y: number }, head: { x: number;
   return Math.exp(-square19SqDist(dot, head) / 0.19);
 }
 
-// ── square-20: perimeter loop with twist cues ───────────────────────────────
 const SQUARE20_PATH: readonly number[] = [
   rowMajorIndex(0, 0),
   rowMajorIndex(0, 1),
@@ -265,7 +252,6 @@ const SQUARE20_TWIST_INNER = new Map<number, number>([
   [12, rowMajorIndex(3, 1)],
 ]);
 
-// ── square-9: braille bit layout ────────────────────────────────────────────
 const SQ9_D1 = 0x01,
   SQ9_D2 = 0x02,
   SQ9_D3 = 0x04,
@@ -292,8 +278,6 @@ function square9BitClass(bit: number): string {
   return "dmx-square9-d1";
 }
 
-// ── helpers ─────────────────────────────────────────────────────────────────
-
 const manhattanDistance = (idx: number) => {
   const { row, col } = indexToCoord(idx);
   return Math.abs(row - 2) + Math.abs(col - 2);
@@ -304,13 +288,9 @@ const centerRippleRing = (idx: number) => {
   return Math.abs(row - 1) + Math.abs(col - 1);
 };
 
-// ── types ───────────────────────────────────────────────────────────────────
-
 /**
- * All 24 dot-matrix variants. The 20 `square-N` keys mirror upstream's
- * `dotm-square-1` … `dotm-square-20` naming. The four legacy names predate
- * the upstream port and are kept because `GuidedWalkthrough.svelte` and
- * its persisted state reference them by these strings.
+ * The 20 `square-N` keys mirror upstream's `dotm-square-N` naming. The four
+ * others are the walkthrough's chapter spinners, older than the port.
  */
 export type DotmatrixVariant =
   | "ripple"
@@ -338,7 +318,6 @@ export type DotmatrixVariant =
   | "square-19"
   | "square-20";
 
-/** Iterable list of all variant keys (handy for tests, random pickers, demos). */
 export const DOTMATRIX_VARIANT_KEYS: readonly DotmatrixVariant[] = [
   "ripple",
   "diagonal",
@@ -373,10 +352,8 @@ export interface PerDotInactive {
 export interface PerDotCss {
   inactive?: false;
   /**
-   * Optional extra class on the dot. Variants where the keyframe is keyed
-   * purely by variant scope (`.dotmatrix.dotmatrix--ripple .dotmatrix-dot`)
-   * leave this off. Variants like `square-4` or `square-9` that fan out
-   * to multiple keyframes per variant supply the discriminating class.
+   * Extra class on the dot, for variants that fan out to several keyframes
+   * (`square-4`, `square-9`).
    */
   className?: string;
   vars?: Record<string, number | string>;
@@ -403,8 +380,6 @@ export type VariantConfig =
       idleOpacity: (idx: number, row: number, col: number) => number;
     };
 
-// ── prism bloom (shared between legacy `prism-bloom` and `square-14`) ──────
-
 const PRISM_BLOOM_FRAMES = [
   "x...x" + ".x.x." + "..o.." + ".x.x." + "x...x",
   "..x.." + ".oxo." + "xooox" + ".oxo." + "..x..",
@@ -430,11 +405,8 @@ function prismBloomConfig(): VariantConfig {
   };
 }
 
-// ── registry ────────────────────────────────────────────────────────────────
-
 export const DOTMATRIX_VARIANTS: Record<DotmatrixVariant, VariantConfig> = {
   // Legacy: ripple — center-out radial pulse via manhattan distance.
-  // CSS rule lives in `dotmatrix-loader.css` keyed on `.dotmatrix--ripple`.
   ripple: {
     kind: "css",
     resolve: (_idx, row, col) => ({
@@ -458,10 +430,8 @@ export const DOTMATRIX_VARIANTS: Record<DotmatrixVariant, VariantConfig> = {
     }),
   },
 
-  // Legacy: prism-bloom — palindrome kaleidoscope. Same frame data and
-  // timing as `square-14` (upstream's "Prism Bloom"); shared with that
-  // variant since the dotm-square-14 walkthrough-chapter implementation
-  // is historically how this variant was authored.
+  // Legacy: prism-bloom — palindrome kaleidoscope, the same config as
+  // `square-14` (upstream's "Prism Bloom").
   "prism-bloom": prismBloomConfig(),
 
   // Neon Drift — diagonal alternating sweep, top-right → bottom-left.
@@ -593,7 +563,7 @@ export const DOTMATRIX_VARIANTS: Record<DotmatrixVariant, VariantConfig> = {
     resolve: (_idx, row, col) => {
       // Middle "gap" column (col 2) inside the 3-row braille band
       if (row >= 1 && row <= 3 && col === 2) {
-        return { inactive: true }; // GAP cells render as inactive
+        return { inactive: true };
       }
       const bit = square9BitForCell(row, col);
       if (bit === null) return { inactive: true };
@@ -652,9 +622,8 @@ export const DOTMATRIX_VARIANTS: Record<DotmatrixVariant, VariantConfig> = {
     idleOpacity: () => 0.08,
   },
 
-  // Prism Bloom — kaleidoscope palindrome (4 frames, 6-step palindrome).
-  // Same as the legacy `prism-bloom` variant but exposed under the
-  // canonical square-N name. Walkthrough still uses `prism-bloom`.
+  // Prism Bloom — kaleidoscope palindrome (4 frames, 6-step palindrome); the
+  // walkthrough uses it as `prism-bloom`.
   "square-14": prismBloomConfig(),
 
   // Helix Glow — DNA-style helix sweeping rows.

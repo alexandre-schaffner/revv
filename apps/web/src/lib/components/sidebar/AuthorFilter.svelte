@@ -7,16 +7,18 @@ import FilterSectionHeader from "$lib/components/shared/filter-popover/FilterSec
 import FilterStateRow from "$lib/components/shared/filter-popover/FilterStateRow.svelte";
 import * as Popover from "$lib/components/ui/popover";
 import {
-  clearAuthorFilters,
   fetchTeamsForOrg,
-  getAuthorFilterOptions,
-  getRepoOwner,
-  getSelectedAuthorLogins,
   getTeamsFetchStateForOrg,
   getTeamsForOrg,
+} from "$lib/stores/org-teams.svelte";
+import {
+  clearAuthorFilters,
+  getAuthorFilterOptions,
+  getSelectedAuthorLogins,
   setAuthorFilters,
   toggleAuthorFilter,
-} from "$lib/stores/prs.svelte";
+} from "$lib/stores/pr-filters.svelte";
+import { getRepoOwner } from "$lib/stores/repos.svelte";
 
 interface Props {
   repoId?: string;
@@ -72,8 +74,6 @@ const showTeamsSection = $derived(
   owner !== null && (teamsFetchState !== "idle" || teamRows.length > 0),
 );
 
-// Fetch the org's teams when the repo filter mounts. The request is
-// idempotent, so the popover usually opens with the team state already known.
 $effect(() => {
   if (owner) void fetchTeamsForOrg(owner);
 });
@@ -185,8 +185,6 @@ function retryTeams(): void {
 {/if}
 
 <style>
-	/* Compact icon button living inline to the right of the search input —
-	   matches the input's 28px height and pill shape. */
 	:global(.filter-trigger) {
 		display: inline-flex;
 		align-items: center;
@@ -209,7 +207,6 @@ function retryTeams(): void {
 		background: var(--color-bg-tertiary);
 	}
 
-	/* Active = at least one creator selected. */
 	:global(.filter-trigger--active) {
 		border-color: var(--color-accent);
 		color: var(--color-accent);

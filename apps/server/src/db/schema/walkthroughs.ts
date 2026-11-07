@@ -1,5 +1,8 @@
 import {
+  type AcpAgentId,
   REVIEW_MODE,
+  type ThinkingEffort,
+  type WalkthroughEndReason,
   type WalkthroughMode,
   type WalkthroughStackSnapshot,
   type WalkthroughStatus,
@@ -13,9 +16,33 @@ import {
   text,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
-import type { DiffFingerprint } from "../../services/stacks/fingerprint";
 import { pullRequests } from "./pull-requests";
 import { reviewSessions } from "./review-sessions";
+
+/** Per-file hash of a PR diff, keyed by filename. */
+export type DiffFingerprint = Readonly<Record<string, string>>;
+
+/**
+ * What a run of this row launches with, recorded before its first run so
+ * every run of it (auto-continuations, resume-on-boot) launches the same
+ * way. Null until then: on a row a snapshot import completed, and on rows
+ * created before plans were recorded.
+ */
+export interface WalkthroughLaunchPlan {
+  readonly agent: AcpAgentId;
+  readonly model: string;
+  readonly thinkingEffort: ThinkingEffort | null;
+  /** The job-start judgment's sizing, kept so a re-resolved launch (Resume after an error) still applies it. */
+  readonly sizing: {
+    readonly model?: string | undefined;
+    readonly thinkingEffort?: ThinkingEffort | undefined;
+  } | null;
+  readonly filePriorities: ReadonlyArray<{
+    readonly filename: string;
+    readonly tier: number | null;
+  }> | null;
+  readonly splitRecommendation: { readonly pieces: number } | null;
+}
 
 /**
  * A generated AI walkthrough of a PR, pinned to a specific head SHA.
@@ -25,10 +52,11 @@ import { reviewSessions } from "./review-sessions";
  * "Agent Subsystem Invariants" in the root CLAUDE.md for the full doctrine.
  *
  * Immutability: a walkthrough is pinned to one `pr_head_sha`. A new commit on
- * the PR never mutates an existing row — the old row is marked `'superseded'`
- * with `superseded_by` pointing at the replacement, and a fresh row is
- * inserted. This preserves audit trail and guarantees clients see a
- * consistent view even mid-regeneration.
+ * the PR never mutates an existing row: the old row is marked `'superseded'`
+ * and a fresh row is inserted (CLAUDE.md invariant 7). `superseded_by` names
+ * the replacement only when the replacement is created in the same step (a
+ * new row at the same key); a head move retires rows before any replacement
+ * exists, so it stays NULL there.
  */
 export const walkthroughs = sqliteTable(
   "walkthroughs",
@@ -48,16 +76,16 @@ export const walkthroughs = sqliteTable(
      */
     summary: text("summary").notNull().default(""),
     /**
-     * Generation contract for this row. `reviewer` is the existing behavior:
-     * a third-party PR review with commit journey and reviewer-facing scorecard.
-     * `author` is a self-review/preflight pass for the PR author.
+     * Generation contract for this row. `reviewer`: a third-party PR review with
+     * commit journey and reviewer-facing scorecard. `author`: a
+     * self-review/preflight pass for the PR author.
      */
     mode: text("mode").$type<WalkthroughMode>().notNull().default(REVIEW_MODE.reviewer),
     /**
-     * `'low' | 'medium' | 'high'`. Written by the orchestrator at job start
-     * from the Jev risk pass (invariant 2's carve-out), passed to
-     * `createPartial` so no `kill -9` gap exists before the row has a tier.
-     * Falls back to `'low'` when Jev is off or unreachable.
+     * `'low' | 'medium' | 'high'`. Written by the orchestrator from the Jev
+     * risk pass (invariant 2's carve-out), with the launch plan, before the
+     * row's first run. Falls back to `'low'` when Jev is off or unreachable,
+     * and the agent sets it in Phase A.
      */
     riskLevel: text("risk_level").notNull().default("low"),
     /** Calibrated confidence [0,1] behind {@link riskLevel}; null when the tier didn't come from Jev. */
@@ -68,8 +96,7 @@ export const walkthroughs = sqliteTable(
      */
     sentiment: text("sentiment"),
     /**
-     * Job lifecycle status — owned exclusively by `WalkthroughJobs.setStatus`.
-     * Agents never write this field directly.
+     * Orchestrator-only (`WalkthroughJobs`, invariant 11); agents never write it.
      *   `generating` — job running or resumable
      *   `complete`   — `complete_walkthrough` validation passed
      *   `error`      — terminal failure (exceeded retries / unrecoverable)
@@ -88,8 +115,9 @@ export const walkthroughs = sqliteTable(
      */
     lastCompletedPhase: text("last_completed_phase").notNull().default("none"),
     /**
-     * Self-FK set when `status='superseded'`: points at the walkthrough row
-     * that replaces this one (always same PR, newer head SHA).
+     * The row that replaced this one, set only for a do-over at the same head.
+     * NULL after a head move or a Regenerate, which retire the row before any
+     * replacement exists.
      */
     supersededBy: text("superseded_by").references((): AnySQLiteColumn => walkthroughs.id, {
       onDelete: "set null",
@@ -111,31 +139,26 @@ export const walkthroughs = sqliteTable(
      */
     baseHeadSha: text("base_head_sha"),
     /**
-     * `full` is the original from-scratch pipeline. `incremental` produces
-     * the same visible report shape, seeded by `parentWalkthroughId` and the
+     * `full` generates from scratch. `incremental` produces the same visible
+     * report shape, seeded by `parentWalkthroughId` and the
      * `baseHeadSha..prHeadSha` commit range.
      */
     generationMode: text("generation_mode").notNull().default("full"),
     generatedAt: text("generated_at").notNull(),
     /**
-     * ISO 8601 timestamp set when {@link WalkthroughJobs.setStatus} transitions
-     * this row to `status='complete'`. Distinct from `generatedAt` (which is
-     * the job-start timestamp): the recap pipeline windows on *finish* time so
-     * a walkthrough that started in period N but finished in period N+1 lands
-     * in N+1's recap, not N's. Nullable for rows that haven't completed yet.
-     *
-     * Backfill on migration 0220: existing `status='complete'` rows get
-     * `completedAt = generatedAt` so historical walkthroughs are visible to
-     * the first recap run.
+     * ISO 8601 timestamp set when the row reaches `status='complete'`. Distinct
+     * from `generatedAt` (the job-start timestamp): the recap pipeline windows on
+     * *finish* time so a walkthrough that started in period N but finished in
+     * period N+1 lands in N+1's recap, not N's.
      */
     completedAt: text("completed_at"),
     modelUsed: text("model_used").notNull(),
     tokenUsage: text("token_usage").notNull().default("{}"),
     prHeadSha: text("pr_head_sha").notNull(),
     opencodeSessionId: text("opencode_session_id"),
-    // Incremented each time WalkthroughJobs.resumePending() picks this row back up
-    // after a server restart. Capped at WALKTHROUGH_MAX_RESUME_ATTEMPTS before the
-    // row is marked `error` and left alone.
+    // Counted each time a resume picks this row back up after its run died.
+    // Past MAX_RESUME_ATTEMPTS (services/jobs/agent-jobs.ts) the row is marked
+    // `error` and left alone.
     resumeAttempts: integer("resume_attempts").notNull().default(0),
     /**
      * ISO 8601 timestamp of the most recent post-completion edit. Null until
@@ -145,8 +168,9 @@ export const walkthroughs = sqliteTable(
      */
     lastEditedAt: text("last_edited_at"),
     /**
-     * Actor that performed the most recent post-completion edit — currently
-     * `'chat:acp'` or `'claude-code'`. Pairs with `lastEditedAt`.
+     * Actor that performed the most recent post-completion edit: `'chat:acp'`,
+     * or an external coding agent's provider id (`'claude-code'`, `'codex'`, …).
+     * Pairs with `lastEditedAt`.
      */
     lastEditedBy: text("last_edited_by"),
     /**
@@ -160,32 +184,27 @@ export const walkthroughs = sqliteTable(
      * PR commit list (JSON of `PrCommit[]`) captured from GitHub at job
      * start. Surfaced to the agent on demand via the `get_commit_history`
      * MCP read tool — never inlined in the prompt, since long PRs would
-     * otherwise pay ~4.5K tokens up front on every run + resume.
-     *
-     * Nullable: rows created before migration 0210 read as `null`, which
-     * the read tool surfaces as an empty array — the agent's single-commit
-     * edge-case path then renders a one-paragraph journey chapter and
-     * moves on.
+     * otherwise pay ~4.5K tokens up front on every run + resume. Null on old
+     * rows, which the read tool surfaces as an empty array.
      */
     prCommits: text("pr_commits"),
     /**
-     * Numeric GitHub user id of the account that triggered this generation
-     * job. Sourced from the better-auth `account.accountId` row that owns
-     * the repo being reviewed (resolved in {@link WalkthroughJobs.startJob}).
-     * Travels with the snapshot when the row is exported to the remote
-     * cache so teammates can attribute who originally generated it.
-     * Nullable for rows created before migration 0070.
+     * Numeric GitHub user id of the account that triggered this generation job.
+     * Travels with the snapshot to the remote cache so teammates can attribute
+     * who originally generated it. Null on old rows.
      */
     generatedByGithubUserId: integer("generated_by_github_user_id"),
-    /** GitHub login of the generating account, e.g. `"alice"`. */
     generatedByGithubLogin: text("generated_by_github_login"),
-    /** Optional GitHub display name. */
     generatedByDisplayName: text("generated_by_display_name"),
-    /** GitHub avatar URL — used for the "Generated by …" badge. */
-    generatedByAvatarUrl: text("generated_by_avatar_url"),
+    /**
+     * Avatar image bytes as a data URL, for the "Generated by …" badge. The
+     * column name predates the switch from URLs: GitHub Enterprise avatar
+     * URLs are signed and expire.
+     */
+    generatedByAvatarContent: text("generated_by_avatar_url"),
     /**
      * Snapshot of the agent provider config captured at job start, as JSON
-     * (`GenerationProviderConfig` from `@revv/shared`). Lets the cache hit
+     * (`GenerationProviderConfig` in `services/walkthrough/cache-format.ts`). Lets the cache hit
      * UI render "claude-opus-4-8 • thinking: high • 1m context" without
      * relying on the live settings (which may have changed since job
      * start). Captured atomically alongside `modelUsed` and never mutated.
@@ -209,14 +228,14 @@ export const walkthroughs = sqliteTable(
     stackContext: text("stack_context", { mode: "json" }).$type<WalkthroughStackSnapshot>(),
     diffFingerprint: text("diff_fingerprint", { mode: "json" }).$type<DiffFingerprint>(),
     carriedFromWalkthroughId: text("carried_from_walkthrough_id"),
+    endReason: text("end_reason").$type<WalkthroughEndReason>(),
+    launchPlan: text("launch_plan", { mode: "json" }).$type<WalkthroughLaunchPlan>(),
   },
   (t) => ({
     /**
-     * Enforces the doctrine invariant "one walkthrough per (PR, head_sha, mode)" at the
-     * database level. Makes `WalkthroughJobs.startJob` naturally idempotent:
-     * concurrent starts upsert onto the same row instead of spawning duplicates.
-     * Superseded rows share the PR but differ on head_sha, so this uniqueness
-     * doesn't block new-commit flows.
+     * One live (non-superseded) walkthrough per (PR, head SHA, mode, generation
+     * mode). `createRow` supersedes the row at its key in the transaction that
+     * inserts the new one.
      */
     activePrHeadShaUnique: uniqueIndex("walkthroughs_active_pr_head_sha_unique")
       .on(t.pullRequestId, t.prHeadSha, t.mode, t.generationMode)

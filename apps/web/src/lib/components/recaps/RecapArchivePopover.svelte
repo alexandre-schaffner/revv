@@ -3,19 +3,13 @@ import type { ProjectRecapSummary, RecapPeriod } from "@revv/shared";
 import CalendarDots from "phosphor-svelte/lib/CalendarDots";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import * as Popover from "$lib/components/ui/popover";
+import { RECAP_PERIOD_COPY } from "$lib/recaps/copy";
 import RecapCalendar from "./RecapCalendar.svelte";
 
 /**
- * The archive, as a popover hung off the top of the page.
- *
- * It used to be a section pinned below the recap body, which meant browsing to
- * another day cost a full scroll past however many chapters the agent wrote —
- * and on a long recap that is thousands of pixels. Up here it is one click from
- * the date it belongs to, and the page below stays purely the recap.
- *
- * Rendered through `Popover.Portal` deliberately: the recap route nests a
+ * Rendered through `Popover.Portal`: the recap route nests an
  * `overflow: hidden` wrapper around an `overflow-y: auto` scroller, so an
- * absolutely-positioned panel would be clipped by both.
+ * absolutely positioned panel would be clipped by both.
  */
 interface Props {
   repoId: string;
@@ -38,16 +32,13 @@ let {
 
 let open = $state(false);
 
-// Just "Archive": the trigger sits inches from a "DAILY RECAP" eyebrow and the
-// date itself, so repeating the period here is noise, and the popover's own
-// heading was a third copy of the same word.
+// Just "Archive": the trigger sits beside a "DAILY RECAP" eyebrow and the date
+// itself, so repeating the period here is noise.
 const triggerLabel = $derived(label ?? "Archive");
-const unit = $derived(period === "daily" ? "day" : "week");
+const unit = $derived(RECAP_PERIOD_COPY[period].unit);
 
-// Any hand-off out of the calendar — opening another recap, kicking off a
-// generation — leaves this popover pointing at a page that is no longer
-// underneath it. Close on the way out rather than leaving it hanging over the
-// new view.
+// A hand-off out of the calendar (another recap, a generation) leaves this
+// popover hanging over a page that is no longer underneath it.
 function close(): void {
   open = false;
 }

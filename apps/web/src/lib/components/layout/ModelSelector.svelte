@@ -1,5 +1,5 @@
 <script lang="ts">
-import { AUTO_SENTINEL, getAgentCapabilities } from "@revv/shared";
+import { AUTO_SENTINEL, getAcpAgentDefaultModel, getAgentCapabilities } from "@revv/shared";
 import Check from "phosphor-svelte/lib/Check";
 import Sparkle from "phosphor-svelte/lib/Sparkle";
 import { SvelteMap } from "svelte/reactivity";
@@ -9,31 +9,28 @@ import {
   Root as PopoverRoot,
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
-import { getDefaultModel, type ModelOption } from "$lib/constants/models";
+import { getSelectedPrId } from "$lib/stores/route.svelte";
 import {
   areModelsLoaded,
   fetchModels,
   getReviewModelOptions,
   getSettings,
   isAutoModelOffered,
-  resolveChatAgentId,
+  type ModelOption,
   updateSettings,
 } from "$lib/stores/settings.svelte";
-import { getIsStreaming, getWalkthroughModelUsed } from "$lib/stores/walkthrough.svelte";
-import { sizingForSelectedPr } from "$lib/stores/walkthrough-sizing.svelte";
+import { ensurePrSizing, getPrSizing } from "$lib/walkthrough/sizing.svelte";
+import { getIsStreaming, getWalkthroughModelUsed } from "$lib/walkthrough/store.svelte";
 import SelectTrigger from "./SelectTrigger.svelte";
 
 let open = $state(false);
 
-// The model surface follows `aiAgent`; capabilities are the registry's single source of truth.
-let currentId = $derived(resolveChatAgentId(getSettings()));
+let currentId = $derived(getSettings().aiAgent);
 let caps = $derived(getAgentCapabilities(currentId));
-// opencode is the only agent whose catalog is fetched live; everything else
-// uses the curated static list baked into the registry.
 let isDynamic = $derived(caps.models === "dynamic");
 let fetchedModels = $derived<ModelOption[]>(getReviewModelOptions(currentId));
-let fetchDone = $derived(caps.models === "dynamic" ? areModelsLoaded("opencode") : true);
-let currentModel = $derived(getSettings()?.aiModel ?? "");
+let fetchDone = $derived(isDynamic ? areModelsLoaded(currentId) : true);
+let currentModel = $derived(getSettings().aiModel);
 let autoModelOffered = $derived(isAutoModelOffered(currentId));
 let isAuto = $derived(currentModel === AUTO_SENTINEL);
 
@@ -42,7 +39,10 @@ function labelFor(value: string | null): string | null {
   return fetchedModels.find((m) => m.value === value)?.label ?? value;
 }
 
-const selectedSizing = sizingForSelectedPr(() => isAuto && autoModelOffered);
+const selectedSizing = $derived(getPrSizing(getSelectedPrId(), isAuto && autoModelOffered));
+$effect(() => {
+  if (isAuto && autoModelOffered) ensurePrSizing(getSelectedPrId());
+});
 let sizing = $derived(selectedSizing.sizing);
 
 /**
@@ -56,12 +56,13 @@ let sizing = $derived(selectedSizing.sizing);
  */
 let autoResolvedLabel = $derived.by((): string | null => {
   if (!isAuto) return null;
-  if (getIsStreaming()) {
-    const running = labelFor(getWalkthroughModelUsed());
+  const prId = getSelectedPrId();
+  if (prId && getIsStreaming(prId)) {
+    const running = labelFor(getWalkthroughModelUsed(prId));
     if (running) return running;
   }
   if (sizing?.status !== "ready") return null;
-  return labelFor(sizing.model) ?? labelFor(getDefaultModel(currentId));
+  return labelFor(sizing.model) ?? labelFor(getAcpAgentDefaultModel(currentId));
 });
 
 /** Whether a sizing is actually outstanding; bare "Auto" when there's no PR to size. */
@@ -90,12 +91,9 @@ let currentLabel = $derived(
           (currentModel || "Select model")),
 );
 
-// Cache-miss fallback for opencode's dynamic catalog: if the bootstrap prefetch
-// hasn't populated it yet, kick off a single (de-duped) fetch.
+// The boot prefetch may not have landed yet; asks are de-duped.
 $effect(() => {
-  if (caps.models === "dynamic" && !areModelsLoaded("opencode")) {
-    void fetchModels("opencode");
-  }
+  if (isDynamic && !areModelsLoaded(currentId)) void fetchModels(currentId);
 });
 
 function getProvider(value: string): string | null {

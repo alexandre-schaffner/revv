@@ -4,19 +4,20 @@ import X from "phosphor-svelte/lib/X";
 import { untrack } from "svelte";
 import { getFileSearchQuery, setFileSearchQuery } from "$lib/stores/sidebar.svelte";
 
-// Mirror SearchFilter.svelte's input UX: 300ms debounce so we don't thrash
-// the tree's setSearch on every keystroke.
+interface Props {
+  /** Enter / ArrowDown: the query is applied; move on to the results. */
+  onSubmit: (query: string) => void;
+}
+
+let { onSubmit }: Props = $props();
+
 let inputEl: HTMLInputElement;
 let inputValue = $state(getFileSearchQuery());
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-// Sync inputValue from the store when the store changes externally.
-// The store is cleared on swipe-back (`setSidebarView('prs')`), PR
-// switches, and scope toggles. The pane stays mounted across those, so
-// without this sync the input would visually retain stale text and the
-// pending debounce would re-apply the stale query 300ms later.
-// `untrack` on the inputValue read keeps local typing from re-triggering
-// this effect — only real store changes do.
+// The store is cleared on swipe-back, PR switches and scope toggles while this
+// pane stays mounted; without this the input would keep the stale text and the
+// pending debounce would re-apply it.
 $effect(() => {
   const storeValue = getFileSearchQuery();
   untrack(() => {
@@ -47,43 +48,18 @@ function flushSearch(): void {
   setFileSearchQuery(inputValue);
 }
 
-// Walk the @pierre/trees shadow root for the first row whose item-type
-// is a file. Search-mode hides non-matches but keeps ancestor dirs
-// visible — skipping dirs lands us on the first actual matching file
-// instead of an unrelated parent folder.
-function findFirstFileRow(): HTMLElement | null {
-  const treeHost = document.querySelector<HTMLElement>(".view-pane--files .pierre-tree-host");
-  if (!treeHost) return null;
-  for (const child of Array.from(treeHost.children)) {
-    const sr = (child as HTMLElement).shadowRoot;
-    if (!sr) continue;
-    const rows = sr.querySelectorAll<HTMLElement>('[data-type="item"]');
-    for (const row of rows) {
-      if (row.getAttribute("data-item-type") === "file") return row;
-    }
-  }
-  return null;
-}
-
-// Enter / ArrowDown highlight the first matching file as if the user
-// were hovering it — DOM focus is the @pierre/trees library's
-// selected-row cue, so .focus() doubles as the hover-style visual.
-// We deliberately don't .click(): click would fire onSelectionChange,
-// which routes through SidebarFilesView.handleSelect and opens the
-// file. This stays purely visual; a follow-up Enter on the now-focused
-// row (handled by the library's row keydown) is what activates.
-// One rAF lets the flushed setFileSearchQuery reach the tree's
-// $effect → controller.setSearch → virtual re-render before we walk
-// the shadow DOM.
 function handleKeydown(e: KeyboardEvent): void {
   if (e.key !== "Enter" && e.key !== "ArrowDown") return;
   e.preventDefault();
   flushSearch();
   inputEl?.blur();
-  requestAnimationFrame(() => {
-    const row = findFirstFileRow();
-    row?.focus();
-  });
+  onSubmit(inputValue);
+}
+
+/** Focus the field and select its text (the sidebar's `/` shortcut). */
+export function focus(): void {
+  inputEl?.focus();
+  inputEl?.select();
 }
 
 function handleClear() {

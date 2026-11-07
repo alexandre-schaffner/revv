@@ -5,10 +5,14 @@ import Plus from "phosphor-svelte/lib/Plus";
 import User from "phosphor-svelte/lib/User";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 import RepoAvatarButton from "$lib/components/sidebar/RepoAvatarButton.svelte";
 import * as Collapsible from "$lib/components/ui/collapsible";
 import * as Tooltip from "$lib/components/ui/tooltip/index.js";
-import { getRepositories, getSelectedRepoId } from "$lib/stores/prs.svelte";
+import { bitsAnim, collapsibleClose, collapsibleOpen } from "$lib/motion";
+import { groupByOwner } from "$lib/repos/add-repo";
+import { getRepositories } from "$lib/stores/repos.svelte";
+import { getSelectedRepoId } from "$lib/stores/route.svelte";
 import {
   isOwnerCollapsed,
   setAddRepoDialogOpen,
@@ -30,26 +34,18 @@ async function handleHome(): Promise<void> {
   await goto("/");
 }
 
-// Group repos by owner (case-insensitive). First-seen owner / first-seen
-// repo order preserves whatever the server returned so grouping doesn't
-// reshuffle the rail on every render. `avatarUrl` is the GitHub owner
-// avatar lifted from the first non-null repo in the group.
-const ownerGroups = $derived.by((): OwnerGroup[] => {
-  const groups = new Map<string, OwnerGroup>();
-  for (const repo of repos) {
-    const key = repo.owner.toLowerCase();
-    const existing = groups.get(key);
-    if (existing) {
-      existing.repos.push(repo);
-      if (existing.avatarUrl === null && repo.avatarUrl !== null) {
-        existing.avatarUrl = repo.avatarUrl;
-      }
-    } else {
-      groups.set(key, { owner: repo.owner, avatarUrl: repo.avatarUrl, repos: [repo] });
-    }
-  }
-  return [...groups.values()];
-});
+// Server order is kept, so grouping doesn't reshuffle the rail on every
+// render. `avatarUrl` is the owner's avatar from the group's first repo that
+// has one.
+const ownerGroups = $derived(
+  [...groupByOwner(repos)].map(
+    ([owner, grouped]): OwnerGroup => ({
+      owner,
+      avatarUrl: grouped.find((repo) => repo.avatarUrl !== null)?.avatarUrl ?? null,
+      repos: grouped,
+    }),
+  ),
+);
 
 function handleAddRepo(): void {
   setAddRepoDialogOpen(true);
@@ -81,10 +77,8 @@ function handleAddRepo(): void {
 			{@const collapsed = isOwnerCollapsed(group.owner)}
 			{@const hasActiveChild = group.repos.some((r) => r.id === activeRepoId)}
 			{@const isMulti = group.repos.length > 1}
-			<!-- Collapsible drives ARIA (aria-expanded/controls), keyboard,
-			     and the data-state attributes that power the open/close
-			     height animation below. We control `open` via our own
-			     persisted store so the collapsed state survives reloads. -->
+			<!-- `open` comes from a persisted store so the collapsed state
+			     survives reloads. -->
 			<Collapsible.Root
 				open={!collapsed}
 				onOpenChange={() => toggleOwnerCollapsed(group.owner)}
@@ -108,18 +102,13 @@ function handleAddRepo(): void {
 								>
 									{#if collapsed}
 										<span class="folder-pill-header">
-											{#if group.avatarUrl}
-												<img
-													src={group.avatarUrl}
-													alt=""
-													class="folder-pill-avatar"
-													referrerpolicy="no-referrer"
-												/>
-										{:else}
-											<span class="folder-pill-avatar folder-pill-avatar--fallback" aria-hidden="true">
-												<User size={14} />
-											</span>
-										{/if}
+											<Avatar src={group.avatarUrl} size={28} radius="8px">
+												{#snippet fallback()}
+													<span class="folder-pill-avatar folder-pill-avatar--fallback" aria-hidden="true">
+														<User size={14} />
+													</span>
+												{/snippet}
+											</Avatar>
 											{#if isMulti}
 												<span class="folder-pill-count" aria-hidden="true">
 													{group.repos.length}
@@ -127,18 +116,13 @@ function handleAddRepo(): void {
 											{/if}
 										</span>
 									{:else}
-										{#if group.avatarUrl}
-											<img
-												src={group.avatarUrl}
-												alt=""
-												class="folder-pill-avatar"
-												referrerpolicy="no-referrer"
-											/>
-										{:else}
-											<span class="folder-pill-fallback" aria-hidden="true">
-												<User size={14} />
-											</span>
-										{/if}
+										<Avatar src={group.avatarUrl} size={28} radius="8px">
+											{#snippet fallback()}
+												<span class="folder-pill-fallback" aria-hidden="true">
+													<User size={14} />
+												</span>
+											{/snippet}
+										</Avatar>
 									{/if}
 								</Collapsible.Trigger>
 							{/snippet}
@@ -148,15 +132,24 @@ function handleAddRepo(): void {
 						</Tooltip.Content>
 					</Tooltip.Root>
 
-					<Collapsible.Content class="folder-pill-content">
-						<div class="folder-pill-content-inner">
-							{#each group.repos as repo (repo.id)}
-								<RepoAvatarButton
-									repository={repo}
-									isActive={repo.id === activeRepoId}
-								/>
-							{/each}
-						</div>
+					<Collapsible.Content>
+						{#snippet child({ props })}
+							<div
+								{...props}
+								class="folder-pill-content"
+								use:bitsAnim={{
+									inPreset: collapsibleOpen,
+									outPreset: collapsibleClose,
+									settleOnMount: true,
+								}}
+							>
+								<div class="folder-pill-content-inner">
+									{#each group.repos as repo (repo.id)}
+										<RepoAvatarButton repository={repo} isActive={repo.id === activeRepoId} />
+									{/each}
+								</div>
+							</div>
+						{/snippet}
 					</Collapsible.Content>
 				</div>
 			</Collapsible.Root>
@@ -177,9 +170,6 @@ function handleAddRepo(): void {
 		</Tooltip.Root>
 	</div>
 
-	<!-- Bottom-edge fade: mirrors .sidebar-fade so the rail's scrollable
-	     avatar column dissolves into the userbar's bg-secondary, keeping
-	     the bottom chrome strip seamless even when the rail overflows. -->
 	<div class="rail-fade" aria-hidden="true"></div>
 </aside>
 
@@ -230,16 +220,8 @@ function handleAddRepo(): void {
 		border-radius: 2px;
 	}
 
-	/* The folder pill: a single container holding the trigger header
-	   above the (animated) Collapsible.Content. Width / radius stay
-	   constant in both states — only the Content's height and the
-	   pill's background animate. Default is transparent so a single
-	   avatar simply floats on the rail; the bg-tertiary panel only
-	   shows when the pill is doing real grouping work (expanded,
-	   multi-repo). Radii are tuned on a concentric scale:
-	     avatar 8 → trigger 10 → grouped panel 12
-	   so the three rounded shapes stay visually in sync at every
-	   nesting level. */
+	/* Transparent by default so a single avatar floats on the rail. Radii
+	   are concentric: avatar 8 → trigger 10 → grouped panel 12. */
 	.folder-pill {
 		position: relative;
 		display: flex;
@@ -253,19 +235,12 @@ function handleAddRepo(): void {
 			box-shadow var(--duration-quick) var(--ease-out-expo);
 	}
 
-	/* Expanded group framing — applied uniformly whether the group
-	   wraps one repo or many, so single-owner and multi-owner pills
-	   read as the same visual primitive. The soft bg-tertiary fill +
-	   1 px inset hairline reads as a carved compartment, not a
-	   stamped card. Collapsed groups skip this entirely. */
 	.folder-pill--grouped {
 		background: var(--color-bg-tertiary);
 		box-shadow: inset 0 0 0 1px var(--color-border-subtle);
 	}
 
-	/* Active-bar indicator when the selected repo lives inside a
-	   collapsed folder. Hides when expanded — at that point each child's
-	   own indicator does the job. */
+	/* Hidden when expanded: each child's own indicator takes over. */
 	.folder-pill--active::before {
 		content: '';
 		position: absolute;
@@ -277,12 +252,6 @@ function handleAddRepo(): void {
 		background: var(--color-accent, var(--color-text-primary));
 	}
 
-	/* Trigger button (rendered by Collapsible.Trigger). Sized identically
-	   in both states so the gradient avatar (with or without the count chip)
-	   doesn't cause the pill above it to jump. Only background-color
-	   transitions on hover; nothing about the trigger itself animates
-	   during open/close. Radius 10 pairs concentrically with the 8 px
-	   avatar inside and the 12 px grouped panel that may wrap it. */
 	:global(.folder-pill-trigger) {
 		display: inline-flex;
 		align-items: center;
@@ -307,7 +276,6 @@ function handleAddRepo(): void {
 		outline-offset: -2px;
 	}
 
-	/* Collapsed-trigger inner: 28×28 avatar with the count chip. */
 	.folder-pill-header {
 		position: relative;
 		display: inline-flex;
@@ -323,8 +291,6 @@ function handleAddRepo(): void {
 		width: 28px;
 		height: 28px;
 		border-radius: 8px;
-		object-fit: cover;
-		display: block;
 	}
 
 	.folder-pill-fallback {
@@ -345,13 +311,6 @@ function handleAddRepo(): void {
 		background: var(--color-bg-secondary);
 	}
 
-	/* Count chip — a raised badge that sits on the avatar's bottom-right
-	   corner, signaling "N repos hide behind this owner." A 2 px ring
-	   in the rail bg colour gives the chip its own perimeter, then a
-	   1 px hairline + subtle shadow lifts it off the gradient avatar
-	   without competing for attention. Flexbox centering avoids the
-	   line-height-vs-height baseline drift that pushed the glyph
-	   off-center inside the box. */
 	.folder-pill-count {
 		position: absolute;
 		right: -5px;
@@ -374,13 +333,9 @@ function handleAddRepo(): void {
 		line-height: 1;
 	}
 
-	/* When the active repo lives inside this collapsed folder, hint at
-	   it by tinting the chip toward the accent. Keeps the rail's
-	   "where am I?" answer scannable without resorting to colour-on
-	   every pill. Foreground uses --primary-foreground, the app's
-	   on-accent ink: white on light's deep teal, near-black on dark's
-	   luminous one. It is NOT white in both themes — the accent inverts
-	   with the theme, so a fixed white would read 2.4:1 in dark. */
+	/* --primary-foreground is the on-accent ink: white on light's deep teal,
+	   near-black on dark's luminous one. A fixed white would read 2.4:1 in
+	   dark. */
 	.folder-pill--active .folder-pill-count {
 		background: var(--color-accent);
 		color: var(--color-primary-foreground);
@@ -389,40 +344,9 @@ function handleAddRepo(): void {
 			0 1px 2px rgba(15, 118, 110, 0.18);
 	}
 
-	/* Collapsible.Content animation. bits-ui injects the natural content
-	   height into `--bits-collapsible-content-height` once mounted, which
-	   lets the keyframes interpolate between 0 and the real height for
-	   both directions. `overflow: hidden` clips the children during the
-	   animation. Reduced-motion is handled globally in app.css. */
-	:global(.folder-pill-content) {
+	.folder-pill-content {
 		overflow: hidden;
 		width: 100%;
-	}
-
-	:global(.folder-pill-content[data-state='open']) {
-		animation: folder-pill-content-down var(--duration-quick) var(--ease-out-expo);
-	}
-
-	:global(.folder-pill-content[data-state='closed']) {
-		animation: folder-pill-content-up var(--duration-quick) var(--ease-out-expo);
-	}
-
-	@keyframes folder-pill-content-down {
-		from {
-			height: 0;
-		}
-		to {
-			height: var(--bits-collapsible-content-height);
-		}
-	}
-
-	@keyframes folder-pill-content-up {
-		from {
-			height: var(--bits-collapsible-content-height);
-		}
-		to {
-			height: 0;
-		}
 	}
 
 	/* Vertical padding sits on the inner content (not the pill) so the
@@ -436,13 +360,9 @@ function handleAddRepo(): void {
 		padding: var(--spacing-island-half) 0;
 	}
 
-	/* In-pill active ring: the default RepoAvatarButton ring is a
-	   2 px bg-secondary "gap" + 3.5 px accent, tuned for the rail's
-	   bg-secondary background. Inside the pill (bg-tertiary) the
-	   bg-secondary stripe reads as a darker frame asymmetric against
-	   the lighter pill bg — the avatar looks off-center inside the
-	   ring. A single solid accent ring sits flush against the avatar,
-	   so the centering reads cleanly. */
+	/* The default ring's bg-secondary gap reads as an off-center dark frame
+	   on the pill's bg-tertiary, so inside the pill it's one solid accent
+	   ring flush against the avatar. */
 	:global(.folder-pill-content .repo-button--active .avatar) {
 		box-shadow: 0 0 0 2px var(--color-accent, var(--color-text-primary));
 	}

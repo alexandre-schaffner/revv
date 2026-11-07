@@ -1,12 +1,3 @@
-/**
- * Svelte 5 use-directives.
- *
- *   <button use:gsapPress>           — press-down scale feedback
- *   <div use:bitsAnim={{ inPreset }}> — drives a bits-ui content surface from
- *                                       its data-state attribute
- *   <div use:heroMorph>              — scroll-driven big-hero → sidebar-hero
- *                                       crossfade for the recap detail layout
- */
 import type { Action } from "svelte/action";
 
 import { gsap } from "./gsap";
@@ -14,11 +5,8 @@ import type { PresetFn } from "./presets";
 import { prefersReducedMotion } from "./reduced-motion";
 import { tokens } from "./tokens";
 
-/* ───────────────────────── gsapPress ───────────────────────── */
-
 interface GsapPressParams {
   scale?: number;
-  /** Skip the press effect (e.g., when the button is :disabled). */
   disabled?: boolean;
 }
 
@@ -132,23 +120,6 @@ export const gsapHover: Action<HTMLElement, GsapHoverParams> = (node, params) =>
   };
 };
 
-/* ───────────────────────── bitsAnim ───────────────────────── */
-
-/**
- * Plays `inPreset` when the host element's `data-state` becomes "open" and
- * `outPreset` when it becomes "closed".
- *
- * The WAAPI placeholder. bits-ui v2's Presence layer calls
- * `node.getAnimations()` and awaits `animation.finished` to decide when an
- * exit is done and the node can unmount. GSAP runs on rAF and does NOT register
- * with the Web Animations API, so a pure-GSAP exit would race the unmount and
- * the element would vanish without animating. We register a no-op WAAPI
- * animation on a custom property (`--gsap-presence-frame`) for the duration of
- * the exit; bits-ui's `getAnimations()` sees it, and we resolve it from GSAP's
- * onComplete. If bits-ui changes its presence detection
- * (https://github.com/huntabyte/bits-ui — `src/lib/bits/utilities/presence`),
- * this needs to be revisited.
- */
 type Side = "top" | "right" | "bottom" | "left";
 type BitsPreset = PresetFn<{ side?: Side }> | PresetFn<void>;
 
@@ -157,6 +128,8 @@ interface BitsAnimParams {
   outPreset?: BitsPreset;
   /** Read `data-side` and pass it to the preset. */
   directionAware?: boolean;
+  /** Show the state the element mounts in without animating to it. */
+  settleOnMount?: boolean;
 }
 
 const PRESENCE_PROP = "--gsap-presence-frame";
@@ -169,6 +142,18 @@ function presencePlaceholder(node: HTMLElement, durationSec: number): Animation 
   );
 }
 
+/**
+ * The WAAPI placeholder: bits-ui v2's Presence layer calls
+ * `node.getAnimations()` and awaits `animation.finished` to decide when an
+ * exit is done and the node can unmount. GSAP runs on rAF and does NOT register
+ * with the Web Animations API, so a pure-GSAP exit would race the unmount and
+ * the element would vanish without animating. We register a no-op WAAPI
+ * animation on a custom property (`--gsap-presence-frame`) for the duration of
+ * the exit; bits-ui's `getAnimations()` sees it, and we resolve it from GSAP's
+ * onComplete. If bits-ui changes its presence detection
+ * (https://github.com/huntabyte/bits-ui — `src/lib/bits/utilities/presence`),
+ * this needs to be revisited.
+ */
 export const bitsAnim: Action<HTMLElement, BitsAnimParams> = (node, params) => {
   let current = params;
   let active: gsap.core.Timeline | null = null;
@@ -187,7 +172,7 @@ export const bitsAnim: Action<HTMLElement, BitsAnimParams> = (node, params) => {
     placeholder = null;
   };
 
-  const play = (state: string | null) => {
+  const play = (state: string | null, instant = false) => {
     if (!current) return;
     stop();
     const side = readSide();
@@ -200,7 +185,7 @@ export const bitsAnim: Action<HTMLElement, BitsAnimParams> = (node, params) => {
     const preset = isOpen ? current.inPreset : current.outPreset;
     active = (preset as PresetFn<unknown>)(node, opts);
 
-    if (prefersReducedMotion()) {
+    if (instant || prefersReducedMotion()) {
       active.progress(1).pause();
       return;
     }
@@ -211,7 +196,7 @@ export const bitsAnim: Action<HTMLElement, BitsAnimParams> = (node, params) => {
     }
   };
 
-  play(node.getAttribute("data-state"));
+  play(node.getAttribute("data-state"), current?.settleOnMount === true);
 
   const observer = new MutationObserver(() => {
     play(node.getAttribute("data-state"));
@@ -228,8 +213,6 @@ export const bitsAnim: Action<HTMLElement, BitsAnimParams> = (node, params) => {
     },
   };
 };
-
-/* ───────────────────────── heroMorph ───────────────────────── */
 
 interface HeroMorphParams {
   /** Selector for the sidebar element whose `inert` attribute mirrors visibility. */
@@ -258,20 +241,16 @@ function findScrollContainer(el: HTMLElement): HTMLElement | Window {
 
 export const heroMorph: Action<HTMLElement, HeroMorphParams | undefined> = (node, params) => {
   const cfg = { ...HERO_MORPH_DEFAULTS, ...params };
-  // Reduced motion suppresses the *ramp*, not the state: `--shrink` snaps
-  // 0 → 1 at the midpoint instead of tweening. Pinning it to 1 (what this
-  // used to do) leaves the sidebar fully opaque at scroll top, so the header
-  // renders twice. The global reduced-motion block in app.css already
-  // collapses the opacity transition, so there is nothing else to do here.
+  // Reduced motion suppresses the *ramp*, not the state: pinning `--shrink`
+  // to 1 would leave the sidebar opaque at scroll top, rendering the header
+  // twice. The global reduced-motion block in app.css collapses the opacity
+  // transition.
   const snap = prefersReducedMotion();
 
-  // No viewport gate. Whether the sidebar has room is a question about the
-  // AppShell main pane, not the window, and RecapDetail answers it with an
-  // `@container` band that hides the rail outright — at which point `--shrink`
-  // is inert and this listener costs one clamp per scroll event.
+  // No viewport gate: whether the sidebar has room depends on the AppShell
+  // main pane, not the window, and RecapDetail's `@container` band hides the
+  // rail outright when it doesn't.
   const target = findScrollContainer(node);
-  // Cache the sidebar reference; `null` until the recap hydrates, the
-  // fallback inside onScroll picks it up on the next tick.
   let sidebar = node.querySelector<HTMLElement>(cfg.sidebarSelector);
   let lastInert: boolean | null = null;
 
@@ -280,8 +259,7 @@ export const heroMorph: Action<HTMLElement, HeroMorphParams | undefined> = (node
     const ramp = Math.min(1, Math.max(0, (top - cfg.startPx) / cfg.rangePx));
     const next = snap ? (ramp < 0.5 ? 0 : 1) : ramp;
     node.style.setProperty("--shrink", String(next));
-    // Keep the sidebar out of the tab order / a11y tree while it's
-    // visually hidden, so screen readers don't see duplicate hero content.
+    // Screen readers would otherwise see the hero content twice.
     if (!sidebar) sidebar = node.querySelector<HTMLElement>(cfg.sidebarSelector);
     if (sidebar) {
       const shouldInert = next < 0.1;

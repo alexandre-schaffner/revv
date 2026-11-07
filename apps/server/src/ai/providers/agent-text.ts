@@ -1,5 +1,3 @@
-// ── agent-text ───────────────────────────────────────────────────────────────
-//
 // Normalization for agent-authored strings the UI renders as PLAIN TEXT rather
 // than markdown: semantic-step titles, issue titles, issue descriptions.
 //
@@ -13,9 +11,7 @@
 //
 // Normalizing at ingest rather than at render keeps the database holding
 // exactly what the reader is supposed to see, so every consumer (UI, GitHub
-// submission, chat context) gets the same string. Both MCP write paths call
-// through here, which is what keeps them byte-for-byte identical (CLAUDE.md
-// invariants #2 and #13).
+// submission, chat context) gets the same string.
 //
 // Deliberately NOT applied to markdown, code, diff or artifact content: those
 // legitimately contain entities and must be stored verbatim.
@@ -35,8 +31,6 @@ const NAMED_ENTITIES: Readonly<Record<string, string>> = {
 const ENTITY_RE = /&(?:#(\d{1,7})|#[xX]([0-9a-fA-F]{1,6})|([a-zA-Z]+));/g;
 
 /**
- * Decode HTML entities in an agent-authored plain-text field, then trim.
- *
  * Single-pass by construction, matching what a browser does: `&amp;lt;`
  * decodes to the literal `&lt;`, not to `<`. An unrecognized named entity is
  * left alone rather than dropped, so a title containing `&foo;` survives.
@@ -55,7 +49,6 @@ export function decodePlainText(value: string): string {
     .trim();
 }
 
-/** Numeric reference → character, falling back to the raw text when invalid. */
 function codePoint(value: number, fallback: string): string {
   if (!Number.isFinite(value) || value <= 0 || value > 0x10ffff) return fallback;
   try {

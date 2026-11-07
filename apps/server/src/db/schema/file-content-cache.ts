@@ -1,11 +1,9 @@
 import { sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 /**
- * Cache for file contents fetched from GitHub.
- *
- * Content at a specific commit SHA + path is immutable, so entries
- * never need invalidation. The primary key encodes the triple
- * (repoFullName, path, ref) separated by NUL bytes.
+ * Retired: nothing reads or writes this table. It stays in users' databases
+ * (no drop migration) and stays declared here because the migration snapshot
+ * still lists it, so `drizzle-kit generate` would otherwise emit a DROP TABLE.
  */
 export const fileContentCache = sqliteTable("file_content_cache", {
   id: text("id").primaryKey(),

@@ -1,129 +1,70 @@
-import {
-  isOpenLayer,
-  type StackMergePlan,
-  type StackMergeRun,
-  type StackRebaseResult,
-} from "@revv/shared";
+import { isOpenLayer, MERGE_METHODS } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { logError } from "../logger";
-import { AppRuntime } from "../runtime";
-import { getOrFetchDiffFiles } from "../services/DiffCache";
-import { PullRequestService } from "../services/PullRequest";
-import { RepositoryService } from "../services/Repository";
+import { DiffCacheService } from "../services/DiffCache";
+import { PrContextService } from "../services/PrContext";
 import { StackHeadlineService } from "../services/stacks/StackHeadlines";
 import { StackMergeService } from "../services/stacks/StackMerge";
 import { StackRebaseService } from "../services/stacks/StackRebase";
 import { StackService } from "../services/stacks/StackService";
-import { handleAppError, withAccount } from "./middleware";
+import { runRoute, withAuth } from "./middleware";
+import { ownedBy } from "./ownership";
+import { literalUnion } from "./schemas";
+
+const mergeMethod = literalUnion(MERGE_METHODS);
 
 export const stackRoutes = new Elysia({ prefix: "/api/prs" })
-  .use(withAccount)
-  .get("/:id/stack", async (ctx) => {
-    try {
-      const stack = await AppRuntime.runPromise(
-        Effect.flatMap(StackService, (s) =>
-          s.detail(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
-        ),
-      );
-      return { stack };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
+  .use(withAuth)
+  .onBeforeHandle(ownedBy({ id: "pull request" }))
+  .get("/:id/stack", (ctx) =>
+    runRoute(
+      Effect.flatMap(StackService, (s) => s.detail(ctx.params.id)).pipe(
+        Effect.map((stack) => ({ stack })),
+      ),
+    ),
+  )
 
-  .post("/:id/stack/warm", async (ctx): Promise<{ warmed: number } | { error: string }> => {
-    try {
-      const warmed = await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const stacks = yield* StackService;
-          const prService = yield* PullRequestService;
-          const repoService = yield* RepositoryService;
-          const { accountId, accessToken } = ctx.account;
+  .post("/:id/stack/warm", (ctx) =>
+    runRoute(
+      Effect.gen(function* () {
+        const stacks = yield* StackService;
+        const prContext = yield* PrContextService;
+        const diffCache = yield* DiffCacheService;
 
-          const stack = yield* stacks.detail(ctx.params.id, ctx.session.user.id, accountId);
-          const here = stack?.layers.find((l) => l.prId === ctx.params.id);
-          if (!stack || !here) return 0;
-          const neighbours = stack.layers.flatMap((l) =>
-            l.prId !== null && Math.abs(l.position - here.position) === 1 && isOpenLayer(l)
-              ? [l.prId]
-              : [],
-          );
-
-          const warmOne = (prId: string) =>
-            Effect.gen(function* () {
-              const pr = yield* prService.getPr(prId, accountId);
-              const repo = yield* repoService.getRepoById(pr.repositoryId, accountId);
-              yield* getOrFetchDiffFiles(
-                pr.id,
-                repo.fullName,
-                pr.externalId,
-                accessToken,
-                pr.changedFiles,
-              );
-            }).pipe(
-              Effect.catch((err) =>
-                Effect.sync(() => logError("stacks", `warming the diff of ${prId} failed`, err)),
-              ),
-            );
-
-          yield* Effect.forkDetach(
-            Effect.forEach(neighbours, warmOne, { concurrency: "unbounded", discard: true }),
-          );
-          return neighbours.length;
-        }),
-      );
-      return { warmed };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  });
-
-export const repoStackRoutes = new Elysia({ prefix: "/api/repos" })
-  .use(withAccount)
-  .get("/:id/stack-headlines", async (ctx) => {
-    try {
-      const headlines = await AppRuntime.runPromise(
-        Effect.flatMap(StackHeadlineService, (s) =>
-          s.forRepo(ctx.params.id, ctx.account.accountId),
-        ),
-      );
-      return { headlines };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  });
-
-type Rejection = ReturnType<typeof handleAppError>;
-
-const mergeMethod = t.Union([t.Literal("merge"), t.Literal("squash"), t.Literal("rebase")]);
-
-export const stackMergeRoutes = new Elysia({ prefix: "/api" })
-  .use(withAccount)
-  .get("/prs/:id/stack/merge-plan", async (ctx): Promise<StackMergePlan | Rejection> => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.flatMap(StackMergeService, (s) =>
-          s.plan(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
-        ),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-  .post(
-    "/prs/:id/stack/merge",
-    async (ctx): Promise<StackMergeRun | Rejection> => {
-      try {
-        return await AppRuntime.runPromise(
-          Effect.flatMap(StackMergeService, (s) =>
-            s.start(ctx.params.id, ctx.session.user.id, ctx.account.accountId, ctx.body),
-          ),
+        const stack = yield* stacks.detail(ctx.params.id);
+        const here = stack?.layers.find((l) => l.prId === ctx.params.id);
+        if (!stack || !here) return { warmed: 0 };
+        const neighbours = stack.layers.flatMap((l) =>
+          l.prId !== null && Math.abs(l.position - here.position) === 1 && isOpenLayer(l)
+            ? [l.prId]
+            : [],
         );
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
+
+        const warmOne = (prId: string) =>
+          Effect.gen(function* () {
+            const { pr, repo, client } = yield* prContext.forPr(prId);
+            yield* diffCache.getOrFetch(pr, repo.fullName, client);
+          }).pipe(
+            Effect.catch((err) =>
+              Effect.sync(() => logError("stacks", `warming the diff of ${prId} failed`, err)),
+            ),
+          );
+
+        yield* Effect.forkDetach(
+          Effect.forEach(neighbours, warmOne, { concurrency: "unbounded", discard: true }),
+        );
+        return { warmed: neighbours.length };
+      }),
+    ),
+  )
+
+  .get("/:id/stack/merge-plan", (ctx) =>
+    runRoute(Effect.flatMap(StackMergeService, (s) => s.plan(ctx.params.id))),
+  )
+  .post(
+    "/:id/stack/merge",
+    (ctx) => runRoute(Effect.flatMap(StackMergeService, (s) => s.start(ctx.params.id, ctx.body))),
     {
       body: t.Object({
         throughPosition: t.Integer({ minimum: 1 }),
@@ -132,48 +73,32 @@ export const stackMergeRoutes = new Elysia({ prefix: "/api" })
       }),
     },
   )
-  .post("/stack-merges/:id/cancel", async (ctx): Promise<StackMergeRun | Rejection> => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.flatMap(StackMergeService, (s) => s.cancel(ctx.params.id, ctx.account.accountId)),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-  .post("/stack-merges/:id/continue", async (ctx): Promise<StackMergeRun | Rejection> => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.flatMap(StackMergeService, (s) =>
-          s.continueRun(ctx.params.id, ctx.account.accountId),
-        ),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  });
+  .post(
+    "/:id/stack/rebase",
+    (ctx) =>
+      runRoute(
+        Effect.flatMap(StackRebaseService, (s) => s.rebase(ctx.params.id, ctx.body.expectedHeads)),
+      ),
+    { body: t.Object({ expectedHeads: t.Record(t.String(), t.String()) }) },
+  );
 
-export const stackRebaseRoutes = new Elysia({ prefix: "/api" }).use(withAccount).post(
-  "/prs/:id/stack/rebase",
-  async (ctx): Promise<StackRebaseResult | Rejection> => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.flatMap(StackRebaseService, (s) =>
-          s.rebase(
-            ctx.params.id,
-            ctx.session.user.id,
-            ctx.account.accountId,
-            ctx.body.expectedHeads,
-          ),
-        ),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  },
-  {
-    body: t.Object({
-      expectedHeads: t.Record(t.String(), t.String()),
-    }),
-  },
-);
+export const repoStackRoutes = new Elysia({ prefix: "/api/repos" })
+  .use(withAuth)
+  .onBeforeHandle(ownedBy({ id: "repository" }))
+  .get("/:id/stack-headlines", (ctx) =>
+    runRoute(
+      Effect.flatMap(StackHeadlineService, (s) => s.forRepo(ctx.params.id)).pipe(
+        Effect.map((headlines) => ({ headlines })),
+      ),
+    ),
+  );
+
+export const stackMergeRunRoutes = new Elysia({ prefix: "/api/stack-merges" })
+  .use(withAuth)
+  .onBeforeHandle(ownedBy({ id: "stack merge" }))
+  .post("/:id/cancel", (ctx) =>
+    runRoute(Effect.flatMap(StackMergeService, (s) => s.cancel(ctx.params.id))),
+  )
+  .post("/:id/continue", (ctx) =>
+    runRoute(Effect.flatMap(StackMergeService, (s) => s.continueRun(ctx.params.id))),
+  );

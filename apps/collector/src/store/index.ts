@@ -1,10 +1,5 @@
-// ── Storage facade ───────────────────────────────────────────────────────────
-//
-// The single module the rest of the collector talks to. The DuckDB engine lives
-// behind this surface on purpose: if the native addon ever stops loading under
-// Bun, a bun:sqlite implementation can satisfy the same shape without touching
-// the service or the queries' callers. (The Phase-2 spike confirmed DuckDB loads
-// cleanly, so DuckDB it is — but the seam stays.)
+// DuckDB stays behind this surface so that if its native addon stops loading
+// under Bun, a bun:sqlite implementation can replace it without touching callers.
 
 import { DuckDBInstance } from "@duckdb/node-api";
 import { retentionFromEnv } from "../retention";
@@ -23,7 +18,6 @@ import { insertSpans, parseOtlpBatch, pruneSpans, type SpanInsert } from "./inge
 import * as q from "./queries";
 import { CREATE_INDEXES, CREATE_SPANS_TABLE } from "./schema";
 
-/** Rolling retention: enough recent history for live analysis, bounded memory. */
 const RETENTION = retentionFromEnv(process.env);
 
 export class TelemetryStore {
@@ -39,9 +33,8 @@ export class TelemetryStore {
     this.#conn = conn;
   }
 
-  /** A DuckDB connection has one transaction context. Keep each batch and its
-   * readers/pruner indivisible on that connection; overlapping BEGINs abort it.
-   * Recover the queue after a failure so one bad batch cannot blind collection. */
+  /** A DuckDB connection has one transaction context and overlapping BEGINs
+   * abort it, so every operation on the connection is serialized. */
   #run<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.#pending.then(operation);
     this.#pending = result.then(
@@ -51,7 +44,6 @@ export class TelemetryStore {
     return result;
   }
 
-  /** Open (or create) the DuckDB file and ensure the schema exists. */
   static async open(dbPath: string): Promise<TelemetryStore> {
     const instance = await DuckDBInstance.create(dbPath);
     const conn = await instance.connect();
@@ -60,7 +52,6 @@ export class TelemetryStore {
     return new TelemetryStore(instance, conn);
   }
 
-  /** Parse an OTLP/HTTP JSON body and persist its spans. Returns rows accepted. */
   async ingestOtlp(
     body: unknown,
   ): Promise<{ accepted: number; latestMs: number; rejectedSpans: number }> {
@@ -70,7 +61,6 @@ export class TelemetryStore {
     return { accepted, latestMs, rejectedSpans };
   }
 
-  /** Direct row insert — used by tests and any non-OTLP feeder. */
   ingest(rows: SpanInsert[]): Promise<number> {
     return this.#run(() => insertSpans(this.#conn, rows));
   }
@@ -151,7 +141,6 @@ export class TelemetryStore {
     return this.#run(() => q.kpis(this.#conn, opts));
   }
 
-  /** Flush and release the DuckDB handles. Safe to call once on shutdown. */
   close(): void {
     try {
       this.#conn.closeSync();
