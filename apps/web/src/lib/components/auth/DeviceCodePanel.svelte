@@ -5,6 +5,8 @@ import { cancelSignIn } from "$lib/stores/auth.svelte";
 import { copyFeedback } from "$lib/utils/copy-feedback.svelte";
 
 interface Props {
+  /** The host the sign-in is on: Cancel stops that one. */
+  host: string;
   userCode: string;
   verificationUri: string;
   /** Background of the code box, chosen to contrast with the surface it sits on. */
@@ -12,7 +14,7 @@ interface Props {
   copyLabel: "text" | "icon";
 }
 
-let { userCode, verificationUri, surface, copyLabel }: Props = $props();
+let { host, userCode, verificationUri, surface, copyLabel }: Props = $props();
 
 const clipboard = copyFeedback(2000);
 </script>
@@ -53,7 +55,7 @@ const clipboard = copyFeedback(2000);
 	<p class="text-xs text-text-muted">Waiting for authorization…</p>
 	<button
 		class="cursor-pointer text-xs text-text-muted underline hover:text-text-secondary"
-		onclick={cancelSignIn}
+		onclick={() => cancelSignIn(host)}
 	>
 		Cancel
 	</button>

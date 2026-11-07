@@ -29,7 +29,7 @@ import {
 import { gsapFadeY, tokens } from "$lib/motion";
 import {
   getDeviceFlow,
-  getError,
+  getErrorFor,
   getIsAuthenticated,
   getIsOnboarded,
 } from "$lib/stores/auth.svelte";
@@ -37,8 +37,12 @@ import { copyFeedback } from "$lib/utils/copy-feedback.svelte";
 
 const workflow = $derived(getPrDeepLinkState());
 const loadingVisible = $derived(getPrDeepLinkLoadingVisible());
-const deviceFlow = $derived(getDeviceFlow());
-const authError = $derived(getError());
+const deviceFlow = $derived(
+  workflow.kind === "idle" ? null : getDeviceFlow(workflow.locator.githubHost),
+);
+const authError = $derived(
+  workflow.kind === "idle" ? null : getErrorFor(workflow.locator.githubHost),
+);
 const waitingForOnboarding = $derived(
   workflow.kind === "resolving" && getIsAuthenticated() && !getIsOnboarded(),
 );

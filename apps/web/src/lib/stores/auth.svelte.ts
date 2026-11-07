@@ -8,6 +8,7 @@ import {
   type AuthReauthClearedEnvelope,
   type AuthReauthRequiredEnvelope,
   isMaintainerLogin,
+  normalizeGithubHost,
   sameGithubHost,
   type UserIdentity,
   type UserUpdatedEnvelope,
@@ -20,6 +21,7 @@ import {
   type Account,
   accountOn,
   reauthAsked,
+  reauthsCleared,
   withIdentity,
   withReauth,
 } from "$lib/session/accounts";
@@ -45,6 +47,18 @@ let identity = $state<UserIdentity | null>(null);
  */
 let accounts = $state<readonly Account[]>([]);
 
+/**
+ * Replace the accounts. A re-auth that no longer applies ends its sign-in: the
+ * modal it showed in is gone, and a waiting one doesn't come back unasked.
+ */
+function setAccounts(next: readonly Account[]): void {
+  for (const host of reauthsCleared(accounts, next)) {
+    cancelSignIn(host);
+    if (reauthOpenedFor !== null && sameGithubHost(reauthOpenedFor, host)) reauthOpenedFor = null;
+  }
+  accounts = next;
+}
+
 const user = $derived.by((): User | null => {
   if (!identity) return null;
   const shown = identity.host ? accountOn(accounts, identity.host) : undefined;
@@ -58,6 +72,9 @@ let isLoading = $state(false);
 let isSwitching = $state(false);
 let error = $state<string | null>(null);
 
+/** The host `error` is about, when it is a sign-in's on a known host. */
+let errorHost = $state<string | null>(null);
+
 /** A sign-in refused for its client id: the host needs one, or the one it has isn't valid. */
 export type SignInErrorCode = Extract<
   ApiErrorCode,
@@ -65,16 +82,23 @@ export type SignInErrorCode = Extract<
 >;
 let signInErrorCode = $state<SignInErrorCode | null>(null);
 
-let deviceFlow = $state<{
-  userCode: string;
-  verificationUri: string;
-  deviceCode: string;
-  interval: number;
-  expiresAt: number;
+interface DeviceFlow {
+  readonly userCode: string;
+  readonly verificationUri: string;
+  readonly deviceCode: string;
+  readonly interval: number;
+  readonly expiresAt: number;
   /** The host and client `/device/init` resolved; the poll must use the same ones. */
-  host: string;
-  clientId: string;
-} | null>(null);
+  readonly host: string;
+  readonly clientId: string;
+}
+
+/**
+ * The device-flow sign-ins under way, one per host: a waiting account's
+ * re-sign-in and the shown host's can run at once, each showing its own code.
+ */
+let deviceFlows = $state<ReadonlyMap<string, DeviceFlow>>(new Map());
+const pollTimers = new Map<string, ReturnType<typeof setTimeout>>();
 /** A local user and its GitHub account on each host. */
 export type LocalAccount = EdenData<(typeof api.api.auth)["local-accounts"]["get"]>[number];
 
@@ -92,8 +116,6 @@ let loadUserRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let loadUserRetryAttempts = $state(0);
 let authRestoreError = $state<string | null>(null);
 let authRestoreExhausted = $state(false);
-
-let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
 const reauths = $derived(reauthAsked(accounts, identity?.host ?? null));
 /** The host of a waiting account the user chose to sign in again from the account menu. */
@@ -125,17 +147,18 @@ export function openReauth(host: string): void {
 }
 
 export function closeReauth(): void {
+  const host = reauthOpenedFor;
   reauthOpenedFor = null;
   clearError();
-  cancelSignIn();
+  if (host !== null) cancelSignIn(host);
 }
 
 export function onAuthReauthRequired(data: AuthReauthRequiredEnvelope["data"]): void {
-  accounts = withReauth(accounts, { ...data, reauthRequired: true });
+  setAccounts(withReauth(accounts, { ...data, reauthRequired: true }));
 }
 
 export function onAuthReauthCleared(data: AuthReauthClearedEnvelope["data"]): void {
-  accounts = withReauth(accounts, { host: data.host, reauthRequired: false });
+  setAccounts(withReauth(accounts, { host: data.host, reauthRequired: false }));
 }
 
 /**
@@ -202,12 +225,19 @@ export function getError(): string | null {
   return error;
 }
 
-export function getSignInErrorCode(): SignInErrorCode | null {
-  return signInErrorCode;
+/** The error to show a sign-in on `host`: one about another host's sign-in isn't. */
+export function getErrorFor(host: string): string | null {
+  return errorHost === null || sameGithubHost(errorHost, host) ? error : null;
 }
 
-export function getDeviceFlow(): typeof deviceFlow {
-  return deviceFlow;
+export function getSignInErrorCode(host: string): SignInErrorCode | null {
+  return errorHost !== null && sameGithubHost(errorHost, host) ? signInErrorCode : null;
+}
+
+/** The sign-in under way on `host`; without one, any (a signed-out window runs one at most). */
+export function getDeviceFlow(host?: string): DeviceFlow | null {
+  if (host !== undefined) return deviceFlows.get(normalizeGithubHost(host)) ?? null;
+  return deviceFlows.values().next().value ?? null;
 }
 
 /**
@@ -221,12 +251,11 @@ export function clearIdentity(): void {
   identity = null;
   // The re-auth modal reads the accounts, so a dead session must not strand
   // it with no session behind it.
-  accounts = [];
+  setAccounts([]);
   reauthOpenedFor = null;
   localAccounts = [];
   localAccountsLoaded = false;
-  error = null;
-  signInErrorCode = null;
+  clearError();
   void fetchLocalAccounts();
 }
 
@@ -287,8 +316,7 @@ export function retryAuthRestore(): void {
 }
 
 export async function signIn(host?: string, clientId?: string): Promise<boolean> {
-  error = null;
-  signInErrorCode = null;
+  clearError();
   isLoading = true;
   try {
     // A signed-in caller sends its session, so re-signing one of its accounts
@@ -304,7 +332,7 @@ export async function signIn(host?: string, clientId?: string): Promise<boolean>
         throw e instanceof ApiError ? signInRefusal(e) : e;
       },
     );
-    deviceFlow = {
+    const flow: DeviceFlow = {
       userCode: data.user_code,
       verificationUri: data.verification_uri,
       deviceCode: data.device_code,
@@ -313,106 +341,140 @@ export async function signIn(host?: string, clientId?: string): Promise<boolean>
       host: data.host,
       clientId: data.client_id,
     };
+    cancelSignIn(flow.host);
+    setFlow(flow);
     try {
       const { openUrl } = await import("@tauri-apps/plugin-opener");
       await openUrl(data.verification_uri);
     } catch {
       // Opening browser is best-effort
     }
-    schedulePoll(deviceFlow.interval);
+    schedulePoll(flow);
     return true;
   } catch (e) {
-    error = `Failed to start sign-in: ${signInErrorMessage(e)}`;
+    setError(`Failed to start sign-in: ${signInErrorMessage(e)}`, host ?? null);
     return false;
   } finally {
     isLoading = false;
   }
 }
 
-function schedulePoll(intervalSeconds: number): void {
-  pollTimer = setTimeout(() => poll(), intervalSeconds * 1000);
+function setFlow(flow: DeviceFlow): void {
+  deviceFlows = new Map(deviceFlows).set(normalizeGithubHost(flow.host), flow);
 }
 
-async function poll(): Promise<void> {
-  if (!deviceFlow) return;
+/** Whether `flow` is still its host's sign-in: not cancelled or restarted since. */
+function isCurrent(flow: DeviceFlow): boolean {
+  return deviceFlows.get(normalizeGithubHost(flow.host)) === flow;
+}
 
-  if (Date.now() > deviceFlow.expiresAt) {
-    endSignIn("Sign-in timed out. Please try again.");
+function schedulePoll(flow: DeviceFlow): void {
+  const key = normalizeGithubHost(flow.host);
+  pollTimers.set(
+    key,
+    setTimeout(() => void poll(flow), flow.interval * 1000),
+  );
+}
+
+async function poll(flow: DeviceFlow): Promise<void> {
+  if (!isCurrent(flow)) return;
+
+  if (Date.now() > flow.expiresAt) {
+    endSignIn(flow.host, "Sign-in timed out. Please try again.");
     return;
   }
 
   try {
     const token = getToken();
     const body = {
-      device_code: deviceFlow.deviceCode,
+      device_code: flow.deviceCode,
       ...(token ? { session_token: token } : {}),
-      host: deviceFlow.host,
-      client_id: deviceFlow.clientId,
+      host: flow.host,
+      client_id: flow.clientId,
     };
     let data: EdenData<typeof api.api.auth.device.poll.post>;
     try {
       data = await call(api.api.auth.device.poll.post(body), "Sign-in failed");
     } catch (e) {
       if (!(e instanceof ApiError)) throw e;
+      if (!isCurrent(flow)) return;
       endSignIn(
+        flow.host,
         e.serverMessage
           ? `Sign-in failed: ${e.serverMessage}`
           : "Sign-in failed. Please try again.",
       );
       return;
     }
+    // GitHub's grant is final even when this sign-in was cancelled or its
+    // re-auth cleared while the answer was on its way.
+    if (data.status === "linked") {
+      // A re-auth or a link of the account on `host`; the server also
+      // broadcasts `auth:reauth-cleared`, but clearing here avoids modal
+      // flicker.
+      setAccounts(withReauth(accounts, { host: flow.host, reauthRequired: false }));
+      if (isCurrent(flow)) cancelSignIn(flow.host);
+      await surfaceWindow();
+      return;
+    }
+    if (data.status === "success") {
+      resetLoadUserRetryState();
+      setToken(data.token);
+      if (isCurrent(flow)) cancelSignIn(flow.host);
+      await loadUser();
+      await surfaceWindow();
+      return;
+    }
+    if (!isCurrent(flow)) return;
     switch (data.status) {
       case "pending":
-        schedulePoll(deviceFlow.interval);
+        schedulePoll(flow);
         return;
       case "slow_down": {
-        const newInterval = data.interval ?? deviceFlow.interval + 5;
-        deviceFlow = { ...deviceFlow, interval: newInterval };
-        schedulePoll(newInterval);
+        const slower = { ...flow, interval: data.interval ?? flow.interval + 5 };
+        setFlow(slower);
+        schedulePoll(slower);
         return;
       }
       case "expired":
-        endSignIn("Sign-in timed out. Please try again.");
+        endSignIn(flow.host, "Sign-in timed out. Please try again.");
         return;
       case "denied":
-        endSignIn("Sign-in was cancelled.");
-        return;
-      case "linked":
-        // A re-auth or a link of the account on `host`; the server also
-        // broadcasts `auth:reauth-cleared`, but clearing here avoids modal
-        // flicker.
-        accounts = withReauth(accounts, { host: deviceFlow.host, reauthRequired: false });
-        reauthOpenedFor = null;
-        deviceFlow = null;
-        await surfaceWindow();
-        return;
-      case "success":
-        resetLoadUserRetryState();
-        setToken(data.token);
-        deviceFlow = null;
-        await loadUser();
-        await surfaceWindow();
+        endSignIn(flow.host, "Sign-in was cancelled.");
         return;
     }
   } catch {
-    if (deviceFlow) schedulePoll(deviceFlow.interval);
+    if (isCurrent(flow)) schedulePoll(flow);
   }
 }
 
-function endSignIn(message: string): void {
-  error = message;
+function endSignIn(host: string, message: string): void {
+  cancelSignIn(host);
   signInErrorCode = null;
-  cancelSignIn();
+  setError(message, host);
 }
 
-export function cancelSignIn(): void {
-  if (pollTimer) clearTimeout(pollTimer);
-  pollTimer = null;
-  deviceFlow = null;
+/** Stop the sign-in on `host`, or every one. */
+export function cancelSignIn(host?: string): void {
+  const keys = host === undefined ? [...deviceFlows.keys()] : [normalizeGithubHost(host)];
+  const next = new Map(deviceFlows);
+  for (const key of keys) {
+    clearTimeout(pollTimers.get(key));
+    pollTimers.delete(key);
+    next.delete(key);
+  }
+  if (next.size !== deviceFlows.size) deviceFlows = next;
+}
+
+/** Show `message`; with `host` when it is about the sign-in on that host. */
+function setError(message: string, host: string | null = null): void {
+  error = message;
+  errorHost = host;
 }
 
 export function clearError(): void {
   error = null;
+  errorHost = null;
   signInErrorCode = null;
 }
 
@@ -440,7 +502,7 @@ export async function loadUser(): Promise<void> {
     // clearing the persisted token here makes OnboardingGate believe this is a
     // first-run install until the user closes and reopens the window.
     const message = signInErrorMessage(e);
-    error = message;
+    setError(message);
     scheduleLoadUserRetry(tokenSnapshot, message);
   } finally {
     isLoading = false;
@@ -467,7 +529,7 @@ async function readSession(
 }
 
 function applySession(read: { identity: UserIdentity; accounts: readonly Account[] }): void {
-  accounts = read.accounts;
+  setAccounts(read.accounts);
   identity = read.identity;
 }
 
@@ -498,7 +560,7 @@ export function onUserUpdated(data: UserUpdatedEnvelope["data"]): void {
   // The account switchers show every account's login and avatar.
   void fetchLocalAccounts();
   identity = { ...identity, name: data.name, email: data.email };
-  accounts = withIdentity(accounts, data);
+  setAccounts(withIdentity(accounts, data));
   holdCurrentSession();
 }
 
@@ -610,7 +672,7 @@ export async function runAccountSwitch(run: () => Promise<void>): Promise<boolea
     await run();
     return true;
   } catch (e) {
-    error = `Failed to switch account: ${thrownMessage(e)}`;
+    setError(`Failed to switch account: ${thrownMessage(e)}`);
     return false;
   } finally {
     isLoading = false;

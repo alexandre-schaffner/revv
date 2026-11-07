@@ -80,3 +80,13 @@ export function reauthAsked(
   const shown = (a: Account) => shownHost === null || sameGithubHost(a.host, shownHost);
   return { blocking: flagged.find(shown) ?? null, waiting: flagged.filter((a) => !shown(a)) };
 }
+
+/** The hosts whose account needed re-auth in `before` and no longer does (or is gone) in `after`. */
+export function reauthsCleared(
+  before: readonly Account[],
+  after: readonly Account[],
+): readonly string[] {
+  return before
+    .filter((a) => a.reauthRequired && !accountOn(after, a.host)?.reauthRequired)
+    .map((a) => a.host);
+}

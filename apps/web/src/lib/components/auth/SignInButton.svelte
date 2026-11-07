@@ -11,6 +11,7 @@ const isLoading = $derived(getIsLoading());
 
 {#if deviceFlow}
 	<DeviceCodePanel
+		host={deviceFlow.host}
 		userCode={deviceFlow.userCode}
 		verificationUri={deviceFlow.verificationUri}
 		surface="elevated"

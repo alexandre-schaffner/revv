@@ -7,7 +7,7 @@ import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import {
   closeReauth,
   getDeviceFlow,
-  getError,
+  getErrorFor,
   getIsLoading,
   getReauthPrompt,
   getSignInErrorCode,
@@ -18,9 +18,9 @@ import DeviceCodePanel from "./DeviceCodePanel.svelte";
 const prompt = $derived(getReauthPrompt());
 const reauth = $derived(prompt?.account ?? null);
 const dismissible = $derived(prompt !== null && !prompt.blocking);
-const deviceFlow = $derived(getDeviceFlow());
-const error = $derived(getError());
-const signInErrorCode = $derived(getSignInErrorCode());
+const deviceFlow = $derived(reauth ? getDeviceFlow(reauth.host) : null);
+const error = $derived(reauth ? getErrorFor(reauth.host) : null);
+const signInErrorCode = $derived(reauth ? getSignInErrorCode(reauth.host) : null);
 const isLoading = $derived(getIsLoading());
 
 let clientId = $state("");
@@ -63,7 +63,8 @@ async function retryWithClientId(): Promise<void> {
   try {
     const started = await signIn(host, trimmed);
     if (!started) {
-      clientIdError = getError() ?? "Failed to start sign-in. Check the client ID and try again.";
+      clientIdError =
+        getErrorFor(host) ?? "Failed to start sign-in. Check the client ID and try again.";
     }
   } finally {
     isStartingWithClientId = false;
@@ -117,6 +118,7 @@ async function retryWithClientId(): Promise<void> {
 
 			{#if deviceFlow}
 				<DeviceCodePanel
+					host={deviceFlow.host}
 					userCode={deviceFlow.userCode}
 					verificationUri={deviceFlow.verificationUri}
 					surface="tertiary"
