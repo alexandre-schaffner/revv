@@ -43,12 +43,12 @@ export const resolveChatSessionContext = (prId: string, warm: boolean) =>
 
     let worktreePath = workspace.agentBranch(ctx)?.worktreePath ?? null;
     let headSha = ctx.pr.headSha;
-    if (warm && worktreePath === null) {
+    if (warm && (worktreePath === null || headSha === null)) {
       // A turn or push already working there will bring the worktree up itself.
       const opened = yield* Effect.scoped(workspace.open(ctx, "warm-up")).pipe(
         Effect.catchTag("WorkspaceBusyError", () => Effect.succeed(null)),
       );
-      worktreePath = opened?.branch.worktreePath ?? null;
+      worktreePath = opened?.branch.worktreePath ?? worktreePath;
       headSha = opened?.headSha ?? headSha;
     }
     if (worktreePath === null || headSha === null) return { ...EMPTY, commands: cachedCommands };
