@@ -28,18 +28,9 @@ export const pullRequests = sqliteTable(
      */
     diffStatsHeadSha: text("diff_stats_head_sha"),
     /**
-     * How many `pr_diff_files` rows the last complete GitHub files fetch
-     * produced for this PR. Written only by `DiffCacheService.cacheFiles`, in
-     * the same transaction as the rows themselves.
-     *
-     * Deliberately separate from `changed_files`. That column is GitHub's own
-     * stat and counts file *entries*, which exceeds the number of distinct
-     * paths whenever a file's type changed (GitHub reports one `removed` and
-     * one `added` entry for the same path). `pr_diff_files` is keyed on
-     * `(prId, path)`, so the cached row count for such a PR can never reach
-     * `changed_files`. Null on rows never fetched since this column was added,
-     * which fall back to the `changed_files` comparison and self-heal after one
-     * fetch.
+     * How many `pr_diff_files` rows the last GitHub files fetch stored, written
+     * with them. Nothing reads it: the rows are written whole in one
+     * transaction, so the head/base stamp below already says they are complete.
      */
     diffFilesCachedCount: integer("diff_files_cached_count"),
     /**

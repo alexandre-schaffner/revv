@@ -308,7 +308,6 @@ export interface PrFileMeta {
 
 const PR_FILES_PAGE_SIZE = 100;
 export const PR_FILES_MAX_PAGES = 30;
-export const PR_FILES_MAX_COUNT = PR_FILES_PAGE_SIZE * PR_FILES_MAX_PAGES;
 /**
  * Hard cap on `files[]` from GitHub's compare endpoint. Unlike `/pulls/:n/files`
  * this endpoint does not paginate the file list, so a range touching more than

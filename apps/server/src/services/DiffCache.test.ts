@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { type Context, Effect, Layer } from "effect";
 import { createDb, type Db } from "../db";
 import { prDiffFiles, pullRequests } from "../db/schema";
-import { GitHubAuthError, type GitHubError, GitHubRateLimitError } from "../domain/errors";
+import { type GitHubError, GitHubRateLimitError } from "../domain/errors";
 import { DbService } from "./Db";
 import {
   DiffCacheService,
@@ -14,7 +14,7 @@ import {
   readCurrentHeadPatch,
 } from "./DiffCache";
 import { GitHubGateway } from "./github/gateway";
-import { PR_FILES_MAX_COUNT, type PrFileMeta } from "./github/pulls";
+import type { PrFileMeta } from "./github/pulls";
 import { githubClient } from "./github/transport";
 import { Realtime } from "./Realtime";
 
@@ -126,12 +126,12 @@ async function answerAfter(
 
 const files = (count: number) => Array.from({ length: count }, (_, i) => githubFile(`src/${i}.ts`));
 
-describe("a cached diff's completeness", () => {
+describe("a cached diff", () => {
   // GitHub counts file *entries* in `changed_files`, and reports a path whose
   // file type changed twice (removed + added). `pr_diff_files` is keyed on
   // (prId, path), so the row count is permanently short of `changed_files` for
   // such a PR.
-  it("is judged by the rows the last fetch stored, not by changed_files", async () => {
+  it("is served for the current head and base, whatever changed_files says", async () => {
     const db = freshDb();
     seedPr(db);
     await cacheFiles(db, files(2998));
@@ -140,70 +140,14 @@ describe("a cached diff's completeness", () => {
     expect(answer).toMatchObject({ source: "cache" });
   });
 
-  it("refetches a cache that lost rows since the fetch that stored them", async () => {
+  it("is fetched when nothing is cached, and a GitHub failure fails the read", async () => {
     const db = freshDb();
     seedPr(db);
-    await cacheFiles(db, files(2));
-    db.delete(prDiffFiles).where(eq(prDiffFiles.path, "src/1.ts")).run();
-    const { fetches } = await answerAfter(db, {});
-    expect(fetches).toBe(1);
-  });
-
-  it("falls back to changed_files for rows cached before the stored count", async () => {
-    const db = freshDb();
-    seedPr(db);
-    await cacheFiles(db, files(1));
-    const short = await answerAfter(db, { changedFiles: 2, diffFilesCachedCount: null });
-    expect(short.fetches).toBe(1);
-  });
-
-  it("caps changed_files at what the GitHub files endpoint can return", async () => {
-    const db = freshDb();
-    seedPr(db);
-    await cacheFiles(db, files(PR_FILES_MAX_COUNT));
-    const { fetches } = await answerAfter(db, {
-      changedFiles: PR_FILES_MAX_COUNT + 1,
-      diffFilesCachedCount: null,
-    });
-    expect(fetches).toBe(0);
-  });
-});
-
-describe("a failed refresh of an incomplete cache", () => {
-  const rateLimit = () =>
-    Effect.fail(new GitHubRateLimitError({ resetAt: new Date(), kind: "primary" }));
-
-  it("serves the cache when GitHub rate-limits", async () => {
-    const db = freshDb();
-    seedPr(db);
-    await cacheFiles(db, [githubFile("src/a.ts"), githubFile("src/b.ts")]);
-    db.delete(prDiffFiles).where(eq(prDiffFiles.path, "src/b.ts")).run();
-
-    const { answer, fetches } = await answerAfter(db, {}, rateLimit);
-
-    expect(fetches).toBe(1);
-    expect(answer).toEqual({
-      source: "cache",
-      files: [expect.objectContaining({ path: "src/a.ts" })],
-    });
-  });
-
-  it("fails on a rate limit when there is no cache to serve", async () => {
-    const db = freshDb();
-    seedPr(db);
-    const { answer } = await answerAfter(db, {}, rateLimit);
-    expect(answer).toMatchObject({ error: { _tag: "GitHubRateLimitError" } });
-  });
-
-  it("fails on any other GitHub error, cache or not", async () => {
-    const db = freshDb();
-    seedPr(db);
-    await cacheFiles(db, [githubFile("src/a.ts"), githubFile("src/b.ts")]);
-    db.delete(prDiffFiles).where(eq(prDiffFiles.path, "src/b.ts")).run();
-    const { answer } = await answerAfter(db, {}, () =>
-      Effect.fail(new GitHubAuthError({ message: "Invalid or expired GitHub token" })),
+    const { answer, fetches } = await answerAfter(db, {}, () =>
+      Effect.fail(new GitHubRateLimitError({ resetAt: new Date(), kind: "primary" })),
     );
-    expect(answer).toMatchObject({ error: { _tag: "GitHubAuthError" } });
+    expect(fetches).toBe(1);
+    expect(answer).toMatchObject({ error: { _tag: "GitHubRateLimitError" } });
   });
 });
 
