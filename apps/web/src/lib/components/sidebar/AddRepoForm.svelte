@@ -9,9 +9,6 @@ import Plus from "phosphor-svelte/lib/Plus";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import Trash from "phosphor-svelte/lib/Trash";
 import { toast } from "svelte-sonner";
-import { toastAddRepoError } from "$lib/components/shared/add-repo-toast";
-import CloneStatusIndicator from "$lib/components/shared/CloneStatusIndicator.svelte";
-import OwnerAvatar from "$lib/components/shared/OwnerAvatar.svelte";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import { Badge } from "$lib/components/ui/badge/index.js";
 import { Button } from "$lib/components/ui/button/index.js";
@@ -23,45 +20,32 @@ import {
   isRepoSlug,
   repoKey,
 } from "$lib/repos/add-repo";
-import { pickDirectory, useAvailableRepos } from "$lib/repos/add-repo.svelte";
+import { CloneBase, useAvailableRepos } from "$lib/repos/add-repo.svelte";
+import { toastAddRepoError } from "$lib/repos/add-repo-toast";
 import {
   fetchAvailableRepos,
   getAvailablePrCount,
   getAvailablePrCountsLoaded,
   getAvailableRepos,
   getAvailableReposLoading,
-  getDefaultCloneBaseDir,
 } from "$lib/repos/catalog.svelte";
 import { RepoRemoval } from "$lib/repos/repo-removal.svelte";
 import { getPullRequests } from "$lib/stores/prs.svelte";
 import { addRepo, getRepositories, retryClone } from "$lib/stores/repos.svelte";
+import CloneStatusIndicator from "./CloneStatusIndicator.svelte";
+import OwnerAvatar from "./OwnerAvatar.svelte";
 import RepoDeleteConfirm from "./RepoDeleteConfirm.svelte";
 import RepoDialogHeader from "./RepoDialogHeader.svelte";
 import RepoField from "./RepoField.svelte";
 
 // Renders without a modal wrapper; the parent supplies padding.
-let {
-  onClose,
-  autoFocus = true,
-  showTitle = true,
-  showLocation = false,
-  cloneBasePath = "",
-  onCloneBasePathChange,
-  onCloneSuccess,
-}: {
-  onClose?: () => void;
-  autoFocus?: boolean;
-  showTitle?: boolean;
-  showLocation?: boolean;
-  cloneBasePath?: string;
-  onCloneBasePathChange?: (path: string) => void;
-  onCloneSuccess?: (basePath: string) => void;
-} = $props();
+let { onClose }: { onClose?: () => void } = $props();
 
 const MANUAL_IMPORT_VALUE = "__manual_import__";
 
 const catalog = useAvailableRepos();
 const removal = new RepoRemoval();
+const cloneBase = new CloneBase();
 
 let search = $state("");
 let addingRepos = $state(new Set<string>());
@@ -72,7 +56,7 @@ let searchEl = $state<HTMLInputElement | null>(null);
 // Focus the search on mount (rAF so it lands after the dialog's open motion),
 // avoiding the `autofocus` attribute and its a11y lint.
 $effect(() => {
-  if (autoFocus && searchEl) requestAnimationFrame(() => searchEl?.focus());
+  if (searchEl) requestAnimationFrame(() => searchEl?.focus());
 });
 
 let trackedByKey = $derived(indexByFullName(getRepositories()));
@@ -116,7 +100,7 @@ async function handleAdd(repoFullName: string) {
   addingRepos = new Set([...addingRepos, repoFullName]);
   try {
     await addRepo(addBody(repoFullName));
-    rememberCloneBase();
+    cloneBase.remember();
   } catch (e) {
     toastAddRepoError(e, "Failed to add repository");
   } finally {
@@ -139,7 +123,7 @@ async function handleManualImport() {
   isManualLoading = true;
   try {
     await addRepo(addBody(slug));
-    rememberCloneBase();
+    cloneBase.remember();
     search = "";
     onClose?.();
   } catch (e) {
@@ -150,34 +134,25 @@ async function handleManualImport() {
 }
 
 let trackedCount = $derived(getRepositories().length);
-let trimmedCloneBasePath = $derived(cloneBasePath.trim());
-let effectiveBase = $derived(trimmedCloneBasePath || getDefaultCloneBaseDir() || "");
-let resolvedClonePath = $derived.by(() => {
-  if (!showLocation || !effectiveBase || !isRepoSlug(trimmedSearch)) return null;
-  const [owner, name] = trimmedSearch.split("/");
-  if (!owner || !name) return null;
-  return `${effectiveBase.replace(/\/$/, "")}/${owner}/${name}`;
-});
+let resolvedClonePath = $derived(
+  isRepoSlug(trimmedSearch) ? cloneBase.previewFor(trimmedSearch) : null,
+);
 
-function addBody(repoFullName: string) {
-  if (!showLocation) return repoFullName;
-  // Only send a custom base; an empty field defers to the server's default
-  // (omitting `basePath`) rather than echoing a guessed path.
-  if (!trimmedCloneBasePath) return { fullName: repoFullName, mode: "clone" as const };
-  return { fullName: repoFullName, mode: "clone" as const, basePath: trimmedCloneBasePath };
-}
-
-function rememberCloneBase(): void {
-  if (!showLocation) return;
-  onCloneSuccess?.(trimmedCloneBasePath);
+function addBody(fullName: string) {
+  const basePath = cloneBase.custom;
+  return basePath === undefined
+    ? { fullName, mode: "clone" as const }
+    : { fullName, mode: "clone" as const, basePath };
 }
 
 async function browseForCloneBase(): Promise<void> {
   if (browsing) return;
   browsing = true;
-  const selected = await pickDirectory();
-  browsing = false;
-  if (selected !== null) onCloneBasePathChange?.(selected);
+  try {
+    await cloneBase.browse();
+  } finally {
+    browsing = false;
+  }
 }
 
 function prCountFor(
@@ -194,9 +169,7 @@ function prCountFor(
 	loop
 	class="add-repo flex h-auto min-h-0 flex-1 flex-col overflow-visible bg-transparent"
 >
-	{#if showTitle}
-		<RepoDialogHeader title="Add Repository" meta={trackedCount > 0 ? `${trackedCount} tracked` : undefined} />
-	{/if}
+	<RepoDialogHeader title="Add Repository" meta={trackedCount > 0 ? `${trackedCount} tracked` : undefined} />
 
 	<div class="search-shell">
 		<Command.Input
@@ -218,36 +191,33 @@ function prCountFor(
 		</Button>
 	</div>
 
-	{#if showLocation}
-		<div class="location-row">
-			<RepoField
-				placeholder={getDefaultCloneBaseDir() ?? 'Default clone location'}
-				aria-label="Clone location"
-				value={cloneBasePath}
-				oninput={(e) => onCloneBasePathChange?.(e.currentTarget.value)}
-				autocomplete="off"
-				spellcheck="false"
-			>
-				{#snippet icon()}<Folder size={13} />{/snippet}
-			</RepoField>
-			<Button
-				variant="outline"
-				size="sm"
-				class="h-8 rounded-[var(--radius-card)]"
-				onclick={() => void browseForCloneBase()}
-				disabled={browsing}
-				title="Browse for folder"
-			>
-				<Folder size={13} />
-				<span>Browse</span>
-			</Button>
+	<div class="location-row">
+		<RepoField
+			placeholder={cloneBase.defaultPath ?? 'Default clone location'}
+			aria-label="Clone location"
+			bind:value={cloneBase.path}
+			autocomplete="off"
+			spellcheck="false"
+		>
+			{#snippet icon()}<Folder size={13} />{/snippet}
+		</RepoField>
+		<Button
+			variant="outline"
+			size="sm"
+			class="h-8 rounded-[var(--radius-card)]"
+			onclick={() => void browseForCloneBase()}
+			disabled={browsing}
+			title="Browse for folder"
+		>
+			<Folder size={13} />
+			<span>Browse</span>
+		</Button>
+	</div>
+	{#if resolvedClonePath}
+		<div class="resolved-path">
+			<ArrowRight size={11} />
+			<span>{resolvedClonePath}</span>
 		</div>
-		{#if resolvedClonePath}
-			<div class="resolved-path">
-				<ArrowRight size={11} />
-				<span>{resolvedClonePath}</span>
-			</div>
-		{/if}
 	{/if}
 
 	<Command.List class="add-repo-list">

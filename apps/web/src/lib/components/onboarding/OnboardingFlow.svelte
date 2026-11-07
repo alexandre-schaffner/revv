@@ -1,5 +1,5 @@
 <script lang="ts">
-import { isPublicGitHub } from "@revv/shared";
+import { githubHostLabel } from "@revv/shared";
 import { onMount } from "svelte";
 import type { DotmatrixVariant } from "$lib/components/ui/dotmatrix";
 import { gsapEnter, tokens } from "$lib/motion";
@@ -17,7 +17,6 @@ import StepWelcome from "./StepWelcome.svelte";
 type StepId = "welcome" | "host" | "signin" | "repo" | "agent" | "done";
 
 const githubHost = $derived(getGithubHost());
-const isGhe = $derived(!isPublicGitHub(githubHost));
 
 const ORDER: StepId[] = ["welcome", "host", "signin", "repo", "agent", "done"];
 
@@ -106,7 +105,7 @@ const meta = $derived<Record<StepId, StepMeta>>({
   signin: {
     chapter: "Chapter II · Key",
     title: "Sign in to",
-    titleItalic: isGhe ? `${githubHost}.` : "GitHub.",
+    titleItalic: `${githubHostLabel(githubHost)}.`,
     spinnerVariant: "square-2",
   },
   repo: {
@@ -149,7 +148,7 @@ const meta = $derived<Record<StepId, StepMeta>>({
 				{:else if current === 'signin'}
 					<StepSignIn onBack={goBack} {githubHost} />
 				{:else if current === 'repo'}
-					<StepRepo onContinue={advance} onBack={goBack} onSkip={advance} isGhe={isGhe} />
+					<StepRepo onContinue={advance} onBack={goBack} onSkip={advance} />
 				{:else if current === 'agent'}
 					<StepAgent onContinue={advance} onBack={goBack} onSkip={advance} />
 				{:else if current === 'done'}

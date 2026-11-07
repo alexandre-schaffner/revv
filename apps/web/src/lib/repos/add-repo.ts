@@ -49,6 +49,11 @@ export function groupByOwner<T extends Pick<Repository, "owner">>(
   return groups;
 }
 
+/** Where the server puts a clone of `fullName` under `base` (`services/RepoClone.ts`). */
+export function clonePathPreview(base: string, fullName: string): string {
+  return `${base.replace(/\/$/, "")}/${fullName}`;
+}
+
 export function majorityOwner(repos: readonly Pick<Repository, "owner">[]): string | null {
   const counts = new Map<string, number>();
   for (const repo of repos) counts.set(repo.owner, (counts.get(repo.owner) ?? 0) + 1);

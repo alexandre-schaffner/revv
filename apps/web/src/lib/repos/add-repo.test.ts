@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+  clonePathPreview,
   filterRepos,
   groupByOwner,
   indexByFullName,
@@ -64,5 +65,12 @@ describe("majorityOwner", () => {
   it("returns null without a strict majority", () => {
     expect(majorityOwner([repo("acme", "a"), repo("me", "b")])).toBeNull();
     expect(majorityOwner([])).toBeNull();
+  });
+});
+
+describe("clonePathPreview", () => {
+  it("joins base and owner/name without a doubled slash", () => {
+    expect(clonePathPreview("/Users/me/code/", "acme/web")).toBe("/Users/me/code/acme/web");
+    expect(clonePathPreview("/Users/me/code", "acme/web")).toBe("/Users/me/code/acme/web");
   });
 });

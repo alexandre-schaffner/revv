@@ -4,13 +4,13 @@ import FolderOpen from "phosphor-svelte/lib/FolderOpen";
 import LinkSimple from "phosphor-svelte/lib/LinkSimple";
 import Plus from "phosphor-svelte/lib/Plus";
 import Spinner from "phosphor-svelte/lib/Spinner";
-import { toastAddRepoError } from "$lib/components/shared/add-repo-toast";
-import CloneStatusIndicator from "$lib/components/shared/CloneStatusIndicator.svelte";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { gsapFadeY, tokens } from "$lib/motion";
 import { getTrackedRepo, LocalClone } from "$lib/repos/add-repo.svelte";
+import { toastAddRepoError } from "$lib/repos/add-repo-toast";
 import { addRepo, retryClone } from "$lib/stores/repos.svelte";
+import CloneStatusIndicator from "./CloneStatusIndicator.svelte";
 import RepoDialogHeader from "./RepoDialogHeader.svelte";
 import RepoField from "./RepoField.svelte";
 
@@ -20,13 +20,13 @@ const clone = new LocalClone();
 let adding = $state(false);
 let linkedFullName = $state<string | null>(null);
 
-let canSubmit = $derived(clone.linkable && !adding);
+let canSubmit = $derived(clone.linkableName !== null && !adding);
 
 let linkedRepo = $derived(linkedFullName ? (getTrackedRepo(linkedFullName) ?? null) : null);
 
 async function submit(): Promise<void> {
-  const fullName = clone.fullName;
-  if (!canSubmit || fullName === null) return;
+  const fullName = clone.linkableName;
+  if (adding || fullName === null) return;
   adding = true;
   try {
     await addRepo({ fullName, mode: "link", clonePath: clone.path.trim() });
@@ -97,7 +97,7 @@ function onPathKeydown(e: KeyboardEvent): void {
 
 		<div class="path-row">
 			<RepoField
-				placeholder="/Users/alex/code/project"
+				placeholder="/Users/you/code/project"
 				aria-label="Local clone path"
 				bind:value={clone.path}
 				onblur={() => void clone.inspect()}
@@ -124,28 +124,19 @@ function onPathKeydown(e: KeyboardEvent): void {
 			</Button>
 		</div>
 
-		{#if clone.isGitRepo === false}
+		{#if clone.status.kind === "not-git"}
 			<p class="hint hint--danger">The selected folder is not a git repository.</p>
-		{:else if clone.alreadyTracked && !adding}
+		{:else if clone.status.kind === "tracked" && !adding}
 			<p class="hint hint--danger">This repository is already tracked.</p>
-		{:else if clone.isGitRepo === true && clone.fullName !== null}
+		{:else if clone.status.kind === "recognized" || clone.status.kind === "tracked"}
 			<p class="hint hint--ok">
 				<CheckCircle size={12} />
-				<span>Recognized as <code>{clone.fullName}</code>.</span>
+				<span>Recognized as <code>{clone.status.fullName}</code>.</span>
 			</p>
-		{:else if clone.isGitRepo === true}
+		{:else if clone.status.kind === "foreign-origin"}
 			<p class="hint hint--danger">
 				This clone's <code>origin</code> remote doesn't point at a repository on this GitHub host.
 			</p>
-		{:else if clone.remotes.length > 0}
-			<div class="remote-list">
-				{#each clone.remotes.slice(0, 3) as remote (`${remote.name}-${remote.url}`)}
-					<div class="remote-row">
-						<span>{remote.name}</span>
-						<code>{remote.url}</code>
-					</div>
-				{/each}
-			</div>
 		{:else}
 			<p class="hint">Choose a local checkout — its GitHub repository is detected automatically.</p>
 		{/if}
@@ -209,29 +200,6 @@ function onPathKeydown(e: KeyboardEvent): void {
 
 	.hint--ok code {
 		color: var(--color-success);
-	}
-
-	.remote-list {
-		display: flex;
-		flex-direction: column;
-		gap: 5px;
-		margin-top: 10px;
-	}
-
-	.remote-row {
-		display: grid;
-		grid-template-columns: 58px minmax(0, 1fr);
-		gap: 8px;
-		align-items: center;
-		color: var(--color-text-muted);
-		font-size: 11px;
-	}
-
-	.remote-row code {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		color: var(--color-text-secondary);
 	}
 
 	.linked-card {

@@ -11,6 +11,7 @@ import { toast } from "svelte-sonner";
 import { goto } from "$app/navigation";
 import { api } from "$lib/api/client";
 import { bodyMessage } from "$lib/api/errors";
+import { clonePathPreview } from "$lib/repos/add-repo";
 import { fetchDefaultCloneBaseDir, getDefaultCloneBaseDir } from "$lib/repos/catalog.svelte";
 import { type AccountEntry, accountEntries } from "$lib/session/account-entries";
 import { switchSession } from "$lib/session/lifecycle.svelte";
@@ -215,11 +216,11 @@ async function resolveActiveLocator(locator: PullRequestLocator): Promise<void> 
     }
     if (result.status === "repository_not_tracked") {
       await fetchDefaultCloneBaseDir();
-      const base = getDefaultCloneBaseDir()?.replace(/\/$/, "") ?? null;
+      const base = getDefaultCloneBaseDir();
       state = {
         kind: "confirm-repository",
         locator,
-        clonePath: base ? `${base}/${locator.repositoryFullName}` : null,
+        clonePath: base ? clonePathPreview(base, locator.repositoryFullName) : null,
       };
       return;
     }

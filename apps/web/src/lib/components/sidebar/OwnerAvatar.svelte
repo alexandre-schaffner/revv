@@ -1,6 +1,6 @@
 <script lang="ts">
-import Avatar from "./Avatar.svelte";
-import RepoGradientAvatar from "./RepoGradientAvatar.svelte";
+import Avatar from "$lib/components/shared/Avatar.svelte";
+import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 
 // The real GitHub owner/org avatar, or the generated gradient when there is
 // no avatar URL or the image fails to load.

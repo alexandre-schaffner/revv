@@ -4,12 +4,15 @@ import { api } from "$lib/api/client";
 import { apiErrorMessage } from "$lib/api/errors";
 import {
   fetchAvailableRepos,
+  fetchDefaultCloneBaseDir,
   getAvailableRepos,
   getAvailableReposFetchFailed,
   getAvailableReposLoading,
+  getDefaultCloneBaseDir,
 } from "$lib/repos/catalog.svelte";
+import { readStored, STORAGE_KEYS, textCodec, writeStored } from "$lib/stores/persisted.svelte";
 import { getRepositories } from "$lib/stores/repos.svelte";
-import { repoKey } from "./add-repo";
+import { clonePathPreview, repoKey } from "./add-repo";
 
 const MAX_AUTO_RETRIES = 3;
 const AUTO_RETRY_DELAY_MS = 2000;
@@ -75,13 +78,61 @@ export async function pickDirectory(): Promise<string | null> {
   }
 }
 
+/**
+ * Where "Clone from GitHub" puts a clone: the last custom base the user cloned
+ * into, else the server's default. Construct during component init.
+ */
+export class CloneBase {
+  /** A custom base; empty means the server's default. */
+  path = $state(readStored(STORAGE_KEYS.lastCloneBase, textCodec, null) ?? "");
+
+  constructor() {
+    void fetchDefaultCloneBaseDir();
+  }
+
+  get defaultPath(): string | null {
+    return getDefaultCloneBaseDir();
+  }
+
+  /** The custom base to send; absent defers to the server's default. */
+  get custom(): string | undefined {
+    return this.path.trim() || undefined;
+  }
+
+  previewFor(fullName: string): string | null {
+    const base = this.custom ?? getDefaultCloneBaseDir();
+    return base ? clonePathPreview(base, fullName) : null;
+  }
+
+  /**
+   * After a successful clone, so the next one starts there. An empty value
+   * stays empty: pinning the default would outlive a later server change.
+   */
+  remember(): void {
+    writeStored(STORAGE_KEYS.lastCloneBase, textCodec, this.path.trim());
+  }
+
+  async browse(): Promise<void> {
+    const selected = await pickDirectory();
+    if (selected !== null) this.path = selected;
+  }
+}
+
 interface Inspection {
   path: string;
   isGitRepo: boolean;
-  remotes: { name: string; url: string }[];
   /** Resolved from the clone's `origin` remote; null when it isn't on this GitHub host. */
   fullName: string | null;
 }
+
+/** What the inspected folder is, for the hint under the path field. */
+export type LocalCloneStatus =
+  | { readonly kind: "idle" }
+  | { readonly kind: "not-git" }
+  /** Its `origin` doesn't point at a repository on this GitHub host. */
+  | { readonly kind: "foreign-origin" }
+  | { readonly kind: "recognized"; readonly fullName: string }
+  | { readonly kind: "tracked"; readonly fullName: string };
 
 /**
  * A local checkout the user wants to link. The GitHub identity always comes
@@ -94,27 +145,20 @@ export class LocalClone {
   #inspection = $state<Inspection | null>(null);
   #current = $derived(this.#inspection?.path === this.path.trim() ? this.#inspection : null);
 
-  get isGitRepo(): boolean | null {
-    return this.#current?.isGitRepo ?? null;
-  }
+  readonly status = $derived.by((): LocalCloneStatus => {
+    const current = this.#current;
+    if (!current) return { kind: "idle" };
+    if (!current.isGitRepo) return { kind: "not-git" };
+    const fullName = current.fullName;
+    if (fullName === null) return { kind: "foreign-origin" };
+    return getTrackedRepo(fullName)
+      ? { kind: "tracked", fullName }
+      : { kind: "recognized", fullName };
+  });
 
-  get remotes(): { name: string; url: string }[] {
-    return this.#current?.remotes ?? [];
-  }
-
-  get fullName(): string | null {
-    return this.#current?.fullName ?? null;
-  }
-
-  get alreadyTracked(): boolean {
-    const name = this.fullName;
-    return name !== null && getTrackedRepo(name) !== undefined;
-  }
-
-  get linkable(): boolean {
-    return (
-      this.isGitRepo === true && this.fullName !== null && !this.alreadyTracked && !this.inspecting
-    );
+  /** The recognized, untracked repository to link, once inspection settled. */
+  get linkableName(): string | null {
+    return this.status.kind === "recognized" && !this.inspecting ? this.status.fullName : null;
   }
 
   async inspect(): Promise<void> {
@@ -130,7 +174,6 @@ export class LocalClone {
       this.#inspection = {
         path,
         isGitRepo: data.isGitRepo,
-        remotes: [...data.remotes],
         fullName: data.proposedFullName,
       };
       if (!data.isGitRepo) toast.error("Choose a folder that contains a git repository");
