@@ -3,7 +3,7 @@ import { ensureHunkScan } from "$lib/hunk-scan/store.svelte";
 import { getToken } from "$lib/session/token.svelte";
 import { loadConversation } from "$lib/stores/conversation.svelte";
 import { clearReviewFiles, getLoadedHeadSha, loadReviewFiles } from "$lib/stores/diff-files.svelte";
-import { getActiveTab, switchPrViewState } from "$lib/stores/pr-view-state.svelte";
+import { closePrView, getActiveTab, openPrView } from "$lib/stores/pr-view-state.svelte";
 import { markVisited } from "$lib/stores/pr-visits.svelte";
 import { getPrById } from "$lib/stores/prs.svelte";
 import { clearSession, loadSession } from "$lib/stores/review.svelte";
@@ -11,8 +11,7 @@ import { getSettings } from "$lib/stores/settings.svelte";
 import { ensureStackHeadlines } from "$lib/stores/stack-headlines.svelte";
 import { ensureStack, warmNeighbours } from "$lib/stores/stacks.svelte";
 import { requestThreadSync } from "$lib/stores/sync.svelte";
-import { fetchWalkthroughSizing, getWalkthroughSizing } from "$lib/walkthrough/sizing.svelte";
-import { getRiskLevel } from "$lib/walkthrough/store.svelte";
+import { ensurePrRiskTier } from "$lib/walkthrough/sizing.svelte";
 import { useWalkthroughWatch } from "$lib/walkthrough/watch.svelte";
 
 /** Called by the review page during its init. */
@@ -28,7 +27,7 @@ export function useOpenReview(getPrId: () => string | null): void {
     const id = prId;
     if (!id || !signedIn) return;
     untrack(() => {
-      switchPrViewState(id);
+      openPrView(id);
       const session = loadSession(id).catch((e) =>
         console.error("[review] Session load failed (non-blocking):", e),
       );
@@ -40,6 +39,8 @@ export function useOpenReview(getPrId: () => string | null): void {
     // Nothing still loading may write into the next page.
     clearReviewFiles();
     clearSession();
+    const id = untrack(() => prId);
+    if (id) closePrView(id);
   });
 
   const threadSyncPrId = $derived(pr?.id ?? null);
@@ -60,11 +61,7 @@ export function useOpenReview(getPrId: () => string | null): void {
 
   // The risk tier from the diff, before any walkthrough has set one.
   $effect(() => {
-    const id = pr?.id;
-    const headSha = pr?.headSha;
-    if (!id || !headSha || getRiskLevel(id) !== null) return;
-    if (getWalkthroughSizing(id, headSha) !== null) return;
-    void fetchWalkthroughSizing(id, headSha);
+    ensurePrRiskTier(pr?.id ?? null);
   });
 
   // The first pass, for the head the diff on screen was loaded against: asked

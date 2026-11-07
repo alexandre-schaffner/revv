@@ -14,13 +14,14 @@ import {
   Root as PopoverRoot,
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
+import { getSelectedPrId } from "$lib/stores/route.svelte";
 import {
   getSettings,
   getThinkingEffortOptions,
   isAutoEffortOffered,
   updateSettings,
 } from "$lib/stores/settings.svelte";
-import { ensureSelectedPrSizing, getSelectedPrSizing } from "$lib/walkthrough/sizing.svelte";
+import { ensurePrSizing, getPrSizing } from "$lib/walkthrough/sizing.svelte";
 import SelectTrigger from "./SelectTrigger.svelte";
 
 let open = $state(false);
@@ -36,9 +37,9 @@ let currentEffort = $derived(
 let autoOffered = $derived(isAutoEffortOffered());
 
 // What Auto resolves to for this PR at its current head; tracking the SHA re-sizes on pull.
-const selectedSizing = $derived(getSelectedPrSizing(isAuto && autoOffered));
+const selectedSizing = $derived(getPrSizing(getSelectedPrId(), isAuto && autoOffered));
 $effect(() => {
-  if (isAuto && autoOffered) ensureSelectedPrSizing();
+  if (isAuto && autoOffered) ensurePrSizing(getSelectedPrId());
 });
 let sizing = $derived(selectedSizing.sizing);
 

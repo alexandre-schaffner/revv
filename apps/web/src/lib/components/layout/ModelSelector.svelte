@@ -19,7 +19,7 @@ import {
   type ModelOption,
   updateSettings,
 } from "$lib/stores/settings.svelte";
-import { ensureSelectedPrSizing, getSelectedPrSizing } from "$lib/walkthrough/sizing.svelte";
+import { ensurePrSizing, getPrSizing } from "$lib/walkthrough/sizing.svelte";
 import { getIsStreaming, getWalkthroughModelUsed } from "$lib/walkthrough/store.svelte";
 import SelectTrigger from "./SelectTrigger.svelte";
 
@@ -41,9 +41,9 @@ function labelFor(value: string | null): string | null {
   return fetchedModels.find((m) => m.value === value)?.label ?? value;
 }
 
-const selectedSizing = $derived(getSelectedPrSizing(isAuto && autoModelOffered));
+const selectedSizing = $derived(getPrSizing(getSelectedPrId(), isAuto && autoModelOffered));
 $effect(() => {
-  if (isAuto && autoModelOffered) ensureSelectedPrSizing();
+  if (isAuto && autoModelOffered) ensurePrSizing(getSelectedPrId());
 });
 let sizing = $derived(selectedSizing.sizing);
 

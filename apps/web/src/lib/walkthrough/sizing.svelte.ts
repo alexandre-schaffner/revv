@@ -3,20 +3,19 @@
 // tier on open. The server sizes from the cached diff and caches the answer
 // on `(prId, headSha, diffFingerprint)`, shared with the generation path.
 
-import type { WalkthroughSizing } from "@revv/shared";
+import type { RiskLevel, WalkthroughSizing } from "@revv/shared";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
+import { call } from "$lib/api/errors";
+import { DIFF_FILL_WAIT_MS } from "$lib/review/diff-cache";
 import { getPrById } from "$lib/stores/prs.svelte";
 import { createResource } from "$lib/stores/resource";
-import { getSelectedPrId } from "$lib/stores/route.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
+import { getRiskLevel } from "./store.svelte";
 
-/**
- * How long a preview waits for its PR's diff to reach the server's cache
- * (`diff:cached`) before giving up. The review page's diff load fills it; a
- * 3 000-file PR takes ~20 s of GitHub pages.
- */
-export const DIFF_FILL_WAIT_MS = 60_000;
+interface SizingAsk {
+  readonly prId: string;
+  readonly headSha: string;
+}
 
 /**
  * Keyed on everything the answer depends on: `(prId, headSha)`, since a pull
@@ -27,12 +26,14 @@ export const DIFF_FILL_WAIT_MS = 60_000;
  * ask waits for `diff:cached`. An HTTP error (auth, unknown PR) is not
  * pending: it is recorded, and callers show nothing.
  */
-const sizings = createResource<{ prId: string }, WalkthroughSizing>({
+const sizings = createResource<SizingAsk, WalkthroughSizing>({
   freshForMs: Number.POSITIVE_INFINITY,
   waitForSignalMs: DIFF_FILL_WAIT_MS,
   fetch: async (_key, { prId }) => {
-    const { data, error } = await api.api.reviews({ id: prId }).walkthrough.sizing.get();
-    if (error) return { status: "error", error: apiErrorMessage(error, "Sizing failed") };
+    const data = await call(
+      api.api.reviews({ id: prId }).walkthrough.sizing.get(),
+      "Sizing failed",
+    );
     return data.status === "pending" ? { status: "pending", data } : { status: "ok", data };
   },
 });
@@ -51,37 +52,36 @@ export function getWalkthroughSizing(
 }
 
 export function fetchWalkthroughSizing(prId: string, headSha: string): Promise<void> {
-  return sizings.load(cacheKey(prId, headSha), { prId }).then(() => undefined);
+  return sizings.load(cacheKey(prId, headSha), { prId, headSha }).then(() => undefined);
 }
 
-function selectedPrHead(): { prId: string; headSha: string } | null {
-  const prId = getSelectedPrId();
+function currentHead(prId: string | null): SizingAsk | null {
   const headSha = prId ? (getPrById(prId)?.headSha ?? null) : null;
   return prId && headSha ? { prId, headSha } : null;
 }
 
 /**
- * Ask for the selected PR's sizing unless it was already asked: an error or a
- * gave-up answer stands until the head moves. Call from an effect gated on
- * wanting it.
+ * Ask for the PR's sizing at its current head unless it was already asked: an
+ * error or a gave-up answer stands until the head moves. Call from an effect
+ * gated on wanting it.
  */
-export function ensureSelectedPrSizing(): void {
-  const head = selectedPrHead();
+export function ensurePrSizing(prId: string | null): void {
+  const head = currentHead(prId);
   if (!head) return;
   if (sizings.entry(cacheKey(head.prId, head.headSha)).request.status !== "idle") return;
   void fetchWalkthroughSizing(head.prId, head.headSha);
 }
 
 /**
- * The selected PR's sizing, and whether one is still outstanding while
- * `active` (the caller's feature gate, e.g. a saved Auto sentinel with the
- * TypeSafe master switch on).
+ * The PR's sizing at its current head, and whether one is still outstanding
+ * while `active` (the caller's feature gate, e.g. a saved Auto sentinel with
+ * the TypeSafe master switch on).
  */
-export function getSelectedPrSizing(active: boolean): {
-  sizing: WalkthroughSizing | null;
-  pending: boolean;
-} {
-  const head = selectedPrHead();
+export function getPrSizing(
+  prId: string | null,
+  active: boolean,
+): { sizing: WalkthroughSizing | null; pending: boolean } {
+  const head = currentHead(prId);
   if (!head) return { sizing: null, pending: false };
   const entry = sizings.entry(cacheKey(head.prId, head.headSha));
   const sizing = entry.request.status === "ok" ? entry.request.data : null;
@@ -92,19 +92,28 @@ export function getSelectedPrSizing(active: boolean): {
   return { sizing, pending };
 }
 
-/** The diff a `pending` sizing was waiting for is cached: ask again. */
-export function onDiffCached(data: { prId: string; headSha: string }): void {
-  const prefix = `${data.prId}|${data.headSha}|`;
-  for (const key of sizings.waitingKeys()) {
-    if (key.startsWith(prefix)) void sizings.refresh(key, { prId: data.prId });
-  }
+/**
+ * How much attention the PR needs: the tier its walkthrough was written at,
+ * else the one sized from the diff before any review ran. `fromReview` says
+ * which.
+ */
+export function getPrRiskTier(prId: string): { level: RiskLevel; fromReview: boolean } | null {
+  const reviewed = getRiskLevel(prId);
+  if (reviewed !== null) return { level: reviewed, fromReview: true };
+  const { sizing } = getPrSizing(prId, false);
+  return sizing?.status === "ready" && sizing.riskLevel !== null
+    ? { level: sizing.riskLevel, fromReview: false }
+    : null;
 }
 
-/** A `diff:cached` sent while the stream was down reached no one: ask again. */
-export function onEventsReconnected(): void {
-  for (const key of sizings.waitingKeys()) {
-    void sizings.refresh(key, { prId: key.slice(0, key.indexOf("|")) });
-  }
+/** Size the PR from its diff unless a walkthrough already set its tier. */
+export function ensurePrRiskTier(prId: string | null): void {
+  if (prId !== null && getRiskLevel(prId) === null) ensurePrSizing(prId);
+}
+
+/** The diff a `pending` sizing was waiting for is cached: ask again. */
+export function onDiffCached(data: { prId: string; headSha: string }): void {
+  sizings.refreshWaiting((_key, ask) => ask.prId === data.prId && ask.headSha === data.headSha);
 }
 
 export function reset(): void {
