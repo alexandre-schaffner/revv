@@ -247,7 +247,7 @@ if [[ "$MODE" == "dev" ]]; then
   printf '%s\n' "$REVV_RESET"
   printf '  %sStart developing:%s\n' "$REVV_BOLD" "$REVV_RESET"
   printf '    %s$%s make dev             %s# all services (web, server, Tauri)%s\n' "$REVV_DIM" "$REVV_RESET" "$REVV_DIM" "$REVV_RESET"
-  printf '    %s$%s make dev-server      %s# API only (port 45678)%s\n\n' "$REVV_DIM" "$REVV_RESET" "$REVV_DIM" "$REVV_RESET"
+  printf '    %s$%s make dev-server      %s# API only (port 45679)%s\n\n' "$REVV_DIM" "$REVV_RESET" "$REVV_DIM" "$REVV_RESET"
   printf '  On first server start, Revv generates an auth key at:\n'
   printf '    %s\n' "${REVV_AUTH_KEY:-$HOME/Library/Application Support/Revv/auth.key}"
   printf '  No .env file is required for normal use — see .env.example for\n'

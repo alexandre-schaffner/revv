@@ -21,7 +21,7 @@ dev: kill-server ## Start all services in development mode
 	$(DEV_ENV) bun run dev
 
 dev-server: kill-server ## Start only the API server (port 45679)
-	REVV_DEBUG=1 REVV_CHANNEL=dev PORT=45679 REVV_DB_PATH=./revv-dev.db REVV_CLONE_DIR=$$HOME/.revv/repos-dev bun run dev:server
+	$(DEV_ENV) bun run dev:server
 
 dev-desktop: kill-server ## Start the Tauri desktop app + Grafana (http://localhost:3000)
 	@printf "\033[36m[dev-desktop]\033[0m telemetry dashboard → \033[1mhttp://localhost:3000/d/revv-overview\033[0m (collector API/OTLP on :45680)\n"
