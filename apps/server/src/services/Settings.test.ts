@@ -224,6 +224,31 @@ describe("SettingsService", () => {
     expect(reloaded.jev).toEqual({ enabled: true, hasApiKey: false });
   });
 
+  it("keeps both of two concurrent patches, in memory and in the row", async () => {
+    const db = createDb(":memory:");
+    const inMemory = await run(
+      db,
+      Effect.gen(function* () {
+        const s = yield* SettingsService;
+        yield* Effect.all(
+          [
+            s.updateSettings({ diffViewMode: "split" }),
+            s.updateSettings({ autoFetchInterval: 10 }),
+          ],
+          { concurrency: "unbounded" },
+        );
+        return yield* s.getSettings();
+      }),
+    );
+    const reloaded = await run(
+      db,
+      Effect.flatMap(SettingsService, (s) => s.getSettings()),
+    );
+    for (const s of [inMemory, reloaded]) {
+      expect([s.diffViewMode, s.autoFetchInterval]).toEqual(["split", 10]);
+    }
+  });
+
   it("resolves a valid agent from a row naming one that no longer exists", async () => {
     const db = createDb(":memory:");
     await run(
