@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Effect, Result } from "effect";
+import { Effect, Fiber, Result } from "effect";
+import { TestClock } from "effect/testing";
 import { fetchCheckDetails, fetchCiRollup, fetchConversation } from "./conversation";
 import { makeHttp } from "./transport";
 
@@ -33,6 +34,20 @@ function stubGraphql(
     { preconnect: realFetch.preconnect },
   );
   return queries;
+}
+
+/** Runs `effect` on a virtual clock, so a retry's backoff passes as soon as it starts. */
+function skippingBackoff<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(effect);
+      while (fiber.pollUnsafe() === undefined) {
+        yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 1)));
+        yield* TestClock.adjust("2 seconds");
+      }
+      return yield* Fiber.join(fiber);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
 }
 
 const ROLLUP = {
@@ -276,7 +291,7 @@ describe("GitHub's own GraphQL failures", () => {
   it("asks the conversation again instead of failing the tab", async () => {
     const queries = stubGraphql(() => (queries.length === 1 ? FAILURE : CONVERSATION));
 
-    const result = await Effect.runPromise(
+    const result = await skippingBackoff(
       fetchConversation(http, client, { owner: "o", repo: "r" }, 1, "pr-id").pipe(Effect.result),
     );
 

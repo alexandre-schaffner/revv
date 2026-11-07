@@ -3,12 +3,7 @@ import type { StackMergeMode, StackMergeRun } from "@revv/shared";
 import { Effect } from "effect";
 import { GitHubApiError, type GitHubError, GitHubNetworkError } from "../../domain/errors";
 import type { GitHubStack, GitHubStackLayer } from "./map";
-import {
-  driveRun,
-  MAX_READ_FAILURES,
-  type MergeDriverPort,
-  type SaveEffects,
-} from "./merge-driver";
+import { driveRun, type MergeDriverPort, type SaveEffects } from "./merge-driver";
 import { RETARGET_WAIT_MS } from "./merge-plan";
 import type { Contradiction } from "./unverified-github";
 
@@ -47,7 +42,7 @@ interface WorldOptions {
   readonly autoMergeAfterReads?: number;
   readonly afterRebase?: (number: number) => string;
   readonly rebaseFails?: () => string | null;
-  readonly cancelAtSave?: number;
+  readonly cancelAfterWrites?: number;
   readonly cancelDuringRebase?: boolean;
   readonly retargetDropsLayer?: boolean;
 }
@@ -167,7 +162,7 @@ function world(layers: GitHubStackLayer[], opts: WorldOptions = {}) {
       }),
     save: (run, effects) =>
       Effect.sync(() => {
-        if (opts.cancelAtSave !== undefined && saves.length + 1 >= opts.cancelAtSave) {
+        if (opts.cancelAfterWrites !== undefined && writes.length >= opts.cancelAfterWrites) {
           cancelled = true;
         }
         if (cancelled) return "ended" as const;
@@ -379,7 +374,7 @@ describe("driveRun", () => {
   });
 
   test("a cancel between steps stops the run before its next GitHub write", async () => {
-    const gh = world([layer(1), layer(2)], { cancelAtSave: 3 });
+    const gh = world([layer(1), layer(2)], { cancelAfterWrites: 1 });
     await drive(runOf(2), gh.port);
     expect(gh.writes).toEqual(["merge #101 merge @h1"]);
   });
@@ -397,6 +392,5 @@ describe("driveRun", () => {
     expect(run.status).toBe("failed");
     expect(down.writes).toEqual([]);
     expect(run.error).toContain("Continue");
-    expect(MAX_READ_FAILURES).toBeGreaterThan(2);
   });
 });

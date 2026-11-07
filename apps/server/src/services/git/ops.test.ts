@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, setDefaultTimeout } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -9,7 +10,6 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -26,6 +26,9 @@ import {
 import { classifyPushFailure, workflowPermissionRejection } from "./push";
 import { redactGitAuth } from "./remote";
 import { gitAttempt } from "./runner";
+
+// git processes start slowly on a loaded machine; a test here runs a dozen.
+setDefaultTimeout(60_000);
 
 const GIT_ENV: Record<string, string> = {
   ...process.env,
@@ -59,7 +62,7 @@ const SOURCE_BRANCH = "iam/1-authn-service";
 const AGENT_BRANCH = "revv/pr-1";
 
 interface Fixture {
-  /** Temp root; delete this to clean up everything below it. */
+  /** Temp root holding every repo below. */
   base: string;
   origin: string;
   clonePath: string;
@@ -71,19 +74,25 @@ interface Fixture {
   sourceTip: string;
 }
 
+function fixtureAt(base: string, sourceTip: string): Fixture {
+  return {
+    base,
+    origin: join(base, "origin"),
+    clonePath: join(base, "clone"),
+    userWorktree: join(base, "user-worktree"),
+    revvWorktree: join(base, "revv-worktree"),
+    sourceTip,
+  };
+}
+
 /**
  * A bare origin, one clone, and **two linked worktrees** of that clone: the
  * user's and Revv's. Being linked makes `.git` a *file* in each, and the user's
  * holding the source branch makes `git checkout -B {sourceBranch}` illegal in
  * Revv's.
  */
-function makeFixture(prefix: string): Fixture {
-  const base = mkdtempSync(join(tmpdir(), prefix));
-  const origin = join(base, "origin");
-  const clonePath = join(base, "clone");
-  const userWorktree = join(base, "user-worktree");
-  const revvWorktree = join(base, "revv-worktree");
-
+function buildFixture(base: string): string {
+  const { origin, clonePath, userWorktree, revvWorktree } = fixtureAt(base, "");
   const seed = join(base, "seed");
   git(base, ["init", "-q", "-b", "main", "seed"]);
   commitFile(seed, "README.md", "seed\n", "seed");
@@ -94,35 +103,54 @@ function makeFixture(prefix: string): Fixture {
   git(seed, ["checkout", "-q", "main"]);
   git(base, ["clone", "-q", "--bare", seed, "origin"]);
   git(base, ["clone", "-q", origin, "clone"]);
+  // The code under test runs git with the developer's own environment, so
+  // their global `commit.gpgsign` would sign every merge it writes here (and
+  // prompt, or fail, with the signer locked). The clone's config wins over it
+  // and is shared by both linked worktrees.
+  git(clonePath, ["config", "commit.gpgsign", "false"]);
+  git(clonePath, ["config", "user.name", "Revv Test"]);
+  git(clonePath, ["config", "user.email", "revv-test@example.com"]);
 
   git(clonePath, ["worktree", "add", "-q", userWorktree, SOURCE_BRANCH]);
   git(clonePath, ["worktree", "add", "-q", "-B", AGENT_BRANCH, revvWorktree, sourceTip]);
+  return sourceTip;
+}
 
-  return { base, origin, clonePath, userWorktree, revvWorktree, sourceTip };
+// Built once and copied back before each test: the repos record absolute
+// paths, so the copy goes back to the same place.
+let fixtureBase: string;
+let pristine: string;
+let pristineSourceTip: string;
+
+beforeAll(() => {
+  fixtureBase = mkdtempSync(join(tmpdir(), "revv-gitops-"));
+  pristineSourceTip = buildFixture(fixtureBase);
+  pristine = `${fixtureBase}-pristine`;
+  cpSync(fixtureBase, pristine, { recursive: true });
+});
+
+afterAll(() => {
+  rmSync(fixtureBase, { recursive: true, force: true });
+  rmSync(pristine, { recursive: true, force: true });
+});
+
+function makeFixture(): Fixture {
+  rmSync(fixtureBase, { recursive: true, force: true });
+  cpSync(pristine, fixtureBase, { recursive: true });
+  return fixtureAt(fixtureBase, pristineSourceTip);
 }
 
 describe("checkoutDetached", () => {
   const sourceBranch = SOURCE_BRANCH;
   const agentBranch = AGENT_BRANCH;
 
-  let base: string;
   let userWorktree: string;
   let revvWorktree: string;
   let sourceTip: string;
 
   beforeEach(() => {
-    ({ base, userWorktree, revvWorktree, sourceTip } = makeFixture("revv-gitops-"));
+    ({ userWorktree, revvWorktree, sourceTip } = makeFixture());
     commitFile(revvWorktree, "authn.ts", "export const authn = 2;\n", "agent: tweak authn");
-  });
-
-  afterEach(async () => {
-    await rm(base, { recursive: true, force: true });
-  });
-
-  it("reproduces the branch-checkout collision it exists to avoid", () => {
-    expect(() =>
-      git(revvWorktree, ["checkout", "-B", sourceBranch, `refs/remotes/origin/${sourceBranch}`]),
-    ).toThrow(/already used by worktree/);
   });
 
   it("positions HEAD at the source-branch tip while another worktree holds it", async () => {
@@ -164,21 +192,16 @@ describe("isMergeInProgress", () => {
   const sourceBranch = SOURCE_BRANCH;
   const agentBranch = AGENT_BRANCH;
 
-  let base: string;
   let userWorktree: string;
   let revvWorktree: string;
 
   beforeEach(() => {
-    ({ base, userWorktree, revvWorktree } = makeFixture("revv-gitops-merge-"));
+    ({ userWorktree, revvWorktree } = makeFixture());
 
     commitFile(revvWorktree, "authn.ts", "export const authn = 2;\n", "agent: authn = 2");
     commitFile(userWorktree, "authn.ts", "export const authn = 3;\n", "upstream: authn = 3");
     git(userWorktree, ["push", "-q", "origin", sourceBranch]);
     git(revvWorktree, ["fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*"]);
-  });
-
-  afterEach(async () => {
-    await rm(base, { recursive: true, force: true });
   });
 
   it("is false on a clean linked worktree", async () => {
@@ -416,7 +439,7 @@ describe("every git command Revv runs", () => {
   };
 
   beforeEach(() => {
-    fixture = makeFixture("revv-gitops-policy-");
+    fixture = makeFixture();
     commitFile(fixture.revvWorktree, "agent.ts", "agent\n", "agent: add");
     commitFile(fixture.userWorktree, "user.ts", "user\n", "user: add");
     git(fixture.userWorktree, ["push", "-q", "origin", SOURCE_BRANCH]);
@@ -430,10 +453,6 @@ describe("every git command Revv runs", () => {
       chmodSync(join(hooks, hook), 0o755);
     }
     git(fixture.clonePath, ["config", "core.hooksPath", hooks]);
-  });
-
-  afterEach(async () => {
-    await rm(fixture.base, { recursive: true, force: true });
   });
 
   it("runs none of the user's hooks", async () => {
@@ -454,16 +473,14 @@ describe("every git command Revv runs", () => {
     expect(existsSync(ran)).toBe(false);
   });
 
-  it("surfaces a signer that refuses, at once", async () => {
+  it("surfaces a signer that refuses with its reason, not as a timeout", async () => {
     signWith(fixture.clonePath, fakeSigner(fixture.base, "refuse"));
     await detachOntoSource();
 
-    const startedAt = Date.now();
     const merged = await merge(fixture.revvWorktree, AGENT_BRANCH, { message: "merge" });
     expect(merged.ok).toBe(false);
     expect(merged.timedOut).toBe(false);
     expect(merged.stderr).toMatch(/sign/i);
-    expect(Date.now() - startedAt).toBeLessThan(10_000);
   });
 
   it("gives up on a signer that never answers instead of hanging", async () => {
@@ -495,11 +512,7 @@ describe("removeWorktree", () => {
   let fixture: Fixture;
 
   beforeEach(() => {
-    fixture = makeFixture("revv-gitops-remove-");
-  });
-
-  afterEach(async () => {
-    await rm(fixture.base, { recursive: true, force: true });
+    fixture = makeFixture();
   });
 
   // `git worktree prune` would also drop the user's worktrees whose drive

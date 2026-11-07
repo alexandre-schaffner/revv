@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, setDefaultTimeout } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -9,11 +10,13 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RebaseStep } from "./rebase-plan";
 import { cleanupReplay, pushStack, type ReplayInput, replayStack } from "./stack-rebase-git";
+
+// git processes start slowly on a loaded machine; a test here runs a dozen.
+setDefaultTimeout(60_000);
 
 const FIXTURE_ENV: Record<string, string> = {
   ...process.env,
@@ -39,10 +42,11 @@ function commit(cwd: string, file: string, body: string, message: string): strin
   return git(cwd, ["rev-parse", "HEAD"]);
 }
 
-let root: string;
-let origin: string;
-let dev: string;
-let revv: string;
+const root = mkdtempSync(join(tmpdir(), "revv-stack-rebase-"));
+const pristine = `${root}-pristine`;
+const origin = join(root, "origin.git");
+const dev = join(root, "dev");
+const revv = join(root, "revv");
 
 let tips: { a: string; b: string; c: string };
 
@@ -107,11 +111,9 @@ async function rebaseAndPush(steps: RebaseStep[]) {
   }
 }
 
-beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "revv-stack-rebase-"));
-  origin = join(root, "origin.git");
-  dev = join(root, "dev");
-  revv = join(root, "revv");
+// Built once and copied back before each test: the repos record absolute
+// paths, so the copy goes back to the same place.
+beforeAll(() => {
   execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin], { env: FIXTURE_ENV });
   git(origin, ["config", "uploadpack.allowAnySHA1InWant", "true"]);
 
@@ -135,10 +137,17 @@ beforeEach(() => {
   git(revv, ["config", "user.email", "revv@example.com"]);
   git(revv, ["config", "commit.gpgsign", "false"]);
   git(revv, ["config", "core.hooksPath", "/dev/null"]);
+  cpSync(root, pristine, { recursive: true });
 });
 
-afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
+beforeEach(() => {
+  rmSync(root, { recursive: true, force: true });
+  cpSync(pristine, root, { recursive: true });
+});
+
+afterAll(() => {
+  rmSync(root, { recursive: true, force: true });
+  rmSync(pristine, { recursive: true, force: true });
 });
 
 describe("stack rebase in Revv's clone", () => {

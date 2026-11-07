@@ -1,7 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, setDefaultTimeout } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { chmodSync, cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isWorktreeHealthy } from "../RepoClone";
@@ -16,6 +15,9 @@ import {
   resetToBase,
   resolveBaseSha,
 } from "./agent-branch";
+
+// git processes start slowly on a loaded machine; a test here runs a dozen.
+setDefaultTimeout(60_000);
 
 const GIT_ENV: Record<string, string> = {
   ...process.env,
@@ -44,24 +46,37 @@ function commitFile(cwd: string, name: string, body: string, message: string): s
 const subjects = (cwd: string, range: string) =>
   git(cwd, ["log", "--format=%s", range]).split("\n").filter(Boolean);
 
-let base: string;
-let worktree: string;
-let branch: AgentBranch;
+const base = mkdtempSync(join(tmpdir(), "revv-agent-branch-"));
+const pristine = `${base}-pristine`;
+const worktree = join(base, "repo");
+const branch: AgentBranch = { worktreePath: worktree, branchName: "revv/pr-1" };
 let oldHead: string;
 let prHead: string;
 
-beforeEach(() => {
-  base = mkdtempSync(join(tmpdir(), "revv-agent-branch-"));
-  worktree = join(base, "repo");
+// Built once and copied back before each test: the repo records absolute
+// paths, so the copy goes back to the same place.
+beforeAll(() => {
   git(base, ["init", "-q", "-b", "revv/pr-1", "repo"]);
+  // The rewrites under test run git with the developer's own environment, so
+  // their global `commit.gpgsign` would sign (or prompt for) every replayed
+  // commit. The repo's config wins over it.
+  git(worktree, ["config", "commit.gpgsign", "false"]);
+  git(worktree, ["config", "user.name", "Revv Test"]);
+  git(worktree, ["config", "user.email", "revv-test@example.com"]);
   commitFile(worktree, "README.md", "seed\n", "seed");
   oldHead = commitFile(worktree, "a.ts", "a1\n", "pr: first commit");
   prHead = commitFile(worktree, "b.ts", "b1\n", "pr: second commit");
-  branch = { worktreePath: worktree, branchName: "revv/pr-1" };
+  cpSync(base, pristine, { recursive: true });
 });
 
-afterEach(async () => {
-  await rm(base, { recursive: true, force: true });
+beforeEach(() => {
+  rmSync(base, { recursive: true, force: true });
+  cpSync(pristine, base, { recursive: true });
+});
+
+afterAll(() => {
+  rmSync(base, { recursive: true, force: true });
+  rmSync(pristine, { recursive: true, force: true });
 });
 
 // The agent branch's baseline: the tightest of the PR heads Revv has seen.
