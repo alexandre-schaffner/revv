@@ -465,9 +465,8 @@ export function onUserUpdated(data: UserUpdatedEnvelope["data"]): void {
     githubLogin: data.githubLogin,
     onboardedAt: user.onboardedAt ?? null,
   };
-  if (data.image != null) {
-    next.image = data.image;
-  }
+  const image = data.avatarContent ?? user.image;
+  if (image != null) next.image = image;
   user = next;
   holdCurrentSession();
 }

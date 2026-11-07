@@ -1,6 +1,7 @@
 import { and, eq, gt, inArray } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { account, repositories, session, user } from "../../db/schema";
+import { avatarOfHostLogin } from "../../db/schema/remote-users";
 import {
   type DbError,
   GitHubAuthError,
@@ -576,6 +577,7 @@ export const GitHubAccountsLive = Layer.effect(
               email: user.email,
               image: user.image,
               githubLogin: user.githubLogin,
+              avatarContent: avatarOfHostLogin(identity.login, hostFromProviderId(row.providerId)),
             })
             .from(user)
             .where(eq(user.id, row.userId))
@@ -597,7 +599,7 @@ export const GitHubAccountsLive = Layer.effect(
             id: userRow.id,
             name: userRow.name,
             email: userRow.email,
-            image: identity.avatarUrl,
+            avatarContent: userRow.avatarContent,
             githubLogin: identity.login,
           },
         });

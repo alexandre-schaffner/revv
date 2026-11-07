@@ -200,13 +200,18 @@ export interface ReposCloneStatusEnvelope {
   data: { repoId: string; status: CloneStatus; error?: string };
 }
 
+/**
+ * Full state of the signed-in user's GitHub identity, after GitHub reported a
+ * new login or avatar. `avatarContent` is the cached data URL, as on
+ * `UserIdentity`: GitHub Enterprise avatar URLs are signed and expire.
+ */
 export interface UserUpdatedEnvelope {
   type: "user:updated";
   data: {
     id: string;
     name: string;
     email: string;
-    image: string | null;
+    avatarContent: string | null;
     githubLogin: string | null;
   };
 }
