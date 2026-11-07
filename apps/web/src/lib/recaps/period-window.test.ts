@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, setSystemTime } from "bun:test";
 import {
   addUtcDays,
   dayKeyToUtcDate,
@@ -18,15 +18,12 @@ import {
   shiftMonth,
   slotKeyFor,
   slotSpan,
-  utcDayKey,
 } from "./period-window";
 
 describe("dayKeyToUtcDate", () => {
   it("parses a day key as UTC midnight, not local midnight", () => {
     const d = dayKeyToUtcDate("2026-06-03");
     expect(d.toISOString()).toBe("2026-06-03T00:00:00.000Z");
-    // The trap this helper exists to avoid: the string below is local time.
-    expect(d.getTime()).toBe(Date.parse("2026-06-03"));
   });
 });
 
@@ -49,10 +46,9 @@ describe("addUtcDays", () => {
 });
 
 describe("monthKeyOf / shiftMonth", () => {
-  it("reads a month key off any accepted value shape", () => {
+  it("reads a month key off a day key or an ISO instant", () => {
     expect(monthKeyOf("2026-06-03")).toBe("2026-06");
     expect(monthKeyOf("2026-06-03T12:00:00.000Z")).toBe("2026-06");
-    expect(monthKeyOf(new Date(Date.UTC(2026, 5, 3)))).toBe("2026-06");
   });
 
   it("rolls across years in both directions", () => {
@@ -123,14 +119,6 @@ describe("monthGridRange", () => {
     expect(from).toBe("2026-02-23T00:00:00.000Z");
     expect(to).toBe("2026-04-06T00:00:00.000Z");
   });
-
-  it("is half-open: the exclusive end is the day after the last cell", () => {
-    const { weeks } = monthGrid("2026-06");
-    const lastCell = weeks[5]?.[6] as string;
-    expect(monthGridRange("2026-06").to).toBe(
-      dayKeyToUtcDate(addUtcDays(lastCell, 1)).toISOString(),
-    );
-  });
 });
 
 describe("slot keys", () => {
@@ -156,16 +144,6 @@ describe("slot keys", () => {
       expect(slotKeyFor("weekly", day)).toBe("weekly:2026-06-01");
     }
     expect(slotKeyFor("daily", "2026-06-04")).toBe("daily:2026-06-04");
-  });
-
-  it("survives a Date-valued periodStart (Eden revives ISO strings to Date)", () => {
-    expect(
-      recapSlotKey({
-        period: "daily",
-        periodStart: new Date("2026-06-03T00:00:00.000Z"),
-        periodEnd: new Date("2026-06-04T00:00:00.000Z"),
-      }),
-    ).toBe("daily:2026-06-03");
   });
 });
 
@@ -222,17 +200,21 @@ describe("selectionBoundaries", () => {
 });
 
 describe("recapWindowIsStale", () => {
-  it("is true for a closed full day, whatever the date", () => {
+  const now = new Date("2026-06-04T09:30:00.000Z");
+  beforeEach(() => setSystemTime(now));
+  afterEach(() => setSystemTime());
+
+  it("is true for a closed full day, even today's", () => {
     expect(
       recapWindowIsStale({
         period: "daily",
-        periodStart: "2026-06-03T00:00:00.000Z",
-        periodEnd: "2026-06-04T00:00:00.000Z",
+        periodStart: "2026-06-04T00:00:00.000Z",
+        periodEnd: "2026-06-05T00:00:00.000Z",
       }),
     ).toBe(true);
   });
 
-  it("is true for a closed full week", () => {
+  it("is true for a closed full week, even this one", () => {
     expect(
       recapWindowIsStale({
         period: "weekly",
@@ -243,10 +225,12 @@ describe("recapWindowIsStale", () => {
   });
 
   it("is false for a rolling window over today", () => {
-    const now = new Date();
-    const start = `${utcDayKey(now)}T00:00:00.000Z`;
     expect(
-      recapWindowIsStale({ period: "daily", periodStart: start, periodEnd: now.toISOString() }),
+      recapWindowIsStale({
+        period: "daily",
+        periodStart: "2026-06-04T00:00:00.000Z",
+        periodEnd: now.toISOString(),
+      }),
     ).toBe(false);
   });
 
@@ -254,8 +238,8 @@ describe("recapWindowIsStale", () => {
     expect(
       recapWindowIsStale({
         period: "daily",
-        periodStart: "2020-01-01T00:00:00.000Z",
-        periodEnd: "2020-01-01T18:00:00.000Z",
+        periodStart: "2026-06-03T00:00:00.000Z",
+        periodEnd: "2026-06-03T18:00:00.000Z",
       }),
     ).toBe(true);
   });

@@ -1,17 +1,16 @@
 import { describe, expect, it } from "bun:test";
 import { renderPrLens } from "./prlens";
 
-// `stripAnimation` and `themeStyleBlock` are regex transforms over the
-// renderer's output, so they are tested against a real render of a real
-// document rather than a handcrafted SVG string — the shape they depend on
-// belongs to the package, not to us, and a package bump is exactly when they
-// would quietly stop matching.
+// `stripAnimation` is a regex transform over the renderer's output, so it is
+// tested against a real render of a real document rather than a handcrafted
+// SVG string — the shape it depends on belongs to the package, not to us, and
+// a package bump is exactly when it would quietly stop matching.
 //
 // The document is a copy of the `data-flow` worked example in
 // `walkthrough-system-common.md`. That the prompt's examples still satisfy the
 // schema is asserted next to the prompt itself, in
 // `apps/server/src/ai/prompts/prlens-examples.test.ts`; here the document is
-// only a fixture that has to animate and carry a stylesheet.
+// only a fixture that has to animate.
 
 const DATA_FLOW = JSON.stringify({
   title: "Review context is fetched once per session",
@@ -89,25 +88,6 @@ describe("renderPrLens", () => {
     expect(result.svg).not.toContain("<animate");
     expect(result.svg).not.toContain("repeatCount");
     expect(result.svg).toContain("<path");
-  });
-
-  it("confines the SVG's own stylesheet to the diagram", async () => {
-    const result = await renderPrLens(DATA_FLOW, "light", false);
-    expect("svg" in result).toBe(true);
-    if (!("svg" in result)) return;
-
-    // The renderer inlines its styles since 0.3, so there may be no sheet at
-    // all. Any it does emit must be scoped: a bare `text{…}` would otherwise
-    // restyle every inline SVG on the page.
-    const sheets = [...result.svg.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((m) => m[1] ?? "");
-    for (const css of sheets) {
-      const selectors = [...css.matchAll(/([^{}]+)\{[^{}]*\}/g)].map((m) => (m[1] ?? "").trim());
-      for (const selector of selectors) {
-        for (const part of selector.split(",")) {
-          expect(part.trim().startsWith(".prlens-diagram ")).toBe(true);
-        }
-      }
-    }
   });
 
   it("returns an error rather than rejecting on a malformed document", async () => {

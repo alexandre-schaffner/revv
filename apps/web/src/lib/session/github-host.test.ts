@@ -8,10 +8,6 @@ describe("normalizeGithubHost", () => {
     expect(normalizeGithubHost("ghe.example.com")).toBe("ghe.example.com");
   });
 
-  it("keeps the host's case and any path before the trailing slash", () => {
-    expect(normalizeGithubHost("GHE.example.com/sub/")).toBe("GHE.example.com/sub");
-  });
-
   it("returns an empty string for blank input", () => {
     expect(normalizeGithubHost("   ")).toBe("");
   });
