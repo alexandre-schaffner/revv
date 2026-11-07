@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { ArtifactBlock } from "@revv/shared";
+import { ARTIFACT_THEME_TOKENS, type ArtifactBlock } from "@revv/shared";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import { onDestroy, untrack } from "svelte";
@@ -62,32 +62,9 @@ const hostUrl = $derived.by(() => {
 function collectThemeTokens(): ArtifactTokens {
   if (!browser) return {};
   const styles = getComputedStyle(document.documentElement);
-  const names = [
-    "--color-bg-primary",
-    "--color-bg-secondary",
-    "--color-bg-tertiary",
-    "--color-bg-elevated",
-    "--color-border",
-    "--color-border-subtle",
-    "--color-text-primary",
-    "--color-text-secondary",
-    "--color-text-muted",
-    "--color-accent",
-    "--color-accent-hover",
-    "--color-accent-muted",
-    "--color-success",
-    "--color-warning",
-    "--color-danger",
-    "--font-sans",
-    "--font-mono",
-    "--radius-card",
-    "--radius-island",
-    "--spacing-island-half",
-    "--spacing-island",
-    "--spacing-inset",
-    "--spacing-island-2x",
-  ];
-  return Object.fromEntries(names.map((name) => [name, styles.getPropertyValue(name).trim()]));
+  return Object.fromEntries(
+    ARTIFACT_THEME_TOKENS.map((name) => [name, styles.getPropertyValue(name).trim()]),
+  );
 }
 
 function postMount(html: string): void {

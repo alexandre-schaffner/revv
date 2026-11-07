@@ -1,5 +1,6 @@
 /// <reference path="../../assets.d.ts" />
 import {
+  ARTIFACT_THEME_TOKEN_GROUPS,
   HUNK_SMELL_META,
   hunkNewEnd,
   REVIEW_MODE,
@@ -45,9 +46,20 @@ export interface WalkthroughReviewMode {
 // trailing it.
 const REVIEW_PERSPECTIVE_MARKER = "{{REVIEW_PERSPECTIVE}}";
 
+const ARTIFACT_THEME_TOKENS_MARKER = "{{ARTIFACT_THEME_TOKENS}}";
+if (!WALKTHROUGH_ARTIFACTS_PROMPT.includes(ARTIFACT_THEME_TOKENS_MARKER)) {
+  throw new Error(`walkthrough-artifacts.md is missing the ${ARTIFACT_THEME_TOKENS_MARKER} marker`);
+}
+
 // The artifact craft spec is single-sourced in `walkthrough-artifacts.md`
 // because the chat agent's edit tools write artifact blocks too.
-export const WALKTHROUGH_ARTIFACT_SPEC: string = WALKTHROUGH_ARTIFACTS_PROMPT.trim();
+export const WALKTHROUGH_ARTIFACT_SPEC: string = WALKTHROUGH_ARTIFACTS_PROMPT.replace(
+  ARTIFACT_THEME_TOKENS_MARKER,
+  () =>
+    ARTIFACT_THEME_TOKEN_GROUPS.map(
+      ({ label, tokens }) => `- **${label}:** ${tokens.map((t) => `\`${t}\``).join(", ")}`,
+    ).join("\n"),
+).trim();
 
 const CONTRACT_FRAGMENTS: ReadonlyArray<readonly [marker: string, value: string]> = [
   ["{{ARTIFACT_SPEC}}", WALKTHROUGH_ARTIFACT_SPEC],

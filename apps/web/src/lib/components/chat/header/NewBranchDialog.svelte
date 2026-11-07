@@ -1,6 +1,7 @@
 <script lang="ts">
 // Push the agent's commits to a new branch instead of the PR's. If the remote
 // already has that branch, the same dialog asks before force-pushing over it.
+import { isValidBranchName } from "@revv/shared";
 import GitBranch from "phosphor-svelte/lib/GitBranch";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import Warning from "phosphor-svelte/lib/Warning";
@@ -32,13 +33,6 @@ function suggestedName(): string {
   return base && base.length > 0 ? `${base}-agent` : "agent-changes";
 }
 
-function isValidName(value: string): boolean {
-  const trimmed = value.trim();
-  return (
-    trimmed.length > 0 && !/\s/.test(trimmed) && !trimmed.startsWith("-") && !trimmed.includes("..")
-  );
-}
-
 export function show(): void {
   mode = "input";
   name = suggestedName();
@@ -49,7 +43,7 @@ export function show(): void {
 async function submit(): Promise<void> {
   if (mode !== "input") return;
   const branch = name.trim();
-  if (!isValidName(branch)) return;
+  if (!isValidBranchName(branch)) return;
   const result = await pushProposed(prId, { newBranchName: branch });
   if (result?.status === "ref-exists") {
     name = branch;
@@ -108,14 +102,14 @@ async function overwrite(): Promise<void> {
 						disabled={isPushing}
 						class="font-mono"
 						onkeydown={(e: KeyboardEvent) => {
-							if (e.key === "Enter" && isValidName(name)) {
+							if (e.key === "Enter" && isValidBranchName(name)) {
 								e.preventDefault();
 								void submit();
 							}
 						}}
 					/>
 				</label>
-				{#if name.length > 0 && !isValidName(name)}
+				{#if name.length > 0 && !isValidBranchName(name)}
 					<p class="hint hint--error">
 						Branch names can't be empty, contain spaces, start with
 						<code>-</code>, or contain <code>..</code>.
@@ -142,7 +136,7 @@ async function overwrite(): Promise<void> {
 						variant="default"
 						size="sm"
 						onclick={submit}
-						disabled={isPushing || !isValidName(name)}
+						disabled={isPushing || !isValidBranchName(name)}
 					>
 						{#if isPushing}
 							<Spinner size={12} class="motion-essential-spin" />
