@@ -5,7 +5,7 @@ const NOW = Date.parse("2026-11-06T12:00:00Z");
 const ago = (ms: number) => new Date(NOW - ms).toISOString();
 
 describe("formatRelativeTime", () => {
-  it("folds the first 45 seconds into 'just now'", () => {
+  it("picks the coarsest unit that fits, then the date after ~10 days", () => {
     expect(formatRelativeTime(ago(30_000), { now: NOW })).toBe("just now");
     expect(formatRelativeTime(ago(5 * 60_000), { now: NOW })).toBe("5m ago");
     expect(formatRelativeTime(ago(3 * 3_600_000), { now: NOW })).toBe("3h ago");

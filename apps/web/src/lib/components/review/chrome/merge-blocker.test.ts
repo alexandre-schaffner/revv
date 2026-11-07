@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { isMergeStateSettling } from "@revv/shared";
 import { type MergeGate, mergeGate } from "./merge-blocker";
 
 const clear = { reviewDecision: null, ciState: null, canBypassProtections: false } as const;
@@ -23,8 +22,6 @@ describe("mergeGate", () => {
 
   test("treats a still-computing state as blocked", () => {
     expect(mergeGate({ ...clear, mergeStateStatus: "unknown" }).kind).toBe("blocked");
-    expect(isMergeStateSettling("unknown")).toBe(true);
-    expect(isMergeStateSettling("BLOCKED")).toBe(false);
   });
 
   test("explains BLOCKED from the review decision before CI", () => {

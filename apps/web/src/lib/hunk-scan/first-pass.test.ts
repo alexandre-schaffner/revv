@@ -267,9 +267,10 @@ describe("scanTicks", () => {
     ]);
   });
 
-  it("levels a clean hunk against its closest floor", () => {
-    const [tick] = scanTicks([answered(0, { slop: 0.3, unclean: 0.35 })], 1);
-    expect(tick?.level).toBeCloseTo(0.5);
+  it("levels a clean hunk by the smell nearest its own floor, not the highest score", () => {
+    // slop 0.45 is 75% of its 0.6 floor; unclean 0.49 scores higher but is 70% of 0.7.
+    const [tick] = scanTicks([answered(0, { slop: 0.45, unclean: 0.49 })], 1);
+    expect(tick?.level).toBeCloseTo(0.75);
   });
 
   it("keeps the rows' own (diff) order rather than regrouping by file", () => {

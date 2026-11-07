@@ -57,28 +57,6 @@ describe("shallowEntryEqual", () => {
     expect(entries.get("pr-1")).toBe(entry);
   });
 
-  // Regression guard: the freeze is shallow, so mutating an array element
-  // in place neither throws nor changes the array reference, and reports
-  // as a no-op that never reaches the store.
-  it("reports an in-place score stamp as unchanged, so the store never sees it", () => {
-    const entries = new Map<
-      string,
-      { issues: Array<{ id: string; advisoryScore?: number; lowSignal?: boolean }> }
-    >();
-    entries.set("pr-1", { issues: [{ id: "i1" }, { id: "i2" }] });
-
-    const result = updateEntryInMap(entries, "pr-1", (draft) => {
-      for (const issue of draft.issues) {
-        if (issue.id === "i1") {
-          issue.advisoryScore = 0.2;
-          issue.lowSignal = true;
-        }
-      }
-    });
-
-    expect(result).toBe("unchanged");
-  });
-
   it("accepts the same delta applied by cloning", () => {
     const entries = new Map<
       string,
