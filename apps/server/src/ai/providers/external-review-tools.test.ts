@@ -101,7 +101,6 @@ function context(
     db,
     prId: "pr-1",
     prHeadSha,
-    userId: "user-1",
     actor: provider,
     provider,
     providerName: EXTERNAL_AGENT_PROVIDER_NAMES[provider],
@@ -124,6 +123,12 @@ function tool(name: string) {
   const spec = EXTERNAL_REVIEW_TOOL_SPECS.find((candidate) => candidate.name === name);
   if (!spec) throw new Error(`Missing external review tool: ${name}`);
   return spec;
+}
+
+/** A call as the MCP route makes it: wire input parsed by the tool's schema first. */
+function call(name: string, ctx: ExternalReviewToolContext, input: Record<string, unknown>) {
+  const spec = tool(name);
+  return spec.handler(ctx, spec.inputSchema.parse(input));
 }
 
 describe("external review tools", () => {
@@ -150,13 +155,13 @@ describe("external review tools", () => {
       resolving_commit_sha: "b".repeat(40),
     };
 
-    const first = await tool("record_issue_resolution").handler(ctx.value, input);
+    const first = await call("record_issue_resolution", ctx.value, input);
     const rowAfterFirst = db.$client
       .query(
         "SELECT resolution_status, resolution_evidence, resolved_at, resolved_by FROM walkthrough_issues WHERE id = ?",
       )
       .get("issue-1") as Record<string, unknown>;
-    const second = await tool("record_issue_resolution").handler(ctx.value, input);
+    const second = await call("record_issue_resolution", ctx.value, input);
     const rowAfterSecond = db.$client
       .query("SELECT resolved_at FROM walkthrough_issues WHERE id = ?")
       .get("issue-1") as Record<string, unknown>;
@@ -176,7 +181,7 @@ describe("external review tools", () => {
     const db = seededDb();
     const ctx = context(db, "codex");
 
-    await tool("record_issue_resolution").handler(ctx.value, {
+    await call("record_issue_resolution", ctx.value, {
       issue_id: "issue-1",
       expected_head_sha: HEAD_SHA,
       status: "addressed",
@@ -184,7 +189,7 @@ describe("external review tools", () => {
       evidence: ["tests pass"],
       resolving_commit_sha: null,
     });
-    await tool("reply_to_comment").handler(ctx.value, {
+    await call("reply_to_comment", ctx.value, {
       thread_id: "thread-1",
       expected_head_sha: HEAD_SHA,
       body: "Done.",
@@ -215,7 +220,7 @@ describe("external review tools", () => {
     ]);
     const ctx = context(db);
 
-    const result = await tool("record_issue_resolution").handler(ctx.value, {
+    const result = await call("record_issue_resolution", ctx.value, {
       issue_id: "issue-1",
       expected_head_sha: HEAD_SHA,
       status: "addressed",
@@ -238,7 +243,7 @@ describe("external review tools", () => {
     db.$client.run("UPDATE pull_requests SET head_sha = ? WHERE id = ?", [newHead, "pr-1"]);
     const ctx = context(db, "claude-code", newHead);
 
-    const result = await tool("record_issue_resolution").handler(ctx.value, {
+    const result = await call("record_issue_resolution", ctx.value, {
       issue_id: "issue-1",
       expected_head_sha: HEAD_SHA,
       status: "addressed",
@@ -261,8 +266,8 @@ describe("external review tools", () => {
       publish_to_github: false,
     };
 
-    await tool("reply_to_comment").handler(ctx.value, input);
-    await tool("reply_to_comment").handler(ctx.value, input);
+    await call("reply_to_comment", ctx.value, input);
+    await call("reply_to_comment", ctx.value, input);
 
     const messages = db.$client
       .query("SELECT author_role, body FROM thread_messages WHERE thread_id = ?")
@@ -282,7 +287,7 @@ describe("external review tools", () => {
     const db = seededDb();
     const ctx = context(db);
 
-    const result = await tool("update_comment_status").handler(ctx.value, {
+    const result = await call("update_comment_status", ctx.value, {
       thread_id: "thread-1",
       expected_head_sha: HEAD_SHA,
       status: "resolved",
@@ -302,7 +307,7 @@ describe("external review tools", () => {
     const db = seededDb();
     const ctx = context(db);
 
-    const result = await tool("request_walkthrough").handler(ctx.value, { head_sha: HEAD_SHA });
+    const result = await call("request_walkthrough", ctx.value, { head_sha: HEAD_SHA });
 
     expect(result.isError).toBeUndefined();
     expect(JSON.parse(result.content[0]?.text ?? "")).toMatchObject({
@@ -320,7 +325,7 @@ describe("external review tools", () => {
       githubHeadSha,
     }));
 
-    const result = await tool("request_walkthrough").handler(ctx.value, { head_sha: HEAD_SHA });
+    const result = await call("request_walkthrough", ctx.value, { head_sha: HEAD_SHA });
 
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain(githubHeadSha);
@@ -334,7 +339,7 @@ describe("external review tools", () => {
       walkthroughId: "walkthrough-1",
     }));
 
-    const result = await tool("request_walkthrough").handler(ctx.value, { head_sha: HEAD_SHA });
+    const result = await call("request_walkthrough", ctx.value, { head_sha: HEAD_SHA });
 
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain("The user stopped");
@@ -349,7 +354,7 @@ describe("external review tools", () => {
       runs: 3,
     }));
 
-    const result = await tool("request_walkthrough").handler(ctx.value, { head_sha: HEAD_SHA });
+    const result = await call("request_walkthrough", ctx.value, { head_sha: HEAD_SHA });
 
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain("already run 3 reviews");
@@ -361,7 +366,7 @@ describe("external review tools", () => {
       throw new Error("Revv is still cloning this repository. Retry in a minute.");
     });
 
-    const result = await tool("request_walkthrough").handler(ctx.value, { head_sha: HEAD_SHA });
+    const result = await call("request_walkthrough", ctx.value, { head_sha: HEAD_SHA });
 
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toBe(
@@ -373,7 +378,8 @@ describe("external review tools", () => {
     const db = seededDb();
     const requested: string[] = [];
     const ctx = context(db);
-    const result = await tool("request_walkthrough").handler(
+    const result = await call(
+      "request_walkthrough",
       {
         ...ctx.value,
         requestWalkthrough: async ({ headSha }) => {
@@ -392,7 +398,7 @@ describe("external review tools", () => {
     const db = seededDb();
     const ctx = context(db);
 
-    const result = await tool("wait_for_walkthrough").handler(ctx.value, {
+    const result = await call("wait_for_walkthrough", ctx.value, {
       walkthrough_id: "walkthrough-1",
       timeout_seconds: "0",
     });
@@ -413,7 +419,7 @@ describe("external review tools", () => {
       db.$client.run("UPDATE walkthroughs SET status = 'complete' WHERE id = ?", ["walkthrough-1"]);
     }, 50);
 
-    const result = await tool("wait_for_walkthrough").handler(ctx.value, {
+    const result = await call("wait_for_walkthrough", ctx.value, {
       walkthrough_id: "walkthrough-1",
       timeout_seconds: 10,
     });
@@ -426,7 +432,7 @@ describe("external review tools", () => {
     db.$client.run("UPDATE walkthroughs SET status = 'generating' WHERE id = ?", ["walkthrough-1"]);
     const ctx = context(db);
 
-    const result = await tool("wait_for_walkthrough").handler(ctx.value, {
+    const result = await call("wait_for_walkthrough", ctx.value, {
       walkthrough_id: "walkthrough-1",
       timeout_seconds: 0,
     });
@@ -438,7 +444,8 @@ describe("external review tools", () => {
     const db = seededDb();
     const ctx = context(db);
 
-    const result = await tool("wait_for_walkthrough").handler(
+    const result = await call(
+      "wait_for_walkthrough",
       { ...ctx.value, prId: "pr-other" },
       { walkthrough_id: "walkthrough-1", timeout_seconds: 0 },
     );

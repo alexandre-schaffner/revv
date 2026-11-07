@@ -15,6 +15,7 @@ import {
 import { streamChatViaAcp } from "../ai/providers/chat-acp";
 import { CHAT_TOOL_BUNDLE } from "../ai/providers/chat-mcp-tools";
 import type { RawChatStreamFrame } from "../ai/providers/chat-types";
+import { turnMcpServer } from "../ai/providers/mcp-tool-gateway";
 import {
   runWalkthroughTurn,
   type WalkthroughTurnParams,
@@ -97,8 +98,9 @@ export const AiServiceLive = Layer.effect(
           },
         })(
           Effect.gen(function* () {
-            yield* requireLaunchable(params.launch);
-            return yield* Effect.promise(() => runWalkthroughTurn(params));
+            const result = yield* Effect.promise(() => runWalkthroughTurn(params));
+            if ("notConfigured" in result) return yield* Effect.fail(new AiNotConfiguredError());
+            return result;
           }),
         ),
 
@@ -136,12 +138,7 @@ export const AiServiceLive = Layer.effect(
               attachments: params.attachments,
               resumeSessionId: params.resumeSessionId,
               onSessionId: params.onSessionId,
-              mcp: {
-                route: "/mcp/chat-context",
-                name: `${CHAT_TOOL_BUNDLE.name}-${params.prId}`,
-                token,
-                required: false,
-              },
+              mcp: turnMcpServer(CHAT_TOOL_BUNDLE, params.prId, token, false),
               interactionMode,
               abortController: params.abortController,
               onFinished: () => Effect.runSync(chatMcpTokens.clear(token)),

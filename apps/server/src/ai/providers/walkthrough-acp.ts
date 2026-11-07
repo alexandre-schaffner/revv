@@ -18,14 +18,14 @@ import { ZERO_TOKEN_USAGE } from "@revv/shared";
 import { debug, logError } from "../../logger";
 import { graftedSpan } from "../../observability/span-graft";
 import type { PrFileMeta } from "../../services/github/pulls";
-import { AgentTurnError } from "../acp/agent-failure";
 import type { AgentLaunch } from "../acp/agent-launch";
-import { type ActivityBeacon, JOB_TURN, runAcpTurn } from "../acp/run-turn";
+import { type AcpTurnOutcome, type ActivityBeacon, JOB_TURN, runAcpTurn } from "../acp/run-turn";
 import { decodeAcpSessionUpdate, makeAcpDecodeState } from "../agent-stream/acp-decoders";
 import type { NormalizedAgentEvent } from "../agent-stream/normalized-events";
+import { makeReasoningFeed } from "../agent-stream/reasoning-feed";
 import {
   buildActivity,
-  isAgentBuiltinTool,
+  isExplorationTool,
   relativizeToolInput,
 } from "../agent-stream/tool-activity";
 import {
@@ -34,13 +34,13 @@ import {
   type WalkthroughPromptHints,
   type WalkthroughReviewMode,
 } from "../prompts/walkthrough";
+import { turnMcpServer } from "./mcp-tool-gateway";
 import { recordWalkthroughToken, startWalkthroughPrompt } from "./walkthrough-metrics";
 import { mergeContextOccupancy } from "./walkthrough-token-usage";
+import { WALKTHROUGH_TOOL_BUNDLE } from "./walkthrough-tools";
 
 /** A `phase` heartbeat while the prompt is in flight, so the client's stall watchdog sees a live run through long thinking gaps. */
 const WALKTHROUGH_HEARTBEAT_MS = 45_000;
-
-const WALKTHROUGH_MCP_SERVER = "revv-walkthrough";
 
 export interface WalkthroughTurnParams extends WalkthroughPromptHints {
   walkthroughId: string;
@@ -91,7 +91,7 @@ export interface WalkthroughTurnResult {
  */
 export async function runWalkthroughTurn(
   params: WalkthroughTurnParams,
-): Promise<WalkthroughTurnResult> {
+): Promise<WalkthroughTurnResult | { readonly notConfigured: true }> {
   const push = params.onLive;
   let finished = false;
   const activity = params.activity;
@@ -99,7 +99,6 @@ export async function runWalkthroughTurn(
 
   let currentPhase: Extract<WalkthroughLifecyclePhase, "connecting" | "exploring"> = "connecting";
   let lastPhaseMessage = "Starting up...";
-  let lastReasoningPush = 0;
   const surfacedExplorationCallIds = new Set<string>();
   // Without these, the agent's reads and greps in the worktree are
   // indistinguishable from model inference in the timeline.
@@ -110,6 +109,16 @@ export async function runWalkthroughTurn(
     lastPhaseMessage = message;
     push({ type: "phase", data: { phase: currentPhase, message } });
   };
+  const reasoning = makeReasoningFeed({
+    thought: (text) => push({ type: "thought", data: { text } }),
+    heartbeat: () => {
+      if (currentPhase === "connecting") {
+        enterExploring("Model is thinking...");
+      } else {
+        push({ type: "phase", data: { phase: currentPhase, message: "Model is thinking..." } });
+      }
+    },
+  });
   const handleAgentEvent = (ev: NormalizedAgentEvent): void => {
     if (ev.kind === "reasoning-delta" || ev.kind === "text-delta") {
       recordWalkthroughToken(params.walkthroughId, ev.data);
@@ -127,16 +136,7 @@ export async function runWalkthroughTurn(
     }
 
     if (ev.kind === "reasoning-delta") {
-      if (ev.data.length > 0) push({ type: "thought", data: { text: ev.data } });
-      const now = Date.now();
-      if (now - lastReasoningPush >= 30_000) {
-        lastReasoningPush = now;
-        if (currentPhase === "connecting") {
-          enterExploring("Model is thinking...");
-        } else {
-          push({ type: "phase", data: { phase: currentPhase, message: "Model is thinking..." } });
-        }
-      }
+      reasoning(ev.data);
       return;
     }
 
@@ -146,7 +146,7 @@ export async function runWalkthroughTurn(
     }
 
     if (ev.kind === "tool-call") {
-      if (isAgentBuiltinTool(ev.toolName)) {
+      if (isExplorationTool(ev.toolName)) {
         enterExploring("Reading files and understanding changes...");
         if (ev.callId) {
           surfacedExplorationCallIds.add(ev.callId);
@@ -207,21 +207,17 @@ export async function runWalkthroughTurn(
   }, WALKTHROUGH_HEARTBEAT_MS);
   const decodeState = makeAcpDecodeState();
 
+  let end: AcpTurnOutcome;
   try {
-    const { end } = await runAcpTurn({
+    end = await runAcpTurn({
       label: "walkthrough-acp",
       launch: params.launch,
       cwd: params.worktreePath,
-      mcp: {
-        route: "/mcp/walkthrough",
-        name: `${WALKTHROUGH_MCP_SERVER}-${params.walkthroughId}`,
-        token: params.mcpToken,
-        required: true,
-      },
+      mcp: turnMcpServer(WALKTHROUGH_TOOL_BUNDLE, params.walkthroughId, params.mcpToken, true),
       deadlines: JOB_TURN,
       activity,
       signal: params.abortController.signal,
-      traceKey: params.walkthroughId,
+      trace: { key: params.walkthroughId, attribute: "walkthrough_id" },
       onSessionOpened: () => {
         // The model may take minutes to its first tool call; the session is alive.
         lastPhaseMessage = "Waiting for model response...";
@@ -233,21 +229,6 @@ export async function runWalkthroughTurn(
         for (const ev of decodeAcpSessionUpdate(update, decodeState)) handleAgentEvent(ev);
       },
     });
-    if (end.kind === "timeout") {
-      debug("walkthrough-acp", "turn timed out:", end.reason);
-      return { end: { kind: "timeout", reason: end.reason }, tokenUsage };
-    }
-    if (end.kind === "cancelled") {
-      return { end: { kind: "cancelled", reason: end.reason }, tokenUsage };
-    }
-    return { end: { kind: "stopped", refused: end.stopReason === "refusal" }, tokenUsage };
-  } catch (err) {
-    const failure = err instanceof AgentTurnError ? err : new AgentTurnError(String(err), "other");
-    logError("walkthrough-acp", "turn failed:", failure.message);
-    return {
-      end: { kind: "failed", message: failure.message, auth: failure.kind === "auth" },
-      tokenUsage,
-    };
   } finally {
     finished = true;
     clearInterval(heartbeatInterval);
@@ -255,5 +236,26 @@ export async function runWalkthroughTurn(
     // an unended span never reaches the exporter.
     for (const span of openToolSpans.values()) span.end();
     openToolSpans.clear();
+  }
+  switch (end.kind) {
+    case "timeout":
+      debug("walkthrough-acp", "turn timed out:", end.reason);
+      return { end, tokenUsage };
+    case "cancelled":
+      return { end, tokenUsage };
+    case "stopped":
+    case "settled":
+      return {
+        end: { kind: "stopped", refused: end.kind === "stopped" && end.stopReason === "refusal" },
+        tokenUsage,
+      };
+    case "failed":
+      logError("walkthrough-acp", "turn failed:", end.failure.message);
+      return {
+        end: { kind: "failed", message: end.failure.message, auth: end.failure.kind === "auth" },
+        tokenUsage,
+      };
+    case "not_configured":
+      return { notConfigured: true };
   }
 }

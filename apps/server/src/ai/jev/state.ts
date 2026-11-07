@@ -39,16 +39,7 @@ export interface FileLike {
   readonly patch: string | null;
 }
 
-export interface CommitLike {
-  readonly message: string;
-}
-
 const PR_BODY_MAX_CHARS = 4_000;
-const COMMIT_SUBJECT_MAX = 40;
-
-function commitSubject(message: string): string {
-  return (message.split("\n", 1)[0] ?? "").slice(0, 200);
-}
 
 /**
  * Patches are included because the job-start questions are about the change,
@@ -58,10 +49,9 @@ function commitSubject(message: string): string {
 export interface JobStartStateInput {
   readonly pr: PrLike;
   readonly files: readonly FileLike[];
-  readonly commits: readonly CommitLike[];
 }
 
-export function buildJobStartState({ pr, files, commits }: JobStartStateInput): JevState {
+export function buildJobStartState({ pr, files }: JobStartStateInput): JevState {
   const header = {
     pr: {
       number: pr.externalId,
@@ -74,8 +64,6 @@ export function buildJobStartState({ pr, files, commits }: JobStartStateInput): 
       deletions: pr.deletions,
       changed_files: pr.changedFiles,
     },
-    commits: commits.slice(0, COMMIT_SUBJECT_MAX).map((c) => commitSubject(c.message)),
-    commit_count: commits.length,
   };
 
   let used = stateChars(header);

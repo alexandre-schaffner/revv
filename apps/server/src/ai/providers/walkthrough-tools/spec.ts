@@ -10,7 +10,7 @@ import {
   SENTIMENT_CONTRACT,
   SUMMARY_CONTRACT,
 } from "../../prompts/review-copy-contract";
-import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gateway";
+import type { McpToolResult } from "../mcp-tool-gateway";
 import {
   artifactBlockField,
   blockRefSchema,
@@ -76,11 +76,6 @@ export type WalkthroughToolHandler<TInput> = (
   ctx: WalkthroughToolContext,
   input: TInput,
 ) => Promise<WalkthroughToolResult>;
-
-export type WalkthroughToolSpec = GatewayToolSpec<WalkthroughToolContext, WalkthroughToolResult> & {
-  /** What the exploration feed shows while the call runs. */
-  readonly activity: string;
-};
 
 const getWalkthroughStateSchema = z.object({});
 
@@ -247,13 +242,13 @@ const addIssueCommentSchema = z.object({
   file_path: z
     .string()
     .describe(
-      "Path of the file the comment anchors to — must match a path present in the PR diff.",
+      "Path of the file the comment anchors to — a path the PR diff changes, or the comment can't reach GitHub.",
     ),
   start_line: z.coerce
     .number()
     .int()
     .describe(
-      "1-based start line of the anchor range. Must be inside a hunk present in the PR diff (same rule as human review comments on GitHub).",
+      "1-based start line of the anchor range. Keep the range inside one hunk of the PR diff: GitHub only accepts review comments there, so on submit the range is narrowed to the diff lines it covers, and a range that covers none can't be posted.",
     ),
   end_line: z.coerce
     .number()

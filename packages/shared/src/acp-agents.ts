@@ -21,11 +21,21 @@ export type ThinkingEffort =
 /** Brand-icon key — the web maps this to an icon component (generic fallback). */
 export type AcpAgentIconKey = "anthropic" | "openai" | "opencode" | "cursor" | "generic";
 
+/** The review-depth tiers Auto model routing answers, shallowest first. */
+export const REVIEW_DEPTHS = ["shallow", "standard", "deep"] as const;
+export type ReviewDepth = (typeof REVIEW_DEPTHS)[number];
+
 export interface AcpAgentModel {
   readonly label: string;
   readonly value: string;
   /** Model-specific effort limits; omitted models inherit the agent ladder. */
   readonly thinkingEfforts?: readonly ThinkingEffort[];
+  /**
+   * The depth tier this model sits at for Auto routing. The first model listed
+   * at a tier is the one Auto picks for it; later ones are older pins that keep
+   * their tier. Untagged models are off the ladder: a pin on one is left alone.
+   */
+  readonly reviewDepth?: ReviewDepth;
 }
 
 /**
@@ -146,11 +156,16 @@ export const ACP_AGENTS = [
       // Keep Sonnet 5 and Haiku 4.5 selectable for existing installations.
       models: [
         { label: "Claude Fable 5.1", value: "claude-fable-5-1" },
-        { label: "Claude Opus 5.5", value: "claude-opus-5-5" },
-        { label: "Claude Sonnet 5.5", value: "claude-sonnet-5-5" },
-        { label: "Claude Sonnet 5", value: "claude-sonnet-5" },
-        { label: "Claude Haiku 5.5", value: "claude-haiku-5-5" },
-        { label: "Claude Haiku 4.5", value: "claude-haiku-4-5-20251001", thinkingEfforts: [] },
+        { label: "Claude Opus 5.5", value: "claude-opus-5-5", reviewDepth: "deep" },
+        { label: "Claude Sonnet 5.5", value: "claude-sonnet-5-5", reviewDepth: "standard" },
+        { label: "Claude Sonnet 5", value: "claude-sonnet-5", reviewDepth: "standard" },
+        { label: "Claude Haiku 5.5", value: "claude-haiku-5-5", reviewDepth: "shallow" },
+        {
+          label: "Claude Haiku 4.5",
+          value: "claude-haiku-4-5-20251001",
+          thinkingEfforts: [],
+          reviewDepth: "shallow",
+        },
       ],
       // Claude Code's named effort ladder tops out at `max`. `ultrathink` is
       // retained in the persisted type and mapped to `max` at launch.

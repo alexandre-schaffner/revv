@@ -1,14 +1,7 @@
-/**
- * Snapshot entry inside a `task-list-update`. Mirrors the shared `ChatTask`
- * shape without the persistence id (the server assigns one downstream).
- */
-export interface NormalizedTask {
-  readonly id: string;
-  readonly content: string;
-  readonly activeForm: string | null;
-  readonly status: "pending" | "in_progress" | "completed";
-  readonly priority: "low" | "medium" | "high" | null;
-}
+import type { ChatTask } from "@revv/shared";
+
+/** Snapshot entry inside a `task-list-update`. */
+export type NormalizedTask = ChatTask;
 
 /** What an ACP agent emits during a turn, decoded from `session/update`. */
 export type NormalizedAgentEvent =

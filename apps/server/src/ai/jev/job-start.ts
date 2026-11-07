@@ -5,7 +5,7 @@
 // per file.
 
 import { createHash } from "node:crypto";
-import type { AcpAgentId, RiskLevel, ThinkingEffortSetting } from "@revv/shared";
+import type { AcpAgentId, ReviewDepth, RiskLevel, ThinkingEffortSetting } from "@revv/shared";
 import { Effect } from "effect";
 import type { JevUnavailable } from "../../domain/errors";
 import type { CacheService } from "../../services/Cache";
@@ -14,12 +14,7 @@ import { JevService } from "../../services/Jev";
 import { riskCriteria } from "../prompts/risk-tiers";
 import { cachedJev } from "./optional";
 import { numericAnswerAt } from "./questions";
-import {
-  type GenerationLaunchOverride,
-  type ReasoningEffort,
-  type ReviewDepth,
-  routeSizing,
-} from "./routing";
+import { type GenerationLaunchOverride, type ReasoningEffort, routeSizing } from "./routing";
 import type { JobStartStateInput } from "./state";
 import { buildJobStartState } from "./state";
 
@@ -130,7 +125,6 @@ export function askJobStart(
 ): Effect.Effect<JobStartAnswers, JevUnavailable, JevService> {
   return Effect.gen(function* () {
     const jev = yield* JevService;
-    // Scored files are addressed by index into `state.files`; slice here must match the state builder's array.
     const scoredFiles = input.files.slice(0, FILE_PRIORITY_MAX_FILES);
     const fileQuestions = Object.fromEntries(
       scoredFiles.map((file, index) => [

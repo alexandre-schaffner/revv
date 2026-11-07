@@ -3,7 +3,7 @@ import type { WalkthroughStackSnapshot } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { createDb, type Db } from "../../../db/index";
 import { prDiffFiles, pullRequests, walkthroughIssues, walkthroughs } from "../../../db/schema";
-import { TOOL_SPECS } from "./index";
+import { WALKTHROUGH_TOOL_BUNDLE } from "./index";
 import { getStackContextHandler } from "./read-handler";
 import type { WalkthroughToolContext } from "./spec";
 
@@ -149,7 +149,7 @@ async function read(db: Db) {
 
 describe("get_stack_context", () => {
   it("is registered on the walkthrough tool surface", () => {
-    expect(TOOL_SPECS.map((s) => s.name)).toContain("get_stack_context");
+    expect(WALKTHROUGH_TOOL_BUNDLE.specs.map((s) => s.name)).toContain("get_stack_context");
   });
 
   it("joins the captured stack with the other layers' live state", async () => {

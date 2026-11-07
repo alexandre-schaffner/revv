@@ -17,8 +17,9 @@ import { debug } from "../../logger";
 import { graftedSpan, publishTraceAnchor } from "../../observability/span-graft";
 import { decodeAcpSessionUpdate, makeAcpDecodeState } from "../agent-stream/acp-decoders";
 import { type AcpConnectionHandle, getAcpConnection, peekAcpConnection } from "./acp-connection";
-import { toAgentTurnError } from "./agent-failure";
+import { type AgentTurnFailure, agentTurnFailure } from "./agent-failure";
 import type { AgentLaunch } from "./agent-launch";
+import { isAgentLaunchable } from "./launch";
 import { ensurePackageRunnerDir } from "./package-runner-dir";
 import { findPlanModeId, modeToExitPlan } from "./session-config";
 
@@ -60,6 +61,33 @@ const CANCEL_GRACE_MS = 1_500;
 export interface ActivityBeacon {
   readonly note: () => void;
   readonly onNote: (listener: () => void) => () => void;
+}
+
+/**
+ * How a job tells its running turn that the work is done (its journal check
+ * passed), so the turn ends as `settled` instead of waiting for the agent to
+ * wind down. Unlike a cancel, it never retires the shared connection.
+ */
+export interface TurnSettle {
+  readonly settle: () => void;
+  readonly settled: () => boolean;
+  readonly whenSettled: Promise<void>;
+}
+
+export function makeTurnSettle(): TurnSettle {
+  let done = false;
+  let resolve: () => void = () => {};
+  const whenSettled = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return {
+    settle: () => {
+      done = true;
+      resolve();
+    },
+    settled: () => done,
+    whenSettled,
+  };
 }
 
 export function makeActivityBeacon(): ActivityBeacon {
@@ -115,38 +143,58 @@ export interface AcpTurnRequest {
   /** Extra liveness for the idle deadline, beyond the session's own updates. */
   readonly activity?: ActivityBeacon;
   readonly signal?: AbortSignal;
-  /** Files `Acp.connect` / `Acp.newSession` / `Acp.prompt` spans under this trace anchor key. */
-  readonly traceKey?: string;
+  readonly settle?: TurnSettle;
+  /**
+   * Files `Acp.connect` / `Acp.newSession` / `Acp.prompt` spans under the job's
+   * trace anchor `key`, tagged with its id under `attribute` (`walkthrough_id`,
+   * `recapId`, …).
+   */
+  readonly trace?: { readonly key: string; readonly attribute: string };
 }
 
-export type AcpTurnEnd =
+/** How a turn ended. `runAcpTurn` never throws: every way out is one of these. */
+export type AcpTurnOutcome =
   | { readonly kind: "stopped"; readonly stopReason: StopReason }
+  /** The caller's {@link TurnSettle} fired: its work is done. */
+  | { readonly kind: "settled" }
   | { readonly kind: "cancelled"; readonly reason: string }
-  | { readonly kind: "timeout"; readonly reason: string };
+  | { readonly kind: "timeout"; readonly reason: string }
+  | { readonly kind: "failed"; readonly failure: AgentTurnFailure }
+  /** The agent's launch command doesn't resolve on this machine. */
+  | { readonly kind: "not_configured"; readonly message: string };
 
-export interface AcpTurnResult {
-  readonly end: AcpTurnEnd;
-  /** Null when the turn ended before a session opened. */
-  readonly session: OpenedSession | null;
+type TurnEnd = Extract<AcpTurnOutcome, { readonly kind: "settled" | "cancelled" | "timeout" }>;
+
+class AgentNotLaunchable extends Error {}
+
+/** The default connect: a pooled agent, after checking a new one could start at all. */
+async function connectLaunchable(cwd: string, launch: AgentLaunch): Promise<AcpConnectionHandle> {
+  if (!isAgentLaunchable(launch.agent)) {
+    throw new AgentNotLaunchable(
+      `The configured agent ('${launch.agent}') is not available on this machine.`,
+    );
+  }
+  return getAcpConnection(cwd, launch);
 }
 
 function humanize(ms: number): string {
   return ms < 60_000 ? `${Math.round(ms / 1_000)} seconds` : `${Math.round(ms / 60_000)} minutes`;
 }
 
-/** The turn's deadlines and caller signal, folded into one abort. */
+/** The turn's deadlines, caller signal and settle, folded into one end. */
 function armTurn(req: AcpTurnRequest, activity: ActivityBeacon) {
-  let ended: { readonly kind: "cancelled" | "timeout"; readonly reason: string } | null = null;
+  let ended: TurnEnd | null = null;
   let onEnd: (() => void) | null = null;
   const ended$ = new Promise<void>((resolve) => {
     onEnd = resolve;
   });
-  const end = (kind: "cancelled" | "timeout", reason: string): void => {
+  const finish = (next: TurnEnd): void => {
     if (ended) return;
-    ended = { kind, reason };
-    debug(req.label, `${reason} — ending the turn`);
+    ended = next;
+    debug(req.label, `${next.kind === "settled" ? "settled" : next.reason} — ending the turn`);
     onEnd?.();
   };
+  const end = (kind: "cancelled" | "timeout", reason: string): void => finish({ kind, reason });
 
   const ceiling = setTimeout(
     () => end("timeout", `Agent turn timed out after ${humanize(req.deadlines.ceilingMs)}`),
@@ -171,6 +219,8 @@ function armTurn(req: AcpTurnRequest, activity: ActivityBeacon) {
   };
   if (req.signal?.aborted) onAbort();
   else req.signal?.addEventListener("abort", onAbort, { once: true });
+  if (req.settle?.settled()) finish({ kind: "settled" });
+  else void req.settle?.whenSettled.then(() => finish({ kind: "settled" }));
 
   return {
     ended: () => ended,
@@ -185,13 +235,13 @@ function armTurn(req: AcpTurnRequest, activity: ActivityBeacon) {
 }
 
 async function traced<T>(
-  key: string | undefined,
+  trace: AcpTurnRequest["trace"],
   name: string,
   attributes: Record<string, string | number>,
   run: () => Promise<T>,
 ): Promise<T> {
-  if (key === undefined) return run();
-  const span = graftedSpan(key, name, { attributes });
+  if (trace === undefined) return run();
+  const span = graftedSpan(trace.key, name, { attributes });
   try {
     return await run();
   } catch (err) {
@@ -203,20 +253,19 @@ async function traced<T>(
 }
 
 /**
- * Run one agent turn. Resolves with how it ended; a cancel or a deadline is an
- * end, not an error. Any other failure rejects with an `AgentTurnError` that
- * carries its kind and the sign-in / Keychain guidance.
+ * Run one agent turn and resolve with how it ended. A failure carries its kind
+ * and the sign-in / Keychain guidance.
  */
 export async function runAcpTurn(
   req: AcpTurnRequest,
-  connect: (cwd: string, launch: AgentLaunch) => Promise<AcpConnectionHandle> = getAcpConnection,
-): Promise<AcpTurnResult> {
-  const { launch } = req;
+  connect: (cwd: string, launch: AgentLaunch) => Promise<AcpConnectionHandle> = connectLaunchable,
+): Promise<AcpTurnOutcome> {
+  const { launch, trace } = req;
   const activity = req.activity ?? makeActivityBeacon();
   const turn = armTurn(req, activity);
   const spanAttrs = {
     acp_agent: launch.agent,
-    ...(req.traceKey ? { walkthrough_id: req.traceKey } : {}),
+    ...(trace ? { [trace.attribute]: trace.key } : {}),
   };
 
   const held: { handle: AcpConnectionHandle | null; session: OpenedSession | null } = {
@@ -238,7 +287,7 @@ export async function runAcpTurn(
   };
 
   const body = async (): Promise<StopReason | null> => {
-    const h = await traced(req.traceKey, "Acp.connect", spanAttrs, () => connect(req.cwd, launch));
+    const h = await traced(trace, "Acp.connect", spanAttrs, () => connect(req.cwd, launch));
     held.handle = h;
     h.jobStarted();
     if (turn.ended() || released) {
@@ -264,7 +313,7 @@ export async function runAcpTurn(
       }
     }
 
-    const opened = await traced(req.traceKey, "Acp.newSession", spanAttrs, async () => {
+    const opened = await traced(trace, "Acp.newSession", spanAttrs, async () => {
       if (req.resumeSessionId && h.loadSessionSupported) {
         try {
           const state = await h.loadSession(req.resumeSessionId, mcpServers);
@@ -321,11 +370,11 @@ export async function runAcpTurn(
       model: launch.model,
       "gen_ai.request.model": launch.model,
     };
-    if (req.traceKey === undefined) return h.prompt(sessionId, blocks);
+    if (trace === undefined) return h.prompt(sessionId, blocks);
     // Re-anchored so everything the turn provokes (the agent's own tool calls,
     // its MCP writes arriving over HTTP) nests inside the prompt span.
-    const span = graftedSpan(req.traceKey, "Acp.prompt", { attributes: promptAttrs });
-    const restoreAnchor = publishTraceAnchor(req.traceKey, span.anchor);
+    const span = graftedSpan(trace.key, "Acp.prompt", { attributes: promptAttrs });
+    const restoreAnchor = publishTraceAnchor(trace.key, span.anchor);
     try {
       const stopReason = await h.prompt(sessionId, blocks);
       span.setAttributes({ stop_reason: String(stopReason) });
@@ -345,47 +394,53 @@ export async function runAcpTurn(
   });
   try {
     const stopReason = await Promise.race([running, turn.whenEnded.then(() => null)]);
-    if (stopReason !== null) {
-      return { end: { kind: "stopped", stopReason }, session: held.session };
-    }
+    if (stopReason !== null) return { kind: "stopped", stopReason };
     const ending = turn.ended() ?? { kind: "cancelled" as const, reason: "Agent turn cancelled" };
     const h = held.handle;
     const sid = held.session?.sessionId;
     if (h && sid) {
       void h.cancel(sid);
-      // The connection is shared: only retire it when the agent ignores the cancel.
-      setTimeout(() => {
-        if (!bodySettled) h.retire();
-      }, CANCEL_GRACE_MS);
+      // The connection is shared: only retire it when the agent ignores the
+      // cancel, and never for a turn whose work is done.
+      if (ending.kind !== "settled") {
+        setTimeout(() => {
+          if (!bodySettled) h.retire();
+        }, CANCEL_GRACE_MS);
+      }
     }
     // A failure that only surfaces after the turn ended is noise from the teardown.
     void running.catch(() => {});
-    return { end: ending, session: held.session };
+    return ending;
   } catch (err) {
     const early = turn.ended();
-    if (early) return { end: early, session: held.session };
-    throw toAgentTurnError(launch.agent, err);
+    if (early) return early;
+    if (err instanceof AgentNotLaunchable) return { kind: "not_configured", message: err.message };
+    return { kind: "failed", failure: agentTurnFailure(launch.agent, err) };
   } finally {
     turn.dispose();
     release();
   }
 }
 
+/** The agent's visible text, or why there is none (with sign-in guidance when it applies). */
+export type PromptOnceResult =
+  | { readonly kind: "answered"; readonly text: string }
+  | { readonly kind: "failed"; readonly error: string; readonly guidance: string | null };
+
 /**
  * A tool-less, one-off prompt (suggestions, stack headlines, the agent check)
- * on a fresh session, returning the agent's visible text. Runs in a
- * Revv-owned directory with no project in it, so every such prompt shares one
- * warm agent per launch whatever repo it is about.
+ * on a fresh session. Runs in a Revv-owned directory with no project in it, so
+ * every such prompt shares one warm agent per launch whatever repo it is about.
  */
 export async function promptOnce(input: {
   readonly label: string;
   readonly launch: AgentLaunch;
   readonly text: string;
   readonly ceilingMs: number;
-}): Promise<string> {
+}): Promise<PromptOnceResult> {
   let collected = "";
   const decodeState = makeAcpDecodeState();
-  const { end } = await runAcpTurn({
+  const outcome = await runAcpTurn({
     label: input.label,
     launch: input.launch,
     cwd: ensurePackageRunnerDir() ?? process.cwd(),
@@ -397,8 +452,22 @@ export async function promptOnce(input: {
     },
     deadlines: { ceilingMs: input.ceilingMs },
   });
-  if (end.kind !== "stopped") throw new Error(end.reason);
-  return collected;
+  switch (outcome.kind) {
+    case "stopped":
+    case "settled":
+      return { kind: "answered", text: collected };
+    case "cancelled":
+    case "timeout":
+      return { kind: "failed", error: outcome.reason, guidance: null };
+    case "not_configured":
+      return { kind: "failed", error: outcome.message, guidance: null };
+    case "failed":
+      return {
+        kind: "failed",
+        error: outcome.failure.agentMessage,
+        guidance: outcome.failure.guidance,
+      };
+  }
 }
 
 export interface AgentSessionContext {

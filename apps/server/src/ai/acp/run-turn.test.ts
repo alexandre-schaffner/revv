@@ -1,9 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import type { ContentBlock, SessionUpdate } from "@agentclientprotocol/sdk";
 import type { AcpConnectionHandle, AcpUpdateListener } from "./acp-connection";
-import { AgentTurnError } from "./agent-failure";
 import type { AgentLaunch } from "./agent-launch";
-import { type AcpTurnRequest, makeActivityBeacon, runAcpTurn } from "./run-turn";
+import {
+  type AcpTurnRequest,
+  makeActivityBeacon,
+  makeTurnSettle,
+  type OpenedSession,
+  runAcpTurn,
+} from "./run-turn";
 
 const launch: AgentLaunch = {
   agent: "opencode",
@@ -77,19 +82,25 @@ function fakeAgent(
   return agent;
 }
 
-function turn(agent: FakeAgent, patch: Partial<AcpTurnRequest> = {}) {
-  return runAcpTurn(
+async function turn(agent: FakeAgent, patch: Partial<AcpTurnRequest> = {}) {
+  let session: OpenedSession | null = null;
+  const outcome = await runAcpTurn(
     {
       label: "run-turn-test",
       launch,
       cwd: "/tmp",
-      prompt: (session) => [{ type: "text", text: session.fresh ? "system + message" : "message" }],
+      prompt: (opened) => [{ type: "text", text: opened.fresh ? "system + message" : "message" }],
       onUpdate: () => {},
       deadlines: { ceilingMs: 5_000 },
       ...patch,
+      onSessionOpened: async (opened) => {
+        session = opened;
+        await patch.onSessionOpened?.(opened);
+      },
     },
     async () => agent.handle,
   );
+  return { end: outcome, session: session as OpenedSession | null };
 }
 
 const promptText = (agent: FakeAgent): string => {
@@ -194,21 +205,34 @@ describe("runAcpTurn", () => {
     expect(agent.calls).toContain("cancel:fresh-1");
   });
 
-  it("rejects a failure with its kind", async () => {
+  it("ends as settled when the caller's work is done, without retiring the connection", async () => {
+    const agent = fakeAgent({ prompt: () => new Promise(() => {}) });
+    const settle = makeTurnSettle();
+    setTimeout(() => settle.settle(), 20);
+    const result = await turn(agent, { settle });
+    expect(result.end).toEqual({ kind: "settled" });
+    expect(agent.calls).toContain("cancel:fresh-1");
+    await Bun.sleep(1_700);
+    expect(agent.calls).not.toContain("retire");
+  });
+
+  it("returns a failure with its kind instead of throwing", async () => {
     const agent = fakeAgent({
       prompt: async () => {
         throw new Error("401 Unauthorized");
       },
     });
-    const error = await turn(agent).catch((err: unknown) => err);
-    expect(error).toBeInstanceOf(AgentTurnError);
-    expect(error).toMatchObject({ kind: "auth", agentMessage: "401 Unauthorized" });
+    const result = await turn(agent);
+    expect(result.end).toMatchObject({
+      kind: "failed",
+      failure: { kind: "auth", agentMessage: "401 Unauthorized" },
+    });
     expect(agent.refcount).toBe(0);
   });
 
   it("refuses plan mode on an agent without one", async () => {
-    const error = await turn(fakeAgent(), { mode: "plan" }).catch((err: unknown) => err);
-    expect(error).toMatchObject({ kind: "other" });
-    expect(String(error)).toContain("no plan mode");
+    const result = await turn(fakeAgent(), { mode: "plan" });
+    expect(result.end).toMatchObject({ kind: "failed", failure: { kind: "other" } });
+    expect(result.end.kind === "failed" && result.end.failure.message).toContain("no plan mode");
   });
 });

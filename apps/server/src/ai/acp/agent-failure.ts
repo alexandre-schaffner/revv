@@ -1,12 +1,12 @@
-// Every agent turn failure leaves the runner as an `AgentTurnError` whose
+// Every agent turn failure leaves the runner as an `AgentTurnFailure` whose
 // `kind` says whether it is an auth problem, so callers (and the web) branch
 // on the kind instead of re-reading the message.
 //
 // Some ACP agents store their login in the macOS login Keychain (Claude Code
 // today; declared per-agent via `keychainAuth` in the shared ACP registry).
-// Revv's server runs as a background LaunchAgent, and whether that background
-// context is permitted to read the item is governed by the item's Access
-// Control — a per-machine state. When blocked, the spawned agent subprocess
+// Revv's server runs as a background process the desktop app spawns, and
+// whether that background context is permitted to read the item is governed
+// by the item's Access Control — a per-machine state. When blocked, the spawned agent subprocess
 // can't authenticate and exits: a 401 / "ACP connection closed".
 //
 // This module stores/injects NO credential. It (a) detects the block and (b)
@@ -77,44 +77,28 @@ export function agentFailureGuidance(
   return keychainAuth?.remediation ?? null;
 }
 
-export function withAgentKeychainHint(
-  agent: AcpAgentId,
-  rawMessage: string,
-  isLoggedIn: (agent: AcpAgentId) => boolean = detectAgentAuth,
-): string {
-  const guidance = agentFailureGuidance(agent, rawMessage, isLoggedIn);
-  return guidance ? `${rawMessage}\n\n${guidance}` : rawMessage;
-}
-
 /**
  * A failed agent turn. `message` is the agent's error with any guidance after
  * a blank line; `agentMessage` and `guidance` keep the two apart.
  */
-export class AgentTurnError extends Error {
+export interface AgentTurnFailure {
   readonly kind: AgentFailureKind;
+  readonly message: string;
   readonly agentMessage: string;
   readonly guidance: string | null;
-
-  constructor(
-    agentMessage: string,
-    kind: AgentFailureKind,
-    guidance: string | null = null,
-    options?: { readonly cause?: unknown },
-  ) {
-    super(guidance ? `${agentMessage}\n\n${guidance}` : agentMessage, options);
-    this.name = "AgentTurnError";
-    this.kind = kind;
-    this.agentMessage = agentMessage;
-    this.guidance = guidance;
-  }
+  readonly cause: unknown;
 }
 
-export function toAgentTurnError(agent: AcpAgentId, err: unknown): AgentTurnError {
-  if (err instanceof AgentTurnError) return err;
+export function agentTurnFailure(agent: AcpAgentId, err: unknown): AgentTurnFailure {
   const raw = err instanceof Error ? err.message : String(err);
   const auth =
     (err instanceof RequestError && err.code === ACP_AUTH_REQUIRED) || looksLikeAuthFailure(raw);
-  return new AgentTurnError(raw, auth ? "auth" : "other", agentFailureGuidance(agent, raw), {
+  const guidance = agentFailureGuidance(agent, raw);
+  return {
+    kind: auth ? "auth" : "other",
+    message: guidance ? `${raw}\n\n${guidance}` : raw,
+    agentMessage: raw,
+    guidance,
     cause: err,
-  });
+  };
 }

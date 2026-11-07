@@ -26,3 +26,13 @@ describe("MCP tool input schemas", () => {
     }
   }
 });
+
+describe("chat tool access", () => {
+  it("declares exactly the read-only tools plan mode keeps", () => {
+    const readOnly = CHAT_TOOL_BUNDLE.specs.filter((spec) => spec.access === "read");
+    expect(readOnly.map((spec) => spec.name)).toEqual([
+      "get_review_context",
+      "get_walkthrough_for_edit",
+    ]);
+  });
+});

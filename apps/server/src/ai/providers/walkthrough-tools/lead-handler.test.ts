@@ -13,7 +13,7 @@ import {
   walkthroughs,
 } from "../../../db/schema";
 import { loadWalkthroughLeads, recordWalkthroughLeads } from "../../../services/walkthrough-leads";
-import { completeWalkthroughHandler, TOOL_SPECS } from "./index";
+import { completeWalkthroughHandler, WALKTHROUGH_TOOL_BUNDLE } from "./index";
 import { resolveLeadHandler } from "./lead-handler";
 import { getWalkthroughStateHandler } from "./read-handler";
 import type { ResolveLeadInput, WalkthroughToolContext } from "./spec";
@@ -199,7 +199,7 @@ describe("recordWalkthroughLeads", () => {
 
 describe("resolve_lead", () => {
   it("is on the tool surface", () => {
-    expect(TOOL_SPECS.map((s) => s.name)).toContain("resolve_lead");
+    expect(WALKTHROUGH_TOOL_BUNDLE.specs.map((s) => s.name)).toContain("resolve_lead");
   });
 
   it("confirms a lead against its issue and broadcasts it", async () => {

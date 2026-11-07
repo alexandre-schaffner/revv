@@ -6,16 +6,15 @@
 // model, and answer.
 
 import type { AgentCheckResult } from "@revv/shared";
-import { AgentTurnError, agentFailureGuidance } from "../acp/agent-failure";
 import type { AgentLaunch } from "../acp/agent-launch";
-import { promptOnce } from "../acp/run-turn";
+import { type PromptOnceResult, promptOnce } from "../acp/run-turn";
 
 /** Covers a cold `npx` adapter install plus the turn itself. */
 const CHECK_CEILING_MS = 120_000;
 const CHECK_PROMPT = "This is a connectivity check from Revv. Reply with the single word OK.";
 
 /** The turn under test; a seam so tests don't spawn a real agent. */
-export type RunCheckTurn = (launch: AgentLaunch) => Promise<unknown>;
+export type RunCheckTurn = (launch: AgentLaunch) => Promise<PromptOnceResult>;
 
 const runRealTurn: RunCheckTurn = (launch) =>
   promptOnce({ label: "agent-check", launch, ceilingMs: CHECK_CEILING_MS, text: CHECK_PROMPT });
@@ -24,15 +23,8 @@ export async function checkAgent(
   launch: AgentLaunch,
   runTurn: RunCheckTurn = runRealTurn,
 ): Promise<AgentCheckResult> {
-  try {
-    // Any answer passes: the point is that a turn completed, not what it said.
-    await runTurn(launch);
-    return { ok: true };
-  } catch (err) {
-    if (err instanceof AgentTurnError) {
-      return { ok: false, error: err.agentMessage, guidance: err.guidance };
-    }
-    const error = err instanceof Error ? err.message : String(err);
-    return { ok: false, error, guidance: agentFailureGuidance(launch.agent, error) };
-  }
+  const result = await runTurn(launch);
+  // Any answer passes: the point is that a turn completed, not what it said.
+  if (result.kind === "answered") return { ok: true };
+  return { ok: false, error: result.error, guidance: result.guidance };
 }

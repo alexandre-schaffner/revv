@@ -19,7 +19,7 @@ interface SchemaSpec {
 const SURFACES: ReadonlyArray<{ label: string; specs: readonly SchemaSpec[] }> = [
   { label: "walkthrough", specs: WALKTHROUGH_TOOL_BUNDLE.specs },
   { label: "recap", specs: RECAP_TOOL_BUNDLE.specs },
-  { label: "chat-edit", specs: EDIT_TOOL_SPECS as unknown as readonly SchemaSpec[] },
+  { label: "chat-edit", specs: EDIT_TOOL_SPECS },
   { label: "external", specs: EXTERNAL_REVIEW_TOOL_SPECS },
 ];
 
@@ -122,7 +122,7 @@ describe("agent MCP tools coerce string-valued numeric arguments", () => {
         : new Set<string>();
     };
     const wt = WALKTHROUGH_TOOL_BUNDLE.specs;
-    const ce = EDIT_TOOL_SPECS as unknown as readonly SchemaSpec[];
+    const ce = EDIT_TOOL_SPECS;
 
     const addStep = pathsOf(wt, "add_semantic_step");
     expect(addStep.has("initial_block.code.start_line")).toBe(true);

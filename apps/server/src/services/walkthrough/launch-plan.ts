@@ -247,7 +247,7 @@ export function planWalkthroughLaunch(input: {
 > {
   return Effect.gen(function* () {
     const { db, resolved, existing, mode } = input;
-    const { pr, repo, files, commits, meta } = resolved;
+    const { pr, repo, files, meta } = resolved;
     const walkthroughService = yield* WalkthroughService;
 
     const priorArtifact =
@@ -308,7 +308,7 @@ export function planWalkthroughLaunch(input: {
       const start = yield* resolveJobStart({
         prId: pr.id,
         headSha: meta.headSha,
-        state: { pr, files, commits },
+        state: { pr, files },
         settings: input.settings,
         agent: input.agent,
         trigger: input.trigger,

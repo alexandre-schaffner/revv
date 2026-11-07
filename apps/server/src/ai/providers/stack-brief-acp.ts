@@ -1,10 +1,10 @@
 import type { StackBriefSnapshot } from "../../db/schema/stack-briefs";
 import type { AgentLaunch } from "../acp/agent-launch";
-import type { ActivityBeacon } from "../acp/run-turn";
+import type { ActivityBeacon, TurnSettle } from "../acp/run-turn";
 import { buildStackBriefUserMessage, STACK_BRIEF_SYSTEM_PROMPT } from "../prompts/stack-brief";
-import { type McpAgentAcpResult, runMcpAgentViaAcp } from "./mcp-agent-acp";
-import type { StackBriefToolContext } from "./stack-brief-tools";
-import { STACK_BRIEF_MCP_SERVER } from "./stack-brief-tools";
+import { type McpAgentRunError, runMcpAgentViaAcp } from "./mcp-agent-acp";
+import { turnMcpServer } from "./mcp-tool-gateway";
+import { STACK_BRIEF_TOOL_BUNDLE, type StackBriefToolContext } from "./stack-brief-tools";
 
 export interface RunStackBriefAcpParams {
   readonly ctx: StackBriefToolContext;
@@ -15,24 +15,23 @@ export interface RunStackBriefAcpParams {
   readonly abortController: AbortController;
   readonly activity: ActivityBeacon;
   readonly calledAnyTool: () => boolean;
-  readonly isValidated: () => boolean;
+  /** Fired once `complete_stack_brief` passed during this run. */
+  readonly completion: TurnSettle;
 }
 
 export function runStackBriefAgentViaAcp(
   params: RunStackBriefAcpParams,
-): Promise<McpAgentAcpResult> {
+): Promise<McpAgentRunError> {
   return runMcpAgentViaAcp({
     launch: params.launch,
     workingDir: params.workingDir,
     abortController: params.abortController,
     activity: params.activity,
-    traceKey: params.ctx.briefId,
-    route: "/mcp/stack-brief",
-    mcpServerName: `${STACK_BRIEF_MCP_SERVER}-${params.ctx.briefId}`,
-    sessionToken: params.sessionToken,
+    settle: params.completion,
+    trace: { key: params.ctx.briefId, attribute: "briefId" },
+    mcp: turnMcpServer(STACK_BRIEF_TOOL_BUNDLE, params.ctx.briefId, params.sessionToken, true),
     prompt: `${STACK_BRIEF_SYSTEM_PROMPT}\n\n---\n\n${buildStackBriefUserMessage(params.snapshot)}`,
     calledAnyTool: params.calledAnyTool,
-    isValidated: params.isValidated,
     debugLabel: "stack-brief-acp",
   });
 }

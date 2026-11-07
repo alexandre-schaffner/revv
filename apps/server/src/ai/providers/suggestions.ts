@@ -161,34 +161,27 @@ function sanitizePrompts(values: unknown[]): string[] {
   return out;
 }
 
-async function generateViaAcp(input: GenerateSuggestionsInput): Promise<string[]> {
-  const collected = await promptOnce({
+export async function generateSuggestions(input: GenerateSuggestionsInput): Promise<string[]> {
+  const answer = await promptOnce({
     label: "suggestions-acp",
     launch: input.launch,
     ceilingMs: SUGGESTIONS_TIMEOUT_MS,
     text: `${SYSTEM_PROMPT}\n\n---\n\n${buildUserMessage(input)}`,
   });
-  const parsed = parsePrompts(collected);
+  const parsed = answer.kind === "answered" ? parsePrompts(answer.text) : null;
   if (!parsed) {
-    throw new Error(`acp agent returned unparseable output (len=${collected.length})`);
-  }
-  return parsed;
-}
-
-export async function generateSuggestions(input: GenerateSuggestionsInput): Promise<string[]> {
-  try {
-    const result = await generateViaAcp(input);
-    debug(
-      "suggestions",
-      `generated ${result.length} prompts via ${input.launch.agent}/${input.launch.model}`,
-    );
-    return result;
-  } catch (err) {
     logError(
       "suggestions",
-      `falling back to defaults:`,
-      err instanceof Error ? err.message : String(err),
+      "falling back to defaults:",
+      answer.kind === "answered"
+        ? `acp agent returned unparseable output (len=${answer.text.length})`
+        : answer.error,
     );
     return [...CHAT_SUGGESTION_FALLBACKS];
   }
+  debug(
+    "suggestions",
+    `generated ${parsed.length} prompts via ${input.launch.agent}/${input.launch.model}`,
+  );
+  return parsed;
 }

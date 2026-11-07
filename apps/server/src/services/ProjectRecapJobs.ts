@@ -24,7 +24,7 @@ import { SPAN } from "@revv/shared/telemetry";
 import { sql } from "drizzle-orm";
 import { Cause, Context, Effect, Layer } from "effect";
 import { resolveAgentLaunch } from "../ai/acp/agent-launch";
-import { isAgentLaunchable } from "../ai/acp/launch";
+import { makeTurnSettle, type TurnSettle } from "../ai/acp/run-turn";
 import { runRecapAgentViaAcp } from "../ai/providers/recap-acp";
 import {
   type RecapSourcePrDiff,
@@ -79,7 +79,7 @@ interface RecapRun extends SubscriberChannel<RecapStreamEvent> {
   /** Set once the source bundle is assembled; the token resolves to nothing before. */
   tools: RecapToolContext | null;
   calledAnyTool: boolean;
-  validated: boolean;
+  readonly completion: TurnSettle;
   modelUsed: string | null;
 }
 
@@ -591,12 +591,6 @@ export const ProjectRecapJobsLive = Layer.effect(
         const agentLaunch = yield* resolveAgentLaunch("recap").pipe(
           Effect.provideService(SettingsService, settingsService),
         );
-        if (!isAgentLaunchable(agentLaunch.agent)) {
-          return {
-            kind: "failed",
-            failure: `The configured recap agent ('${agentLaunch.agent}') is not available on this machine.`,
-          };
-        }
         run.context.modelUsed = agentLaunch.model;
 
         const repoClient = yield* Effect.cached(resolveRepoClient(recap.repositoryId));
@@ -618,17 +612,14 @@ export const ProjectRecapJobsLive = Layer.effect(
           onToolCall: () => {
             run.context.calledAnyTool = true;
           },
-          onCompleted: () => {
-            run.context.validated = true;
-            if (!run.abort.signal.aborted) run.abort.abort(new Error("Recap completed"));
-          },
+          onCompleted: run.context.completion.settle,
         };
         run.context.tools = tools;
 
         emit({ type: "phase", data: { phase: "analyzing", message: "Analyzing pull requests…" } });
 
         agentStartMs = Date.now();
-        const outcome = yield* Effect.promise(() =>
+        const error = yield* Effect.promise(() =>
           runRecapAgentViaAcp({
             ctx: tools,
             sessionToken: run.token,
@@ -637,7 +628,7 @@ export const ProjectRecapJobsLive = Layer.effect(
             abortController: run.abort,
             activity: run.activity,
             calledAnyTool: () => run.context.calledAnyTool,
-            isValidated: () => run.context.validated,
+            completion: run.context.completion,
           }),
         );
         if (ttftMs !== null) yield* Effect.annotateCurrentSpan("ttft_ms", ttftMs);
@@ -645,7 +636,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         return {
           kind: "journal",
           failure:
-            outcome.error ??
+            error?.message ??
             "Agent finished without calling complete_recap — the overview may be empty or invalid",
         };
       });
@@ -659,7 +650,7 @@ export const ProjectRecapJobsLive = Layer.effect(
             nextSeq: 0,
             tools: null,
             calledAnyTool: false,
-            validated: false,
+            completion: makeTurnSettle(),
             modelUsed: null,
           }),
           body: runRecap,

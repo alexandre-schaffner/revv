@@ -71,30 +71,27 @@ export function parseStackHeadline(raw: string): GeneratedStackHeadline | null {
   }
 }
 
-async function generateViaAcp(input: StackHeadlineInput): Promise<GeneratedStackHeadline> {
-  const collected = await promptOnce({
+export async function generateStackHeadline(
+  input: StackHeadlineInput,
+): Promise<GeneratedStackHeadline | null> {
+  const answer = await promptOnce({
     label: "stack-headline-acp",
     launch: input.launch,
     ceilingMs: HEADLINE_TIMEOUT_MS,
     text: `${SYSTEM_PROMPT}\n\n---\n\n${buildUserMessage(input)}`,
   });
-  const parsed = parseStackHeadline(collected);
-  if (!parsed) throw new Error(`unparseable output (len=${collected.length})`);
-  return parsed;
-}
-
-export async function generateStackHeadline(
-  input: StackHeadlineInput,
-): Promise<GeneratedStackHeadline | null> {
-  try {
-    const result = await generateViaAcp(input);
-    debug(
+  const parsed = answer.kind === "answered" ? parseStackHeadline(answer.text) : null;
+  if (!parsed) {
+    logError(
       "stack-headline",
-      `named a ${input.layersBaseFirst.length}-layer stack via ${input.launch.model}`,
+      "falling back to titles:",
+      answer.kind === "answered" ? `unparseable output (len=${answer.text.length})` : answer.error,
     );
-    return result;
-  } catch (err) {
-    logError("stack-headline", "falling back to titles:", err instanceof Error ? err.message : err);
     return null;
   }
+  debug(
+    "stack-headline",
+    `named a ${input.layersBaseFirst.length}-layer stack via ${input.launch.model}`,
+  );
+  return parsed;
 }

@@ -60,16 +60,14 @@ export type ConnectionResolution<Meta> =
   | { ok: true; meta: Meta }
   | { ok: false; status: number; message: string };
 
-export interface HttpToolCall<Ctx, Meta> {
-  readonly toolName: string;
-  readonly input: unknown;
+export interface HttpToolCall<Ctx, Meta, Result extends McpToolResult> {
+  readonly spec: ToolSpec<Ctx, Result>;
+  readonly input: Record<string, unknown>;
   readonly ctx: Ctx;
   readonly meta: Meta;
 }
 
 export interface BindHttpOptions<Ctx, Meta, Result extends McpToolResult> {
-  readonly prefix?: string;
-  readonly path: string;
   readonly logScope: string;
   readonly bundle: ToolSpecBundle<Ctx, Result>;
   readonly resolveContext: (req: Request) => Promise<ContextResolution<Ctx, Meta>>;
@@ -78,23 +76,19 @@ export interface BindHttpOptions<Ctx, Meta, Result extends McpToolResult> {
    * Tool calls still resolve the full project-bound context.
    */
   readonly resolveConnection?: (req: Request) => Promise<ConnectionResolution<Meta>>;
-  readonly serverVersion?: string;
   readonly logInbound?: boolean;
-  readonly specsForList?: (
-    specs: ReadonlyArray<ToolSpec<Ctx, Result>>,
-    meta: Meta,
-  ) => ReadonlyArray<ToolSpec<Ctx, Result>>;
-  readonly rejectToolCall?: (toolName: string, meta: Meta) => string | null;
+  /** Why this caller may not use `spec`, or null. A refused tool is neither listed nor callable. */
+  readonly refuse?: (spec: ToolSpec<Ctx, Result>, meta: Meta) => string | null;
   /**
-   * Key under which the job that provoked this call published its trace anchor
-   * (see observability/span-graft.ts) — the walkthrough id for generation, the
-   * recap id for recaps. Returning it files each `tools/call` span inside that
-   * job's trace instead of a trace of its own, which is what makes an agent's
-   * content writes visible in the generation timeline. Omit for surfaces with
-   * no owning job (chat context): the span is still recorded, just unparented.
+   * The job that provoked this call: `key` is the id it published its trace
+   * anchor under (see observability/span-graft.ts), stamped on the span as
+   * `attribute`. Files each `tools/call` span inside that job's trace instead
+   * of a trace of its own, which is what makes an agent's content writes
+   * visible in the generation timeline. Omit for surfaces with no owning job
+   * (chat context): the span is still recorded, just unparented.
    */
-  readonly traceAnchorKey?: (meta: Meta) => string | null;
-  readonly beforeToolCall?: (call: HttpToolCall<Ctx, Meta>) => void;
+  readonly trace?: { readonly attribute: string; readonly key: (meta: Meta) => string };
+  readonly beforeToolCall?: (call: HttpToolCall<Ctx, Meta, Result>) => void;
   readonly servedMessage?: (requests: readonly JsonRpcRequest[], ctx: Ctx, meta: Meta) => string;
 }
 
@@ -113,12 +107,11 @@ function inboundMethod(body: unknown): string {
 function handleInitialize<Ctx, Result extends McpToolResult>(
   id: number | string | null,
   bundle: ToolSpecBundle<Ctx, Result>,
-  serverVersion?: string,
 ): JsonRpcResponse {
   return jsonRpcSuccess(id, {
     protocolVersion: "2024-11-05",
     capabilities: { tools: {} },
-    serverInfo: { name: bundle.name, version: serverVersion ?? bundle.version },
+    serverInfo: { name: bundle.name, version: bundle.version },
   });
 }
 
@@ -151,14 +144,13 @@ async function handleToolsCall<Ctx, Meta, Result extends McpToolResult>(
     return jsonRpcError(id, -32602, "tools/call: missing tool name");
   }
 
-  const rejection = options.rejectToolCall?.(name, resolved.meta) ?? null;
-  if (rejection) {
-    return jsonRpcError(id, -32601, rejection);
-  }
-
   const spec = options.bundle.specs.find((s) => s.name === name);
   if (!spec) {
     return jsonRpcError(id, -32601, `tools/call: unknown tool '${name}'`);
+  }
+  const refusal = options.refuse?.(spec, resolved.meta) ?? null;
+  if (refusal) {
+    return jsonRpcError(id, -32601, refusal);
   }
 
   const parsed = spec.inputSchema.safeParse(p.arguments ?? {});
@@ -172,16 +164,21 @@ async function handleToolsCall<Ctx, Meta, Result extends McpToolResult>(
 
   try {
     options.beforeToolCall?.({
-      toolName: name,
+      spec,
       input: parsed.data,
       ctx: resolved.ctx,
       meta: resolved.meta,
     });
-    const anchorKey = options.traceAnchorKey?.(resolved.meta) ?? null;
+    const anchorKey = options.trace?.key(resolved.meta) ?? null;
     const result = await withGraftedSpan(
       anchorKey,
       `Mcp.${name}`,
-      { attributes: { mcp_tool: name, ...(anchorKey ? { walkthrough_id: anchorKey } : {}) } },
+      {
+        attributes: {
+          mcp_tool: name,
+          ...(anchorKey && options.trace ? { [options.trace.attribute]: anchorKey } : {}),
+        },
+      },
       () => spec.handler(resolved.ctx, parsed.data),
     );
     return jsonRpcSuccess(id, result);
@@ -203,7 +200,7 @@ async function handleToolsCall<Ctx, Meta, Result extends McpToolResult>(
 export function bindHttp<Ctx, Meta, Result extends McpToolResult>(
   options: BindHttpOptions<Ctx, Meta, Result>,
 ) {
-  return new Elysia({ prefix: options.prefix ?? "/mcp" }).post(options.path, async (ctx) => {
+  return new Elysia().post(options.bundle.route, async (ctx) => {
     const req = ctx.request;
     const body: unknown = ctx.body;
 
@@ -263,7 +260,7 @@ export function bindHttp<Ctx, Meta, Result extends McpToolResult>(
       const rpcId = rpc.id ?? null;
       try {
         if (rpc.method === "initialize") {
-          responses.push(handleInitialize(rpcId, options.bundle, options.serverVersion));
+          responses.push(handleInitialize(rpcId, options.bundle));
         } else if (rpc.method === "notifications/initialized") {
           if (rpc.id !== undefined && rpc.id !== null) {
             responses.push(jsonRpcSuccess(rpcId, null));
@@ -273,9 +270,10 @@ export function bindHttp<Ctx, Meta, Result extends McpToolResult>(
             responses.push(jsonRpcError(rpcId, -32603, "MCP connection was not resolved"));
             continue;
           }
-          const specs =
-            options.specsForList?.(options.bundle.specs, connectionResolution.meta) ??
-            options.bundle.specs;
+          const { meta } = connectionResolution;
+          const specs = options.refuse
+            ? options.bundle.specs.filter((spec) => options.refuse?.(spec, meta) === null)
+            : options.bundle.specs;
           responses.push(handleToolsList(rpcId, specs));
         } else if (rpc.method === "tools/call") {
           if (fullResolution === null) {

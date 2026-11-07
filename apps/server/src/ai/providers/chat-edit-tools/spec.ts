@@ -16,7 +16,7 @@ import {
   SENTIMENT_CONTRACT,
   SUMMARY_CONTRACT,
 } from "../../prompts/review-copy-contract";
-import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gateway";
+import type { McpToolResult } from "../mcp-tool-gateway";
 import {
   artifactBlockField,
   blockRefSchema,
@@ -40,7 +40,6 @@ export interface ChatWalkthroughEditContext {
   readonly db: Db;
   /** Edits target the PR's newest complete walkthrough, resolved per call. */
   readonly prId: string;
-  readonly userId: string;
   readonly actor: ChatEditActor;
   /** After the commit: `lifecycle:edited`, then `events`, then a team-cache push. */
   readonly publishEdit: (walkthroughId: string, events: readonly WalkthroughStreamEvent[]) => void;
@@ -54,11 +53,6 @@ export type ChatEditToolHandler<TInput> = (
   ctx: ChatWalkthroughEditContext,
   input: TInput,
 ) => Promise<ChatEditToolResult>;
-
-export type ChatEditToolSpecRecord = GatewayToolSpec<
-  ChatWalkthroughEditContext,
-  ChatEditToolResult
->;
 
 /** Exactly one variant, as `add_diff_step` takes it. */
 export const blockContentSchema = z

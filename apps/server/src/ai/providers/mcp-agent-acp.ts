@@ -4,9 +4,16 @@
 // (`calledAnyTool`), never the agent stream.
 
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
+import type { AgentFailureKind } from "../../domain/errors";
 import { logError } from "../../logger";
 import type { AgentLaunch } from "../acp/agent-launch";
-import { type ActivityBeacon, JOB_TURN, runAcpTurn } from "../acp/run-turn";
+import {
+  type ActivityBeacon,
+  JOB_TURN,
+  runAcpTurn,
+  type TurnMcpServer,
+  type TurnSettle,
+} from "../acp/run-turn";
 
 export interface RunMcpAgentAcpParams {
   readonly launch: AgentLaunch;
@@ -14,64 +21,61 @@ export interface RunMcpAgentAcpParams {
   readonly abortController: AbortController;
   /** The job's liveness beacon; its MCP route notes every call it authenticates. */
   readonly activity: ActivityBeacon;
-  /** The job id its trace anchor is published under. */
-  readonly traceKey: string;
-  readonly route: string;
-  readonly mcpServerName: string;
-  readonly sessionToken: string;
+  /** Fired by the job's completion gate tool once it passes. */
+  readonly settle: TurnSettle;
+  /** The job id its trace anchor is published under, and the span attribute naming it. */
+  readonly trace: { readonly key: string; readonly attribute: string };
+  readonly mcp: TurnMcpServer;
   /** System prompt and user message in one: ACP has no separate system channel. */
   readonly prompt: string;
   readonly calledAnyTool: () => boolean;
-  readonly isValidated: () => boolean;
   readonly debugLabel: string;
   readonly onSessionUpdate?: (update: SessionUpdate) => void;
 }
 
-export interface McpAgentAcpResult {
-  readonly validated: boolean;
-  readonly noToolCalls?: boolean;
-  readonly error?: string;
-}
+/** Why the run produced nothing the journal can complete on, or null when it did its part. */
+export type McpAgentRunError = {
+  readonly kind: AgentFailureKind | "no_tool_calls";
+  readonly message: string;
+} | null;
 
-export async function runMcpAgentViaAcp(params: RunMcpAgentAcpParams): Promise<McpAgentAcpResult> {
+export async function runMcpAgentViaAcp(params: RunMcpAgentAcpParams): Promise<McpAgentRunError> {
   const { launch } = params;
-  try {
-    const { end } = await runAcpTurn({
-      label: params.debugLabel,
-      launch,
-      cwd: params.workingDir,
-      mcp: {
-        route: params.route,
-        name: params.mcpServerName,
-        token: params.sessionToken,
-        required: true,
-      },
-      deadlines: JOB_TURN,
-      activity: params.activity,
-      signal: params.abortController.signal,
-      traceKey: params.traceKey,
-      prompt: () => [{ type: "text", text: params.prompt }],
-      onUpdate: (update) => params.onSessionUpdate?.(update),
-    });
-    // The completion gate aborts the turn on purpose once it passes.
-    if (params.isValidated()) return { validated: true };
-    if (end.kind !== "stopped") {
-      logError(params.debugLabel, "run ended early:", end.reason);
-      return { validated: false, error: end.reason };
-    }
-    if (!params.calledAnyTool()) {
-      const error =
+  const end = await runAcpTurn({
+    label: params.debugLabel,
+    launch,
+    cwd: params.workingDir,
+    mcp: params.mcp,
+    deadlines: JOB_TURN,
+    activity: params.activity,
+    signal: params.abortController.signal,
+    settle: params.settle,
+    trace: params.trace,
+    prompt: () => [{ type: "text", text: params.prompt }],
+    onUpdate: (update) => params.onSessionUpdate?.(update),
+  });
+  if (params.settle.settled()) return null;
+  switch (end.kind) {
+    case "settled":
+      return null;
+    case "stopped": {
+      if (params.calledAnyTool()) return null;
+      const message =
         `The model finished without calling any tools. This usually means the selected ` +
         `model (${launch.model}) does not support tool calling through the '${launch.agent}' ` +
         `ACP agent, or the provider is not configured for it.`;
-      logError(params.debugLabel, error);
-      return { validated: false, noToolCalls: true, error };
+      logError(params.debugLabel, message);
+      return { kind: "no_tool_calls", message };
     }
-    return { validated: false };
-  } catch (err) {
-    if (params.isValidated()) return { validated: true };
-    const message = err instanceof Error ? err.message : String(err);
-    logError(params.debugLabel, "run failed:", message);
-    return { validated: false, error: message };
+    case "cancelled":
+    case "timeout":
+      logError(params.debugLabel, "run ended early:", end.reason);
+      return { kind: "other", message: end.reason };
+    case "not_configured":
+      logError(params.debugLabel, end.message);
+      return { kind: "other", message: end.message };
+    case "failed":
+      logError(params.debugLabel, "run failed:", end.failure.message);
+      return { kind: end.failure.kind, message: end.failure.message };
   }
 }
