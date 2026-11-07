@@ -14,6 +14,7 @@ import type { Db } from "../../db";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
 import { type DiffFingerprint, walkthroughs } from "../../db/schema/walkthroughs";
 import { finishedReview, latestCompleteWalkthrough } from "./content";
+import { perspectiveOf } from "./perspective";
 
 const MAX_CHAT_PROMPT_ISSUES = 40;
 
@@ -47,13 +48,12 @@ export interface FinishedReview {
 }
 
 /**
- * Each PR's latest finished review (see `finishedReview`), superseded since or
- * not; with `perspectives`, only a review in the PR's perspective counts.
+ * Each PR's latest finished review (see `finishedReview`) in the PR's
+ * perspective (`perspectiveOf`), superseded since or not.
  */
 export function latestFinishedReviews(
   db: Db,
   prIds: readonly string[],
-  perspectives?: ReadonlyMap<string, WalkthroughMode>,
 ): Map<string, FinishedReview> {
   if (prIds.length === 0) return new Map();
   const rows = db
@@ -73,10 +73,10 @@ export function latestFinishedReviews(
     .where(and(inArray(walkthroughs.pullRequestId, [...prIds]), finishedReview()))
     .orderBy(desc(walkthroughs.generatedAt))
     .all();
+  const perspectives = new Map(prIds.map((prId) => [prId, perspectiveOf(db, prId)]));
   const latest = new Map<string, (typeof rows)[number]>();
   for (const row of rows) {
-    const perspective = perspectives?.get(row.prId);
-    if (perspective !== undefined && row.mode !== perspective) continue;
+    if (row.mode !== perspectives.get(row.prId)) continue;
     if (!latest.has(row.prId)) latest.set(row.prId, row);
   }
 
