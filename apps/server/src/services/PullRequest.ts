@@ -1,7 +1,6 @@
 import type { PullRequest } from "@revv/shared";
 import { and, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import type { Db } from "../db/index";
 import { pullRequests, repositories, walkthroughs } from "../db/schema/index";
 import { avatarOfRepoLogin } from "../db/schema/remote-users";
 import { type DbError, NotFoundError } from "../domain/errors";
