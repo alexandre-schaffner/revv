@@ -67,6 +67,9 @@ assertContract(
 );
 
 const deviceAuth = await Bun.file("apps/server/src/routes/device-auth.ts").text();
-assertContract(deviceAuth.includes("body?.client_id"), "transient client id reaches device auth");
+assertContract(
+  deviceAuth.includes("body.client_id?.trim() ||"),
+  "transient client id reaches device auth",
+);
 
 console.log(`PR deep-link contract OK: ${built}`);

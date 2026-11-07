@@ -209,6 +209,15 @@ export class GitHubAccounts extends Context.Service<
     readonly localUsers: Effect.Effect<LocalUser[], DbError>;
     /** The user's account on each host, and the hosts Revv can sign in to unconnected. */
     readonly connectedHosts: (userId: string) => Effect.Effect<ConnectedHost[], DbError>;
+    /**
+     * The client the user's account on `host` was issued to, so signing it in
+     * again needs no client id from the user or the settings. Null when they
+     * have no account there, or its row predates `client_id`.
+     */
+    readonly issuedClientIdOn: (
+      userId: string,
+      host: string,
+    ) => Effect.Effect<string | null, DbError>;
     /** The ids of the user's accounts, or of their account on `host`. */
     readonly accountsOf: (userId: string, host?: string) => Effect.Effect<string[], DbError>;
     /**
@@ -925,6 +934,19 @@ export const GitHubAccountsLive = Layer.effect(
           .map((r) => r.id),
       );
 
+    const issuedClientIdOn = (
+      userId: string,
+      host: string,
+    ): Effect.Effect<string | null, DbError> =>
+      dbTry("read account client id", () =>
+        db
+          .select({ providerId: account.providerId, clientId: account.clientId })
+          .from(account)
+          .where(eq(account.userId, userId))
+          .all()
+          .find((r) => isAccountOnHost(r.providerId, host)),
+      ).pipe(Effect.map((row) => row?.clientId ?? null));
+
     const disconnect = (userId: string, host: string): Effect.Effect<void, DbError> =>
       Effect.gen(function* () {
         const ids = yield* accountsOf(userId, host);
@@ -1003,6 +1025,7 @@ export const GitHubAccountsLive = Layer.effect(
       switchTo,
       localUsers,
       connectedHosts,
+      issuedClientIdOn,
       accountsOf,
       disconnect,
       removeUser,
