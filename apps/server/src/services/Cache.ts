@@ -1,9 +1,10 @@
 import { and, eq, isNull, lt, or } from "drizzle-orm";
-import { Context, Effect, type Exit, Layer } from "effect";
+import { Context, Effect, Layer } from "effect";
 import { daysBefore, type RetentionPolicy } from "../db/retention";
 import { kvCache } from "../db/schema/index";
 import type { DbError } from "../domain/errors";
 import { dbTry } from "../effects/db-try";
+import { keyedSingleFlight } from "../effects/keyed-single-flight";
 import { DbService } from "./Db";
 
 /**
@@ -88,11 +89,16 @@ export const CacheServiceLive = Layer.effect(
     const memory = new Map<string, MemEntry>();
     const cacheKey = (ns: string, key: string) => `${ns}\0${key}`;
 
-    const inflight = new Map<string, Promise<unknown>>();
-
     let hits = 0;
     let misses = 0;
     let inflightDedups = 0;
+    // Detached: a fetch outlives an interrupted caller, and the next one joins it.
+    const flight = keyedSingleFlight<string, unknown, unknown>({
+      detach: true,
+      onJoin: () => {
+        inflightDedups++;
+      },
+    });
 
     const isExpired = (expiresAt: number | null): boolean =>
       expiresAt !== null && Date.now() > expiresAt;
@@ -232,38 +238,16 @@ export const CacheServiceLive = Layer.effect(
         const existing = yield* get<T>(ns, key);
         if (existing !== null) return existing;
 
-        const dedupKey = cacheKey(ns, key);
-        const pending = inflight.get(dedupKey);
-        if (pending) {
-          inflightDedups++;
-          const exit = yield* Effect.promise(() => pending as Promise<Exit.Exit<T, E>>);
-          return yield* exit;
-        }
-
-        // The Promise carries the fetcher's Exit and never rejects, so every
-        // caller, owner and joiner alike, sees a typed failure in the error
-        // channel. A rejecting Promise would reach joiners as a defect, slipping
-        // past their `catchAll`.
-        const runtime = yield* Effect.context<R>();
-        const promise = Effect.runPromiseWith(runtime)(
+        // One flight hosts every namespace's fetches, keyed on (ns, key): the
+        // key fixes the value and failure types.
+        return yield* (flight(
+          cacheKey(ns, key),
           fetcher().pipe(
             Effect.tap((value) =>
               set(ns, key, value, opts).pipe(Effect.orElseSucceed(() => undefined)),
             ),
-            Effect.exit,
           ),
-        );
-
-        // The entry lives exactly as long as the fetch, which runs detached:
-        // an interrupted owner leaves it running, and a later caller must join
-        // it rather than start a second one. Settling drops it, failure
-        // included, so a failed fetch is never replayed to the next caller.
-        inflight.set(dedupKey, promise);
-        void promise.then(() => {
-          if (inflight.get(dedupKey) === promise) inflight.delete(dedupKey);
-        });
-        const exit = yield* Effect.promise(() => promise);
-        return yield* exit;
+        ) as Effect.Effect<T, E, R>);
       });
 
     const stats = () =>
