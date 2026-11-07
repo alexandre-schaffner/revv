@@ -2,15 +2,13 @@
 // from the walkthrough store, the PR's first pass and the user's settings.
 // GuidedWalkthrough only switches on `page.kind` and lays the parts out.
 
-import {
-  type Activity,
-  chapterNumbersByIndex,
-  type IssueSeverity,
-  severityRank,
-  type WalkthroughBlock,
-  type WalkthroughIssue,
-  type WalkthroughPipelinePhase,
-  type WalkthroughSemanticStep,
+import type {
+  Activity,
+  IssueSeverity,
+  WalkthroughBlock,
+  WalkthroughIssue,
+  WalkthroughPipelinePhase,
+  WalkthroughSemanticStep,
 } from "@revv/shared";
 import { untrack } from "svelte";
 import {
@@ -22,23 +20,31 @@ import { type FirstPassView, firstPassView } from "$lib/hunk-scan/first-pass";
 import { getHunkScan } from "$lib/hunk-scan/store.svelte";
 import { getLoadedHeadSha } from "$lib/stores/diff-files.svelte";
 import { getPrById } from "$lib/stores/prs.svelte";
+import { walkthroughAnchor } from "$lib/stores/review-nav.svelte";
+import { worstSeverity } from "$lib/walkthrough/issues";
 import { WALKTHROUGH_PERSPECTIVES } from "$lib/walkthrough/perspective";
 import { type WalkthroughEntry, walkthroughUiState } from "$lib/walkthrough/reducer";
+import { chapterNumbers } from "$lib/walkthrough/steps";
 import {
   getIsHydrating,
   getIssueSignal,
   getSelectedMode,
+  getStepLabel,
   getWalkthroughEntry,
 } from "$lib/walkthrough/store.svelte";
 
-/** Which state the tab is in, in the order the checks apply. */
+/**
+ * What the tab body shows: the store's `walkthroughUiState`, plus the two
+ * states only the tab has (the cached read still landing, and a first pass
+ * with no review yet).
+ */
 export type WalkthroughPage =
-  | { kind: "error-empty"; explorations: readonly Activity[] }
+  | { kind: "hydrating" }
   | { kind: "empty" }
   | { kind: "first-pass-only" }
+  | { kind: "error-empty"; explorations: readonly Activity[] }
   | { kind: "loading" }
-  | { kind: "content" }
-  | { kind: "none" };
+  | { kind: "content" };
 
 export interface ChapterEntry {
   block: WalkthroughBlock;
@@ -88,7 +94,7 @@ const AGENT_CHAPTERS = [
     blurb: "What changed and why",
     activeBlurb: "Reading the diff…",
     spinner: "ripple",
-    targetId: "walkthrough-overview",
+    targetId: walkthroughAnchor.overview,
   },
   {
     id: "diff",
@@ -96,7 +102,7 @@ const AGENT_CHAPTERS = [
     blurb: "Hunk-by-hunk reasoning",
     activeBlurb: "Analyzing hunks…",
     spinner: "diagonal",
-    targetId: "walkthrough-diff",
+    targetId: walkthroughAnchor.diff,
   },
   {
     id: "sentiment",
@@ -104,7 +110,7 @@ const AGENT_CHAPTERS = [
     blurb: "Overall read on the PR",
     activeBlurb: "Forming a verdict…",
     spinner: "collapse",
-    targetId: "walkthrough-sentiment",
+    targetId: walkthroughAnchor.sentiment,
   },
   {
     id: "rated",
@@ -112,7 +118,7 @@ const AGENT_CHAPTERS = [
     blurb: "Across 9 axes",
     activeBlurb: "Scoring each axis…",
     spinner: "prism-bloom",
-    targetId: "walkthrough-rating",
+    targetId: walkthroughAnchor.rating,
   },
 ] as const satisfies readonly Omit<StepperChapterData, "available">[];
 
@@ -239,7 +245,6 @@ export class WalkthroughView {
     const entriesByChapter = $derived.by(() => {
       const map = new Map<number, ChapterEntry[]>();
       for (const block of this.blocks) {
-        if (block.semanticStepIndex === undefined) continue;
         const list = map.get(block.semanticStepIndex) ?? [];
         list.push({ block, annotation: annotationOf(block) });
         map.set(block.semanticStepIndex, list);
@@ -249,20 +254,15 @@ export class WalkthroughView {
     // A chapter with no blocks yet (just opened, or left empty by a stalled
     // run) isn't shown and isn't numbered — the same rule the chat agent
     // numbers chapters by.
-    const chapterNumbers = $derived(
-      chapterNumbersByIndex(
-        semanticSteps.map((s) => s.semanticStepIndex),
-        entriesByChapter.keys(),
-      ),
-    );
-    this.chapterCount = $derived(chapterNumbers.size);
+    const numbers = $derived(chapterNumbers(semanticSteps, this.blocks));
+    this.chapterCount = $derived(numbers.size);
     this.chapters = $derived(
       semanticSteps
-        .filter((s) => chapterNumbers.has(s.semanticStepIndex))
+        .filter((s) => numbers.has(s.semanticStepIndex))
         .map((section, i) => ({
           section,
-          number: chapterNumbers.get(section.semanticStepIndex) ?? null,
-          anchorId: i === 0 ? "walkthrough-diff" : undefined,
+          number: numbers.get(section.semanticStepIndex) ?? null,
+          anchorId: i === 0 ? walkthroughAnchor.diff : undefined,
           entries: entriesByChapter.get(section.semanticStepIndex) ?? [],
         })),
     );
@@ -272,7 +272,7 @@ export class WalkthroughView {
         : {
             section: { semanticStepIndex: -1, title: "Overview", summary: null },
             number: null,
-            anchorId: "walkthrough-overview",
+            anchorId: walkthroughAnchor.overview,
             entries: [
               {
                 block: {
@@ -280,6 +280,7 @@ export class WalkthroughView {
                   id: "overview-block",
                   order: -1,
                   phase: "overview",
+                  semanticStepIndex: -1,
                   stepIndex: 0,
                   content: this.summary,
                 },
@@ -289,16 +290,9 @@ export class WalkthroughView {
           },
     );
 
-    const blockIndex = $derived(
-      new Map(this.blocks.map((b, i) => [b.id, { block: b, step: i + 1 }])),
-    );
     this.stepTagFor = (blockId) => {
-      const found = blockIndex.get(blockId);
-      if (!found) return null;
-      const { semanticStepIndex, stepIndex } = found.block;
-      if (semanticStepIndex === undefined || stepIndex === undefined) return `→ Step ${found.step}`;
-      const chapter = chapterNumbers.get(semanticStepIndex) ?? semanticStepIndex + 1;
-      return `→ Ch ${chapter} · Step ${stepIndex + 1}`;
+      const label = getStepLabel(prId(), blockId);
+      return label ? `→ ${label}` : null;
     };
 
     const signal = $derived(getIssueSignal(prId()));
@@ -313,10 +307,7 @@ export class WalkthroughView {
       const map = new Map<string, IssueSeverity>();
       for (const issue of this.issues) {
         for (const id of issue.blockIds) {
-          const current = map.get(id);
-          if (!current || severityRank(issue.severity) > severityRank(current)) {
-            map.set(id, issue.severity);
-          }
+          map.set(id, worstSeverity([map.get(id), issue.severity]) ?? issue.severity);
         }
       }
       return map;
@@ -331,9 +322,9 @@ export class WalkthroughView {
       return firstPassView(rows, scan.status, allIssues, !this.isStreaming, entry?.leads ?? null);
     });
 
+    // Later content is the stronger signal: a missed `phase:advanced` can't
+    // strand the stepper on Diff Analysis under rendered ratings.
     const activeChapterIndex = $derived(
-      // Later content is the stronger signal: a missed `phase:advanced`
-      // can't strand the stepper on Diff Analysis under rendered ratings.
       this.ratings.length > 0 ? 3 : sentiment !== null ? 2 : PHASE_TO_CHAPTER[lastCompletedPhase],
     );
     // The scan holds the agent until it hands over its leads; a scan that
@@ -360,7 +351,7 @@ export class WalkthroughView {
           blurb: this.firstPass.result,
           activeBlurb: this.firstPass.scanning,
           spinner: FIRST_PASS_SPINNER,
-          targetId: "walkthrough-first-pass",
+          targetId: walkthroughAnchor.firstPass,
           // Its unraised leads fold under the issues, in the content view.
           available: this.summary !== null && this.firstPass.hasLeads,
         },
@@ -379,20 +370,7 @@ export class WalkthroughView {
       // calls in a row would otherwise collide.
       return explorationSteps.slice(start).map((step, i) => ({ step, ordinal: start + i }));
     });
-    this.stepperVisible = $derived(
-      !this.streamError &&
-        !hydrating &&
-        (this.summary !== null || blocksAll.length > 0 || this.isStreaming),
-    );
-
-    // Defensive on sentiment/ratings too: any Phase C/D content means Phase B
-    // is over even if its `phase:advanced` hasn't arrived.
-    this.showDiffSkeleton = $derived(
-      this.isStreaming &&
-        sentiment === null &&
-        this.ratings.length === 0 &&
-        (lastCompletedPhase === "none" || lastCompletedPhase === "A" || lastCompletedPhase === "B"),
-    );
+    this.showDiffSkeleton = $derived(this.isStreaming && activeChapterIndex <= 1);
     this.activity = $derived(
       interleave(
         entry?.timeline ?? [],
@@ -426,18 +404,29 @@ export class WalkthroughView {
     });
 
     this.page = $derived.by((): WalkthroughPage => {
-      const hasBody = Boolean(this.summary) || blocksAll.length > 0;
-      if (this.streamError && !hasBody) {
-        return { kind: "error-empty", explorations: explorationSteps.slice(-6) };
+      switch (uiState.kind) {
+        case "absent":
+        case "idle":
+          if (hydrating) return { kind: "hydrating" };
+          return this.firstPass.rows.length > 0 ? { kind: "first-pass-only" } : { kind: "empty" };
+        case "error-empty":
+          return { kind: "error-empty", explorations: explorationSteps.slice(-6) };
+        case "streaming": {
+          const written =
+            this.summary !== null ||
+            blocksAll.length > 0 ||
+            sentiment !== null ||
+            this.ratings.length > 0;
+          return written ? { kind: "content" } : { kind: "loading" };
+        }
+        default:
+          return { kind: "content" };
       }
-      if (!this.isStreaming && !hasBody && !this.streamError && !hydrating) {
-        return this.firstPass.rows.length > 0 ? { kind: "first-pass-only" } : { kind: "empty" };
-      }
-      if (!hasBody && sentiment === null && this.ratings.length === 0 && this.isStreaming) {
-        return { kind: "loading" };
-      }
-      if (this.summary) return { kind: "content" };
-      return { kind: "none" };
     });
+    this.stepperVisible = $derived(
+      !hydrating &&
+        (uiState.kind === "streaming" ||
+          (this.page.kind === "content" && uiState.kind !== "error-partial")),
+    );
   }
 }
