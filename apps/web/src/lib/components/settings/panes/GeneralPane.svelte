@@ -11,8 +11,8 @@ export const pane = defineSettingsPane({
     theme: { label: "Theme", keywords: ["appearance", "dark", "light", "mode"] },
     diffTheme: { label: "Diff theme", keywords: ["syntax", "code", "colors", "dark", "light"] },
     diffLayout: {
-      label: "Default diff layout",
-      keywords: ["split", "unified", "side by side", "view"],
+      label: "Default layout",
+      keywords: ["diff", "split", "unified", "side by side", "view"],
     },
     diffWrap: { label: "Wrap long lines", keywords: ["wrap", "soft wrap", "overflow", "scroll"] },
     syncInterval: {
@@ -110,7 +110,7 @@ async function handleReplayOnboarding(): Promise<void> {
 
 <SettingsPane {pane}>
 	<SettingsGroup heading="Appearance">
-		<SettingsRow row={pane.rows.theme} label="Theme" hint="Follow the system, or pin light or dark.">
+		<SettingsRow row={pane.rows.theme} hint="Follow the system, or pin light or dark.">
 			{#snippet control()}
 				<SegmentedControl
 					aria-label="Theme"
@@ -122,7 +122,6 @@ async function handleReplayOnboarding(): Promise<void> {
 		</SettingsRow>
 		<SettingsRow
 			row={pane.rows.diffTheme}
-			label="Diff theme"
 			hint="Syntax colors in diffs. Pin one to read light code in a dark app, or the reverse."
 		>
 			{#snippet control()}
@@ -139,7 +138,6 @@ async function handleReplayOnboarding(): Promise<void> {
 	<SettingsGroup heading="Diffs">
 		<SettingsRow
 			row={pane.rows.diffLayout}
-			label="Default layout"
 			hint="Also changes when you switch layouts from a review."
 		>
 			{#snippet control()}
@@ -153,7 +151,6 @@ async function handleReplayOnboarding(): Promise<void> {
 		</SettingsRow>
 		<SettingsRow
 			row={pane.rows.diffWrap}
-			label="Wrap long lines"
 			hint="Soft-wrap lines that run past the pane instead of scrolling sideways."
 		>
 			{#snippet control()}
@@ -165,7 +162,6 @@ async function handleReplayOnboarding(): Promise<void> {
 	<SettingsGroup heading="Sync">
 		<SettingsRow
 			row={pane.rows.syncInterval}
-			label="Refresh interval"
 			hint="How often Revv checks GitHub for new and updated pull requests."
 		>
 			{#snippet control()}
@@ -184,7 +180,6 @@ async function handleReplayOnboarding(): Promise<void> {
 	<SettingsGroup heading="Setup">
 		<SettingsRow
 			row={pane.rows.replayOnboarding}
-			label="Replay onboarding"
 			hint="Walk through the setup flow again from the beginning."
 		>
 			{#snippet control()}

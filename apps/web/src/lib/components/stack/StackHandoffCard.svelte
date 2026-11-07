@@ -10,11 +10,7 @@ import { gsapFadeY } from "$lib/motion";
 import { openStackLayer } from "$lib/stacks/open-layer";
 import { layerFacts, layerRole, RISK_LABEL, readableBrief } from "$lib/stacks/stack-layer-facts";
 import { shortcutLabel } from "$lib/stores/command-keys";
-import {
-  askMergeEligibility,
-  canViewerMerge,
-  viewerMayMerge,
-} from "$lib/stores/merge-eligibility.svelte";
+import { useMergeEligibility, viewerMayMerge } from "$lib/stores/merge-eligibility.svelte";
 import { STACK_NEXT_KEYS } from "$lib/stores/shortcuts.svelte";
 import { openStackMergeSheet } from "$lib/stores/stack-merge.svelte";
 import { getLayer, getNeighbour, getStack } from "$lib/stores/stacks.svelte";
@@ -33,10 +29,11 @@ const brief = $derived(readableBrief(stack?.brief ?? null));
 const nextRole = $derived(next ? layerRole(next, brief) : null);
 const nextFacts = $derived(next ? layerFacts(next) : []);
 
-$effect(() => {
-  if (viewerMayMerge(prId)) askMergeEligibility(prId);
-});
-const canMerge = $derived(canViewerMerge(prId));
+const eligibility = useMergeEligibility(
+  () => prId,
+  () => viewerMayMerge(prId),
+);
+const canMerge = $derived(eligibility.viewerCanMerge);
 const nextKeys = shortcutLabel(STACK_NEXT_KEYS);
 const atTop = $derived(stack !== null && here !== null && next === null);
 const allReviewed = $derived(

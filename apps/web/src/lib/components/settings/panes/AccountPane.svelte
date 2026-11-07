@@ -16,7 +16,7 @@ export const pane = defineSettingsPane({
       label: "Revoke access on GitHub",
       keywords: ["authorized applications", "oauth", "token", "permissions"],
     },
-    remove: { label: "Remove account", keywords: ["delete", "danger", "erase", "local data"] },
+    remove: { label: "Remove this account", keywords: ["delete", "danger", "erase", "local data"] },
   },
 });
 </script>
@@ -60,7 +60,7 @@ async function handleRemoveAccount(): Promise<void> {
 <SettingsPane {pane}>
 	{#if user}
 		<SettingsGroup>
-			<SettingsRow row={pane.rows.identity} label={user.name}>
+			<SettingsRow searchRow={pane.rows.identity} label={user.name}>
 				{#snippet leading()}
 					<Avatar src={user.image} size={32}>
 						{#snippet fallback()}
@@ -87,7 +87,6 @@ async function handleRemoveAccount(): Promise<void> {
 			</SettingsRow>
 			<SettingsRow
 				row={pane.rows.revoke}
-				label="Revoke access on GitHub"
 				hint="Signing out clears Revv's local copy of your token. To revoke Revv's access on GitHub's side, remove it from your authorized applications."
 			>
 				{#snippet control()}
@@ -108,7 +107,6 @@ async function handleRemoveAccount(): Promise<void> {
 		<SettingsGroup heading="Remove account" tone="danger">
 			<SettingsRow
 				row={pane.rows.remove}
-				label="Remove this account"
 				hint="Permanently deletes the account and all of its local data. This cannot be undone."
 			>
 				{#snippet control()}
@@ -144,7 +142,7 @@ async function handleRemoveAccount(): Promise<void> {
 	{:else}
 		<SettingsGroup>
 			<SettingsRow
-				row={pane.rows.identity}
+				searchRow={pane.rows.identity}
 				label="Not signed in"
 				hint="Sign in with GitHub to sync your repositories and pull requests."
 			>

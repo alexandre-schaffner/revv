@@ -15,14 +15,14 @@ export const pane = defineSettingsPane({
     },
     bucket: { label: "Bucket name", keywords: ["gcs", "google cloud"] },
     credentials: { label: "Google Cloud credentials", keywords: ["adc", "gcloud", "sign in"] },
-    test: { label: "Test cache connection", keywords: ["probe", "bucket"] },
+    test: { label: "Test connection", keywords: ["probe", "bucket"] },
     uploads: { label: "Upload finished walkthroughs", keywords: ["push", "share"] },
     downloads: { label: "Hydrate from team cache", keywords: ["download", "pull", "reuse"] },
     signingMode: {
       label: "Verification mode",
       keywords: ["signing", "signature", "strict", "permissive", "ssh"],
     },
-    keyPath: { label: "SSH key path", keywords: ["signing", "private key", "ssh"] },
+    keyPath: { label: "SSH private key path", keywords: ["signing", "private key", "ssh"] },
     trustedHosts: {
       label: "Trusted signer hosts",
       keywords: ["signing", "github enterprise", "ghe"],
@@ -167,7 +167,6 @@ function parseTrustedHosts(text: string): string[] {
 	<SettingsGroup>
 		<SettingsRow
 			row={pane.rows.enabled}
-			label="Enable team cache"
 			hint="Teammates who open a pull request you've already reviewed load your walkthrough instead of re-running the agent. Uses a Google Cloud Storage bucket; its IAM grants are the team boundary."
 		>
 			{#snippet control()}
@@ -187,7 +186,7 @@ function parseTrustedHosts(text: string): string[] {
 		</p>
 	{:else}
 		<SettingsGroup heading="Connection">
-			<SettingsRow row={pane.rows.bucket} label="Bucket name" labelFor="cache-bucket-input" layout="stacked">
+			<SettingsRow row={pane.rows.bucket} labelFor="cache-bucket-input" layout="stacked">
 				{#snippet control()}
 					<CommitInput
 						id="cache-bucket-input"
@@ -199,7 +198,7 @@ function parseTrustedHosts(text: string): string[] {
 				{/snippet}
 			</SettingsRow>
 
-			<SettingsRow row={pane.rows.credentials} label="Google Cloud credentials">
+			<SettingsRow row={pane.rows.credentials}>
 				{#snippet hint()}
 					{#if adc.kind === 'ready' && !adc.status.available && !adc.status.gcloudFound}
 						Install the <a href="https://cloud.google.com/sdk/docs/install" target="_blank" rel="noopener noreferrer">Google Cloud SDK</a>,
@@ -235,7 +234,7 @@ function parseTrustedHosts(text: string): string[] {
 				{/snippet}
 			</SettingsRow>
 
-			<SettingsRow row={pane.rows.test} label="Test connection" hint="Probes the bucket with your current credentials.">
+			<SettingsRow row={pane.rows.test} hint="Probes the bucket with your current credentials.">
 				{#snippet control()}
 					<Button variant="outline" size="sm" onclick={testCacheConnection} disabled={cacheTestRunning}>
 						{#if cacheTestRunning}
@@ -257,7 +256,6 @@ function parseTrustedHosts(text: string): string[] {
 		<SettingsGroup heading="Sharing">
 			<SettingsRow
 				row={pane.rows.uploads}
-				label="Upload finished walkthroughs"
 				hint="Push your generations to the bucket so teammates can load them."
 			>
 				{#snippet control()}
@@ -270,7 +268,6 @@ function parseTrustedHosts(text: string): string[] {
 			</SettingsRow>
 			<SettingsRow
 				row={pane.rows.downloads}
-				label="Hydrate from team cache"
 				hint="On a cache hit, skip the agent and load the teammate's snapshot."
 			>
 				{#snippet control()}
@@ -284,7 +281,7 @@ function parseTrustedHosts(text: string): string[] {
 		</SettingsGroup>
 
 		<SettingsGroup heading="Signing">
-			<SettingsRow row={pane.rows.signingMode} label="Verification mode" hint={signingModeDescriptions[signingMode]}>
+			<SettingsRow row={pane.rows.signingMode} hint={signingModeDescriptions[signingMode]}>
 				{#snippet control()}
 					<SegmentedControl
 						aria-label="Verification mode"
@@ -297,7 +294,6 @@ function parseTrustedHosts(text: string): string[] {
 
 			<SettingsRow
 				row={pane.rows.keyPath}
-				label="SSH private key path"
 				labelFor="cache-key-path-input"
 				layout="stacked"
 			>
@@ -318,7 +314,6 @@ function parseTrustedHosts(text: string): string[] {
 
 			<SettingsRow
 				row={pane.rows.trustedHosts}
-				label="Trusted signer hosts"
 				labelFor="cache-trusted-hosts-input"
 				layout="stacked"
 				hint="Comma-separated. Snapshots signed from any other host are rejected before a network call."
@@ -335,7 +330,7 @@ function parseTrustedHosts(text: string): string[] {
 				{/snippet}
 			</SettingsRow>
 
-			<SettingsRow row={pane.rows.testSigning} label="Test signing">
+			<SettingsRow row={pane.rows.testSigning}>
 				{#snippet hint()}
 					Signs a probe with your key and verifies it against <code>https://&lt;host&gt;/&lt;login&gt;.keys</code>.
 				{/snippet}

@@ -12,10 +12,7 @@
 import type { Snippet } from "svelte";
 import type { SettingsRowRef } from "../settings-panes";
 
-interface Props {
-  /** The pane's searchable row this renders, so a search hit can scroll here and flash it. */
-  row?: SettingsRowRef | undefined;
-  label: string;
+interface CommonProps {
   /** Plain text, or a snippet when the hint needs a link or inline code. */
   hint?: string | Snippet | undefined;
   /** Associates the label with a form control (for inputs, not switches). */
@@ -30,9 +27,27 @@ interface Props {
   children?: Snippet;
 }
 
+type Props = CommonProps &
+  (
+    | {
+        /** The pane's searchable row this renders: its label, and where a search hit scrolls and flashes. */
+        row: SettingsRowRef;
+        label?: undefined;
+        searchRow?: undefined;
+      }
+    | {
+        /** Text known only at runtime (an account name, a repository). */
+        label: string;
+        /** The searchable row this one stands in for, so a hit on it scrolls here. */
+        searchRow?: SettingsRowRef | undefined;
+        row?: undefined;
+      }
+  );
+
 let {
   row,
-  label,
+  label: dynamicLabel,
+  searchRow,
   hint,
   labelFor,
   disabled = false,
@@ -41,13 +56,16 @@ let {
   control,
   children,
 }: Props = $props();
+
+const label = $derived(row?.label ?? dynamicLabel ?? "");
+const anchor = $derived((row ?? searchRow)?.anchor);
 </script>
 
 <div
 	class="row"
 	class:row--stacked={layout === 'stacked'}
 	class:row--disabled={disabled}
-	data-setting-id={row?.anchor}
+	data-setting-id={anchor}
 	aria-disabled={disabled || undefined}
 >
 	<div class="row-main">

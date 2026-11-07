@@ -29,14 +29,14 @@ export type WalkthroughSizing =
       readonly thinkingEffort: ThinkingEffort | null;
     };
 
-/** Which phase of the A→B→C→D pipeline a block belongs to. */
-export type WalkthroughBlockPhase = "overview" | "diff_analysis" | "sentiment";
+/**
+ * Which phase of the A→B→C→D pipeline a block belongs to. Only Phase B writes
+ * blocks: Phase A lives on `Walkthrough.summary` and Phase C on
+ * `Walkthrough.sentiment`.
+ */
+export type WalkthroughBlockPhase = "diff_analysis";
 
 export interface BlockPhaseFields {
-  /**
-   * Only `'diff_analysis'` is written: Phase A lives on `Walkthrough.summary`
-   * and Phase C on `Walkthrough.sentiment`.
-   */
   phase: WalkthroughBlockPhase;
   /** Monotonic, zero-based index of the parent semantic step. */
   semanticStepIndex: number;

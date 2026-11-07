@@ -184,7 +184,7 @@ function labelIn(options: readonly { label: string; value: string }[], value: st
 	</SettingsGroup>
 
 	<SettingsGroup heading="Defaults" description="What new reviews and chats start with. The chat bar can change them too.">
-		<SettingsRow row={pane.rows.reviewModel} label="Review model" hint="Writes walkthroughs and answers in chat.">
+		<SettingsRow row={pane.rows.reviewModel} hint="Writes walkthroughs and answers in chat.">
 			{#snippet control()}
 				<Select.Root
 					type="single"
@@ -206,7 +206,7 @@ function labelIn(options: readonly { label: string; value: string }[], value: st
 		</SettingsRow>
 
 		{#if agentEfforts.length > 0}
-			<SettingsRow row={pane.rows.thinkingEffort} label="Thinking effort" hint="How long the agent deliberates before it answers.">
+			<SettingsRow row={pane.rows.thinkingEffort} hint="How long the agent deliberates before it answers.">
 				{#snippet control()}
 					<Select.Root
 						type="single"
@@ -231,7 +231,6 @@ function labelIn(options: readonly { label: string; value: string }[], value: st
 
 		<SettingsRow
 			row={pane.rows.suggestionsModel}
-			label="Suggestions model"
 			hint="A low-cost model for the suggested prompts in the right panel."
 		>
 			{#snippet control()}
@@ -256,7 +255,6 @@ function labelIn(options: readonly { label: string; value: string }[], value: st
 
 		<SettingsRow
 			row={pane.rows.maxTurns}
-			label="Max turns"
 			hint="Most tool round trips the agent may take in one review or chat reply ({AI_MAX_TURNS.min}–{AI_MAX_TURNS.max})."
 		>
 			{#snippet control()}
@@ -274,7 +272,6 @@ function labelIn(options: readonly { label: string; value: string }[], value: st
 
 		<SettingsRow
 			row={pane.rows.baseConflictStrategy}
-			label="Resolve base conflicts by"
 			hint={conflictStrategyHints[conflictStrategy]}
 		>
 			{#snippet control()}
@@ -291,7 +288,6 @@ function labelIn(options: readonly { label: string; value: string }[], value: st
 	<SettingsGroup heading="Connection">
 		<SettingsRow
 			row={pane.rows.agentTest}
-			label="Test the agent"
 			hint="Sends one short prompt with your review model, from Revv's background service, the same way walkthroughs run. Uses a few tokens."
 		>
 			{#snippet control()}

@@ -49,9 +49,11 @@ const loads = createResource<Promise<unknown> | undefined, LoadedFiles>({
   },
 });
 
-// The head each PR's files were last loaded against, kept while a pull
-// reloads them. When `prs:updated` brings a newer `pr.headSha`, the diff on
-// screen is behind it and the tab offers Pull.
+// The head each PR's files were last installed at. It outlives the reload a
+// Pull runs (which drops the files to put the loader up), so the tab keeps its
+// Pull spinner, and a failed Pull can be retried; it goes when the PR is
+// released. When `prs:updated` brings a newer `pr.headSha`, the diff on screen
+// is behind it and the tab offers Pull.
 const loadedHeadShas = new SvelteMap<string, string>();
 
 /** The files of `prId`: loading until its first load lands, then the last good answer. */
@@ -120,9 +122,10 @@ export async function reloadReviewFiles(prId: string): Promise<boolean> {
   return install(prId, await loads.load(prId, undefined));
 }
 
-/** Forget the files of `prId`; a load still in flight can't write them back. */
+/** Forget the files of `prId` and the head they were at; a load still in flight can't write them back. */
 export function releaseReviewFiles(prId: string): void {
   loads.invalidate(prId);
+  loadedHeadShas.delete(prId);
 }
 
 export function reset(): void {

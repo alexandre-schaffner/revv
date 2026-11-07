@@ -189,17 +189,16 @@ async function readRecap(recapId: string) {
 export async function generateRecap(
   repoId: string,
   period: RecapPeriod,
-  options?: { regenerate?: boolean; periodStart?: string; periodEnd?: string },
+  pinned?: { periodStart?: string; periodEnd?: string },
 ): Promise<{ recapId: string } | null> {
   try {
     const body: { period: RecapPeriod; periodStart?: string; periodEnd?: string } = {
       period,
     };
-    if (options?.periodStart !== undefined) body.periodStart = options.periodStart;
-    if (options?.periodEnd !== undefined) body.periodEnd = options.periodEnd;
-    const query = options?.regenerate ? { regenerate: "true" } : {};
+    if (pinned?.periodStart !== undefined) body.periodStart = pinned.periodStart;
+    if (pinned?.periodEnd !== undefined) body.periodEnd = pinned.periodEnd;
     const data = await call(
-      api.api.repos({ id: repoId }).recaps.generate.post(body, { query }),
+      api.api.repos({ id: repoId }).recaps.generate.post(body),
       "Failed to start recap",
     );
     // Refresh the list so the new placeholder row appears.

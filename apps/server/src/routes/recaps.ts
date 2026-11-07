@@ -63,7 +63,7 @@ const repoRecapRoutes = new Elysia({ prefix: "/api/repos" })
   )
   // Body: { period: "daily" | "weekly", periodStart?, periodEnd? }. Without
   // boundaries it asks for the open window so far (today / this week up to
-  // now); `?regenerate=true` reruns the window's recap rather than reusing it.
+  // now).
   .post(
     "/:id/recaps/generate",
     async (ctx) => {
@@ -87,7 +87,7 @@ const repoRecapRoutes = new Elysia({ prefix: "/api/repos" })
             repoId: ctx.params.id,
             period,
             ...(pinned ? { window: pinned } : {}),
-            intent: ctx.query.regenerate === "true" ? "regenerate" : "manual",
+            intent: "manual",
           }),
         ),
       );
@@ -97,9 +97,6 @@ const repoRecapRoutes = new Elysia({ prefix: "/api/repos" })
         period: t.String(),
         periodStart: t.Optional(t.String()),
         periodEnd: t.Optional(t.String()),
-      }),
-      query: t.Object({
-        regenerate: t.Optional(t.String()),
       }),
     },
   );

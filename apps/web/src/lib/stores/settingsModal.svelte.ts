@@ -11,22 +11,23 @@ export type SettingsSectionId =
   | "updates";
 
 let open = $state(false);
-let targetSection = $state<SettingsSectionId | null>(null);
+let section = $state<SettingsSectionId>("general");
 
 export function getSettingsOpen(): boolean {
   return open;
 }
 
-export function getSettingsTargetSection(): SettingsSectionId | null {
-  return targetSection;
+export function getSettingsSection(): SettingsSectionId {
+  return section;
 }
 
-export function clearSettingsTargetSection(): void {
-  targetSection = null;
+export function selectSettingsSection(id: SettingsSectionId): void {
+  section = id;
 }
 
-export function openSettings(section?: SettingsSectionId): void {
-  if (section) targetSection = section;
+/** Opens on `target`, or switches the open modal to it. */
+export function openSettings(target: SettingsSectionId): void {
+  section = target;
   open = true;
 }
 
@@ -34,6 +35,8 @@ export function closeSettings(): void {
   open = false;
 }
 
+/** Opening without a target starts on General. */
 export function toggleSettings(): void {
+  if (!open) section = "general";
   open = !open;
 }

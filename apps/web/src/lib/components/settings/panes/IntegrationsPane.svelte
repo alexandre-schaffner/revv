@@ -76,7 +76,7 @@ function metaLine(lastUsedAt: string | null, expiresAt: string | null): string |
 			{@const status = statusFor(provider)}
 			{@const busy = action?.provider === provider}
 			{@const meta = status?.connected ? metaLine(status.lastUsedAt, status.expiresAt) : null}
-			<SettingsRow row={pane.rows[provider]} label={EXTERNAL_AGENT_PROVIDER_NAMES[provider]}>
+			<SettingsRow row={pane.rows[provider]}>
 				{#snippet hint()}
 					<span class="integration-status">
 						{#if status?.connected}

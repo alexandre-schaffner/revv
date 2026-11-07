@@ -1,5 +1,5 @@
 <script lang="ts">
-import { ACP_AGENTS, type AcpAgentId } from "@revv/shared";
+import { ACP_AGENTS, type AcpAgentId, getAcpAgent } from "@revv/shared";
 import CaretLeft from "phosphor-svelte/lib/CaretLeft";
 import { onDestroy, onMount } from "svelte";
 import { agentReadiness } from "$lib/agent-setup/readiness";
@@ -29,7 +29,12 @@ interface Props {
 
 let { onContinue, onBack, onSkip }: Props = $props();
 
-const OPENCODE: AcpAgentId = "opencode";
+/** The agent that works without a sign-in, offered when nothing is installed. */
+const ZERO_CONFIG = ACP_AGENTS.find((a) => needsNoSignIn(a.id));
+
+function needsNoSignIn(agent: AcpAgentId): boolean {
+  return getAcpAgent(agent).cli.loginArgs === null;
+}
 
 let mode = $state<"loading" | "picker">("loading");
 let isSaving = $state(false);
@@ -37,8 +42,7 @@ const status = $derived(getAgentStatus());
 const install = $derived(getAgentInstall());
 const signingIn = $derived(getSigningInAgent());
 
-// Picker selection: pre-select the current chat agent, falling back to opencode
-// if the settings haven't loaded or the saved agent isn't installed.
+// Picker selection: the current chat agent until detection says otherwise.
 let selected = $state<AcpAgentId>(getSettings().aiAgent);
 
 const selectedReadiness = $derived(agentReadiness(status?.agents[selected]));
@@ -46,8 +50,6 @@ const selectedLabel = $derived(ACP_AGENTS.find((a) => a.id === selected)?.label 
 const selectedLoginCommand = $derived(
   status?.agents[selected]?.loginCommand ?? `${selected} login`,
 );
-// True once detection resolved and nothing is installed — we advertise opencode
-// (pre-selected, free / no sign-in) as the zero-config option.
 const noneInstalled = $derived(
   status !== null && !ACP_AGENTS.some((a) => status?.agents[a.id]?.installed),
 );
@@ -63,8 +65,8 @@ type CtaState =
 
 const cta = $derived.by((): CtaState => {
   if (signingIn !== null) return { kind: "signing-in", agent: signingIn };
-  if (install.kind === "running") return { kind: "installing" };
-  if (install.kind === "failed") return { kind: "install-failed" };
+  if (install.kind === "running" && install.agent === selected) return { kind: "installing" };
+  if (install.kind === "failed" && install.agent === selected) return { kind: "install-failed" };
   if (selectedReadiness.ready) return { kind: "ready" };
   if (selectedReadiness.needs !== "sign-in") return { kind: "needs-install" };
   // Embedded PTY login where the host supports it (the server is the
@@ -85,8 +87,8 @@ onMount(async () => {
     // installed agent (registry order) so Continue doesn't pick a missing CLI.
     const saved = getSettings().aiAgent;
     selected = data.agents[saved]?.installed ? saved : (installed[0]?.id ?? selected);
-  } else {
-    selected = OPENCODE;
+  } else if (ZERO_CONFIG) {
+    selected = ZERO_CONFIG.id;
   }
   mode = "picker";
 });
@@ -128,8 +130,8 @@ function handleSkip(): void {
 		<p class="lede">Detecting installed agents…</p>
 	{:else}
 		<p class="lede">
-			{#if noneInstalled}
-				No agent is set up on this machine yet. <em>opencode</em> is free,
+			{#if noneInstalled && ZERO_CONFIG}
+				No agent is set up on this machine yet. <em>{ZERO_CONFIG.label}</em> is free,
 				open-source, and works out of the box — no sign-in needed. Start with it,
 				or install another agent below.
 			{:else}
@@ -167,7 +169,7 @@ function handleSkip(): void {
 							<span class="option-name">{agent.label}</span>
 							{#if isInstalled}
 								<span class="option-tag tag-installed">installed</span>
-							{:else if agent.id === OPENCODE}
+							{:else if needsNoSignIn(agent.id)}
 								<span class="option-tag tag-free">free · no sign-in</span>
 							{:else}
 								<span class="option-tag tag-missing">needs sign-in</span>

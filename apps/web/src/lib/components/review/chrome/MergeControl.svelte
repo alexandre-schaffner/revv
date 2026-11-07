@@ -13,12 +13,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "$lib/components/ui/popo
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { getConversation } from "$lib/stores/conversation.svelte";
-import {
-  askMergeEligibility,
-  canViewerMerge,
-  getMergeEligibility,
-  viewerMayMerge,
-} from "$lib/stores/merge-eligibility.svelte";
+import { useMergeEligibility, viewerMayMerge } from "$lib/stores/merge-eligibility.svelte";
 import { getPrById, mergePr } from "$lib/stores/prs.svelte";
 import { openStackMergeSheet } from "$lib/stores/stack-merge.svelte";
 import { getLayer, getStack, getStackRequest } from "$lib/stores/stacks.svelte";
@@ -36,11 +31,12 @@ let { prId, disabled = false }: Props = $props();
 const pr = $derived(getPrById(prId));
 const isPrOwner = $derived(!!pr && loginsMatch(pr.authorLogin, getCurrentUserLogin()));
 
-$effect(() => {
-  if (viewerMayMerge(prId)) askMergeEligibility(prId);
-});
-const mergeEligibility = $derived(getMergeEligibility(prId));
-const shown = $derived(pr?.status === "open" && canViewerMerge(prId));
+const eligibility = useMergeEligibility(
+  () => prId,
+  () => viewerMayMerge(prId),
+);
+const mergeEligibility = $derived(eligibility.current);
+const shown = $derived(pr?.status === "open" && eligibility.viewerCanMerge);
 
 const conversation = $derived.by(() => {
   const request = getConversation(prId).request;

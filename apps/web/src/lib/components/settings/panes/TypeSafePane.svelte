@@ -9,8 +9,8 @@ export const pane = defineSettingsPane({
   icon: Gauge,
   rows: {
     enabled: { label: "Use TypeSafe judgments", keywords: ["jev", "system one", "sizing", "risk"] },
-    apiKey: { label: "TypeSafe API key", keywords: ["jev", "key", "token"] },
-    test: { label: "Test TypeSafe connection", keywords: ["jev", "latency"] },
+    apiKey: { label: "API key", keywords: ["jev", "key", "token"] },
+    test: { label: "Test connection", keywords: ["jev", "latency"] },
   },
 });
 </script>
@@ -67,8 +67,8 @@ async function clearApiKey(): Promise<void> {
   try {
     await call(api.api.settings.jev["api-key"].delete(), "Could not clear the key");
     await afterKeyChange();
-  } catch {
-    // Best-effort: the next settings fetch reconciles the real state.
+  } catch (e) {
+    testState = { ok: false, error: thrownMessage(e) };
   } finally {
     apiKeySaving = false;
   }
@@ -91,7 +91,6 @@ async function testConnection(): Promise<void> {
 	<SettingsGroup description="TypeSafe's System One model answers closed-set questions without generating text. Everything falls back to the agent's own judgment when TypeSafe is off or unreachable.">
 		<SettingsRow
 			row={pane.rows.enabled}
-			label="Use TypeSafe judgments"
 			hint="Sizes each review, sets its risk tier, ranks the changed files, runs a hunk-by-hunk first pass, checks and calibrates flagged issues, holds artifacts and prose to the bar, and stops doomed retries. When off, no requests are made."
 		>
 			{#snippet control()}
@@ -107,7 +106,6 @@ async function testConnection(): Promise<void> {
 	<SettingsGroup heading="Connection">
 		<SettingsRow
 			row={pane.rows.apiKey}
-			label="API key"
 			labelFor="jev-api-key-input"
 			layout="stacked"
 			hint="Stored in your OS keychain, never in the settings database. Saved when you press Enter or leave the field."
@@ -126,7 +124,6 @@ async function testConnection(): Promise<void> {
 		</SettingsRow>
 		<SettingsRow
 			row={pane.rows.test}
-			label="Test connection"
 			hint="Sends one judgment to TypeSafe and reports how long it took."
 		>
 			{#snippet control()}

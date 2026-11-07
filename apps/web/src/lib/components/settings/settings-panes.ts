@@ -1,6 +1,7 @@
 // Each settings pane describes itself in its own `<script module>`: title,
-// nav icon, optional nav badge, and the rows search can find. `panes/index.ts`
-// lists them, which is the only registration a new pane needs.
+// nav icon, optional nav badge, and the rows search can find. A new pane is a
+// `panes/index.ts` entry plus a `SettingsSectionId` member; `defineSettingsPane`
+// rejects an id the union doesn't have.
 
 import type { Component } from "svelte";
 import type { SettingsSectionId } from "$lib/stores/settingsModal.svelte";
