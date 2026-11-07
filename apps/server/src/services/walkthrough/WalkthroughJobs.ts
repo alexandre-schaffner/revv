@@ -373,6 +373,8 @@ export const WalkthroughJobsLive = Layer.effect(
         generating: Effect.map(walkthroughService.listGenerating(), (rows) =>
           rows.map((row) => row.id),
         ),
+        isGenerating: (walkthroughId) =>
+          Effect.map(readRow(walkthroughId), (row) => row?.status === "generating"),
         bumpResumeAttempts: (walkthroughId) =>
           walkthroughService.incrementResumeAttempts(walkthroughId),
         completionBlocker: (walkthroughId) =>
@@ -750,6 +752,8 @@ export const WalkthroughJobsLive = Layer.effect(
         switch (decision) {
           case "live":
             return "resumed";
+          case "gone":
+            return "gone";
           case "completed":
           case "exhausted":
             return decision;
@@ -856,7 +860,8 @@ export const WalkthroughJobsLive = Layer.effect(
             const outcome = yield* resumeLocked(atHead.id, at);
             if (outcome === "resumed") return { walkthroughId: atHead.id, reused: false };
             if (outcome === "completed") return { walkthroughId: atHead.id, reused: true };
-            // Over its budget, it failed: from here it is a finished row.
+            // Over its budget it failed, or its run settled it meanwhile: from
+            // here it is a finished row.
           }
           if (atHead !== null && params.replace === "none") {
             return { walkthroughId: atHead.id, reused: true };

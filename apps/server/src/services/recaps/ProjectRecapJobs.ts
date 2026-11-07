@@ -3,8 +3,9 @@
 // the MCP token. What is recap-specific lives here:
 //
 //   • `requestRecap` owns the create / reuse / rerun decision for a window
-//     (one active recap per (repoId, period, periodStart)), serialized per
-//     window.
+//     (one active recap per (repoId, period, periodStart)). Every decision
+//     about a window's recap — requests, and the kernel's resumes — runs under
+//     that window's lock.
 //   • A run assembles the window's source bundle once and records it on the
 //     row, so a resumed run reads the same pull requests its earlier attempt
 //     was writing entries for.
@@ -52,7 +53,7 @@ import { PrMirror } from "../PrMirror";
 import { PullRequestService } from "../PullRequest";
 import { Realtime } from "../Realtime";
 import { SettingsService } from "../Settings";
-import { ProjectRecapService } from "./ProjectRecap";
+import { ProjectRecapService, type RecapWindowRow } from "./ProjectRecap";
 import { planRecapRequest, type RecapIntent } from "./request";
 import { makeRecapSources } from "./source-bundle";
 
@@ -139,7 +140,16 @@ export const ProjectRecapJobsLive = Layer.effect(
       github,
       mirror,
     });
-    const windowMutex = yield* makeStartJobMutex();
+    const windowLocks = yield* makeStartJobMutex();
+    // Not re-entrant: what runs under it resumes through `resumeLocked`.
+    const underWindowLock = <A, E>(
+      window: Omit<RecapWindowRow, "status">,
+      effect: Effect.Effect<A, E>,
+    ) =>
+      Effect.flatMap(
+        windowLocks.acquire(`${window.repositoryId}:${window.period}:${window.periodStart}`),
+        (lock) => lock.withPermits(1)(effect),
+      );
     const subscribers = makeSubscriberRegistry<RecapStreamEvent>({
       traceScope: "recap-jobs",
       errorScope: "recap-jobs",
@@ -199,6 +209,8 @@ export const ProjectRecapJobsLive = Layer.effect(
       turnsPerRun: 1,
       journal: {
         generating: Effect.map(recapService.listGenerating(), (rows) => rows.map((row) => row.id)),
+        isGenerating: (recapId) =>
+          Effect.map(recapService.readWindow(recapId), (row) => row?.status === "generating"),
         bumpResumeAttempts: (recapId) => recapService.incrementResumeAttempts(recapId),
         completionBlocker: (recapId) =>
           dbTry("recap completion check", () => recapCompletionBlocker(db, recapId)),
@@ -206,7 +218,17 @@ export const ProjectRecapJobsLive = Layer.effect(
       settle,
       ...TOOL_GATED_FAILURES,
       relaunch: (recapId) => launch(recapId),
+      exclusive: (recapId, effect) =>
+        Effect.flatMap(recapService.readWindow(recapId), (row) =>
+          row ? underWindowLock(row, effect) : effect,
+        ),
     });
+
+    /** The kernel's resume policy, then the relaunch. Under the window lock. */
+    const resumeLocked = (recapId: string) =>
+      Effect.flatMap(jobs.resumeDecision(recapId), (decision) =>
+        decision === "run" ? launch(recapId) : Effect.void,
+      );
 
     const runRecap = (run: AgentRun<RecapRun>): Effect.Effect<RunEnd<string>, DbError> =>
       Effect.gen(function* () {
@@ -337,8 +359,8 @@ export const ProjectRecapJobsLive = Layer.effect(
         const now = new Date();
         const window = request.window ?? rollingWindow(request.period, now);
         const { repoId, period } = request;
-        const mutex = yield* windowMutex.acquire(`${repoId}:${period}:${window.periodStart}`);
-        return yield* mutex.withPermits(1)(
+        return yield* underWindowLock(
+          { repositoryId: repoId, period, periodStart: window.periodStart },
           Effect.gen(function* () {
             const existing = yield* recapService.findActiveForPeriod(
               repoId,
@@ -355,7 +377,7 @@ export const ProjectRecapJobsLive = Layer.effect(
             });
 
             if (existing && plan === "reuse") {
-              if (existing.status === "generating") yield* jobs.resume(existing.id);
+              if (existing.status === "generating") yield* resumeLocked(existing.id);
               return { recapId: existing.id };
             }
 

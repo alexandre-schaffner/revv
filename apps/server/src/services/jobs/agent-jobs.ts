@@ -12,12 +12,12 @@
 //     verdict to the journal completes exactly when the pipeline's completion
 //     check passes.
 //   • Resume (on boot, the user's, or a request finding a row whose run died)
-//     is one budgeted policy, `resumeDecision`: a journal that already passes
-//     the completion check is completed without a rerun; otherwise the attempt
-//     is counted first, and a row over the budget fails (invariant 9). An
-//     attempt that can't be counted isn't run. It runs under the pipeline's own
-//     lock on the row (`exclusive`), so it can't race the pipeline's other
-//     decisions about it.
+//     is one budgeted policy, `resumeDecision`: a row no longer `generating`
+//     is left alone; a journal that already passes the completion check is
+//     completed without a rerun; otherwise the attempt is counted first, and a
+//     row over the budget fails (invariant 9). An attempt that can't be
+//     counted isn't run. It runs under the pipeline's own lock on the row
+//     (`exclusive`), so it can't race the pipeline's other decisions about it.
 //   • The pipeline's `settle` writes the terminal status — only from
 //     `generating` — and announces it after the commit (invariant 8).
 
@@ -67,6 +67,8 @@ export interface AgentJobSpec<C, F> {
   readonly journal: {
     /** Ids of rows still `generating`. */
     readonly generating: Effect.Effect<ReadonlyArray<string>, DbError>;
+    /** Whether row `id` is still `generating`; false for a row that is gone. */
+    readonly isGenerating: (id: string) => Effect.Effect<boolean, DbError>;
     /** Returns the new count. */
     readonly bumpResumeAttempts: (id: string) => Effect.Effect<number, DbError>;
     /** Why the row isn't finished yet, or null when its journal holds a finished result. */
@@ -103,10 +105,10 @@ export interface AgentJobSpec<C, F> {
 
 /**
  * What a resume of a row whose run isn't live decided: it was live after all,
- * its journal passed and it completed, it was over its budget and failed, or
- * it runs again.
+ * it had already settled (or was deleted), its journal passed and it
+ * completed, it was over its budget and failed, or it runs again.
  */
-export type ResumeDecision = "live" | "completed" | "exhausted" | "run";
+export type ResumeDecision = "live" | "gone" | "completed" | "exhausted" | "run";
 
 export interface LaunchInput<C, F, E> {
   readonly id: string;
@@ -276,7 +278,10 @@ export const makeAgentJobs = <C, F>(
 
     const resumeDecision = (id: string): Effect.Effect<ResumeDecision, DbError> =>
       Effect.gen(function* () {
+        // Live first: a run settles its row before it leaves the registry,
+        // so a row read as generating after this has no run left to settle it.
         if ((yield* Ref.get(registry)).has(id)) return "live";
+        if (!(yield* spec.journal.isGenerating(id))) return "gone";
         const blocker = yield* spec.journal.completionBlocker(id);
         if (blocker === null) {
           yield* settle(id, { kind: "complete" }, null);

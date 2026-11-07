@@ -49,6 +49,7 @@ const makeHarness = (rows: Record<string, Partial<Row>> = {}) =>
         generating: Effect.sync(() =>
           [...harness.rows].filter(([, row]) => row.status === "generating").map(([id]) => id),
         ),
+        isGenerating: (id) => Effect.sync(() => harness.rows.get(id)?.status === "generating"),
         bumpResumeAttempts: (id) =>
           harness.failBump
             ? Effect.fail(new DbError({ message: "disk full" }))
@@ -254,6 +255,24 @@ describe("agent job kernel: resume from the journal", () => {
         yield* h.jobs.resume("a");
         expect(h.relaunched).toEqual([]);
         expect(h.rows.get("a")?.status).toBe("generating");
+      }),
+    ));
+
+  // A reader that saw the row `generating` just before its run settled it
+  // (the recap stream, a brief's ensure) must not run a finished row again.
+  it("leaves a row its run already settled alone", () =>
+    scoped(
+      Effect.gen(function* () {
+        const h = yield* makeHarness({ a: {}, b: { status: "error", failure: "boom" } });
+        yield* launch(h, "a", () => Effect.succeed({ kind: "complete" } as const));
+        yield* ended(h, "a");
+
+        expect(yield* h.jobs.resumeDecision("a")).toBe("gone");
+        yield* h.jobs.resume("b");
+        expect(h.relaunched).toEqual([]);
+        expect(h.settled.map((s) => s.id)).toEqual(["a"]);
+        expect(h.rows.get("a")).toMatchObject({ status: "complete", attempts: 0 });
+        expect(h.rows.get("b")).toMatchObject({ status: "error", attempts: 0, failure: "boom" });
       }),
     ));
 
