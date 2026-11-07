@@ -4,6 +4,7 @@
 import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import type { CloneStatus } from "@revv/shared";
 import { isGitRepo, originUrl, resolveRef } from "../git/ops";
 
 export function pathIsUnder(child: string, parent: string): boolean {
@@ -26,13 +27,18 @@ export function existingPathIsUnder(child: string, parent: string): boolean {
  * Why Revv must not `rm -rf` the managed clone at `clonePath`, or null when it
  * may. Never the home directory, the root, or anything holding them. Under
  * Revv's base the folder is Revv's. Elsewhere (a base the user picked), only a
- * clone of this repository is removed: that one Revv made, since a matching
- * checkout found there is linked, never managed.
+ * finished clone of this repository is removed: that one Revv made, since a
+ * matching checkout found there is linked, never managed. A clone that isn't
+ * `ready` there may be a folder Revv refused to clone into.
  */
 export async function managedCloneRemovalRefusal(
   clonePath: string,
   base: string,
-  repo: { readonly githubHost: string; readonly fullName: string },
+  repo: {
+    readonly githubHost: string;
+    readonly fullName: string;
+    readonly cloneStatus: CloneStatus;
+  },
 ): Promise<string | null> {
   const target = resolve(clonePath);
   if (
@@ -45,6 +51,9 @@ export async function managedCloneRemovalRefusal(
   }
   if (pathIsUnder(target, base)) return null;
   if (!existsSync(target)) return null;
+  if (repo.cloneStatus !== "ready") {
+    return `Keeping ${clonePath}: Revv never finished cloning ${repo.fullName} there`;
+  }
   if (await remoteMatches(target, repo.githubHost, repo.fullName)) return null;
   return `Refusing to delete ${clonePath}: it isn't a clone of ${repo.fullName}`;
 }

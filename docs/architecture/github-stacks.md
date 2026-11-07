@@ -21,7 +21,7 @@ GitHub's GraphQL has no stack mutations. Everything Revv does to a stack through
 
 `StackService.detail` serves the GitHub half from the kv cache while it is under 30s old. An older copy is served while GitHub is re-read in the background (`stack:updated` follows); with no copy, it reads GitHub, and falls back to the copy built from the mirror (`stale: true`) when GitHub is unreachable. The Revv half is read from the DB on every call. Clients re-read on:
 
-- `stack:updated`: the poll saw a member join, leave, move, or change head or base, or a stacked PR close; or Revv pushed, retargeted or merged a layer. `StackService.moved` drops the cached copy first, so the re-read asks GitHub.
+- `stack:updated`: the poll saw a member join, leave, move, or change head or base, or a stacked PR close; or Revv pushed, retargeted or merged a layer. Every one of those is a write to `PrMirror`, the one caller of `StackService.moved`, which drops the cached copy first, so the re-read asks GitHub; a background re-read that started before the move is discarded.
 - a member's `walkthrough:event` lifecycle envelope
 - `stack-brief:status-changed`, `stack-merge:progress`
 
@@ -40,8 +40,8 @@ The prompt gains a `### Stack` block, and the agent can call `get_stack_context`
 |---|---|---|
 | `current` | Nothing has moved. | Nothing. |
 | `below-moved` | The review still reads true; the context around it moved. | Banner. |
-| `restacked` | New head, byte-identical layer changes. | Carries the review over: a new row at the new head, hydrated from the prior row through `WalkthroughSnapshotImporter`, with no agent run. |
-| `layer-changed` | The layer's own changes differ. | Incremental run over only the changed files' current patches (`diffSource: stack_layer_delta`), never `git diff oldHead newHead`, which drags in lower-layer churn. |
+| `restacked` | New head, byte-identical layer changes, and a finished review a queued "Review the stack" run takes over (`services/walkthrough/restack.ts`: a full review covers either request, an incremental one only an incremental request). | Carries the review over: a new row at the new head, hydrated from the prior row through `WalkthroughSnapshotImporter`, with no agent run. |
+| `layer-changed` | The layer's own changes differ (or are identical but no finished review would carry over: an empty file list, no banner). | Incremental run over only the changed files' current patches (`diffSource: stack_layer_delta`), never `git diff oldHead newHead`, which drags in lower-layer churn. |
 | `needs-rebase` | A layer below merged and this one still targets it or conflicts. | Banner with **Rebase stack**. |
 
 ## Rebasing a stack

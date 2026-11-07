@@ -20,11 +20,6 @@ export interface ExternalIntegrationStatus {
   readonly expiresAt: string | null;
 }
 
-export interface ExternalIntegrationConnectResult extends ExternalIntegrationStatus {
-  /** Files and directories the connect just wrote, surfaced in the UI. */
-  readonly locations: readonly string[];
-}
-
 export const EXTERNAL_AGENT_PROVIDER_NAMES: Readonly<Record<ExternalAgentProvider, string>> = {
   "claude-code": "Claude Code",
   codex: "Codex",

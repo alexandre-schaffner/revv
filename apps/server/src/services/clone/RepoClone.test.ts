@@ -77,6 +77,28 @@ describe("one folder per repository row", () => {
     }
   });
 
+  it("keeps a refused destination the user chose for the retry, and never deletes it", async () => {
+    const chosen = join(root, "code");
+    const dest = join(chosen, "octo", "repo");
+    makeClone(dest, "octo/other");
+    const db = seedDb([{ id: "repo-a", accountId: "acc-a" }]);
+    const { run, dispose } = cloneServices(db, base);
+    try {
+      const refused = run(clone((svc) => svc.ensureClone("repo-a", { basePath: chosen })));
+      await expect(refused).rejects.toBeDefined();
+      expect(rowOf(db, "repo-a")).toMatchObject({ clonePath: dest, cloneStatus: "error" });
+
+      // A retry carries no base: it must not fall back to Revv's.
+      await expect(run(clone((svc) => svc.ensureClone("repo-a")))).rejects.toBeDefined();
+      expect(rowOf(db, "repo-a")).toMatchObject({ clonePath: dest, cloneStatus: "error" });
+
+      await run(clone((svc) => svc.deleteClone("repo-a")));
+      expect(existsSync(join(dest, "README.md"))).toBe(true);
+    } finally {
+      await dispose();
+    }
+  });
+
   it("refuses to link a checkout another account already links", async () => {
     const checkout = join(root, "code", "repo");
     makeClone(checkout);

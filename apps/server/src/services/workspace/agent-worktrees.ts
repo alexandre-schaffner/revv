@@ -169,6 +169,7 @@ export async function isWorktreeHealthy(params: {
   }
   const locks = await prWorktreeLockPaths(worktreePath, branchName);
   if (locks.length === 0 || locks.some((lockPath) => existsSync(lockPath))) return false;
+  // legacy-upgrade: prRefNamespace.
   if ((await resolveRef(clonePath, legacyPrRef(prNumber))) !== null) return false;
   if ((await attachedBranch(worktreePath)) !== `refs/heads/${branchName}`) return false;
   const currentSha = await resolveRef(worktreePath, "HEAD");
@@ -194,7 +195,7 @@ export async function bringWorktreeToHead(params: {
 }): Promise<void> {
   const { base, clonePath, worktreePath, branchName, prNumber, prHeadSha, url } = params;
   if (existsSync(worktreePath)) await clearStalePrWorktreeLocks(worktreePath, branchName);
-  await deleteRef(clonePath, legacyPrRef(prNumber));
+  await deleteRef(clonePath, legacyPrRef(prNumber)); // legacy-upgrade: prRefNamespace
 
   // Leftovers of a push or branch edit that was killed mid-way.
   if (existsSync(worktreePath)) {
@@ -362,7 +363,7 @@ export const AgentWorktreesLive = Layer.effect(
             if (existsSync(worktreePath)) await rm(worktreePath, { recursive: true, force: true });
             await deleteBranch(clonePath, branchName);
             await deleteRef(clonePath, prFetchRef(prNumber));
-            await deleteRef(clonePath, legacyPrRef(prNumber));
+            await deleteRef(clonePath, legacyPrRef(prNumber)); // legacy-upgrade: prRefNamespace
             await deleteRef(clonePath, scratchRef("chat-push", prNumber, "source"));
             return { pruned: true };
           },

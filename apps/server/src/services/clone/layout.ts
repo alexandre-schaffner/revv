@@ -48,7 +48,10 @@ export function cloneLayout(base: string) {
       review: (repoId: string, walkthroughId: string) =>
         join(holder(repoId), `${REVIEW_PREFIX}${walkthroughId}`),
     },
-    /** Where an older Revv kept a row's worktrees: shared by every row of one `owner/name`. */
+    /**
+     * Where an older Revv kept a row's worktrees: shared by every row of one
+     * `owner/name` (legacy-upgrade: rowKeyedFolders).
+     */
     legacyHolder: (repo: { readonly owner: string; readonly name: string }) =>
       join(base, repo.owner, repo.name, "worktrees"),
   };

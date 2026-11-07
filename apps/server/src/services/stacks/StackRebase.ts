@@ -22,6 +22,7 @@ import { GitHubGateway } from "../github/gateway";
 import type { GitHubStack } from "../github/stacks";
 import { type PrContextBasic, PrContextService } from "../PrContext";
 import { PrMirror } from "../PrMirror";
+import { prIdsByNumber } from "./reads";
 import { planStackRebase } from "./rebase-plan";
 import { type StackError, StackService } from "./StackService";
 import { liveRunFor } from "./stack-merge-runs";
@@ -50,7 +51,6 @@ export class StackRebaseService extends Context.Service<
     readonly rebaseStack: (
       ctx: PrContextBasic,
       stack: GitHubStack,
-      accountId: string,
       proceed?: Effect.Effect<boolean>,
     ) => Effect.Effect<StackRebaseResult, StackRejectedError | GitHubError>;
   }
@@ -137,6 +137,19 @@ export const StackRebaseServiceLive = Layer.effect(
         ),
       );
 
+    /** GitHub took the retarget: record it before the next poll would. */
+    const recordRetarget = (ctx: PrContextBasic, number: number, targetBranch: string) =>
+      Effect.gen(function* () {
+        const id = (yield* dbTry("retargeted PR lookup", () =>
+          prIdsByNumber(db, ctx.repo.id, [number]),
+        )).get(number);
+        if (id) yield* mirror.recordMutation(id, { kind: "base", targetBranch });
+      }).pipe(
+        Effect.catch((err) =>
+          Effect.sync(() => logError("stack-rebase", `recording #${number}'s new base`, err)),
+        ),
+      );
+
     const checkMembership = (ctx: PrContextBasic, stack: GitHubStack, number: number) =>
       Effect.gen(function* () {
         const reread = yield* stacks.fetchFresh(ctx, number);
@@ -153,7 +166,6 @@ export const StackRebaseServiceLive = Layer.effect(
     const rebaseStack = (
       ctx: PrContextBasic,
       stack: GitHubStack,
-      accountId: string,
       proceed: Effect.Effect<boolean> = Effect.succeed(true),
     ) =>
       Effect.scoped(
@@ -192,6 +204,7 @@ export const StackRebaseServiceLive = Layer.effect(
             );
             if (done._tag === "Success") {
               retargeted.push(plan.retarget);
+              yield* recordRetarget(ctx, plan.retarget, stack.baseRefName);
               yield* checkMembership(ctx, stack, plan.retarget);
             } else {
               logError("stack-rebase", `retargeting #${plan.retarget} failed`, done.failure);
@@ -202,9 +215,6 @@ export const StackRebaseServiceLive = Layer.effect(
             ctx,
             rebased.map(({ number, to }) => ({ prNumber: number, newTip: to })),
           );
-          if (rebased.length > 0 || retargeted.length > 0) {
-            yield* stacks.moved(accountId, ctx.repo.id, stack.number);
-          }
           return { rebased, retargeted } satisfies StackRebaseResult;
         }),
       );
@@ -235,7 +245,7 @@ export const StackRebaseServiceLive = Layer.effect(
         if (yield* mergeRunning(ctx.repo.id, stack.number)) {
           return yield* rejected({ reason: "invalid" }, "A merge of this stack is running");
         }
-        return yield* rebaseStack(ctx, stack, accountId);
+        return yield* rebaseStack(ctx, stack);
       });
 
     return { rebase, rebaseStack };

@@ -33,8 +33,8 @@ import {
 import { PrContextService } from "../PrContext";
 import { Realtime } from "../Realtime";
 import { SettingsService } from "../Settings";
-import { stackSignature } from "./fingerprint";
 import { type StackError, StackService } from "./StackService";
+import { stackSignature } from "./signature";
 
 const MAX_CONCURRENT_BRIEF_JOBS = 1;
 

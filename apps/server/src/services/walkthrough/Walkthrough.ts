@@ -44,11 +44,11 @@ import {
   decodeRating,
   decodeSemanticStep,
   decodeTokenUsage,
-  finishedReview,
   isRatedAxis,
   loadContentRows,
 } from "./content";
 import { loadWalkthroughLeads } from "./leads";
+import { type RestackSource, restackSourceOf } from "./restack";
 import { deriveRoundFocusTitle } from "./round-title";
 
 function rowToWalkthrough(
@@ -118,12 +118,6 @@ function readWalkthrough(
         status: found.row.status,
       }
     : null;
-}
-
-export interface RestackSource {
-  readonly id: string;
-  readonly generationMode: WalkthroughGenerationMode;
-  readonly diffFingerprint: DiffFingerprint;
 }
 
 export class WalkthroughService extends Context.Service<
@@ -691,46 +685,7 @@ export const WalkthroughServiceLive = Layer.effect(
         }),
 
       findRestackSource: (prId, headSha, mode) =>
-        Effect.gen(function* () {
-          return yield* dbTry("findRestackSource", (): RestackSource | null => {
-            const live = db
-              .select({ id: walkthroughs.id })
-              .from(walkthroughs)
-              .where(
-                and(
-                  eq(walkthroughs.pullRequestId, prId),
-                  eq(walkthroughs.prHeadSha, headSha),
-                  eq(walkthroughs.mode, mode),
-                  ne(walkthroughs.status, "superseded"),
-                ),
-              )
-              .get();
-            if (live) return null;
-            const row = db
-              .select({
-                id: walkthroughs.id,
-                generationMode: walkthroughs.generationMode,
-                diffFingerprint: walkthroughs.diffFingerprint,
-              })
-              .from(walkthroughs)
-              .where(
-                and(
-                  eq(walkthroughs.pullRequestId, prId),
-                  eq(walkthroughs.mode, mode),
-                  ne(walkthroughs.prHeadSha, headSha),
-                  finishedReview(),
-                ),
-              )
-              .orderBy(desc(walkthroughs.generatedAt))
-              .get();
-            if (!row?.diffFingerprint) return null;
-            return {
-              id: row.id,
-              generationMode: row.generationMode === "incremental" ? "incremental" : "full",
-              diffFingerprint: row.diffFingerprint,
-            };
-          });
-        }),
+        dbTry("findRestackSource", () => restackSourceOf(db, prId, headSha, mode)),
 
       markCarriedFrom: (walkthroughId, fromWalkthroughId) =>
         Effect.gen(function* () {

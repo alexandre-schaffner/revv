@@ -8,15 +8,30 @@ default sort.
 
 | Domain | Open | Severity mix |
 |---|---|---|
-| Server (Effect) | 0 | — |
+| Server (Effect) | 1 | low |
 | Server (layout) | 1 | low |
 | Web stores | 0 | — |
 | UI / motion | 1 | low |
-| **Total** | **2** | |
+| **Total** | **3** | |
 
 ---
 
 ## Open
+
+<a id="e-003"></a>
+### E-003 — `CacheService.getOrFetch` runs its fetcher with `Effect.runPromiseWith`
+
+**Rule violated:** [§2.2 — Stay inside Effect](./conventions.md#effect-stay-inside).
+
+**Where:** `apps/server/src/services/Cache.ts`, `getOrFetch`. The single-flight entry is a
+Promise started with `Effect.runPromiseWith(runtime)` over the caller's context, so joiners can
+await it and the fetch outlives an interrupted owner.
+
+**Fix shape.** Keep the in-flight map, but hold a `Deferred<Exit<T, E>>` per key, filled by the
+fetcher forked with `Effect.forkDetach`; joiners `Deferred.await` it. Same semantics (detached
+fetch, typed failures for every caller, the entry dropped on settle) without leaving Effect.
+
+**Severity:** Low.
 
 <a id="s-001"></a>
 ### S-001 — Feature files still flat beside (or instead of) a `services/<feature>/` folder

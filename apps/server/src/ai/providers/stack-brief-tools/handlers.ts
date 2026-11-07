@@ -1,15 +1,13 @@
 import type { StackBriefStatus, StackLayerLink } from "@revv/shared";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import {
   type StackBriefSnapshot,
   stackBriefLayers,
   stackBriefs,
 } from "../../../db/schema/stack-briefs";
-import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
-import { walkthroughs } from "../../../db/schema/walkthroughs";
 import { readCurrentHeadFiles } from "../../../services/DiffCache";
-import { takeawayOf } from "../../../services/stacks/overlay";
-import { isCompleteReview, readBriefLayers } from "../../../services/stacks/reads";
+import { readBriefLayers } from "../../../services/stacks/reads";
+import { latestFinishedReviews } from "../../../services/walkthrough/review-reads";
 import { fail, ok } from "../mcp-tool-gateway";
 import {
   ARC_MAX_CHARS,
@@ -169,26 +167,7 @@ export const getStackLayersHandler: StackBriefToolHandler<GetStackLayersInput> =
 
   const filesByPr = readCurrentHeadFiles(ctx.db, prIds);
 
-  const reviews =
-    prIds.length === 0
-      ? []
-      : ctx.db
-          .select({
-            id: walkthroughs.id,
-            prId: walkthroughs.pullRequestId,
-            status: walkthroughs.status,
-            phase: walkthroughs.lastCompletedPhase,
-            completedAt: walkthroughs.completedAt,
-            prHeadSha: walkthroughs.prHeadSha,
-            summary: walkthroughs.summary,
-            sentiment: walkthroughs.sentiment,
-            riskLevel: walkthroughs.riskLevel,
-          })
-          .from(walkthroughs)
-          .where(inArray(walkthroughs.pullRequestId, prIds))
-          .orderBy(desc(walkthroughs.generatedAt))
-          .all()
-          .filter(isCompleteReview);
+  const reviews = latestFinishedReviews(ctx.db, prIds);
 
   const layers = brief.snapshot.layers.map((layer) => {
     const files = layer.prId
@@ -197,32 +176,22 @@ export const getStackLayersHandler: StackBriefToolHandler<GetStackLayersInput> =
           ?.map((f) => f.path)
           .toSorted() ?? null)
       : null;
-    const forPr = reviews.filter((w) => w.prId === layer.prId);
-    const review = forPr.find((w) => w.prHeadSha === layer.headSha) ?? forPr[0];
+    const review = layer.prId ? reviews.get(layer.prId) : undefined;
     let walkthrough = null;
     if (review) {
-      const issues = ctx.db
-        .select({ title: walkthroughIssues.title, severity: walkthroughIssues.severity })
-        .from(walkthroughIssues)
-        .where(
-          and(
-            eq(walkthroughIssues.walkthroughId, review.id),
-            eq(walkthroughIssues.resolutionStatus, "open"),
-          ),
-        )
-        .orderBy(walkthroughIssues.order)
-        .all();
       const sentiment = review.sentiment?.trim() ?? "";
       walkthrough = {
         current: review.prHeadSha === layer.headSha,
-        takeaway: takeawayOf(review.summary),
+        takeaway: review.takeaway,
         sentimentExcerpt:
           sentiment.length > SENTIMENT_EXCERPT_CHARS
             ? `${sentiment.slice(0, SENTIMENT_EXCERPT_CHARS)}…`
             : sentiment || null,
         riskLevel: review.riskLevel,
-        openIssues: issues.length,
-        openIssueTitles: issues.slice(0, ISSUE_TITLES_MAX).map((i) => `[${i.severity}] ${i.title}`),
+        openIssues: review.openIssues.length,
+        openIssueTitles: review.openIssues
+          .slice(0, ISSUE_TITLES_MAX)
+          .map((i) => `[${i.severity}] ${i.title}`),
       };
     }
     return {

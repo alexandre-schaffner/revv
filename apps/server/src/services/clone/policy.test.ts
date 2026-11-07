@@ -87,7 +87,7 @@ describe("decideCloneDestination", () => {
 });
 
 describe("managedCloneRemovalRefusal", () => {
-  const repo = { githubHost: "github.com", fullName: "octo/repo" };
+  const repo = { githubHost: "github.com", fullName: "octo/repo", cloneStatus: "ready" as const };
   const base = "/srv/revv-clones";
 
   it("allows a folder under Revv's base", async () => {
@@ -118,6 +118,10 @@ describe("managedCloneRemovalRefusal", () => {
       expect(await managedCloneRemovalRefusal(clone, base, repo)).toBeNull();
       expect(await managedCloneRemovalRefusal(other, base, repo)).not.toBeNull();
       expect(await managedCloneRemovalRefusal(join(root, "octo"), base, repo)).not.toBeNull();
+      // A clone Revv never finished there may be a folder it refused to clone into.
+      expect(
+        await managedCloneRemovalRefusal(clone, base, { ...repo, cloneStatus: "error" }),
+      ).not.toBeNull();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

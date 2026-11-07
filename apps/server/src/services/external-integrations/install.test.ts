@@ -64,9 +64,13 @@ function input(root: string, token: string): BridgeInstallInput {
   };
 }
 
-function credentialText(location: string): string {
-  const file = statSync(location).isDirectory() ? join(location, ".mcp.json") : location;
-  return readFileSync(file, "utf8");
+/** Every file under `home`, concatenated: what the agent configs now say. */
+function writtenUnder(home: string): string {
+  return [...new Bun.Glob("**/*").scanSync({ cwd: home, dot: true })]
+    .map((file) => join(home, file))
+    .filter((file) => statSync(file).isFile())
+    .map((file) => readFileSync(file, "utf8"))
+    .join("\n");
 }
 
 afterEach(() => {
@@ -87,16 +91,15 @@ describe.each([...EXTERNAL_AGENT_PROVIDERS])("%s install", (provider: ExternalAg
     integrationInstaller.install(input(home, "second-token"));
 
     expect(integrationInstaller.installed()).toBe(true);
-    const written = integrationInstaller.locations.map(credentialText).join("\n");
-    expect(written).toContain("second-token");
-    expect(written).not.toContain("first-token");
+    expect(integrationInstaller.installedToken()).toBe("second-token");
+    expect(writtenUnder(home)).not.toContain("first-token");
   });
 
-  it("brings an installed bridge copy up to the bundled one", () => {
+  it("a re-install with its own credential brings the bridge, guide and server URL up to date", () => {
     const home = temporaryHome();
     const target = installer(provider, home);
     const given = input(home, "token");
-    target.install(given);
+    target.install({ ...given, apiUrl: "http://127.0.0.1:1/mcp/external" });
     const copies = [
       ...new Bun.Glob("**/server/revv-mcp.ts").scanSync({ cwd: home, dot: true }),
     ].map((file) => join(home, file));
@@ -104,9 +107,14 @@ describe.each([...EXTERNAL_AGENT_PROVIDERS])("%s install", (provider: ExternalAg
     const copy = copies[0] ?? "";
     writeFileSync(copy, "// an older bridge\n");
 
-    target.refreshBridge(given.integrationsDirectory);
+    const token = target.installedToken();
+    expect(token).toBe("token");
+    target.install({ ...given, token: token ?? "" });
 
     expect(readFileSync(copy, "utf8")).toBe("#!/usr/bin/env bun\n");
+    const written = writtenUnder(home);
+    expect(written).toContain(given.apiUrl);
+    expect(written).not.toContain("http://127.0.0.1:1/");
   });
 
   it("removes everything it owns on disconnect", () => {
@@ -131,12 +139,14 @@ describe.each([...EXTERNAL_AGENT_PROVIDERS])("%s install", (provider: ExternalAg
 
 describe("activation", () => {
   it("names the slash command the installed prompt or command file registers", () => {
-    const home = temporaryHome();
     const command = `revv-address-feedback-${ACCOUNT_KEY}`;
     for (const provider of ["codex", "opencode"] as const) {
-      const { activation, locations } = installer(provider, home);
-      expect(activation).toContain(`/${command}.`);
-      expect(locations.some((path) => basename(path) === `${command}.md`)).toBe(true);
+      const home = temporaryHome();
+      const target = installer(provider, home);
+      target.install(input(home, "token"));
+      expect(target.activation).toContain(`/${command}.`);
+      const registered = [...new Bun.Glob(`**/${command}.md`).scanSync({ cwd: home, dot: true })];
+      expect(registered.map((file) => basename(file))).toEqual([`${command}.md`]);
     }
   });
 });

@@ -73,7 +73,6 @@ import {
   planLaunch,
   planNewRow,
   providerConfigFor,
-  type RestackCarry,
 } from "./launch-plan";
 import {
   CANCELLED,
@@ -83,6 +82,7 @@ import {
 } from "./lifecycle";
 import type { PromptFile } from "./prompt-files";
 import { RemoteWalkthroughCache } from "./RemoteWalkthroughCache";
+import type { RestackCarry } from "./restack";
 import { MAX_AUTO_CONTINUATIONS, runWalkthrough, type WalkthroughRunInputs } from "./run";
 import {
   type JudgmentServices,

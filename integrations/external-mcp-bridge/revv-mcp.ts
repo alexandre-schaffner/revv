@@ -29,9 +29,10 @@ type JsonRpcPayload = JsonRpcRequest | JsonRpcRequest[];
 const token = process.env.REVV_INTEGRATION_TOKEN?.trim() ?? "";
 /**
  * The server that installed this copy writes its own URL into
- * `REVV_API_URL`. Copies installed before it did probe Revv's two channels,
- * production then development (`API_PORT`, `DEV_API_PORT` in `@revv/shared`;
- * `scripts/check-external-agent-contract.ts` holds them equal).
+ * `REVV_API_URL`, and rewrites it on every start. Configs written before it
+ * did probe Revv's two channels, production then development (`API_PORT`,
+ * `DEV_API_PORT` in `@revv/shared`; `scripts/check-desktop-contract.ts` holds
+ * them equal) until a Revv that pins them starts (legacy-upgrade: unpinnedBridge).
  */
 const LEGACY_PORTS = [45678, 45679];
 const configuredEndpoints = process.env.REVV_API_URL?.trim();

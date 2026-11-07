@@ -11,7 +11,6 @@ import {
   EXTERNAL_AGENT_SCOPES,
   type ExternalAgentProvider,
   type ExternalAgentScope,
-  type ExternalIntegrationConnectResult,
   type ExternalIntegrationStatus,
   isExternalAgentProvider,
   SHA_PATTERN,
@@ -92,6 +91,11 @@ export function selectPullRequestForCheckout<T extends ExternalPullRequestCandid
   return branchMatches.length === 1 ? (branchMatches[0] ?? null) : null;
 }
 
+/** The MCP route the bridges of this server's installs talk to. */
+function bridgeApiUrl(): string {
+  return `http://${serverEnv.host}:${serverEnv.port}/mcp/external`;
+}
+
 function tokenHash(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
@@ -123,11 +127,18 @@ export class ExternalIntegrations extends Context.Service<
       readonly accountId: string;
       readonly userId: string;
       readonly provider: ExternalAgentProvider;
-    }) => Effect.Effect<ExternalIntegrationConnectResult, ExternalIntegrationError>;
+    }) => Effect.Effect<ExternalIntegrationStatus, ExternalIntegrationError>;
     readonly disconnect: (
       accountId: string,
       provider: ExternalAgentProvider,
     ) => Effect.Effect<void, ExternalIntegrationError>;
+    /**
+     * Rewrite every file Revv owns in the agents' configs (bridge copy,
+     * guide, and the entry's command, URL and proxy bypass) for each active
+     * credential whose install still carries it, so a release's fixes reach
+     * installs without a reconnect. Run once per boot.
+     */
+    readonly refreshInstalls: () => Effect.Effect<void>;
     readonly authenticate: (
       token: string,
     ) => Effect.Effect<ExternalAuthorizedContext, ExternalIntegrationError>;
@@ -166,20 +177,10 @@ export const ExternalIntegrationsLive = Layer.effect(
       });
       const byProvider = new Map(rows.map((row) => [row.provider, row]));
       const now = Date.now();
-      const integrationsDirectory = yield* Effect.try(findIntegrationsDirectory).pipe(
-        Effect.orElseSucceed(() => null),
-      );
       return EXTERNAL_AGENT_PROVIDERS.map((provider): ExternalIntegrationStatus => {
         const row = byProvider.get(provider);
         const active = row ? isIntegrationCredentialActive(row, now) : false;
         const installer = externalIntegrationInstaller(provider, accountId);
-        if (integrationsDirectory !== null) {
-          try {
-            installer.refreshBridge(integrationsDirectory);
-          } catch (err) {
-            logError("external-integrations", `refreshing the ${provider} bridge failed:`, err);
-          }
-        }
         return {
           provider,
           connected: Boolean(row && active),
@@ -218,7 +219,7 @@ export const ExternalIntegrationsLive = Layer.effect(
             runtimeExecutable: process.execPath,
             token,
             integrationsDirectory,
-            apiUrl: `http://${serverEnv.host}:${serverEnv.port}/mcp/external`,
+            apiUrl: bridgeApiUrl(),
           }),
         catch: asIntegrationError("INSTALL_FAILED", "Could not install the Revv integration."),
       });
@@ -270,7 +271,6 @@ export const ExternalIntegrationsLive = Layer.effect(
         createdAt: now,
         lastUsedAt: null,
         expiresAt,
-        locations: installer.locations,
       };
     });
 
@@ -306,6 +306,56 @@ export const ExternalIntegrationsLive = Layer.effect(
         ),
       });
     });
+
+    const refreshInstalls = Effect.fn("ExternalIntegrations.refreshInstalls")(
+      function* () {
+        const integrationsDirectory = yield* Effect.try({
+          try: findIntegrationsDirectory,
+          catch: asIntegrationError("INSTALL_FAILED", "Could not locate the bundled assets."),
+        });
+        const rows = yield* Effect.try({
+          try: () =>
+            db
+              .select({
+                provider: externalIntegrations.provider,
+                accountId: externalIntegrations.accountId,
+                tokenHash: externalIntegrations.tokenHash,
+                expiresAt: externalIntegrations.expiresAt,
+                revokedAt: externalIntegrations.revokedAt,
+              })
+              .from(externalIntegrations)
+              .all(),
+          catch: (cause) =>
+            externalIntegrationError("INTERNAL", "Could not read integration credentials.", cause),
+        });
+        for (const row of rows) {
+          if (!isExternalAgentProvider(row.provider) || !isIntegrationCredentialActive(row))
+            continue;
+          const installer = externalIntegrationInstaller(row.provider, row.accountId);
+          try {
+            // Only an install carrying this database's credential is this
+            // server's to rewrite.
+            const token = installer.installedToken();
+            if (token === null || tokenHash(token) !== row.tokenHash) continue;
+            installer.install({
+              runtimeExecutable: process.execPath,
+              token,
+              integrationsDirectory,
+              apiUrl: bridgeApiUrl(),
+            });
+          } catch (err) {
+            logError(
+              "external-integrations",
+              `refreshing the ${row.provider} install failed:`,
+              err,
+            );
+          }
+        }
+      },
+      Effect.catch((err) =>
+        Effect.sync(() => logError("external-integrations", "refreshing installs failed:", err)),
+      ),
+    );
 
     const authenticate = Effect.fn("ExternalIntegrations.authenticate")(function* (token: string) {
       const integration = yield* Effect.try({
@@ -419,6 +469,6 @@ export const ExternalIntegrationsLive = Layer.effect(
       };
     });
 
-    return { status, connect, disconnect, authenticate, resolve: resolveProject };
+    return { status, connect, disconnect, refreshInstalls, authenticate, resolve: resolveProject };
   }),
 );

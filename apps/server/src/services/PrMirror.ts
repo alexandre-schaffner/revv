@@ -11,6 +11,9 @@
  *   (invariant 7), keeping one generating at the new head;
  * - a PR that went terminal is announced (`pr:archived`), its agent worktree
  *   reaped (unless someone works in it), and its stack marked stale;
+ * - a stack a write moved (a layer's head, base or place) is marked stale:
+ *   the one announcement of `stack:updated` for Revv's own pushes, retargets
+ *   and merges;
  * - the account's clients hear `prs:updated`, after the commit (invariant 8).
  */
 import {
@@ -56,6 +59,7 @@ export interface MirrorOutcome {
 /** A change Revv made on GitHub itself, recorded without re-reading the PR. */
 export type PrMutation =
   | { readonly kind: "draft"; readonly isDraft: boolean }
+  | { readonly kind: "base"; readonly targetBranch: string }
   | { readonly kind: "terminal"; readonly status: "merged" | "closed"; readonly closedAt: string };
 
 export interface PrMirrorService {
@@ -93,7 +97,7 @@ export interface PrMirrorService {
 
 export class PrMirror extends Context.Service<PrMirror, PrMirrorService>()("PrMirror") {}
 
-/** Stacks a write moved: a PR changed place, or a layer's diff range moved. */
+/** Stacks a write moved: a PR changed place, or a layer's diff range or base moved. */
 export function movedStackNumbers(
   prs: readonly PullRequest[],
   prior: ReadonlyMap<string, PullRequest>,
@@ -103,7 +107,10 @@ export function movedStackNumbers(
     const before = prior.get(pr.id);
     const placeMoved = !sameStack(before?.stack ?? null, pr.stack);
     const rangeMoved =
-      before !== undefined && (before.headSha !== pr.headSha || before.baseSha !== pr.baseSha);
+      before !== undefined &&
+      (before.headSha !== pr.headSha ||
+        before.baseSha !== pr.baseSha ||
+        before.targetBranch !== pr.targetBranch);
     if (!placeMoved && !rangeMoved) continue;
     if (pr.stack) moved.add(pr.stack.number);
     if (placeMoved && before?.stack) moved.add(before.stack.number);
@@ -268,6 +275,9 @@ export const PrMirrorLive = Layer.effect(
         if (mutation.kind === "draft") {
           yield* prService.setPrDraft(prId, mutation.isDraft);
           after = { ...before, isDraft: mutation.isDraft };
+        } else if (mutation.kind === "base") {
+          yield* prService.setPrTargetBranch(prId, mutation.targetBranch);
+          after = { ...before, targetBranch: mutation.targetBranch };
         } else {
           yield* prService.markPrsClosed([
             { id: prId, status: mutation.status, closedAt: mutation.closedAt },

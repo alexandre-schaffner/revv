@@ -4,8 +4,8 @@ import type { DiffFingerprint } from "../../db/schema/walkthroughs";
 import { logError } from "../../logger";
 import { commitExists, diffNameStatus, diffNumstat, diffPatchForPath, fetch } from "../git/ops";
 import { authedRemoteUrl } from "../git/remote";
-import { changedFiles, fingerprintFiles } from "../stacks/fingerprint";
 import { capPatch, normalizeGitStatus, resolveCounts } from "./incremental-diff";
+import { changedFiles, fingerprintFiles } from "./restack";
 
 export interface PromptFile {
   readonly filename: string;

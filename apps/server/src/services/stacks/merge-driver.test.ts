@@ -3,7 +3,7 @@ import type { StackMergeMode, StackMergeRun } from "@revv/shared";
 import { Effect } from "effect";
 import { GitHubApiError, type GitHubError, GitHubNetworkError } from "../../domain/errors";
 import type { GitHubStack, GitHubStackLayer } from "../github/stacks";
-import { driveRun, type MergeDriverPort, type SaveEffects } from "./merge-driver";
+import { driveRun, type MergeDriverPort } from "./merge-driver";
 import { RETARGET_WAIT_MS } from "./merge-plan";
 import type { Contradiction } from "./unverified-github";
 
@@ -59,7 +59,7 @@ function world(layers: GitHubStackLayer[], opts: WorldOptions = {}) {
   }[] = [];
   const writes: string[] = [];
   let pushes = 0;
-  const saves: { run: StackMergeRun; effects: SaveEffects }[] = [];
+  const saves: { run: StackMergeRun; merged: readonly number[] }[] = [];
   const contradictions: Contradiction[] = [];
 
   const set = (number: number, patch: Partial<GitHubStackLayer>) => {
@@ -160,13 +160,13 @@ function world(layers: GitHubStackLayer[], opts: WorldOptions = {}) {
           kind: "auto",
         });
       }),
-    save: (run, effects) =>
+    save: (run, merged) =>
       Effect.sync(() => {
         if (opts.cancelAfterWrites !== undefined && writes.length >= opts.cancelAfterWrites) {
           cancelled = true;
         }
         if (cancelled) return "ended" as const;
-        saves.push({ run, effects });
+        saves.push({ run, merged });
         return "live" as const;
       }),
     isActive: () => Effect.sync(() => !cancelled),
@@ -234,7 +234,7 @@ describe("driveRun", () => {
       "merge #103 merge @h3",
     ]);
     expect(run.layers.map((l) => l.state)).toEqual(["merged", "merged", "merged"]);
-    expect(gh.saves.flatMap((s) => s.effects.merged)).toEqual([101, 102, 103]);
+    expect(gh.saves.flatMap((s) => s.merged)).toEqual([101, 102, 103]);
     expect(gh.saves.at(-1)?.run.status).toBe("complete");
   });
 

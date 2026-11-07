@@ -51,7 +51,7 @@ make reset-db            # Delete the dev DB (revv-dev.db) and ~/.revv/settings.
 
 - **Effect system** throughout: services use `Effect.gen`, `Context.Service`, and `Layer` for DI and structured error handling. Don't bypass Effect when modifying services.
 - **Services**: `GitHubGateway` (`services/github/`, every GitHub call, made with a host-bound `GitHubClient`), `GitHubAccounts` (account tokens, re-auth, identity), `PrMirror` (the one writer of GitHub's view of a PR), `RepositoryService`, `PullRequestService`, `PollScheduler`, `Broadcaster`, `Settings`
-- **Git**: only `services/git/` runs git, through one runner that never runs the user's hooks (the clone is often the user's own repo); commits Revv writes for the user's branches are signed per the user's own config, non-interactively (a signer that would prompt fails with its error), and internal ones are unsigned. One push per remote branch (`BranchPushLock`); never `git worktree prune`, never move a branch the user owns. Every folder Revv uses in a clone is keyed on the repository row (`services/clone/layout.ts`); a folder belongs to one row. The chat agent's per-PR worktree belongs to `PrWorkspace` (`services/workspace/`), and anything that touches it (including the prune when the PR closes) takes the PR's claim; the chat turn is `ChatTurnService` (`services/chat/`).
+- **Git**: only `services/git/` runs git, through one runner that never runs the user's hooks (the clone is often the user's own repo); commits Revv writes for the user's branches are signed per the user's own config, non-interactively (a signer that would prompt fails with its error), and internal ones are unsigned. One push per remote branch (`BranchPushLock`); never `git worktree prune`, never move a branch the user owns. Every folder Revv uses in a clone is keyed on the repository row (`services/clone/layout.ts`); a folder belongs to one row. The chat agent's per-PR worktree is located, created and pruned by `AgentWorktrees` (`services/workspace/agent-worktrees.ts`), which holds the PR's claim, and used through `PrWorkspace`; anything that touches it (including the prune when the PR closes) takes that claim; the chat turn is `ChatTurnService` (`services/chat/`).
 - **Auth**: GitHub's device-code flow (`routes/device-auth.ts`): no client secret and no OAuth callback URL. `GitHubAccounts` owns users, accounts (each row records the OAuth client its token was issued to), tokens (OS keychain via `SecretStore`) and sessions: it mints a 30-day bearer session token that each day of use extends, and `withAuth`/`withAccount` (`routes/middleware.ts`) resolve it. The SSE stream takes the same token as `?token=`. better-auth is no longer used at runtime; its `user`/`session`/`account` tables remain.
 - **Database**: Drizzle ORM on SQLite: `~/Library/Application Support/Revv/revv.db` in prod, `apps/server/revv-dev.db` under `make dev`. Schema in `src/db/schema/` (one file per table). Migrations live in `src/db/migrations` and are applied on startup (below).
 - **Realtime (SSE)**: Clients open a single `GET /api/events?token=…` stream. Features send through `Realtime`, which resolves the owning account; `Broadcaster` is its transport. Inbound commands use REST endpoints.
@@ -263,8 +263,10 @@ agent tomorrow). Any change that violates them is wrong by construction — push
 
    The snapshot importer that hydrates team-cache hits also carries a review over a pure
    restack: when a stacked layer's new head has a fingerprint identical to a finished review's
-   (`walkthroughs.diff_fingerprint`), the orchestrator imports that review into the new head's
-   row (`carried_from_walkthrough_id`) with no agent run. The old row is never touched.
+   (`walkthroughs.diff_fingerprint`) that covers the requested generation mode, the orchestrator
+   imports that review into the new head's row (`carried_from_walkthrough_id`) with no agent
+   run. The old row is never touched. The rule is `services/walkthrough/restack.ts`; the stack
+   overlay's `restacked` label calls the same rule.
 
    **Carve-out: chat-edit is the single authorized post-completion mutation path.** After
    `status='complete'`, the chat agent's edit MCP tools (`update_overview`, `add_block`,
@@ -307,9 +309,9 @@ agent tomorrow). Any change that violates them is wrong by construction — push
     removed by a scope finalizer on every exit path; a resumed job clears what its killed run
     left, and the worktree sweep removes those of walkthroughs no longer generating. Generation
     never reads the PR's agent worktree (`pr-N` on `revv/pr-N`), which belongs to the chat
-    agent: `PrWorkspace` holds one claim per PR for it, so a chat turn, a push of the agent's
-    commits and an edit of them never overlap, and the server refuses the second rather than
-    racing in the worktree.
+    agent: `AgentWorktrees` holds one claim per PR for it, so a chat turn, a push of the agent's
+    commits, an edit of them and the prune when the PR closes never overlap, and the server
+    refuses the second rather than racing in the worktree.
 11. **Status transitions are orchestrator-only.** Agents never write `status` or
     `last_completed_phase` directly. MCP tool handlers update phase fields as a side-effect
     of their own writes; `status ∈ {generating, complete, error, superseded}` is only ever

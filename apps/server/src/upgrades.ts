@@ -55,7 +55,10 @@ export const LEGACY_UPGRADES = {
   },
   prRefNamespace: {
     introducedIn: "0.21.1",
-    sites: ["apps/server/src/services/git/pr-refs.ts"],
+    sites: [
+      "apps/server/src/services/git/pr-refs.ts",
+      "apps/server/src/services/workspace/agent-worktrees.ts",
+    ],
     carries: "clones holding `refs/revv/pr-N`, which made `revv/pr-N` resolve to the PR head",
   },
   walkthroughOnlyReviewRounds: {
@@ -69,5 +72,20 @@ export const LEGACY_UPGRADES = {
     sites: ["apps/server/src/services/walkthrough/content.ts"],
     carries:
       "walkthrough rows and team-cache snapshots whose provider config names the agent driver (`claude-agent-sdk`, `opencode`, `codex`) instead of the ACP agent id. Snapshots are shared across a team, so a teammate on an older release can still upload one",
+  },
+  rowKeyedFolders: {
+    introducedIn: "0.35.0",
+    sites: [
+      "apps/server/src/services/clone/RepoClone.ts",
+      "apps/server/src/services/clone/layout.ts",
+    ],
+    carries:
+      "clones and worktrees keyed on `owner/name`, which two accounts' rows of one repository shared: at boot each row gets its own clone and its worktrees move under `.worktrees/<row id>`",
+  },
+  unpinnedBridge: {
+    introducedIn: "0.35.0",
+    sites: ["integrations/external-mcp-bridge/revv-mcp.ts", "scripts/check-desktop-contract.ts"],
+    carries:
+      "external-agent configs written before the bridge carried `REVV_API_URL`: the bridge probes both channels' ports until the boot refresh (`ExternalIntegrations.refreshInstalls`) pins the config",
   },
 } as const satisfies Record<string, LegacyUpgrade>;

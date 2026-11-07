@@ -17,10 +17,10 @@ import {
 } from "../../db/schema";
 import { DbService } from "../Db";
 import { Realtime } from "../Realtime";
-import { fingerprintFiles } from "../stacks/fingerprint";
 import { blockId, issueId, semanticStepId } from "./content";
-import { parentFingerprintOf, planNewRow, planRestackCarry } from "./launch-plan";
+import { parentFingerprintOf, planNewRow } from "./launch-plan";
 import { makeWalkthroughLifecycle } from "./lifecycle";
+import { fingerprintFiles, restackCarry } from "./restack";
 import { exportWalkthroughSnapshot } from "./snapshot";
 import { WalkthroughService, WalkthroughServiceLive } from "./Walkthrough";
 import {
@@ -262,7 +262,7 @@ describe("restack carry", () => {
   });
 });
 
-describe("planRestackCarry", () => {
+describe("restackCarry", () => {
   const fingerprint = fingerprintFiles(FILES);
   const source = (generationMode: "full" | "incremental") => ({
     id: "wt-old",
@@ -271,15 +271,15 @@ describe("planRestackCarry", () => {
   });
 
   it("carries a full review into an incremental request, as a full review", () => {
-    expect(planRestackCarry(source("full"), "incremental", fingerprint)).toEqual({
+    expect(restackCarry(source("full"), "incremental", fingerprint)).toEqual({
       fromWalkthroughId: "wt-old",
       generationMode: "full",
     });
   });
 
   it("never lets an incremental review stand in for a full one", () => {
-    expect(planRestackCarry(source("incremental"), "full", fingerprint)).toBeNull();
-    expect(planRestackCarry(source("incremental"), "incremental", fingerprint)).toEqual({
+    expect(restackCarry(source("incremental"), "full", fingerprint)).toBeNull();
+    expect(restackCarry(source("incremental"), "incremental", fingerprint)).toEqual({
       fromWalkthroughId: "wt-old",
       generationMode: "incremental",
     });
@@ -289,7 +289,7 @@ describe("planRestackCarry", () => {
     const moved = fingerprintFiles([
       { filename: "src/a.ts", status: "modified", patch: "@@ -2 +2 @@\n+a" },
     ]);
-    expect(planRestackCarry(source("full"), "full", moved)).toBeNull();
+    expect(restackCarry(source("full"), "full", moved)).toBeNull();
   });
 });
 

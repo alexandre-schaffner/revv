@@ -10,6 +10,7 @@ import { logError } from "./logger";
 import { withGitHubOrigin } from "./observability/github-ledger/origin";
 import { RepoCloneService } from "./services/clone/RepoClone";
 import { DbMaintenance } from "./services/DbMaintenance";
+import { ExternalIntegrations } from "./services/ExternalIntegrations";
 import { killRunningGitProcesses } from "./services/git/ops";
 import { GitHubAccounts } from "./services/github/accounts";
 import { PollScheduler } from "./services/PollScheduler";
@@ -46,6 +47,7 @@ export const BootLive = Layer.effectDiscard(
     const repoClone = yield* RepoCloneService;
     const agentWorktrees = yield* AgentWorktrees;
     const dbMaintenance = yield* DbMaintenance;
+    const externalIntegrations = yield* ExternalIntegrations;
 
     yield* Effect.addFinalizer(() => Effect.sync(stopAllAcpConnections));
     // Orphaned `git clone`s would fight the next lifetime for `.git/shallow.lock`
@@ -89,6 +91,9 @@ export const BootLive = Layer.effectDiscard(
         step("stack-review", stackReview.resumePending()),
         step("stack-merge", stackMerge.expireStale()),
         step("db-maintenance", dbMaintenance.start()),
+        // Installs in the coding agents' configs pick up this release's
+        // bridge, guide and server URL.
+        step("external-integrations", externalIntegrations.refreshInstalls()),
         // Warm, so the first agent probe doesn't block on the login shell.
         step(
           "agent-path",
