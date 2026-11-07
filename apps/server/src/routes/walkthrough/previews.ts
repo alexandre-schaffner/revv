@@ -46,9 +46,6 @@ export function walkthroughSizing(
     const answers = yield* resolveJobStartAnswers(diff.pr.id, diff.headSha, {
       pr: diff.pr,
       files: diff.files,
-      // Commit subjects are a sizing nicety, not load-bearing; skipping
-      // them keeps this off the GitHub path.
-      commits: [],
     });
     if (answers === null) return { status: "pending" as const };
 
@@ -87,7 +84,7 @@ export function ensureHunkScan(
     if (diff === null) return { status: "pending" as const };
     const { pr, headSha, files } = diff;
 
-    const answers = yield* resolveJobStartAnswers(pr.id, headSha, { pr, files, commits: [] });
+    const answers = yield* resolveJobStartAnswers(pr.id, headSha, { pr, files });
     const hunkScan = yield* HunkScanService;
     yield* hunkScan.start({
       prId: pr.id,

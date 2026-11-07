@@ -130,7 +130,6 @@ export function askJobStart(
 ): Effect.Effect<JobStartAnswers, JevUnavailable, JevService> {
   return Effect.gen(function* () {
     const jev = yield* JevService;
-    // Scored files are addressed by index into `state.files`; slice here must match the state builder's array.
     const scoredFiles = input.files.slice(0, FILE_PRIORITY_MAX_FILES);
     const fileQuestions = Object.fromEntries(
       scoredFiles.map((file, index) => [
