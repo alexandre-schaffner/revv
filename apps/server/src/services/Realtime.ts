@@ -1,6 +1,7 @@
 // Who receives a server push. Features address an event to an account, or to
-// the repository or pull request it concerns, and this resolves the owning
-// account in one place; `Broadcaster` only moves the bytes.
+// the repository or pull request it concerns, and this resolves the local
+// user who owns it in one place: every client of that user hears it, whichever
+// host it has active. `Broadcaster` only moves the bytes.
 //
 // Commit first, broadcast second (invariant 8): callers send after their
 // write commits. A push is best-effort, so nothing here fails: an owner that
@@ -10,7 +11,7 @@
 import type { ServerEventMessage } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import { pullRequests, repositories } from "../db/schema";
+import { account, pullRequests, repositories } from "../db/schema";
 import { dbTry } from "../effects/db-try";
 import { logError } from "../logger";
 import { Broadcaster } from "./Broadcaster";
@@ -22,8 +23,6 @@ export class Realtime extends Context.Service<
     readonly toAccount: (accountId: string, msg: ServerEventMessage) => Effect.Effect<void>;
     readonly toRepo: (repoId: string, msg: ServerEventMessage) => Effect.Effect<void>;
     readonly toPr: (prId: string, msg: ServerEventMessage) => Effect.Effect<void>;
-    /** To every client. Only for server-global signals that carry no account data. */
-    readonly toAll: (msg: ServerEventMessage) => Effect.Effect<void>;
   }
 >()("Realtime") {}
 
@@ -35,27 +34,38 @@ export const RealtimeLive = Layer.effect(
 
     const toOwner = (
       label: string,
-      owner: () => { accountId: string } | undefined,
+      owner: () => { userId: string } | undefined,
       msg: ServerEventMessage,
     ) =>
       dbTry(`resolve the owner of ${label}`, owner).pipe(
         Effect.flatMap((row) =>
           row
-            ? broadcaster.broadcastToAccount(row.accountId, msg)
+            ? broadcaster.broadcastToUser(row.userId, msg)
             : Effect.sync(() => logError("realtime", `${msg.type}: ${label} has no owner`)),
         ),
         Effect.catch((e) => Effect.sync(() => logError("realtime", `${msg.type}:`, e.message))),
       );
 
     return {
-      toAccount: broadcaster.broadcastToAccount,
+      toAccount: (accountId, msg) =>
+        toOwner(
+          `account ${accountId}`,
+          () =>
+            db
+              .select({ userId: account.userId })
+              .from(account)
+              .where(eq(account.id, accountId))
+              .get(),
+          msg,
+        ),
       toRepo: (repoId, msg) =>
         toOwner(
           `repository ${repoId}`,
           () =>
             db
-              .select({ accountId: repositories.accountId })
+              .select({ userId: account.userId })
               .from(repositories)
+              .innerJoin(account, eq(account.id, repositories.accountId))
               .where(eq(repositories.id, repoId))
               .get(),
           msg,
@@ -65,14 +75,14 @@ export const RealtimeLive = Layer.effect(
           `pull request ${prId}`,
           () =>
             db
-              .select({ accountId: repositories.accountId })
+              .select({ userId: account.userId })
               .from(pullRequests)
               .innerJoin(repositories, eq(repositories.id, pullRequests.repositoryId))
+              .innerJoin(account, eq(account.id, repositories.accountId))
               .where(eq(pullRequests.id, prId))
               .get(),
           msg,
         ),
-      toAll: broadcaster.broadcastAll,
     };
   }),
 );

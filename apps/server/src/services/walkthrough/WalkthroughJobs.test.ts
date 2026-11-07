@@ -8,9 +8,12 @@ import { CacheService } from "../Cache";
 import { RepoCloneService } from "../clone/RepoClone";
 import { DbService } from "../Db";
 import { DiffCacheService } from "../DiffCache";
+import { GitHubGateway } from "../github/gateway";
 import { HunkScanService } from "../hunk-scan/HunkScan";
 import { JevService } from "../Jev";
 import { PrContextService } from "../PrContext";
+import { PrMirror } from "../PrMirror";
+import { PrHeadMoves, PrHeadMovesLive } from "../pr-head-moves";
 import { Realtime } from "../Realtime";
 import { ReviewService } from "../Review";
 import { SettingsService } from "../Settings";
@@ -53,10 +56,22 @@ function seed(
     .run();
 }
 
-/** The orchestrator over a real journal, with GitHub reporting the PR at `head`. */
-function jobsAt(db: Db, head: string) {
+/**
+ * The orchestrator over a real journal, with GitHub reporting the PR at `head`
+ * and the mirror holding it at `stored` (by default the same head). Like the
+ * real mirror, the fake publishes a head move on `PrHeadMoves` when the two
+ * differ. `trace` records the mirror writes and diff-cache reads, in order.
+ */
+function jobsAt(db: Db, head: string, options: { readonly stored?: string } = {}) {
   const sent: ServerEventMessage[] = [];
-  const context = { pr: { ...PR, headSha: head }, repo: REPO, accountId: "account-1", client: {} };
+  const trace: string[] = [];
+  const stored = options.stored ?? head;
+  const context = {
+    pr: { ...PR, headSha: stored },
+    repo: REPO,
+    accountId: "account-1",
+    client: {},
+  };
   const unused = {} as never;
   const realtime = Layer.succeed(Realtime, {
     toAccount: (_accountId: string, msg: ServerEventMessage) => Effect.sync(() => sent.push(msg)),
@@ -72,12 +87,36 @@ function jobsAt(db: Db, head: string) {
         Layer.succeed(PrContextService, {
           readPr: () => Effect.succeed({ pr: context.pr, repo: REPO, accountId: "account-1" }),
           forPr: () => Effect.succeed(context),
-          withDiff: () =>
-            Effect.succeed({
-              ...context,
-              meta: { headSha: head, baseSha: "base" },
-              files: [],
-              commits: [],
+        } as never),
+        Layer.succeed(GitHubGateway, {
+          prs: {
+            get: () => Effect.succeed({ ...PR, headSha: head, baseSha: "base" }),
+            commits: () => Effect.succeed([]),
+          },
+        } as never),
+        Layer.effect(
+          PrMirror,
+          Effect.map(
+            Effect.service(PrHeadMoves),
+            (headMoves) =>
+              ({
+                apply: (rows: ReadonlyArray<{ id: string; headSha: string }>) =>
+                  Effect.gen(function* () {
+                    trace.push(`mirror ${rows[0]?.headSha}`);
+                    const live = rows[0];
+                    if (live && live.headSha !== stored) {
+                      yield* headMoves.publish(live.id, live.headSha);
+                    }
+                    return { rows, accountIds: new Set() };
+                  }),
+              }) as never,
+          ),
+        ).pipe(Layer.provideMerge(PrHeadMovesLive)),
+        Layer.succeed(DiffCacheService, {
+          getOrFetch: (pr: { headSha: string }) =>
+            Effect.sync(() => {
+              trace.push(`diff ${pr.headSha}`);
+              return { files: [] };
             }),
         } as never),
         Layer.succeed(RepoCloneService, {
@@ -91,7 +130,6 @@ function jobsAt(db: Db, head: string) {
         Layer.succeed(JevService, unused),
         Layer.succeed(HunkScanService, unused),
         Layer.succeed(CacheService, unused),
-        Layer.succeed(DiffCacheService, unused),
         Layer.succeed(WalkthroughSnapshotImporter, unused),
         Layer.succeed(StackService, unused),
       ),
@@ -99,7 +137,7 @@ function jobsAt(db: Db, head: string) {
   );
   const run = <A, E>(f: (jobs: WalkthroughJobs["Service"]) => Effect.Effect<A, E>) =>
     Effect.runPromise(Effect.flatMap(WalkthroughJobs, f).pipe(Effect.provide(layer)));
-  return { run, sent };
+  return { run, sent, trace };
 }
 
 const rowsOf = (db: Db) =>
@@ -131,6 +169,48 @@ describe("resuming a walkthrough", () => {
 
     expect(await run((jobs) => jobs.resume("wt-1"))).toBe("superseded");
     expect(rowsOf(db)).toEqual([{ id: "wt-1", status: "superseded" }]);
+  });
+});
+
+describe("a request", () => {
+  it("records a head the poll hasn't seen through the mirror before it reads the diff", async () => {
+    const db = createDb(":memory:");
+    seed(db, { id: "wt-err", status: "error", head: "head-2" });
+    const { run, trace } = jobsAt(db, "head-2");
+
+    await run((jobs) =>
+      jobs.startJob({ prId: PR.id, trigger: "review_requested", replace: "none" }),
+    );
+
+    expect(trace).toEqual(["mirror head-2", "diff head-2"]);
+  });
+});
+
+describe("a request that finds the PR moved past a running review", () => {
+  // The request writes the live head through the mirror, whose head-move
+  // listener supersedes the old head's rows under the PR lock. The request
+  // must not hold that lock yet, or the two wait on each other forever.
+  it("supersedes the old head's row through the head-move listener, and completes", async () => {
+    const db = createDb(":memory:");
+    seed(db, { id: "wt-old", status: "generating", head: "head-1" });
+    seed(db, { id: "wt-err", status: "error", head: "head-2" });
+    const { run, trace } = jobsAt(db, "head-2", { stored: "head-1" });
+
+    const result = await run((jobs) =>
+      jobs.startJob({ prId: PR.id, trigger: "review_requested", replace: "none" }).pipe(
+        Effect.timeoutOrElse({
+          duration: "2 seconds",
+          orElse: () => Effect.die(new Error("startJob deadlocked on the PR lock")),
+        }),
+      ),
+    );
+
+    expect(result).toEqual({ walkthroughId: "wt-err", reused: true });
+    expect(trace).toEqual(["mirror head-2", "diff head-2"]);
+    expect(endOf(db)).toEqual([
+      { status: "superseded", endReason: "superseded" },
+      { status: "error", endReason: null },
+    ]);
   });
 });
 

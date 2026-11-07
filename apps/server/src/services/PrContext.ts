@@ -1,16 +1,7 @@
 import type { PullRequest, Repository } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
-import {
-  type DbError,
-  type GitHubAuthError,
-  type GitHubError,
-  GitHubNotFoundError,
-  type NotFoundError,
-} from "../domain/errors";
-import { DiffCacheService, toGitHubFileShape } from "./DiffCache";
+import type { DbError, GitHubAuthError, GitHubError, NotFoundError } from "../domain/errors";
 import { GitHubAccounts } from "./github/accounts";
-import { GitHubGateway } from "./github/gateway";
-import type { PrCommit, PrFileMeta } from "./github/pulls";
 import type { GitHubClient } from "./github/transport";
 import { PullRequestService } from "./PullRequest";
 import { RepositoryService } from "./Repository";
@@ -41,17 +32,6 @@ export interface PrContextBasic extends RepoContext {
   readonly pr: PullRequest;
 }
 
-/**
- * {@link PrContextBasic} plus what an agent run needs: the PR's head and base
- * as GitHub reports them now, and the files, commits, title and body of that
- * head.
- */
-export interface PrContextWithDiff extends PrContextBasic {
-  readonly meta: { readonly headSha: string; readonly baseSha: string };
-  readonly files: PrFileMeta[];
-  readonly commits: readonly PrCommit[];
-}
-
 export type PrContextError = NotFoundError | GitHubAuthError | GitHubError | DbError;
 
 export class PrContextService extends Context.Service<
@@ -69,8 +49,6 @@ export class PrContextService extends Context.Service<
       prId: string,
       accountId?: string,
     ) => Effect.Effect<PrContextBasic, PrContextError>;
-    /** {@link forPr} plus the PR's live head/base, its diff files and its commits. */
-    readonly withDiff: (prId: string) => Effect.Effect<PrContextWithDiff, PrContextError>;
   }
 >()("PrContextService") {}
 
@@ -80,8 +58,6 @@ export const PrContextServiceLive = Layer.effect(
     const prService = yield* PullRequestService;
     const repoService = yield* RepositoryService;
     const accounts = yield* GitHubAccounts;
-    const github = yield* GitHubGateway;
-    const diffCache = yield* DiffCacheService;
 
     const forRepo = (repoId: string) =>
       Effect.gen(function* () {
@@ -105,47 +81,11 @@ export const PrContextServiceLive = Layer.effect(
         return { ...(yield* forRepo(pr.repositoryId)), pr } satisfies PrContextBasic;
       });
 
-    const withDiff = (prId: string) =>
-      Effect.gen(function* () {
-        const basic = yield* forPr(prId);
-        const { repo, pr, client } = basic;
-        const live = yield* github.prs.get(client, repo.fullName, repo.id, pr.externalId);
-        if (live.headSha === null || live.baseSha === null) {
-          return yield* Effect.fail(
-            new GitHubNotFoundError({
-              resource: "pull_request",
-              id: `${repo.fullName}#${pr.externalId}`,
-            }),
-          );
-        }
-        // The cache holds the stored row's head. Until the poll records a push
-        // GitHub already reports, the live head's files come from GitHub.
-        const files =
-          live.headSha === pr.headSha && live.baseSha === pr.baseSha
-            ? toGitHubFileShape((yield* diffCache.getOrFetch(pr, repo.fullName, client)).files)
-            : yield* github.prs.files(client, repo.fullName, pr.externalId);
-        const commits = yield* github.prs.commits(client, repo.fullName, pr.externalId);
-        return {
-          ...basic,
-          pr: {
-            ...pr,
-            title: live.title,
-            body: live.body,
-            headSha: live.headSha,
-            baseSha: live.baseSha,
-          },
-          meta: { headSha: live.headSha, baseSha: live.baseSha },
-          files,
-          commits,
-        } satisfies PrContextWithDiff;
-      });
-
     return {
       getRepo: (repoId: string) => repoService.getRepoById(repoId),
       forRepo,
       readPr,
       forPr,
-      withDiff,
     };
   }),
 );

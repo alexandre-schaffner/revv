@@ -13,7 +13,6 @@ import { GitHubAccounts } from "./github/accounts";
 import { GitHubGateway } from "./github/gateway";
 import type { GhCommentAnchor } from "./github/reviews";
 import { planThreadComment } from "./github-review-comment";
-import { PollScheduler } from "./PollScheduler";
 import { PrContextService } from "./PrContext";
 import { PrConversationService } from "./PrConversation";
 import { type Conversation, ReviewService } from "./Review";
@@ -120,7 +119,6 @@ export function submitReview(prId: string, body: SubmitReviewInput) {
     const walkthroughService = yield* WalkthroughService;
     const diffCache = yield* DiffCacheService;
     const conversations = yield* PrConversationService;
-    const pollScheduler = yield* PollScheduler;
 
     const ctx = yield* prContext.forPr(prId);
     const { pr, repo, client, accountId } = ctx;
@@ -226,28 +224,14 @@ export function submitReview(prId: string, body: SubmitReviewInput) {
       }
     }
 
-    // Replies on threads GitHub already has, one at a time so each thread's
-    // replies land in the order they were written.
+    // Replies on threads GitHub already has.
     const after = yield* review.getConversation(pr.id);
     const replies = after.threads.flatMap((t) =>
       unpublishedReplies(t, after.messages[t.id] ?? [], viewerLogin),
     );
-    let failedReplies = 0;
-    for (const reply of replies) {
-      yield* sync.pushReply(reply.id).pipe(
-        Effect.catch((e) =>
-          logged(`push reply ${reply.id}`)(e).pipe(
-            Effect.tap(() =>
-              Effect.sync(() => {
-                failedReplies++;
-              }),
-            ),
-          ),
-        ),
-      );
-    }
+    const failedReplies = yield* sync.pushReplies(replies.map((reply) => reply.id));
 
-    yield* pollScheduler.syncThreadsNow(pr.id);
+    yield* sync.syncThreadsNow(pr.id);
 
     // Stamped regardless of action: an approve whose body includes walkthrough
     // issues also counts as "sent to GitHub".

@@ -1,9 +1,10 @@
 // "GitHub reports a head SHA that differs from the stored one: did the head
 // really move forward?"
 //
-// The answer is destructive. A head move makes PrMirror call
-// `WalkthroughJobs.supersedeForPr(prId, newHeadSha)`, which cancels every
-// walkthrough for the PR not pinned to `newHeadSha` and marks it `'superseded'`.
+// The answer is destructive. PrMirror publishes a head move (`PrHeadMoves`),
+// and WalkthroughJobs answers with `supersedeForPr(prId, newHeadSha)`, which
+// cancels every walkthrough for the PR not pinned to `newHeadSha` and marks it
+// `'superseded'`.
 // If `newHeadSha` is an *older* view of the PR, that kills the walkthrough
 // generating at the real head, leaving a contentless superseded row that also
 // poisons the next incremental run's base SHA.

@@ -9,7 +9,6 @@ import { api } from "$lib/api/client";
 import { call } from "$lib/api/errors";
 import { thrownMessage } from "$lib/api/wire";
 import { acceptWriteResult } from "$lib/stores/conversation.svelte";
-import { loadSession } from "$lib/stores/review.svelte";
 import { markIssuesAsSubmitted } from "$lib/walkthrough/store.svelte";
 import { draftThreadIds } from "./threads";
 
@@ -37,9 +36,6 @@ export async function submitReview(
       "Failed to submit review",
     );
     acceptWriteResult(prId, { conversation: result.conversation });
-    // Re-read past the freshness window: rows still missing their externalId
-    // would be posted again by the next submit.
-    await loadSession(prId, true);
 
     toast.success(`${actionLabel(action)} on GitHub`);
     const { failedReplies } = result;

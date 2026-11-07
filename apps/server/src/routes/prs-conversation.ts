@@ -6,8 +6,8 @@ import type { ConversationWrite } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, type Static, t } from "elysia";
 import { PrConversationService } from "../services/PrConversation";
-import { runRoute, withAccount } from "./middleware";
-import { ownedBy } from "./ownership";
+import { runRoute, withAuth } from "./middleware";
+import { asOwner } from "./ownership";
 
 const names = t.Array(t.String({ minLength: 1 }), { minItems: 1, maxItems: 50 });
 const someNames = t.Array(t.String({ minLength: 1 }), { maxItems: 50 });
@@ -40,20 +40,18 @@ const writeBodyMatchesShared: Same<Static<typeof writeBody>, ConversationWrite> 
 void writeBodyMatchesShared;
 
 export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
-  .use(withAccount)
-  .onBeforeHandle(ownedBy({ id: "pull request" }))
+  .use(withAuth)
+  .resolve(asOwner({ id: "pull request" }))
   .get("/:id/conversation", (ctx) =>
-    runRoute(
-      Effect.flatMap(PrConversationService, (s) => s.load(ctx.params.id, ctx.account.accountId)),
-    ),
+    runRoute(Effect.flatMap(PrConversationService, (s) => s.load(ctx.params.id, ctx.owner))),
   )
 
   // The cached snapshot only, for an instant first paint; null on a miss.
   .get("/:id/conversation/cached", (ctx) =>
     runRoute(
-      Effect.flatMap(PrConversationService, (s) =>
-        s.cached(ctx.params.id, ctx.account.accountId),
-      ).pipe(Effect.map((conversation) => ({ conversation }))),
+      Effect.flatMap(PrConversationService, (s) => s.cached(ctx.params.id, ctx.owner)).pipe(
+        Effect.map((conversation) => ({ conversation })),
+      ),
     ),
   )
 
@@ -62,18 +60,14 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
     async (ctx) => {
       const body = ctx.body;
       return runRoute(
-        Effect.flatMap(PrConversationService, (s) =>
-          s.write(ctx.params.id, ctx.account.accountId, body),
-        ),
+        Effect.flatMap(PrConversationService, (s) => s.write(ctx.params.id, ctx.owner, body)),
       );
     },
     { body: writeBody },
   )
 
   .get("/:id/checks", (ctx) =>
-    runRoute(
-      Effect.flatMap(PrConversationService, (s) => s.checks(ctx.params.id, ctx.account.accountId)),
-    ),
+    runRoute(Effect.flatMap(PrConversationService, (s) => s.checks(ctx.params.id, ctx.owner))),
   )
 
   .get(
@@ -81,7 +75,7 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
     (ctx) =>
       runRoute(
         Effect.flatMap(PrConversationService, (s) =>
-          s.checkDetails(ctx.params.id, ctx.account.accountId, ctx.params.checkRunId),
+          s.checkDetails(ctx.params.id, ctx.owner, ctx.params.checkRunId),
         ),
       ),
     { params: t.Object({ id: t.String(), checkRunId: t.Numeric({ minimum: 1 }) }) },
@@ -89,9 +83,7 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
 
   .get("/:id/label-options", (ctx) =>
     runRoute(
-      Effect.flatMap(PrConversationService, (s) =>
-        s.labelOptions(ctx.params.id, ctx.account.accountId),
-      ),
+      Effect.flatMap(PrConversationService, (s) => s.labelOptions(ctx.params.id, ctx.owner)),
     ),
   )
 
@@ -100,7 +92,7 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
     (ctx) =>
       runRoute(
         Effect.flatMap(PrConversationService, (s) =>
-          s.assigneeOptions(ctx.params.id, ctx.account.accountId, ctx.query.q ?? ""),
+          s.assigneeOptions(ctx.params.id, ctx.owner, ctx.query.q ?? ""),
         ),
       ),
     { query: t.Object({ q: t.Optional(t.String({ maxLength: 100 })) }) },
@@ -111,7 +103,7 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
     (ctx) =>
       runRoute(
         Effect.flatMap(PrConversationService, (s) =>
-          s.reviewerOptions(ctx.params.id, ctx.account.accountId, ctx.query.q ?? ""),
+          s.reviewerOptions(ctx.params.id, ctx.owner, ctx.query.q ?? ""),
         ),
       ),
     { query: t.Object({ q: t.Optional(t.String({ maxLength: 100 })) }) },

@@ -56,7 +56,6 @@ function message(threadId: string, overrides: Partial<ThreadMessage> = {}): Thre
     authorAvatarContent: null,
     body: "Please rename this.",
     messageType: "comment",
-    codeSuggestion: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     editedAt: null,
     externalId: null,

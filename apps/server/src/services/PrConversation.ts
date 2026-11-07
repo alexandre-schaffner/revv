@@ -25,7 +25,6 @@ import { type DbError, type GitHubError, isGitHubUnreachable } from "../domain/e
 import { logError } from "../logger";
 import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { CacheService } from "./Cache";
-import type { DbService } from "./Db";
 import { AvatarCache } from "./github/avatars";
 import { GitHubGateway } from "./github/gateway";
 import { type PrContextBasic, type PrContextError, PrContextService } from "./PrContext";
@@ -44,7 +43,6 @@ const CODEOWNERS_NS = "pr-codeowners";
 const CODEOWNERS_TTL_MS = 10 * 60 * 1000;
 
 type ConversationError = GitHubError | PrContextError | DbError;
-type Deps = DbService;
 
 export class PrConversationService extends Context.Service<
   PrConversationService,
@@ -53,7 +51,7 @@ export class PrConversationService extends Context.Service<
     readonly cached: (
       prId: string,
       accountId: string,
-    ) => Effect.Effect<PrConversation | null, ConversationError, Deps>;
+    ) => Effect.Effect<PrConversation | null, ConversationError>;
     /**
      * A fresh conversation from GitHub. Falls back to the cached snapshot
      * (`stale: true`) when GitHub is unreachable or rate-limited.
@@ -61,21 +59,20 @@ export class PrConversationService extends Context.Service<
     readonly load: (
       prId: string,
       accountId: string,
-    ) => Effect.Effect<PrConversationResponse, ConversationError, Deps>;
+    ) => Effect.Effect<PrConversationResponse, ConversationError>;
     /** The head commit's CI rollup only; cheap enough to poll. */
     readonly checks: (
       prId: string,
       accountId: string,
     ) => Effect.Effect<
       { readonly rollup: CiRollup | null; readonly access: CiAccess },
-      ConversationError,
-      Deps
+      ConversationError
     >;
     readonly checkDetails: (
       prId: string,
       accountId: string,
       checkRunId: number,
-    ) => Effect.Effect<CheckDetails, ConversationError, Deps>;
+    ) => Effect.Effect<CheckDetails, ConversationError>;
     /**
      * Apply a write on GitHub, then answer the refreshed conversation (null
      * when the re-read failed; the write still landed).
@@ -84,7 +81,7 @@ export class PrConversationService extends Context.Service<
       prId: string,
       accountId: string,
       write: ConversationWrite,
-    ) => Effect.Effect<ConversationWriteResult, ConversationError, Deps>;
+    ) => Effect.Effect<ConversationWriteResult, ConversationError>;
     /**
      * A write made outside `write` (a review submitted to GitHub) changed the
      * conversation: re-read it and announce `pr:conversation-updated`. The
@@ -94,21 +91,21 @@ export class PrConversationService extends Context.Service<
     readonly afterWrite: (
       ctx: PrContextBasic,
       accountId: string,
-    ) => Effect.Effect<ConversationWriteResult, never, Deps>;
+    ) => Effect.Effect<ConversationWriteResult, never>;
     readonly labelOptions: (
       prId: string,
       accountId: string,
-    ) => Effect.Effect<PrLabel[], ConversationError, Deps>;
+    ) => Effect.Effect<PrLabel[], ConversationError>;
     readonly assigneeOptions: (
       prId: string,
       accountId: string,
       query: string,
-    ) => Effect.Effect<ActorOption[], ConversationError, Deps>;
+    ) => Effect.Effect<ActorOption[], ConversationError>;
     readonly reviewerOptions: (
       prId: string,
       accountId: string,
       query: string,
-    ) => Effect.Effect<ReviewerOptions, ConversationError, Deps>;
+    ) => Effect.Effect<ReviewerOptions, ConversationError>;
   }
 >()("PrConversationService") {}
 

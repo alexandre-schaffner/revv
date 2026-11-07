@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { ValidationError } from "../domain/errors";
+import { forgetRepositories } from "../services/clone/forget";
 import { CLONE_BASE_DIR } from "../services/clone/layout";
 import { expandUserPath, pathIsUnder } from "../services/clone/policy";
 import { RepoCloneService } from "../services/clone/RepoClone";
@@ -12,12 +13,12 @@ import { PrContextService } from "../services/PrContext";
 import { getRepoActivityResponse } from "../services/RepoActivity";
 import { RepositoryService } from "../services/Repository";
 import { diagnoseRepoNotFound } from "../services/repo-access";
-import { errorResponse, runRoute, withAccount } from "./middleware";
-import { ownedBy } from "./ownership";
+import { errorResponse, runRoute, withAccount, withAuth } from "./middleware";
+import { asOwner } from "./ownership";
 
-export const repoRoutes = new Elysia({ prefix: "/api/repos" })
+/** The repository list and adding to it: the active account's view. */
+const repoListRoutes = new Elysia({ prefix: "/api/repos" })
   .use(withAccount)
-  .onBeforeHandle(ownedBy({ id: "repository" }))
   .get("/", (ctx) =>
     runRoute(
       Effect.gen(function* () {
@@ -83,7 +84,7 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
             accountId,
           );
 
-          yield* Effect.forkDetach(scheduler.syncNow());
+          yield* Effect.forkDetach(scheduler.syncNow(accountId));
 
           // The outcome is the repo's clone status, so the add never fails on it.
           if (isLink) {
@@ -133,7 +134,12 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
       );
     },
     { body: t.Object({ path: t.String() }) },
-  )
+  );
+
+/** One repository's routes, acting as the account that owns it. */
+const repoByIdRoutes = new Elysia({ prefix: "/api/repos" })
+  .use(withAuth)
+  .resolve(asOwner({ id: "repository" }))
   .get("/:id/clone-status", (ctx) =>
     runRoute(
       Effect.gen(function* () {
@@ -157,7 +163,7 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
         const repoSvc = yield* RepositoryService;
         const cloneSvc = yield* RepoCloneService;
 
-        const repo = yield* repoSvc.getRepoById(ctx.params.id, ctx.account.accountId);
+        const repo = yield* repoSvc.getRepoById(ctx.params.id, ctx.owner);
         // A clone takes minutes; revalidating a linked checkout doesn't.
         const ensured = cloneSvc.ensureClone(repo.id).pipe(Effect.catch(() => Effect.void));
         yield* repo.managed ? Effect.forkDetach(ensured) : ensured;
@@ -166,17 +172,7 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
     ),
   )
   .delete("/:id", (ctx) =>
-    runRoute(
-      Effect.gen(function* () {
-        const cloneSvc = yield* RepoCloneService;
-        const repoSvc = yield* RepositoryService;
-        const { accountId } = ctx.account;
-        // The account check comes first: it is what keeps the clone of a
-        // repository this account doesn't own on disk.
-        yield* repoSvc.getRepoById(ctx.params.id, accountId);
-        yield* cloneSvc.deleteClone(ctx.params.id);
-        yield* repoSvc.deleteRepo(ctx.params.id, accountId);
-        return { success: true };
-      }),
-    ),
+    runRoute(forgetRepositories([ctx.params.id]).pipe(Effect.as({ success: true }))),
   );
+
+export const repoRoutes = new Elysia().use(repoListRoutes).use(repoByIdRoutes);

@@ -1,14 +1,14 @@
 // The account's pull requests: the open list, the closed/merged archive,
 // pins, and the owner-only PR mutations.
 
-import type { MergeMethod, PullRequest } from "@revv/shared";
+import type { MergeMethod, PrsUpdatedEnvelope, PullRequest } from "@revv/shared";
 import { type ReviewMode, reviewModeFor } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { call } from "$lib/api/errors";
 import { thrownMessage } from "$lib/api/wire";
 import { reasonFor } from "$lib/prs/tagged-prs";
-import { getCurrentUserLogin, isIdentityLoaded } from "$lib/stores/auth.svelte";
+import { getCurrentUserLogin, isIdentityLoaded, isShownHost } from "$lib/stores/auth.svelte";
 
 let pullRequests = $state<PullRequest[]>([]);
 // Set once `fetchPrs` has settled (success or failure). Lets callers tell
@@ -102,11 +102,12 @@ export function getTaggedPrsResolved(): boolean {
 }
 
 /**
- * Apply the full open-PR state from a `prs:updated` SSE event.
- * The server sends the canonical DB list for the active account, so replacing
- * avoids stale closed/reopened rows and preserves server ordering.
+ * Apply the full open-PR state from a `prs:updated` SSE event: the canonical
+ * DB list of one account, so replacing the shown host's avoids stale
+ * closed/reopened rows and preserves server ordering.
  */
-export function onPrsUpdated(incoming: PullRequest[]): void {
+export function onPrsUpdated({ host, prs: incoming }: PrsUpdatedEnvelope["data"]): void {
+  if (!isShownHost(host)) return;
   pullRequests = incoming;
   if (incoming.length === 0 || archivedPrs.length === 0) return;
 

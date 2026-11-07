@@ -11,7 +11,8 @@ export interface AccountEntry {
   /** The GitHub login, else the local user's name. */
   readonly login: string;
   readonly email: string;
-  readonly avatarUrl: string | null;
+  /** The cached avatar bytes as a data URL: GitHub Enterprise's signed avatar URLs expire. */
+  readonly avatarContent: string | null;
 }
 
 export function accountEntryKey(userId: string, host: string): string {
@@ -28,7 +29,7 @@ export function accountEntries(localAccounts: readonly LocalAccount[]): AccountE
       githubLogin: account.githubLogin,
       login: account.githubLogin ?? local.name,
       email: local.email,
-      avatarUrl: account.avatarUrl ?? local.image,
+      avatarContent: account.avatarContent,
     })),
   );
 }

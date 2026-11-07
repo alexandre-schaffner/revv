@@ -197,7 +197,6 @@ export const DiffCacheServiceLive = Layer.effect(
                 additions,
                 deletions,
                 changedFiles: rows.length,
-                diffFilesCachedCount: rows.length,
                 diffFilesHeadSha: fetchedFor.headSha,
                 diffFilesBaseSha: fetchedFor.baseSha,
               })

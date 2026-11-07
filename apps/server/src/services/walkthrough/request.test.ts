@@ -108,7 +108,6 @@ const silentRealtime = {
   toAccount: () => Effect.void,
   toRepo: () => Effect.void,
   toPr: () => Effect.void,
-  toAll: () => Effect.void,
 };
 
 function request(db: Db, startJob: StartJob) {

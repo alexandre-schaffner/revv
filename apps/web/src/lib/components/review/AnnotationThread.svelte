@@ -6,7 +6,6 @@ import {
   type ThreadMessage,
 } from "@revv/shared";
 import ArrowElbowDownLeft from "phosphor-svelte/lib/ArrowElbowDownLeft";
-import CheckSquare from "phosphor-svelte/lib/CheckSquare";
 import Clock from "phosphor-svelte/lib/Clock";
 import PaperPlaneTilt from "phosphor-svelte/lib/PaperPlaneTilt";
 import type { Attachment } from "svelte/attachments";
@@ -176,18 +175,6 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 			{:else}
 				<Markdown class="msg-body" source={msg.body} trust="external" density="dense" />
 			{/if}
-
-			{#if msg.codeSuggestion}				<div class="suggestion-block">
-					<div class="suggestion-label">
-						<CheckSquare size={11} />
-						Code suggestion
-					</div>
-					<pre class="suggestion-code">{msg.codeSuggestion}</pre>
-					{#if !isResolved && onResolve}
-						<button class="apply-btn" onclick={() => onResolve?.()}>Resolve</button>
-					{/if}
-				</div>
-			{/if}
 		</div>
 	{/each}
 
@@ -289,53 +276,10 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 		word-break: break-word;
 	}
 
-	.suggestion-block {
-		margin-top: 8px;
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 5px;
-		overflow: hidden;
-	}
 
-	.suggestion-label {
-		display: flex;
-		align-items: center;
-		gap: 5px;
-		padding: 5px 9px;
-		font-size: 11px;
-		color: var(--color-text-muted);
-		background: var(--color-diff-bg);
-		border-bottom: 1px solid var(--color-border-subtle);
-	}
 
-	.suggestion-code {
-		margin: 0;
-		padding: 8px 12px;
-		font-family: var(--font-mono);
-		font-size: 11px;
-		line-height: 1.6;
-		color: var(--color-text-secondary);
-		background: var(--color-diff-bg);
-		overflow-x: auto;
-		white-space: pre;
-	}
 
-	.apply-btn {
-		display: block;
-		width: 100%;
-		padding: 5px 9px;
-		font-size: 11px;
-		color: var(--color-success);
-		background: color-mix(in srgb, var(--color-success) 8%, transparent);
-		border: none;
-		border-top: 1px solid color-mix(in srgb, var(--color-success) 12%, transparent);
-		cursor: pointer;
-		text-align: left;
-		transition: background-color var(--duration-instant) var(--ease-soft);
-	}
 
-	.apply-btn:hover {
-		background: color-mix(in srgb, var(--color-success) 14%, transparent);
-	}
 
 	.thread-footer {
 		display: flex;

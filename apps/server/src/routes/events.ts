@@ -1,5 +1,5 @@
 // `GET /api/events` — one long-lived SSE connection per client tab carrying
-// account-scoped server pushes.
+// the server pushes for every GitHub account of the signed-in user.
 //
 // Auth: `?token=<bearer>`, because the browser's `EventSource` API does not
 // allow custom headers.
@@ -10,35 +10,28 @@
 // cursors (invariant 8).
 
 import type { ServerEventMessage } from "@revv/shared";
-import { Effect, Exit } from "effect";
+import { Effect } from "effect";
 import { Elysia } from "elysia";
 import { debug } from "../logger";
 import { AppRuntime } from "../runtime";
 import { Broadcaster } from "../services/Broadcaster";
-import { requestAccount, sessionUserId } from "./middleware";
+import { authenticate } from "./middleware";
 import { openSse } from "./sse";
 
 export const eventsRoute = new Elysia().get("/api/events", async ({ query, request }) => {
-  const token = typeof query.token === "string" ? query.token : undefined;
-  const userId = await sessionUserId(token);
-  if (userId === null) {
-    return new Response("Unauthorized", { status: 401 });
-  }
-
-  // A session with no usable GitHub account still gets the server-global
-  // signals: it registers under an account id nothing broadcasts to.
-  const account = await AppRuntime.runPromiseExit(requestAccount(userId, query));
-  const accountId = Exit.isSuccess(account) ? account.value.accountId : "unresolved";
+  const auth = await authenticate(typeof query.token === "string" ? query.token : undefined);
+  if (!("userId" in auth)) return auth;
+  const { userId } = auth;
 
   const { response, channel } = openSse<ServerEventMessage>({
     heartbeat: "event",
     signal: request.signal,
   });
   const unregister = await AppRuntime.runPromise(
-    Effect.flatMap(Broadcaster, (bus) => bus.register(accountId, channel)),
+    Effect.flatMap(Broadcaster, (bus) => bus.register(userId, channel)),
   );
   channel.onClose(unregister);
 
-  debug("events-route", `connected accountId=${accountId}`);
+  debug("events-route", `connected userId=${userId}`);
   return response;
 });

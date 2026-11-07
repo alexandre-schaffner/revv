@@ -47,7 +47,7 @@ fetch, typed failures for every caller, the entry dropped on settle) without lea
 - team cache: `Cache.ts`, `cache-eligibility.ts`, beside `cache-signing/` and `blob/`
 - no folder yet:
   - poll: `PollScheduler.ts`, `poll-{gate,maintenance,notifications,open-prs,state}.ts`
-  - review: `Review.ts`, `review-submit.ts`, `review-mode.ts`, `github-review-comment.ts`, `Sync.ts`
+  - review: `Review.ts`, `review-submit.ts`, `review-mode.ts`, `github-review-comment.ts`, `Sync.ts`, `diff-anchors.ts`
   - onboarding: `Onboarding.ts`, `AgentLogin.ts`, `EventJobRegistry.ts` (which only those two use)
 
 **Fix shape.** Moves plus import rewrites, one feature per PR, with the feature roots in
@@ -79,7 +79,7 @@ other dialog titles first.
 - E-003 — Added `OpencodeNotSelectedError` / `OpencodeUnhealthyError` for two `AiGenerationError` misuses in `OpencodeSupervisor.ts` (all three since deleted with the opencode daemon transport)
 - E-004 — Wrapped all 7 raw Drizzle calls in Cache.ts with `Effect.try({ try, catch })`; added `DbError` to `domain/errors.ts`; updated service interface error channels from `never` to `DbError`
 - E-006 — DB-backed services (`Repository`, `PullRequest`, `Review`, `Walkthrough`, `WalkthroughSnapshotImporter`, `ProjectRecap`, `Cache`) capture `DbService` when their Layer is built; `effects/with-db.ts`, `tryDb` and the hand-written `provideService(DbService, …)` bridges are gone
-- E-005 — Wrapped all raw Drizzle calls in Cache.ts (7 sites, E-004), Review.ts (12 sites), and PullRequest.ts (2 sites) using the `tryDb` helper (failing with `DbError`); `Repository.ts` followed in round 2 (its `addRepo` no longer turns DB faults into `ValidationError`)
+- E-005 — Wrapped all raw Drizzle calls in Cache.ts (7 sites, E-004), Review.ts (12 sites), and PullRequest.ts (2 sites) using the `dbTry` helper (failing with `DbError`); `Repository.ts` followed in round 2 (its `addRepo` no longer turns DB faults into `ValidationError`)
 - S-001 — Migrated `review.svelte.ts` per-PR view state from plain `Map` + `$state` mirrors to single reactive `$state` store (`store = $state({ entries: Map, activePrId })`); derived `getActiveTab`/`getActiveFilePath` from the active entry; all mutations follow reactive-Map idiom
 - S-002 — Audited chat.svelte.ts: all 42 Map/Set mutation sites consistently follow the reactive-Map idiom (§4.3); unifying to a single mutation surface is future refactoring, not a convention violation
 - S-003 — Created `RequestState<T>` tagged union in `stores/_types.ts`; migrated `review.svelte.ts` repo file state from enum + error string to `RequestState<RepoFileData>`; updated `ReviewLayout.svelte` consumer

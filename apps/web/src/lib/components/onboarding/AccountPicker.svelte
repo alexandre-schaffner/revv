@@ -51,7 +51,7 @@ function handlePick(userId: string, host: string): void {
                     disabled={isSwitching}
                 >
                     <span class="picker-card-avatar">
-                        <Avatar src={entry.avatarUrl} size={36}>
+                        <Avatar src={entry.avatarContent} size={36}>
                             {#snippet fallback()}
                                 <User size={18} class="picker-card-icon" />
                             {/snippet}

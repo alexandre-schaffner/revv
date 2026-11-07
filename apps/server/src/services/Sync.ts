@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { isThreadResolved, loginsMatch } from "@revv/shared";
-import { Context, Effect, Layer } from "effect";
+import { Cause, Context, Effect, Layer } from "effect";
 import {
   type DbError,
   ForbiddenError,
   type GitHubError,
+  httpErrorOf,
   type NotFoundError,
   SyncError,
 } from "../domain/errors";
@@ -48,6 +49,11 @@ export class SyncService extends Context.Service<
     readonly pushThread: (threadId: string) => Effect.Effect<void, SyncFailure | ForbiddenError>;
     /** Post one reply, its thread first when that isn't on GitHub yet. */
     readonly pushReply: (messageId: string) => Effect.Effect<void, SyncFailure>;
+    /**
+     * Post replies one at a time, in order, so each thread's land as they were
+     * written. A reply GitHub refuses is logged and counted; resolves how many.
+     */
+    readonly pushReplies: (messageIds: readonly string[]) => Effect.Effect<number>;
     /** Push a thread's status to GitHub, for a thread GitHub knows. */
     readonly pushStatus: (threadId: string) => Effect.Effect<void, SyncFailure>;
     /**
@@ -66,6 +72,12 @@ export class SyncService extends Context.Service<
       prId: string,
       opts?: { readonly force?: boolean },
     ) => Effect.Effect<PullResult, SyncFailure>;
+    /**
+     * A pull a user asked for. It always answers the PR's clients, with
+     * `threads:synced` or `threads:sync-error` (which clears their spinner),
+     * and never fails.
+     */
+    readonly syncThreadsNow: (prId: string) => Effect.Effect<void>;
   }
 >()("SyncService") {}
 
@@ -81,10 +93,20 @@ export const SyncServiceLive = Layer.effect(
     const diffCache = yield* DiffCacheService;
     const accounts = yield* GitHubAccounts;
 
-    const pushThread = (threadId: string) =>
+    // A push links local rows to the GitHub comments it posted; `threads:synced`
+    // tells the PR's clients to re-read them (a posted draft is no longer
+    // editable).
+    const announceLinked = (prId: string) =>
+      realtime.toPr(prId, {
+        type: "threads:synced",
+        data: { prId, timestamp: new Date().toISOString() },
+      });
+
+    /** Resolves the PR when it posted something. */
+    const postThread = (threadId: string) =>
       Effect.gen(function* () {
         const { thread, prId } = yield* reviewService.getThread(threadId);
-        if (thread.externalCommentId) return;
+        if (thread.externalCommentId) return null;
 
         const { pr, repo, client, accountId } = yield* prContext.forPr(prId);
         if (!pr.headSha) {
@@ -135,16 +157,18 @@ export const SyncServiceLive = Layer.effect(
         if (match) {
           yield* reviewService.linkThread(threadId, { externalThreadId: match.nodeId });
         }
+        return prId;
       });
 
-    const pushReply = (messageId: string) =>
+    /** Resolves the PR when it posted something. */
+    const postReply = (messageId: string) =>
       Effect.gen(function* () {
         const message = yield* reviewService.getMessage(messageId);
-        if (message.externalId) return;
+        if (message.externalId) return null;
 
         const { thread, prId } = yield* reviewService.getThread(message.threadId);
         if (!thread.externalCommentId) {
-          yield* pushThread(thread.id).pipe(
+          yield* postThread(thread.id).pipe(
             Effect.catchTag("ForbiddenError", (e) =>
               Effect.fail(new SyncError({ message: e.message, threadId: thread.id })),
             ),
@@ -153,7 +177,7 @@ export const SyncServiceLive = Layer.effect(
           const after = yield* reviewService
             .getMessage(messageId)
             .pipe(Effect.catchTag("NotFoundError", () => Effect.succeed(null)));
-          if (after === null || after.externalId) return;
+          if (after === null || after.externalId) return prId;
         }
 
         const fresh = yield* reviewService.getThread(thread.id);
@@ -176,6 +200,30 @@ export const SyncServiceLive = Layer.effect(
           message.body,
         );
         yield* reviewService.linkMessage(message.id, String(posted.id));
+        return prId;
+      });
+
+    const announcing = <E>(post: Effect.Effect<string | null, E>) =>
+      post.pipe(Effect.flatMap((prId) => (prId === null ? Effect.void : announceLinked(prId))));
+
+    const pushReplies = (messageIds: readonly string[]) =>
+      Effect.gen(function* () {
+        let failed = 0;
+        const linked = new Set<string>();
+        for (const id of messageIds) {
+          const prId = yield* postReply(id).pipe(
+            Effect.catch((e) =>
+              Effect.sync(() => {
+                logError("sync", `push reply ${id}:`, e.message);
+                failed++;
+                return null;
+              }),
+            ),
+          );
+          if (prId !== null) linked.add(prId);
+        }
+        for (const prId of linked) yield* announceLinked(prId);
+        return failed;
       });
 
     const pushStatus = (threadId: string, client?: GitHubClient) =>
@@ -392,11 +440,37 @@ export const SyncServiceLive = Layer.effect(
         return pulled;
       });
 
+    const syncThreadsNow = (prId: string) =>
+      syncThreads(prId, { force: true }).pipe(
+        Effect.asVoid,
+        Effect.catchTag("NotFoundError", () => Effect.void),
+        Effect.catch((err) =>
+          Effect.gen(function* () {
+            logError("sync", `Manual thread sync failed for PR ${prId}:`, err);
+            yield* realtime.toPr(prId, {
+              type: "threads:sync-error",
+              data: { prId, message: httpErrorOf(err).message },
+            });
+          }),
+        ),
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            logError("sync", `Manual thread sync failed for PR ${prId}:`, Cause.pretty(cause));
+            yield* realtime.toPr(prId, {
+              type: "threads:sync-error",
+              data: { prId, message: "Thread sync failed unexpectedly" },
+            });
+          }),
+        ),
+      );
+
     return {
-      pushThread,
-      pushReply,
+      pushThread: (threadId) => announcing(postThread(threadId)),
+      pushReply: (messageId) => announcing(postReply(messageId)),
+      pushReplies,
       pushStatus: (threadId) => pushStatus(threadId),
       syncThreads,
+      syncThreadsNow,
     };
   }),
 );

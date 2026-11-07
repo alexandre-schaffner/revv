@@ -26,11 +26,7 @@ let isSavingClientId = $state(false);
 
 const needsClientId = $derived(
   Boolean(
-    reauth?.host &&
-      !isPublicGitHub(reauth.host) &&
-      (signInErrorCode === "missing_github_client_id" ||
-        signInErrorCode === "invalid_github_client_id" ||
-        clientIdError),
+    reauth?.host && !isPublicGitHub(reauth.host) && (signInErrorCode !== null || clientIdError),
   ),
 );
 

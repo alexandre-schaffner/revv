@@ -2,7 +2,13 @@ import { describe, expect, it } from "bun:test";
 import { eq } from "drizzle-orm";
 import { Cause, type Context, Effect, Layer } from "effect";
 import { createDb, type Db } from "../../db/index";
-import { commentThreads, reviewRounds, walkthroughIssues, walkthroughs } from "../../db/schema";
+import {
+  commentThreads,
+  reviewRounds,
+  reviewSessions,
+  walkthroughIssues,
+  walkthroughs,
+} from "../../db/schema";
 import { DbService } from "../Db";
 import { Realtime } from "../Realtime";
 import { WalkthroughService, WalkthroughServiceLive } from "./Walkthrough";
@@ -38,7 +44,6 @@ const recordingRealtime = (sent: Sent) =>
       Effect.sync(
         () => void sent.push({ prId, type: msg.type, data: "data" in msg ? msg.data : null }),
       ),
-    toAll: () => Effect.void,
   });
 
 const runWalkthrough = <A, E>(
@@ -286,6 +291,9 @@ describe("supersede", () => {
   /** `wt-old` at `head-1` with one AI thread on its only issue. */
   function seedAiThread(db: Db): void {
     insertWalkthroughs(db, { id: "wt-old", status: "complete", mode: "reviewer" });
+    db.insert(reviewSessions)
+      .values({ id: "session-1", pullRequestId: "pr-1", startedAt: "2026-01-01T00:00:00Z" })
+      .run();
     db.insert(walkthroughIssues)
       .values({
         id: "issue-1",
@@ -323,7 +331,6 @@ describe("supersede", () => {
           threadsWhenAnnounced.push(db.select().from(commentThreads).all().length);
           sent.push({ prId, type: msg.type, data: "data" in msg ? msg.data : null });
         }),
-      toAll: () => Effect.void,
     });
 
     const ids = await Effect.runPromise(
@@ -363,9 +370,7 @@ describe("supersede", () => {
     ]);
   });
 
-  // The comment and its replies still exist on GitHub, and the pull would
-  // never bring them back.
-  it("keeps an AI thread already on GitHub, detached from its issue", async () => {
+  it("keeps an AI thread already on GitHub, detached from its retired issue", async () => {
     const db = createDb(":memory:");
     seedAiThread(db);
     db.update(commentThreads)
@@ -373,16 +378,14 @@ describe("supersede", () => {
       .where(eq(commentThreads.id, "thread-ai"))
       .run();
     const sent: Sent = [];
-
-    await runWalkthrough(db, (s) => s.supersedeAllForPr("pr-1", "head-2"), sent);
-
+    await runWalkthrough(db, (service) => service.supersedeAllForPr("pr-1", "head-2"), sent);
     expect(sent).toEqual([]);
     expect(
       db
-        .select({ id: commentThreads.id, issue: commentThreads.walkthroughIssueId })
+        .select({ id: commentThreads.id, issueId: commentThreads.walkthroughIssueId })
         .from(commentThreads)
         .all(),
-    ).toEqual([{ id: "thread-ai", issue: null }]);
+    ).toEqual([{ id: "thread-ai", issueId: null }]);
   });
 });
 

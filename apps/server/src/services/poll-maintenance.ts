@@ -97,9 +97,14 @@ export const refreshRepoMetadata = (
 
     if (anyRepoChanged) {
       for (const accountId of gate.accountIds) {
+        const host = repos.find((r) => gate.repoToAccountId.get(r.id) === accountId)?.githubHost;
+        if (host === undefined) continue;
         yield* repoService.listRepos(accountId).pipe(
           Effect.flatMap((accountRepos) =>
-            realtime.toAccount(accountId, { type: "repos:updated", data: accountRepos }),
+            realtime.toAccount(accountId, {
+              type: "repos:updated",
+              data: { host, repos: accountRepos },
+            }),
           ),
           Effect.catchTag("DbError", (err) =>
             Effect.sync(() => logError("PollScheduler", "announcing repo metadata failed:", err)),

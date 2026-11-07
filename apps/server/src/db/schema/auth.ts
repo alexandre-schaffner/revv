@@ -9,6 +9,7 @@ export const user = sqliteTable("user", {
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
   emailVerified: integer("email_verified", { mode: "boolean" }).notNull().default(false),
+  // Retired: each account row owns its GitHub login and avatar. Never written now.
   image: text("image"),
   githubLogin: text("github_login"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
@@ -16,7 +17,7 @@ export const user = sqliteTable("user", {
   // Null until the user finishes onboarding (the web app's OnboardingGate).
   // Survives reinstalls.
   onboardedAt: integer("onboarded_at", { mode: "timestamp" }),
-  /** FK into remote_users — the authenticated user's canonical profile. */
+  /** Retired: never written or read. */
   identityId: text("identity_id").references(() => remoteUsers.id),
 });
 

@@ -1,11 +1,22 @@
 import { describe, expect, it } from "bun:test";
 import type { ServerEventMessage } from "@revv/shared";
+import { eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { createDb, type Db } from "../db";
-import { account, pullRequests, repositories, reviewSessions, user } from "../db/schema";
+import {
+  account,
+  commentThreads,
+  pullRequests,
+  repositories,
+  reviewSessions,
+  user,
+  walkthroughIssues,
+  walkthroughs,
+} from "../db/schema";
+import { ForbiddenError } from "../domain/errors";
 import { DbService } from "./Db";
 import { Realtime } from "./Realtime";
-import { ReviewService, ReviewServiceLive } from "./Review";
+import { ReviewService, ReviewServiceLive, threadWrites } from "./Review";
 
 const PR_ID = "repo-1:7";
 
@@ -68,7 +79,6 @@ function harness() {
     toAccount: () => Effect.void,
     toRepo: () => Effect.void,
     toPr: (prId, msg) => Effect.sync(() => void events.push({ prId, msg })),
-    toAll: () => Effect.void,
   });
   const layer = ReviewServiceLive.pipe(
     Layer.provide(Layer.merge(realtime, Layer.succeed(DbService, { db }))),
@@ -242,5 +252,86 @@ describe("ReviewService", () => {
     await run((r) => r.setStatus(thread.id, "resolved"));
 
     expect(await run((r) => r.applyRemoteResolved(thread.id, false))).toBe("changed");
+  });
+});
+
+describe("threadWrites: what is on GitHub is GitHub's", () => {
+  it("refuses Revv's edits and deletes of a posted message or thread, but applies GitHub's", async () => {
+    const { db, run } = harness();
+    const { thread, message } = await run((r) =>
+      r.startThread(PR_ID, anchor, { ...reviewer, body: "Rename this." }),
+    );
+    await run((r) => r.linkPostedDrafts(thread.id, [message.id], "gh-1", "Rename this."));
+
+    const edited = threadWrites.editMessage(db, message.id, "Changed");
+    expect(edited).toBeInstanceOf(ForbiddenError);
+    expect(threadWrites.removeThread(db, thread.id)).toBeInstanceOf(ForbiddenError);
+    expect(threadWrites.removeMessage(db, thread.id, message.id)).toBeInstanceOf(ForbiddenError);
+
+    const remote = threadWrites.editMessage(db, message.id, "Changed on GitHub", {
+      origin: "github",
+    });
+    expect("envelopes" in remote && remote.value.body).toBe("Changed on GitHub");
+  });
+
+  it("retires AI threads: a draft goes, a posted one stays detached", async () => {
+    const { db, run } = harness();
+    const sessionId = await run((r) => r.sessionIdFor(PR_ID));
+    db.insert(walkthroughs)
+      .values({
+        id: "wt-1",
+        reviewSessionId: sessionId,
+        pullRequestId: PR_ID,
+        summary: "",
+        mode: "reviewer",
+        status: "complete",
+        lastCompletedPhase: "D",
+        generatedAt: "2026-01-01T00:00:00Z",
+        modelUsed: "",
+        tokenUsage: "{}",
+        prHeadSha: "head-1",
+      })
+      .run();
+    for (const id of ["issue-draft", "issue-posted"]) {
+      db.insert(walkthroughIssues)
+        .values({
+          id,
+          walkthroughId: "wt-1",
+          order: 0,
+          severity: "warning",
+          title: "t",
+          description: "d",
+          createdAt: "2026-01-01T00:00:00Z",
+        })
+        .run();
+      threadWrites.upsertIssueComment(db, {
+        prId: PR_ID,
+        threadId: `thread-${id}`,
+        messageId: `msg-${id}`,
+        issueId: id,
+        anchor,
+        body: "Look here.",
+      });
+    }
+    db.update(commentThreads)
+      .set({ externalCommentId: "gh-2" })
+      .where(eq(commentThreads.id, "thread-issue-posted"))
+      .run();
+
+    const retired = threadWrites.retireAiThreads(db, ["issue-draft", "issue-posted"]);
+
+    expect(retired).toEqual([
+      {
+        prId: PR_ID,
+        value: undefined,
+        envelopes: [{ type: "thread:deleted", data: { threadId: "thread-issue-draft" } }],
+      },
+    ]);
+    expect(
+      db
+        .select({ id: commentThreads.id, issueId: commentThreads.walkthroughIssueId })
+        .from(commentThreads)
+        .all(),
+    ).toEqual([{ id: "thread-issue-posted", issueId: null }]);
   });
 });

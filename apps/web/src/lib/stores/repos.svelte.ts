@@ -1,13 +1,13 @@
 // The repositories the account tracks: the list, its clone status, and
 // adding, removing and re-cloning one.
 
-import type { ApiErrorCode, CloneStatus, Repository } from "@revv/shared";
+import type { ApiErrorCode, CloneStatus, Repository, ReposUpdatedEnvelope } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { ApiError, call } from "$lib/api/errors";
 import { thrownMessage } from "$lib/api/wire";
 import { clearOwnerHueCache, preloadOwnerHues } from "$lib/repos/avatar-palette";
-import { requestSync } from "$lib/stores/sync.svelte";
+import { isShownHost } from "$lib/stores/auth.svelte";
 import { fetchPrs, removeRepoPrsLocally } from "./prs.svelte";
 
 let repositories = $state<Repository[]>([]);
@@ -51,8 +51,8 @@ export async function fetchRepos(): Promise<void> {
   }
 }
 
-export function onReposUpdated(repos: Repository[]): void {
-  void setRepositories(repos);
+export function onReposUpdated({ host, repos }: ReposUpdatedEnvelope["data"]): void {
+  if (isShownHost(host)) void setRepositories(repos);
 }
 
 export function onReposCloneStatus(data: {
@@ -115,8 +115,8 @@ export async function addRepo(input: AddRepoInput): Promise<void> {
     );
   }
   await fetchRepos();
-  // The new repo's PRs arrive over `prs:updated` once the sync has run.
-  await requestSync();
+  // The add started a sync (its `prs:sync-*` drive the spinner); the new
+  // repo's PRs arrive over `prs:updated` once it has run.
   await fetchPrs();
 }
 

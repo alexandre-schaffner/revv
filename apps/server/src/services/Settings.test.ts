@@ -62,6 +62,12 @@ describe("normalizeSettings", () => {
     expect(s.recap.agent).toBe("claude-code");
   });
 
+  it("stores the GitHub host normalized, whatever form it arrived in", () => {
+    expect(normalizeSettings({ githubHost: " https://GHE.Example.com/ " }).githubHost).toBe(
+      "ghe.example.com",
+    );
+  });
+
   it("floors and clamps max turns", () => {
     expect(normalizeSettings({ aiMaxTurns: 3.7 }).aiMaxTurns).toBe(10);
     expect(normalizeSettings({ aiMaxTurns: 99.9 }).aiMaxTurns).toBe(99);

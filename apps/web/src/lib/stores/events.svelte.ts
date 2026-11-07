@@ -28,7 +28,6 @@ import * as repoActivity from "./repo-activity.svelte";
 import * as repos from "./repos.svelte";
 import { refreshAllWaiting } from "./resource";
 import * as review from "./review.svelte";
-import { getGithubHost, isSettingsLoaded } from "./settings.svelte";
 import * as stackHeadlines from "./stack-headlines.svelte";
 import * as stackMerge from "./stack-merge.svelte";
 import * as stacks from "./stacks.svelte";
@@ -116,7 +115,6 @@ const RECOVER_BASE_MS = 1_000;
 const RECOVER_MAX_MS = 30_000;
 
 let source: EventSource | null = null;
-let activeHostOverride: string | null = null;
 // EventSource fires `open` on the first connect AND on every auto-reconnect.
 let openCount = 0;
 let lastEventTime = 0;
@@ -158,7 +156,7 @@ function dispatch(msg: ServerEventMessage): void {
       break;
     case "prs:updated":
       prs.onPrsUpdated(msg.data);
-      walkthrough.onPrsUpdated(msg.data);
+      walkthrough.onPrsUpdated(msg.data.prs);
       break;
     case "pr:archived":
       prs.onPrArchived(msg.data);
@@ -314,13 +312,8 @@ function startWatchdog(): void {
 function open(): void {
   const token = getToken();
   if (!token) return;
-  // Before settings load, the server's own saved host picks the account; the
-  // client's default would point a GHE install at github.com.
-  const host = activeHostOverride ?? (isSettingsLoaded() ? getGithubHost() : null);
-  const hostParam = host ? `&host=${encodeURIComponent(host)}` : "";
-  const es = new EventSource(
-    `${API_BASE_URL}/api/events?token=${encodeURIComponent(token)}${hostParam}`,
-  );
+  // One stream carries the pushes of every account of the signed-in user.
+  const es = new EventSource(`${API_BASE_URL}/api/events?token=${encodeURIComponent(token)}`);
   source = es;
   lastEventTime = Date.now();
 
@@ -348,13 +341,8 @@ function open(): void {
   });
 }
 
-/**
- * `hostOverride` binds the stream to an account whose host the settings
- * store doesn't hold yet (an account switch); it sticks across reconnects.
- */
-export function connect(hostOverride?: string): void {
+export function connect(): void {
   disconnect();
-  if (hostOverride !== undefined) activeHostOverride = hostOverride;
   openCount = 0;
   recoverAttempts = 0;
   startWatchdog();
@@ -368,5 +356,4 @@ export function disconnect(): void {
   clearRecoverTimer();
   source?.close();
   source = null;
-  activeHostOverride = null;
 }

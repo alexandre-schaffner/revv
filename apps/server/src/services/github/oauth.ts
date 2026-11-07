@@ -1,12 +1,97 @@
 /**
  * GitHub's OAuth endpoints for the device-code sign-in and the refresh grant,
- * plus the viewer reads a fresh sign-in needs. The device flow — including
- * its refresh grant — takes a `client_id` only, never a `client_secret`.
+ * and which client id each host signs in with.
+ *
+ * Revv targets github.com with a bundled public OAuth App (or, in Pro, a
+ * bundled GitHub App), and any GitHub Enterprise host with a client ID the
+ * user supplies during onboarding — no GHE host is baked in. The device flow
+ * — including its refresh grant — takes a `client_id` only, never a
+ * `client_secret`.
  */
+import {
+  clientIdKind,
+  GITHUB_CLIENT_ID_HINT,
+  isPublicGitHub,
+  savedClientIdForHost,
+} from "@revv/shared";
 import { Effect } from "effect";
-import type { GitHubError } from "../../domain/errors";
-import { clientIdIsGitHubApp } from "../../github-oauth";
+import { serverEnv } from "../../config";
+import {
+  type GitHubError,
+  InvalidGitHubClientIdError,
+  MissingGitHubClientIdError,
+} from "../../domain/errors";
 import { oauthPost } from "./transport";
+
+export type ClientIdError = MissingGitHubClientIdError | InvalidGitHubClientIdError;
+
+/**
+ * A GitHub App's permissions are fixed at registration/install, so its
+ * device-code request sends no `scope`; an OAuth App requests scopes at login.
+ */
+export function clientIdIsGitHubApp(clientId: string): boolean {
+  return clientIdKind(clientId) === "github-app";
+}
+
+/**
+ * The client id to sign in to (or refresh a token on) `host` with.
+ *
+ * github.com always resolves to Revv's bundled registration (Pro: the bundled
+ * GitHub App), checked BEFORE `customClientId`: a custom id is one a user
+ * registered on their own GHE instance, and github.com's device-code
+ * endpoint 404s on it. A GHE host takes `customClientId`, else
+ * `GITHUB_CLIENT_ID` for a fixed deployment.
+ */
+export function clientIdForHost(
+  host: string,
+  customClientId?: string | null,
+): Effect.Effect<string, ClientIdError> {
+  if (isPublicGitHub(host)) {
+    if (serverEnv.edition === "pro") return Effect.succeed(serverEnv.githubAppClientId);
+    if (serverEnv.githubClientIdPublic) return Effect.succeed(serverEnv.githubClientIdPublic);
+    return Effect.fail(
+      new MissingGitHubClientIdError({
+        host,
+        message:
+          "Public GitHub sign-in requires GITHUB_CLIENT_ID_PUBLIC to be set. " +
+          "Register an OAuth App on github.com and add GITHUB_CLIENT_ID_PUBLIC=<id> to your .env file.",
+      }),
+    );
+  }
+  const custom = customClientId?.trim();
+  if (custom) {
+    return clientIdKind(custom) === null
+      ? Effect.fail(
+          new InvalidGitHubClientIdError({
+            host,
+            message: `The GitHub App or OAuth App client ID for ${host} is not valid. ${GITHUB_CLIENT_ID_HINT}`,
+          }),
+        )
+      : Effect.succeed(custom);
+  }
+  if (serverEnv.githubClientId) return Effect.succeed(serverEnv.githubClientId);
+  return Effect.fail(
+    new MissingGitHubClientIdError({
+      host,
+      message:
+        `Signing in to ${host} requires a GitHub App or OAuth App client ID. ` +
+        "Add one during onboarding (GitHub Enterprise → client ID), or set GITHUB_CLIENT_ID for a fixed deployment.",
+    }),
+  );
+}
+
+/**
+ * The client id a sign-in to `host` uses: an explicit `override` (a deep
+ * link's or onboarding's transient input), else the one saved for that host,
+ * else the bundled/env one.
+ */
+export function resolveClientId(
+  host: string,
+  saved: { readonly githubHost: string; readonly githubClientId: string },
+  override?: string,
+): Effect.Effect<string, ClientIdError> {
+  return clientIdForHost(host, override?.trim() || savedClientIdForHost(host, saved));
+}
 
 /**
  * Classic OAuth App device-flow scope. A GitHub App's permissions are fixed at

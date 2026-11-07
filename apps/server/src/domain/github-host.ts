@@ -1,4 +1,4 @@
-import { isPublicGitHub } from "@revv/shared";
+import { isPublicGitHub, normalizeGithubHost, sameGithubHost } from "@revv/shared";
 import { serverEnv } from "../config";
 
 const PREFIX = "github:";
@@ -11,18 +11,17 @@ const PREFIX = "github:";
 export const LEGACY_GITHUB_PROVIDER_ID = "github";
 
 export function providerIdForHost(host: string): string {
-  return `${PREFIX}${host}`;
+  return `${PREFIX}${normalizeGithubHost(host)}`;
 }
 
 export function hostFromProviderId(providerId: string): string {
-  if (providerId.startsWith(PREFIX)) return providerId.slice(PREFIX.length);
+  if (providerId.startsWith(PREFIX)) return normalizeGithubHost(providerId.slice(PREFIX.length));
   return serverEnv.githubHost;
 }
 
-export function providerIdsForHost(host: string): string[] {
-  return host === serverEnv.githubHost
-    ? [providerIdForHost(host), LEGACY_GITHUB_PROVIDER_ID]
-    : [providerIdForHost(host)];
+/** Whether an account row's provider id names `host`. */
+export function isAccountOnHost(providerId: string, host: string): boolean {
+  return sameGithubHost(hostFromProviderId(providerId), host);
 }
 
 /** github.com's REST API lives on `api.github.com`; a GitHub Enterprise host's on `api.<host>`. */

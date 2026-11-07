@@ -21,8 +21,9 @@ export const commentThreads = sqliteTable("comment_threads", {
   // pushes it again rather than reverting it to GitHub's.
   statusPushPending: integer("status_push_pending", { mode: "boolean" }).notNull().default(false),
   // The walkthrough issue this thread comments on, when the agent wrote it
-  // (`add_issue_comment`); null for human threads. Cascades, so deleting the
-  // issue (a Jev retraction, `delete_issue`) deletes its threads.
+  // (`add_issue_comment`); null for human threads, and for an AI thread already
+  // on GitHub whose issue went away (`threadWrites.retireAiThreads` detaches it
+  // before the issue is deleted).
   walkthroughIssueId: text("walkthrough_issue_id").references(() => walkthroughIssues.id, {
     onDelete: "cascade",
   }),

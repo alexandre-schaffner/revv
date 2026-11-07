@@ -12,47 +12,48 @@ const unauthorized = () =>
 
 const BEARER = /^Bearer\s+(\S+)$/i;
 
-/** The local user behind a session token, or null for none, an expired one, or a DB failure. */
-export async function sessionUserId(token: string | undefined): Promise<string | null> {
-  if (!token) return null;
+/**
+ * The signed-in user behind a session token, or the refusal to answer with:
+ * 401 for no session or an expired one, the fault's own status when the
+ * lookup itself failed. A 401 tells the client its session is gone, so a
+ * fault must never answer one.
+ */
+export async function authenticate(
+  token: string | undefined,
+): Promise<{ readonly userId: string } | ReturnType<typeof unauthorized> | ApiErrorResponse> {
+  if (!token) return unauthorized();
   const exit = await AppRuntime.runPromiseExit(
     Effect.flatMap(GitHubAccounts, (accounts) => accounts.sessionUser(token)),
   );
-  if (Exit.isSuccess(exit)) return exit.value;
-  logError("auth", "session lookup failed:", Cause.pretty(exit.cause));
-  return null;
+  if (Exit.isFailure(exit)) return errorResponse(Cause.squash(exit.cause));
+  return exit.value === null ? unauthorized() : { userId: exit.value };
 }
 
 function bearerToken(headers: Headers): string | undefined {
   return BEARER.exec(headers.get("authorization") ?? "")?.[1];
 }
 
-/** Derives the signed-in `userId`; answers 401 without one. */
-export const withAuth = new Elysia({ name: "with-auth" }).derive({ as: "scoped" }, async (ctx) => {
-  const userId = await sessionUserId(bearerToken(ctx.request.headers));
-  if (userId === null) return unauthorized();
-  return { userId };
-});
+/** Derives the signed-in `userId` (see `authenticate`). */
+export const withAuth = new Elysia({ name: "with-auth" }).derive({ as: "scoped" }, (ctx) =>
+  authenticate(bearerToken(ctx.request.headers)),
+);
 
-function queryHost(query: Record<string, unknown>): string | undefined {
-  const host = query.host;
-  if (typeof host !== "string") return undefined;
-  const trimmed = host.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-/** The GitHub account a request acts as: the one on `?host=`, else the settings host's. */
-export const requestAccount = (userId: string, query: Record<string, unknown>) =>
+/**
+ * The GitHub account a request that names no repository acts as: the user's
+ * account on the active host, which picks the default list view. A request
+ * about a repository or pull request acts as the account that owns it
+ * instead (`routes/ownership.ts`).
+ */
+export const activeAccount = (userId: string) =>
   Effect.gen(function* () {
-    const host =
-      queryHost(query) ?? (yield* Effect.flatMap(SettingsService, (s) => s.githubHost()));
+    const host = yield* Effect.flatMap(SettingsService, (s) => s.githubHost());
     return yield* Effect.flatMap(GitHubAccounts, (accounts) =>
       accounts.accountForUser(userId, host),
     );
   });
 
 /**
- * Derives `userId` and the request's GitHub `account` (see `requestAccount`).
+ * Derives `userId` and the request's `account` (see `activeAccount`).
  *
  * It resolves the session itself instead of chaining `.use(withAuth)`:
  * Elysia deduplicates named plugins, and when `withAuth` is deduped its
@@ -61,12 +62,10 @@ export const requestAccount = (userId: string, query: Record<string, unknown>) =
 export const withAccount = new Elysia({ name: "with-account" }).derive(
   { as: "scoped" },
   async (ctx) => {
-    const userId = await sessionUserId(bearerToken(ctx.request.headers));
-    if (userId === null) return unauthorized();
-    const exit = await AppRuntime.runPromiseExit(
-      requestAccount(userId, ctx.query as Record<string, unknown>),
-    );
-    if (Exit.isSuccess(exit)) return { userId, account: exit.value };
+    const auth = await authenticate(bearerToken(ctx.request.headers));
+    if (!("userId" in auth)) return auth;
+    const exit = await AppRuntime.runPromiseExit(activeAccount(auth.userId));
+    if (Exit.isSuccess(exit)) return { userId: auth.userId, account: exit.value };
     return errorResponse(Cause.squash(exit.cause));
   },
 );

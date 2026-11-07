@@ -125,7 +125,6 @@ export function cloneServices(db: Db, base: string) {
       toAccount: () => Effect.void,
       toRepo: () => Effect.void,
       toPr: () => Effect.void,
-      toAll: () => Effect.void,
     }),
     Layer.succeed(GitHubAccounts, {
       clientFor: () => Effect.succeed({ token: "token" }),

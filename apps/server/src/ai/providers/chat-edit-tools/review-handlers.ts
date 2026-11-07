@@ -1,13 +1,12 @@
 // A GitHub-submitted issue and its comments are immutable (invariant 7).
 
-import type { WalkthroughRating } from "@revv/shared";
+import { canUserModifyComment, type WalkthroughRating } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import type { Db } from "../../../db";
 import { commentThreads } from "../../../db/schema/comment-threads";
 import { threadMessages } from "../../../db/schema/thread-messages";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
-import { NotFoundError } from "../../../domain/errors";
 import { threadWrites } from "../../../services/Review";
 import {
   decodeCitations,
@@ -84,9 +83,12 @@ function editableIssueComment(
       refused: `Error: comment ${messageId} does not belong to the active walkthrough for this PR.`,
     };
   }
-  if (issue.submittedAt !== null) {
+  if (!canUserModifyComment(message, null)) {
     return {
-      refused: `Error: parent issue has been pushed to GitHub. Cannot ${verb} comments on submitted issues.`,
+      refused:
+        message.externalId !== null
+          ? `Error: comment ${messageId} is already on GitHub. Cannot ${verb} it from Revv.`
+          : `Error: comment ${messageId} was not written by Revv. Cannot ${verb} it.`,
     };
   }
   return { message, thread };
@@ -239,9 +241,9 @@ export const deleteIssueHandler: ChatEditToolHandler<DeleteIssueInput> = async (
       };
     }
 
-    const threadEvents = deleteIssue(ctx.db, existing.id);
+    const threadEvents = deleteIssue(ctx.db, existing.id).flatMap((w) => w.envelopes);
     return {
-      message: `Issue ${input.issue_id} deleted${threadEvents.length > 0 ? ` (${threadEvents.length} linked thread(s) cascaded)` : ""}.`,
+      message: `Issue ${input.issue_id} deleted${threadEvents.length > 0 ? ` (${threadEvents.length} linked thread(s) removed)` : ""}.`,
       threadEvents,
       events: [{ type: "issue:deleted", data: { id: input.issue_id } }],
     };
@@ -295,7 +297,7 @@ export const updateIssueCommentHandler: ChatEditToolHandler<UpdateIssueCommentIn
     const found = editableIssueComment(ctx.db, wt.id, input.thread_message_id, "edit");
     if ("refused" in found) return found;
     const edited = threadWrites.editMessage(ctx.db, found.message.id, input.body);
-    if (edited instanceof NotFoundError) return { refused: `Error: ${edited.message}` };
+    if (!("envelopes" in edited)) return { refused: `Error: ${edited.message}` };
     return {
       message: `Comment ${input.thread_message_id} updated.`,
       threadEvents: edited.envelopes,
@@ -310,7 +312,7 @@ export const deleteIssueCommentHandler: ChatEditToolHandler<DeleteIssueCommentIn
     const found = editableIssueComment(ctx.db, wt.id, input.thread_message_id, "delete");
     if ("refused" in found) return found;
     const removed = threadWrites.removeMessage(ctx.db, found.thread.id, found.message.id);
-    if (removed instanceof NotFoundError) return { refused: `Error: ${removed.message}` };
+    if (!("envelopes" in removed)) return { refused: `Error: ${removed.message}` };
     const threadRemoved = removed.envelopes.some((e) => e.type === "thread:deleted");
     return {
       message: `Comment ${input.thread_message_id} deleted${threadRemoved ? " with its thread (it was the thread's first message)" : ""}.`,

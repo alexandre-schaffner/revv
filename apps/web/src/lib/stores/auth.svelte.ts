@@ -3,7 +3,13 @@
 // switch, end) lives in `$lib/session/lifecycle.svelte`; this store imports
 // no other store.
 
-import { isMaintainerLogin, type UserIdentity, type UserUpdatedEnvelope } from "@revv/shared";
+import {
+  type ApiErrorCode,
+  isMaintainerLogin,
+  sameGithubHost,
+  type UserIdentity,
+  type UserUpdatedEnvelope,
+} from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
 import { ApiError, apiErrorCode, call } from "$lib/api/errors";
@@ -21,6 +27,8 @@ interface User {
   email: string;
   image?: string;
   githubLogin?: string | null;
+  /** The host of the account shown as the identity: the active host's. */
+  host?: string | null;
   onboardedAt?: string | null;
 }
 
@@ -29,7 +37,11 @@ let isLoading = $state(false);
 let isSwitching = $state(false);
 let error = $state<string | null>(null);
 
-export type SignInErrorCode = "invalid_github_client_id" | "missing_github_client_id";
+/** A sign-in refused for its client id: the host needs one, or the one it has isn't valid. */
+export type SignInErrorCode = Extract<
+  ApiErrorCode,
+  "MISSING_GITHUB_CLIENT_ID" | "INVALID_GITHUB_CLIENT_ID"
+>;
 let signInErrorCode = $state<SignInErrorCode | null>(null);
 
 let deviceFlow = $state<{
@@ -174,14 +186,10 @@ export function clearIdentity(): void {
   void fetchLocalAccounts();
 }
 
-function parseSignInErrorCode(value: unknown): SignInErrorCode | null {
-  return value === "missing_github_client_id" || value === "invalid_github_client_id"
-    ? value
-    : null;
-}
-
 function signInRefusal(refusal: ApiError): Error {
-  signInErrorCode = parseSignInErrorCode(refusal.body?.code);
+  const code = apiErrorCode(refusal);
+  signInErrorCode =
+    code === "MISSING_GITHUB_CLIENT_ID" || code === "INVALID_GITHUB_CLIENT_ID" ? code : null;
   const detail = refusal.serverMessage ?? "";
   return new Error(`Sign-in request failed (${refusal.status})${detail ? `: ${detail}` : ""}`);
 }
@@ -405,6 +413,7 @@ function toUser(fields: {
   readonly name: string;
   readonly email: string;
   readonly githubLogin: string | null;
+  readonly host: string | null;
   readonly onboardedAt: string | null;
   readonly avatarContent: string | null;
 }): User {
@@ -414,6 +423,7 @@ function toUser(fields: {
     name: fields.name,
     email: fields.email,
     githubLogin: fields.githubLogin,
+    host: fields.host,
     onboardedAt: fields.onboardedAt,
     ...(image != null ? { image } : {}),
   };
@@ -453,7 +463,10 @@ function holdCurrentSession(): void {
 
 export function onUserUpdated(data: UserUpdatedEnvelope["data"]): void {
   if (user?.id !== data.id) return;
-  user = toUser({ ...data, onboardedAt: user.onboardedAt ?? null });
+  // The account switchers show every account's login and avatar.
+  void fetchLocalAccounts();
+  if (!isShownHost(data.host)) return;
+  user = toUser({ ...data, host: user.host ?? null, onboardedAt: user.onboardedAt ?? null });
   holdCurrentSession();
 }
 
@@ -539,9 +552,9 @@ async function heldLocalAccounts(): Promise<readonly LocalAccount[]> {
         );
         const accounts = data
           .filter((a) => a.connected)
-          .map(({ host, githubLogin, avatarUrl }) => ({ host, githubLogin, avatarUrl }));
+          .map(({ host, githubLogin, avatarContent }) => ({ host, githubLogin, avatarContent }));
         return accounts.length > 0
-          ? { id: held.userId, name: held.name, email: held.email, image: held.image, accounts }
+          ? { id: held.userId, name: held.name, email: held.email, accounts }
           : null;
       } catch (e) {
         if (apiErrorCode(e) === "UNAUTHORIZED") releaseSession({ token: held.token });
@@ -585,6 +598,14 @@ export async function deleteAccount(): Promise<void> {
 
 export function getUser(): User | null {
   return user;
+}
+
+/**
+ * Whether a push about the account on `host` is about the lists on screen:
+ * those of the active host's account. The stream carries every account.
+ */
+export function isShownHost(host: string): boolean {
+  return user?.host == null || sameGithubHost(user.host, host);
 }
 
 export function getCurrentUserLogin(): string | null {

@@ -16,7 +16,7 @@ import {
   GitHubNotFoundError,
 } from "../../../domain/errors";
 import { logError } from "../../../logger";
-import { splitFullName } from "../graphql-batch";
+import { type RepoRef, splitFullName } from "../graphql-batch";
 import {
   type GitHubClient,
   type GitHubHttp,
@@ -49,11 +49,6 @@ import {
   timelinePageQuery,
 } from "./queries";
 import { runWrite } from "./writes";
-
-export interface RepoRef {
-  readonly owner: string;
-  readonly repo: string;
-}
 
 /**
  * One GraphQL ask that survives fields the token may not read. A GitHub App

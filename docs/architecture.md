@@ -82,11 +82,11 @@ Repos/GitHub hides API calls, retries, sync watermarks, and metadata persistence
 #### Realtime / Events
 
 `Realtime` (`services/Realtime.ts`) is the realtime narrow neck for the global SSE stream
-(`GET /api/events`). Features address a push to an account: `toAccount(accountId, msg)`, or
-`toRepo(repoId, msg)` / `toPr(prId, msg)`, which resolve the owning account in one place.
-`toAll(msg)` reaches every connected client and is reserved for server-global sync signals.
-`Broadcaster` is the transport underneath (`register` per account from `routes/events.ts`, fan-out,
-disconnect bookkeeping); only `Realtime`, `AppLayer` and the events route may import it
+(`GET /api/events`, one per user, carrying every account of the user). Features address a push
+to an account, repository or PR: `toAccount(accountId, msg)`, `toRepo(repoId, msg)` or
+`toPr(prId, msg)`; `Realtime` resolves the owning local user in one place.
+`Broadcaster` is the transport underneath (`register` per local user from `routes/events.ts`,
+fan-out, disconnect bookkeeping); only `Realtime`, `AppLayer` and the events route may import it
 (`check:import-boundaries`). The envelope union (`ServerEventMessage`) lives entirely in
 `@revv/shared/src/events`, so the wire contract has one source of truth.
 
@@ -94,8 +94,9 @@ Doctrine: **commit-first, broadcast-second** (invariant #8). Callers MUST commit
 sending; a missed push is reconstructible from the DB on reconnect via the snapshot REST
 endpoints. The interface carries no sequence cursor: the walkthrough emitter bumps the durable
 `seq` and stamps it onto the envelope before sending.
-Every feature-level event is account-scoped, including the PR sync's `prs:sync-started` /
-`prs:sync-complete` / `prs:sync-failed`; `toAll` has no callers today.
+Every feature-level event is addressed this way, including the PR sync's `prs:sync-started` /
+`prs:sync-complete` / `prs:sync-failed` (to the repo-owning accounts and whoever asked for the
+sync); there is no send to every client.
 
 PR / repo / auth / thread / chat / recap envelopes all flow through this same SSE channel.
 Client-initiated sync requests are REST commands.

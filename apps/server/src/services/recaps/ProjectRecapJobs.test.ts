@@ -52,7 +52,6 @@ function recapJobs(db: Db, patch: Partial<ProjectRecapService["Service"]> = {}) 
     toAccount: () => Effect.void,
     toRepo: (_repoId, msg) => Effect.sync(() => void broadcasts.push(msg)),
     toPr: () => Effect.void,
-    toAll: () => Effect.void,
   });
   const dbLayer = Layer.succeed(DbService, { db });
   const layer = ProjectRecapJobsLive.pipe(

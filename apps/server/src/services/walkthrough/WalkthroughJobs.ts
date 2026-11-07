@@ -4,7 +4,9 @@
 // the MCP token. What is walkthrough-specific lives here and beside it:
 //
 //   • Every decision about a PR's rows runs under the PR's lock: a request, a
-//     resume, a hydrate, a supersede.
+//     resume, a hydrate, a supersede. A request records GitHub's live head
+//     through the mirror before it takes the lock: the head move the mirror
+//     publishes supersedes under it.
 //   • `startJob` decides what a request lands on: the run already live, the
 //     row already at the head, or a new row — which takes over a finished
 //     review (restack carry, team cache) when one exists, and is planned and
@@ -43,6 +45,7 @@ import {
   AiGenerationError,
   type DbError,
   type GitHubError,
+  GitHubNotFoundError,
   HeadShaMismatchError,
 } from "../../domain/errors";
 import { dbTry } from "../../effects/db-try";
@@ -54,11 +57,14 @@ import { CacheService } from "../Cache";
 import { RepoCloneService } from "../clone/RepoClone";
 import { DbService } from "../Db";
 import { DiffCacheService, toGitHubFileShape } from "../DiffCache";
+import { GitHubGateway } from "../github/gateway";
 import { HunkScanService } from "../hunk-scan/HunkScan";
 import { JevService } from "../Jev";
 import { makeStartJobMutex } from "../job-mutex";
 import { type AgentRun, makeAgentJobs, type RunOutcome } from "../jobs/agent-jobs";
 import { type PrContextBasic, type PrContextError, PrContextService } from "../PrContext";
+import { PrMirror } from "../PrMirror";
+import { PrHeadMoves } from "../pr-head-moves";
 import { Realtime } from "../Realtime";
 import { ReviewService } from "../Review";
 import { SettingsService } from "../Settings";
@@ -263,8 +269,12 @@ export const WalkthroughJobsLive = Layer.effect(
     const snapshotImporter = yield* WalkthroughSnapshotImporter;
     const realtime = yield* Realtime;
     const stackService = yield* StackService;
+    const github = yield* GitHubGateway;
+    const mirror = yield* PrMirror;
+    const headMoves = yield* PrHeadMoves;
 
-    // Not re-entrant: what runs under it calls the `*Locked` variants.
+    // Not re-entrant: what runs under it calls the `*Locked` variants, and
+    // never `mirror.apply`, whose head-move listener supersedes under it.
     const prLocks = yield* makeStartJobMutex();
     const underPrLock = <A, E>(prId: string, effect: Effect.Effect<A, E>) =>
       Effect.flatMap(prLocks.acquire(prId), (lock) => lock.withPermits(1)(effect));
@@ -748,15 +758,51 @@ export const WalkthroughJobsLive = Layer.effect(
         }
       });
 
-    const request = (params: StartJobParams): Effect.Effect<StartJobResult, StartJobError> =>
+    /**
+     * The PR as GitHub reports it now, recorded first: a head the poll hasn't
+     * seen yet goes through the mirror (which supersedes runs at the old one),
+     * so the whole run — the diff cache, the relevance judgments — reads the
+     * head it reviews. Then that head's files and commits.
+     *
+     * Runs before the request takes the PR lock, never under it: the mirror
+     * publishes the head move, and the supersede it triggers takes that lock.
+     */
+    const liveContext = (prId: string) =>
+      Effect.gen(function* () {
+        const stored = yield* prContextService.forPr(prId);
+        const { repo, client } = stored;
+        const live = yield* github.prs.get(client, repo.fullName, repo.id, stored.pr.externalId);
+        const { rows } = yield* mirror.apply([live]);
+        const pr = rows[0] ?? stored.pr;
+        if (pr.headSha === null || pr.baseSha === null) {
+          return yield* Effect.fail(
+            new GitHubNotFoundError({
+              resource: "pull_request",
+              id: `${repo.fullName}#${pr.externalId}`,
+            }),
+          );
+        }
+        const files = toGitHubFileShape(
+          (yield* diffCacheService.getOrFetch(pr, repo.fullName, client)).files,
+        );
+        const commits = yield* github.prs.commits(client, repo.fullName, pr.externalId);
+        return { ...stored, pr, headSha: pr.headSha, files, commits };
+      });
+
+    type LivePr = Effect.Success<ReturnType<typeof liveContext>>;
+
+    /** What a request lands on, decided under the PR lock at the head `liveContext` recorded. */
+    const request = (
+      params: StartJobParams,
+      resolved: LivePr,
+    ): Effect.Effect<StartJobResult, StartJobError> =>
       Effect.gen(function* () {
         const mode = params.mode ?? "reviewer";
         const requestedGenerationMode = params.generationMode ?? "full";
         const live = yield* findActiveByPr(params.prId, mode);
 
-        const resolved = yield* prContextService.withDiff(params.prId);
-        const { pr, repo, meta, files, commits } = resolved;
-        const headSha = meta.headSha;
+        const { pr, repo, files, commits } = resolved;
+        const headSha = resolved.headSha;
         const pinnedHead = params.expectedHeadSha?.toLowerCase();
         if (pinnedHead !== undefined && headSha.toLowerCase() !== pinnedHead) {
           return yield* Effect.fail(
@@ -948,15 +994,31 @@ export const WalkthroughJobsLive = Layer.effect(
         }),
       );
 
+    const supersedeForPr = (prId: string, exceptHeadSha?: string, mode?: WalkthroughMode) =>
+      underPrLock(prId, supersedeLocked(prId, exceptHeadSha, mode));
+
+    // A head move the mirror recorded makes the runs at the old head stale
+    // (invariant 7). Takes the PR lock, so no caller of `mirror.apply` may
+    // hold it (`liveContext` runs before `request` takes it).
+    yield* headMoves.listen((prId, headSha) =>
+      supersedeForPr(prId, headSha).pipe(
+        Effect.catch((err) =>
+          Effect.sync(() => logError("walkthrough-jobs", `supersede on head move ${prId}:`, err)),
+        ),
+      ),
+    );
+
     return {
-      startJob: (params) => underPrLock(params.prId, request(params)),
+      startJob: (params) =>
+        Effect.flatMap(liveContext(params.prId), (resolved) =>
+          underPrLock(params.prId, request(params, resolved)),
+        ),
       importFromTeamCache,
       resume,
       findActiveByPr,
       cancel: (walkthroughId) => jobs.stop(walkthroughId, "user"),
       resumePending: () => jobs.resumePending,
-      supersedeForPr: (prId, exceptHeadSha, mode) =>
-        underPrLock(prId, supersedeLocked(prId, exceptHeadSha, mode)),
+      supersedeForPr,
       emitEvent,
       resolveSessionToken: jobs.resolveToken,
     };

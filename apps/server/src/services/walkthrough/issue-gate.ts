@@ -20,6 +20,7 @@ import type { CacheService } from "../Cache";
 import { readCurrentHeadPatch } from "../DiffCache";
 import { fitAnchorToPatch } from "../diff-anchors";
 import type { JevService } from "../Jev";
+import type { ThreadWrite } from "../Review";
 import { decodeIssue, deleteIssue } from "./content";
 
 /** Where a verdict is announced, once committed. */
@@ -94,7 +95,7 @@ export function applyJudgment(
   sink: JudgmentSink,
 ): void {
   const now = new Date().toISOString();
-  let retractedThreads: readonly ThreadEventMessage[] = [];
+  let retractedThreads: readonly ThreadWrite<void>[] = [];
   let retractedIssue = false;
   let updated: WalkthroughIssue | null = null;
 
@@ -126,7 +127,9 @@ export function applyJudgment(
 
   if (retractedIssue) {
     sink.markRetracted(issueId);
-    for (const message of retractedThreads) sink.broadcastThread(message);
+    for (const message of retractedThreads.flatMap((w) => w.envelopes)) {
+      sink.broadcastThread(message);
+    }
     sink.emit({ type: "issue:deleted", data: { id: issueId } });
   } else if (updated !== null) {
     sink.emit({ type: "issue", data: updated });

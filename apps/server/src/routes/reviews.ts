@@ -4,14 +4,14 @@ import { Elysia, t } from "elysia";
 import { ReviewService } from "../services/Review";
 import { humanAuthor, viewerOnPr } from "../services/review-mode";
 import { submitReview } from "../services/review-submit";
-import { runRoute, withAccount } from "./middleware";
+import { runRoute, withAuth } from "./middleware";
 import { ownedBy } from "./ownership";
 import { literalUnion } from "./schemas";
 import { threadMessageBody } from "./thread-message";
 
 /** Review routes: `:id` and `:prId` name the pull request. */
 export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
-  .use(withAccount)
+  .use(withAuth)
   .onBeforeHandle(ownedBy({ id: "pull request", prId: "pull request" }))
   // Every thread on the PR with its messages, for a cold render in one round trip.
   .get("/active/:prId", (ctx) =>
@@ -28,6 +28,7 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
           const created = yield* review.startThread(ctx.params.id, anchor, {
             ...message,
             ...author,
+            messageType: "comment",
           });
           ctx.set.status = 201;
           return created;

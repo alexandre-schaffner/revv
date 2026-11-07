@@ -19,7 +19,6 @@ import {
   normalizeTokenUsage,
   type RatingAxis,
   type RatingCitation,
-  type ThreadEventMessage,
   type ThreadMessage,
   type Verdict,
   type WalkthroughBlock,
@@ -624,20 +623,14 @@ export function upsertIssue(
 }
 
 /**
- * Delete a concern, its AI threads retired first (`threadWrites.retireAiThreads`).
- * Returns their envelopes, to announce once committed.
+ * Delete a concern. Its inline-comment threads are retired first (see
+ * `threadWrites.retireAiThreads`); the writes are returned for the caller to
+ * announce once committed.
  */
-export function deleteIssue(db: Db, id: string): readonly ThreadEventMessage[] {
-  const owner = db
-    .select({ prId: walkthroughs.pullRequestId })
-    .from(walkthroughIssues)
-    .innerJoin(walkthroughs, eq(walkthroughs.id, walkthroughIssues.walkthroughId))
-    .where(eq(walkthroughIssues.id, id))
-    .get();
-  if (!owner) return [];
-  const retired = threadWrites.retireAiThreads(db, owner.prId, [id]);
+export function deleteIssue(db: Db, id: string): ThreadWrite<void>[] {
+  const retired = threadWrites.retireAiThreads(db, [id]);
   db.delete(walkthroughIssues).where(eq(walkthroughIssues.id, id)).run();
-  return retired.envelopes;
+  return retired;
 }
 
 /** A block named by its position, as the agent addresses it. */
