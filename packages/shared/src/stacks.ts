@@ -54,7 +54,9 @@ export type StackLayerReview =
  *   layer-changed  — the layer's own changes differ in `files`.
  *   needs-rebase   — a layer below merged and this one still carries its
  *                    changes (squash-merged base); the author has to restack.
- *   unknown        — no review, or one written before Revv tracked stacks.
+ *   unknown        — no review, or a re-pushed layer whose reviewed and
+ *                    current diffs can't be compared. A review written before
+ *                    Revv tracked stacks reads `current`.
  */
 export type RestackVerdict =
   | { readonly kind: "current" }

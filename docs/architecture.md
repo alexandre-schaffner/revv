@@ -104,18 +104,28 @@ SSE channel. Client-initiated sync requests are REST commands; server-to-client 
 directory) gives every command one policy: no prompts, none of the user's hooks, commit
 signing per `GitPolicy` (the user's own config for commits pushed to their branches, off
 otherwise), a timeout, the process registry the shutdown reaper kills, and token redaction. `ops.ts`
-is the command surface; `remote.ts` builds the authenticated remote URL; `push.ts` pushes and
-reads push failures; `scratch.ts` is the detached scratch worktree base sync and stack rebase run
-in; `pr-refs.ts` names every ref, branch and worktree Revv creates; `BranchPushLock` allows one
-push per remote branch. Revv never runs `git worktree prune` (the clone may be the user's
-repository) and never moves a user's branch by name.
+is the command surface: a read that can't fail meaningfully answers `null`/`[]`, one whose caller
+needs the data throws `GitCommandError`, which Effect code types through `gitTry`
+(`GitOperationError`). `remote.ts` builds the authenticated remote URL; `push.ts` pushes and
+reads every push failure one way (`pushOutcome`); `scratch.ts` is the detached scratch worktree
+base sync and stack rebase run in; `pr-refs.ts` names every ref and branch Revv creates;
+`BranchPushLock` allows one push per remote branch. Revv never runs `git worktree prune` (the
+clone may be the user's repository) and never moves a user's branch by name. The boot layer
+kills the git processes still running at shutdown.
 
-`RepoCloneService` owns clones, the per-PR agent worktree (`acquirePrWorktree`), the per-job
-review worktree (`acquireReviewWorktree`) and file reads at a SHA. `PrWorkspace`
-(`services/workspace/`) owns the agent worktree's use: one claim per PR shared by chat turns,
-pushes and commit edits, the PR's chat session, and every operation on the agent's commits.
-This module is distinct from `GitHubGateway`, which only talks to the GitHub API and never
-touches the local filesystem.
+Every folder Revv uses on disk is keyed on the repository row (`services/clone/layout.ts`), so
+two accounts tracking one repository never share one: a managed clone at
+`<base>/<owner>/<name>` (or `<name>.<row id>` when another row holds that), every worktree
+under `<base>/.worktrees/<row id>/`. `RepoCloneService` (`services/clone/`) owns clones, their
+status and its broadcast, the per-job review worktree (`acquireReviewWorktree`) and file reads at
+a SHA; a folder belongs to one row, and a clone is deleted only when Revv manages it and no
+other row uses it. `AgentWorktrees` (`services/workspace/agent-worktrees.ts`) owns the per-PR
+agent worktree and the claim on it: one chat turn, push, commit edit or prune at a time, so the
+prune when a PR closes waits for a running turn. `PrWorkspace` (`services/workspace/`) owns
+the worktree's use: the PR's chat session and every operation on the agent's commits. Every
+push Revv makes to a PR's branch, and every merge, is recorded through `PrMirror`. These
+modules are distinct from `GitHubGateway`, which only talks to the GitHub API and never touches
+the local filesystem.
 
 ## Import Direction
 
@@ -129,7 +139,7 @@ Feature modules depend inward on platform seams:
 - Agent content writes go through MCP tool handlers; orchestrators own lifecycle/status writes.
 - Routes resolve account context through `GitHubAccounts`, not `SecretStore` directly.
 - Only `services/git/` spawns git, through its runner; everything else calls `services/git/ops`
-  (or `RepoCloneService` / `PrWorkspace` for worktrees).
+  (or `RepoCloneService` / `AgentWorktrees` / `PrWorkspace` for worktrees).
 
 `bun run check:import-boundaries` enforces the PR-context, secret-store, GitHub-transport, and Local-Git import rules and
 names the remaining legacy exceptions scheduled for later waves.
