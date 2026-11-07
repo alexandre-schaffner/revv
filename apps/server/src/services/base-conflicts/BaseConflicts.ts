@@ -68,7 +68,7 @@ export class BaseConflictsService extends Context.Service<
       readonly prId: string;
       readonly accountId: string;
       readonly expectedHeadSha: string;
-    }) => Effect.Effect<ReadableStream<BaseConflictFrame>, BaseConflictsError, SettingsService>;
+    }) => Effect.Effect<ReadableStream<BaseConflictFrame>, BaseConflictsError>;
   }
 >()("BaseConflictsService") {}
 
@@ -343,7 +343,7 @@ export const BaseConflictsServiceLive = Layer.effect(
         const conflictFiles = started.kind === "conflict" ? started.files : [];
         const result = (frame: Extract<BaseConflictFrame, { kind: "result" }>) => frame;
 
-        return yield* runConflictResolve<BaseConflictFrame, never>({
+        return yield* runConflictResolve<BaseConflictFrame>({
           opening: [
             {
               kind: "status",

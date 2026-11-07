@@ -431,9 +431,9 @@ export const PrWorkspaceLive = Layer.effect(
           }),
         ),
 
-      mergeAndPush: (params) => push.mergeAndPush(params).pipe(Effect.provide(context)),
-      resolveAndPush: (prId) => push.resolveAndPush(prId).pipe(Effect.provide(context)),
-      cherryPickAndPush: (params) => push.cherryPickAndPush(params).pipe(Effect.provide(context)),
+      mergeAndPush: push.mergeAndPush,
+      resolveAndPush: push.resolveAndPush,
+      cherryPickAndPush: push.cherryPickAndPush,
     };
   }),
 );

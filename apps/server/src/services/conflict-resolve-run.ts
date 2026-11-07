@@ -55,13 +55,13 @@ export const queueToStream = <F>(frames: Queue.Queue<F>): ReadableStream<F> =>
     },
   });
 
-export interface ConflictResolveRun<F, R> {
+export interface ConflictResolveRun<F> {
   /** Sent before the agent starts. */
   readonly opening: readonly F[];
   /** The agent working the conflicts, or null when there are none. */
   readonly agent: Effect.Effect<ReadableStream<RawChatStreamFrame>, AiError> | null;
   /** Verify the agent's work and push it: the frame that ends a run that got this far. */
-  readonly finish: (offer: (frame: F) => Effect.Effect<void>) => Effect.Effect<F, unknown, R>;
+  readonly finish: (offer: (frame: F) => Effect.Effect<void>) => Effect.Effect<F, unknown>;
   /** The frame that ends a run that failed with `message`, once what it left is backed out. */
   readonly failed: (message: string) => Effect.Effect<F>;
   /** Every frame is progress: holders with an idle expiry re-arm it. */
@@ -70,9 +70,9 @@ export interface ConflictResolveRun<F, R> {
   readonly cleanup: Effect.Effect<void>;
 }
 
-export const runConflictResolve = <F, R>(
-  run: ConflictResolveRun<F | AgentProgressFrame, R>,
-): Effect.Effect<ReadableStream<F | AgentProgressFrame>, never, R> =>
+export const runConflictResolve = <F>(
+  run: ConflictResolveRun<F | AgentProgressFrame>,
+): Effect.Effect<ReadableStream<F | AgentProgressFrame>> =>
   Effect.gen(function* () {
     const frames = yield* Queue.unbounded<F | AgentProgressFrame>();
     const offer = (frame: F | AgentProgressFrame) =>

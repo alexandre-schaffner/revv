@@ -31,7 +31,6 @@ import { logError } from "../../logger";
 import { AiService } from "../Ai";
 import { DbService } from "../Db";
 import { type PrContextError, PrContextService } from "../PrContext";
-import type { SettingsService } from "../Settings";
 import { latestCompleteWalkthrough } from "../walkthrough/content";
 import { PrWorkspace } from "../workspace/PrWorkspace";
 import { ChatSessionService } from "./ChatSession";
@@ -77,7 +76,6 @@ const MAX_PROMPT_ISSUES = 40;
 export const ChatTurnServiceLive = Layer.effect(
   ChatTurnService,
   Effect.gen(function* () {
-    const context = yield* Effect.context<SettingsService>();
     const { db } = yield* DbService;
     const prCtx = yield* PrContextService;
     const workspace = yield* PrWorkspace;
@@ -226,7 +224,6 @@ export const ChatTurnServiceLive = Layer.effect(
           // The turn outlives the request: its stream closes the scope.
           const scope = yield* Scope.make();
           return yield* prepare(params, scope).pipe(
-            Effect.provide(context),
             Effect.onError(() => Scope.close(scope, Exit.void)),
           );
         }),

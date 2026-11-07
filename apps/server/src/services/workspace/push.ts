@@ -48,7 +48,6 @@ import { lsRemoteHead, pushLeased, pushNewBranch, pushOutcome } from "../git/pus
 import { authedRemoteUrl } from "../git/remote";
 import type { PrContextBasic, PrContextError } from "../PrContext";
 import type { PrMirror } from "../PrMirror";
-import type { SettingsService } from "../Settings";
 import {
   countProposed,
   healAbandonedMerge,
@@ -88,8 +87,6 @@ export type AttemptPushResult =
   | { readonly status: "conflict"; readonly files: readonly string[]; readonly branch: string }
   | { readonly status: "remote-changed"; readonly branch: string }
   | { readonly status: "ref-exists"; readonly branch: string };
-
-type PushR = SettingsService;
 
 interface PushDeps {
   readonly resolve: (prId: string) => Effect.Effect<PrContextBasic, PrContextError>;
@@ -340,8 +337,8 @@ export function makeAgentPush(deps: PushDeps) {
     readonly prId: string;
     readonly newBranchName?: string;
     readonly force?: boolean;
-  }): Effect.Effect<AttemptPushResult, ChatPushError, PushR> =>
-    Effect.scoped<AttemptPushResult, ChatPushError, PushR | Scope.Scope>(
+  }): Effect.Effect<AttemptPushResult, ChatPushError> =>
+    Effect.scoped<AttemptPushResult, ChatPushError, Scope.Scope>(
       params.newBranchName !== undefined
         ? pushToNewBranch(params.prId, params.newBranchName, params.force ?? false)
         : Effect.gen(function* () {
@@ -368,7 +365,7 @@ export function makeAgentPush(deps: PushDeps) {
 
   const resolveAndPush = (
     prId: string,
-  ): Effect.Effect<ReadableStream<ResolvePushFrame>, ChatPushError, PushR> =>
+  ): Effect.Effect<ReadableStream<ResolvePushFrame>, ChatPushError> =>
     Effect.gen(function* () {
       // The run outlives the request; the stream closes the scope.
       const scope = yield* Scope.make();
@@ -412,7 +409,7 @@ export function makeAgentPush(deps: PushDeps) {
         })
         .pipe(Effect.onError(() => backOut.pipe(Effect.andThen(release))));
 
-      return yield* runConflictResolve<ResolvePushFrame, PushR>({
+      return yield* runConflictResolve<ResolvePushFrame>({
         opening: [
           { kind: "status", message: `Re-running merge into ${ctx.pr.sourceBranch}...` },
           { kind: "conflict-files", files: merged.files },
@@ -449,7 +446,7 @@ export function makeAgentPush(deps: PushDeps) {
   const cherryPickAndPush = (params: {
     readonly prId: string;
     readonly shas: readonly string[];
-  }): Effect.Effect<AttemptPushResult, ChatPushError, PushR> =>
+  }): Effect.Effect<AttemptPushResult, ChatPushError> =>
     Effect.scoped(
       Effect.gen(function* () {
         if (params.shas.length === 0)
