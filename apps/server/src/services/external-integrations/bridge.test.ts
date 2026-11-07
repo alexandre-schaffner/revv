@@ -15,6 +15,12 @@ const BRIDGE = resolve(
 );
 const REQUEST = `${JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/list" })}\n`;
 
+// Bun routes even loopback requests through HTTP_PROXY, so a developer's proxy
+// would answer the bridge instead of the stub (with a 407, say).
+const BRIDGE_ENV = Object.fromEntries(
+  Object.entries(process.env).filter(([name]) => !/^(https?|all|no)_proxy$/i.test(name)),
+);
+
 const servers: { stop: () => void }[] = [];
 const temporaryDirectories: string[] = [];
 
@@ -39,7 +45,7 @@ async function askBridge(
   const child = Bun.spawn(["bun", "run", BRIDGE], {
     cwd,
     env: {
-      ...process.env,
+      ...BRIDGE_ENV,
       REVV_INTEGRATION_TOKEN: "test-token",
       REVV_API_URL: apiUrl,
     },

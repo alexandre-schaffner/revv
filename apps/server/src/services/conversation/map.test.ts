@@ -291,7 +291,7 @@ describe("mapConversation", () => {
 });
 
 describe("collectAvatarUrls", () => {
-  test("collects each login once", () => {
+  test("maps each user and bot login to its avatar, and skips teams", () => {
     const urls = collectAvatarUrls(rawConversation());
     expect(urls.get("alice")).toBe("https://avatars.example/alice");
     expect(urls.get("ci-bot")).toBe("https://a/bot");

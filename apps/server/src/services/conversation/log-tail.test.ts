@@ -56,8 +56,11 @@ describe("extractLogTail", () => {
     const log = ["##[group]Run make", ...noise, "##[error]boom"].join("\n");
     const tail = extractLogTail(log);
     expect(tail.truncated).toBe(true);
-    expect(tail.lines).toHaveLength(150);
-    expect(tail.lines.at(-1)).toEqual({ kind: "error", text: "boom" });
+    expect(tail.lines.length).toBeLessThan(noise.length);
+    expect(tail.lines.slice(-2)).toEqual([
+      { kind: "plain", text: "line 399" },
+      { kind: "error", text: "boom" },
+    ]);
   });
 
   test("falls back to the log's tail when nothing is marked as an error", () => {

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Effect, Layer, Result } from "effect";
+import { Effect, Fiber, Layer, Result } from "effect";
+import { TestClock } from "effect/testing";
 import { createDb, type Db } from "../../db/index";
 import { GitHubApiError, GitHubNotFoundError, GitHubRateLimitError } from "../../domain/errors";
-import { apiBaseForHost } from "../../domain/github-host";
 import { STACK_UNSEEN, stackSeen } from "../../domain/observed-pr";
 import { DbService } from "../Db";
 import { GitHubEtagCacheLive } from "../GitHubEtagCache";
@@ -61,6 +61,20 @@ function stubFetch(respond: (call: FetchCall, index: number) => Response) {
     return respond(call, calls.length - 1);
   }) as typeof fetch;
   return calls;
+}
+
+/** Runs `effect` on a virtual clock, so a retry's backoff passes as soon as it starts. */
+function skippingBackoff<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(effect);
+      while (fiber.pollUnsafe() === undefined) {
+        yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 1)));
+        yield* TestClock.adjust("2 seconds");
+      }
+      return yield* Fiber.join(fiber);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
 }
 
 function rawComment(id: number): Record<string, unknown> {
@@ -286,7 +300,6 @@ describe("GitHubGateway per-host API base", () => {
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
-    expect(calls[0]?.url).toBe(`${apiBaseForHost("ghe.example.com")}/repos/octo/repo/pulls/7`);
     expect(calls[0]?.url).toBe("https://api.ghe.example.com/repos/octo/repo/pulls/7");
     expect(calls[1]?.url).toBe("https://api.github.com/repos/octo/repo/pulls/7");
   });
@@ -457,16 +470,13 @@ describe("searchClosedInWindow", () => {
 // ~14s of backoff. In the sequential thread sweep that backoff stalls every PR
 // queued behind the failing one, so the split is load-bearing, not cosmetic.
 describe("GitHubGateway error classification", () => {
-  // One failure only: the retry schedule is exponential from 2s, so failing
-  // twice would push this past a sane test timeout without proving anything
-  // more than failing once does.
   it("retries a 5xx as transient", async () => {
     const db = createDb(":memory:");
     const calls = stubFetch((_call, index) =>
       index < 1 ? new Response("boom", { status: 503 }) : responseJson(gqlPrPage([gqlPr(1)])),
     );
 
-    const prs = await Effect.runPromise(
+    const prs = await skippingBackoff(
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
         return yield* github.prs.listOpen(testClient, "octo/repo", "repo-1");
