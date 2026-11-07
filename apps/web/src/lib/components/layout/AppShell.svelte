@@ -392,6 +392,23 @@ function onRightHandleDblClick(): void {
 		display: flex;
 	}
 
+	/* pointer-events:none lets clicks through the padding around the pills. */
+	.tabs-float {
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		display: flex;
+		justify-content: center;
+		padding: 10px 0 8px;
+		z-index: 10;
+		pointer-events: none;
+	}
+
+	:where(.tabs-float) :global(*) {
+		pointer-events: auto;
+	}
+
 	.page-slot {
 		flex: 1;
 		min-height: 0;
