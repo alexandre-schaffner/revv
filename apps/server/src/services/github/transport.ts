@@ -8,6 +8,7 @@
  * `scripts/check-import-boundaries.ts`); everything else reaches GitHub
  * through `GitHubGateway` with a {@link GitHubClient}.
  */
+import { spanName } from "@revv/shared/telemetry";
 import { Effect, Schedule } from "effect";
 import {
   GitHubAccessDeniedError,
@@ -210,7 +211,7 @@ function exchange<A>(
   init: { readonly headers?: Record<string, string>; readonly redirect?: RequestRedirect } = {},
 ): Effect.Effect<{ readonly status: number; readonly value: A }, GitHubError> {
   const method = spec.method ?? "GET";
-  return Effect.withSpan("GitHub.request", {
+  return Effect.withSpan(spanName("github", "request"), {
     attributes: { path: spec.path, method },
   })(
     Effect.gen(function* () {
@@ -410,7 +411,7 @@ export function makeHttp(
     tolerateErrors: boolean,
   ): Effect.Effect<{ data: T; errors: ReadonlyArray<GraphqlError> }, GitHubError> => {
     const operationName = query.match(/(?:query|mutation)\s+(\w+)/)?.[1] ?? "unknown";
-    return Effect.withSpan("GitHub.graphql", { attributes: { operationName } })(
+    return Effect.withSpan(spanName("github", "graphql"), { attributes: { operationName } })(
       exchange(
         client,
         { method: "POST", path: "/graphql", body: { query, variables } },
@@ -644,7 +645,9 @@ export function paginateGraphql<T, N>(
  * GitHub Enterprise the URL carries its own short-lived signature.
  */
 export function fetchDataUrl(url: string): Effect.Effect<string, GitHubError> {
-  return Effect.withSpan("GitHub.request", { attributes: { path: url, method: "GET" } })(
+  return Effect.withSpan(spanName("github", "request"), {
+    attributes: { path: url, method: "GET" },
+  })(
     githubTryPromise({
       try: async () => {
         const res = await send(url, {}, url);
@@ -673,7 +676,7 @@ export function oauthPost(
   { readonly status: number; readonly statusText: string; readonly text: string },
   GitHubError
 > {
-  return Effect.withSpan("GitHub.request", { attributes: { path, method: "POST" } })(
+  return Effect.withSpan(spanName("github", "request"), { attributes: { path, method: "POST" } })(
     githubTryPromise({
       try: async () => {
         const res = await send(

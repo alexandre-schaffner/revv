@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isOpenLayer, type StackBriefStatus } from "@revv/shared";
+import { SPAN_ATTR } from "@revv/shared/telemetry";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { runStackBriefAgentViaAcp } from "../../ai/providers/stack-brief-acp";
@@ -222,7 +223,9 @@ export const StackBriefJobsLive = Layer.effect(
           instrument: (_run, effect) =>
             effect.pipe(
               withTraceAnchor(briefId),
-              Effect.withSpan("StackBriefJobs.job", { attributes: { briefId } }),
+              Effect.withSpan("StackBriefJobs.job", {
+                attributes: { [SPAN_ATTR.briefId]: briefId },
+              }),
             ),
         })
         .pipe(Effect.asVoid);

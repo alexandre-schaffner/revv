@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readdirSync, realpathSync, rmdirSync } from "nod
 import { rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import type { CloneStatus, Repository } from "@revv/shared";
+import { spanName } from "@revv/shared/telemetry";
 import { and, asc, eq, isNotNull, or } from "drizzle-orm";
 import { Context, Effect, Layer, type Scope } from "effect";
 import { repositories, walkthroughs } from "../../db/schema/index";
@@ -477,7 +478,7 @@ export const repoCloneLayer = (base: string) =>
           }
           inFlightClones.add(row.id);
           yield* cloneManaged(row, opts?.basePath).pipe(
-            Effect.withSpan("RepoClone.ensureClone", {
+            Effect.withSpan(spanName("repoClone", "ensureClone"), {
               attributes: { repoFullName: row.fullName },
             }),
             Effect.ensuring(Effect.sync(() => inFlightClones.delete(row.id))),

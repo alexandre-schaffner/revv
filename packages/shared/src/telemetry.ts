@@ -22,6 +22,16 @@ export const SPAN_NAMESPACE = {
   repoClone: "RepoClone",
 } as const;
 
+export type SpanNamespace = keyof typeof SPAN_NAMESPACE;
+
+/** `<prefix>.<operation>`: a span name the collector files under `ns`'s category. */
+export function spanName<N extends SpanNamespace, O extends string>(
+  ns: N,
+  operation: O,
+): `${(typeof SPAN_NAMESPACE)[N]}.${O}` {
+  return `${SPAN_NAMESPACE[ns]}.${operation}`;
+}
+
 /** OpenTelemetry semantic-convention keys, plus Revv's own KPI keys. */
 export const SPAN_ATTR = {
   httpMethod: "http.request.method",

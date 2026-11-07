@@ -1,3 +1,4 @@
+import { spanName } from "@revv/shared/telemetry";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
 import type { McpToolResult, ToolSpec, ToolSpecBundle } from "../../ai/providers/mcp-tool-gateway";
@@ -172,7 +173,7 @@ async function handleToolsCall<Ctx, Meta, Result extends McpToolResult>(
     const anchorKey = options.trace?.key(resolved.meta) ?? null;
     const result = await withGraftedSpan(
       anchorKey,
-      `Mcp.${name}`,
+      spanName("mcp", name),
       {
         attributes: {
           mcp_tool: name,
