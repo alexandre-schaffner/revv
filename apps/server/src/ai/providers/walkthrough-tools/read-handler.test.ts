@@ -148,7 +148,7 @@ async function read(db: Db) {
 }
 
 describe("get_stack_context", () => {
-  it("is registered on the shared tool surface both transports read", () => {
+  it("is registered on the walkthrough tool surface", () => {
     expect(TOOL_SPECS.map((s) => s.name)).toContain("get_stack_context");
   });
 

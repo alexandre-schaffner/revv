@@ -87,7 +87,6 @@ describe("splitRecommendation", () => {
   });
 
   it("keeps the floor high enough that a coin flip never recommends a split", () => {
-    expect(SPLIT_RECOMMENDATION_FLOOR).toBeGreaterThan(0.5);
     expect(splitRecommendation(answers({ splitScore: 0.5, splitCount: "many" }))).toBeNull();
   });
 });

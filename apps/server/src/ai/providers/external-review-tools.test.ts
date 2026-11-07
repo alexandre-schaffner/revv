@@ -6,11 +6,12 @@ import {
   type WalkthroughStreamEvent,
 } from "@revv/shared";
 import { createDb, type Db } from "../../db";
+import { EXTERNAL_AGENT_SCOPES } from "../../services/ExternalIntegrations";
 import type { WalkthroughRequestOutcome } from "../../services/walkthrough-request";
 import {
   EXTERNAL_REVIEW_TOOL_SPECS,
   type ExternalReviewToolContext,
-  scopeForExternalTool,
+  hasExternalToolScope,
 } from "./external-review-tools";
 
 const HEAD_SHA = "a".repeat(40);
@@ -126,12 +127,15 @@ function tool(name: string) {
 }
 
 describe("external review tools", () => {
-  it("declares exactly one authorization scope on every exposed tool", () => {
-    expect(EXTERNAL_REVIEW_TOOL_SPECS).toHaveLength(13);
-    expect(new Set(EXTERNAL_REVIEW_TOOL_SPECS.map((spec) => spec.name)).size).toBe(13);
+  it("authorizes each tool under its own scope only, and never an unknown tool", () => {
+    const names = EXTERNAL_REVIEW_TOOL_SPECS.map((spec) => spec.name);
+    expect(new Set(names).size).toBe(names.length);
     for (const spec of EXTERNAL_REVIEW_TOOL_SPECS) {
-      expect(scopeForExternalTool(spec.name)).toBe(spec.scope);
+      const others = EXTERNAL_AGENT_SCOPES.filter((scope) => scope !== spec.scope);
+      expect(hasExternalToolScope(spec.name, [spec.scope])).toBe(true);
+      expect(hasExternalToolScope(spec.name, others)).toBe(false);
     }
+    expect(hasExternalToolScope("delete_everything", EXTERNAL_AGENT_SCOPES)).toBe(false);
   });
 
   it("records issue resolution once and treats an identical retry as a no-op", async () => {

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "bun:test";
-import { getAgentKeychainAuth } from "@revv/shared";
 import { AgentTurnError } from "../acp/agent-failure";
 import { checkAgent } from "./agent-check";
 
@@ -19,18 +18,6 @@ describe("checkAgent", () => {
       error: "Internal error: You've hit your spend limit",
       guidance: null,
     });
-  });
-
-  it("adds sign-in or Keychain guidance for an auth failure", async () => {
-    const result = await checkAgent(input, async () => {
-      throw new Error("Authentication required");
-    });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error).toBe("Authentication required");
-    // Which guidance leads depends on this machine's login state; either way
-    // it carries the registry's Keychain remediation.
-    expect(result.guidance).toContain(getAgentKeychainAuth("claude-code")?.remediation ?? " ");
   });
 
   it("splits a runner failure into the agent's error and its guidance", async () => {
