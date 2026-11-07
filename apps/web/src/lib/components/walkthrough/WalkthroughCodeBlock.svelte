@@ -48,7 +48,6 @@ function offsetLineNumbers(node: HTMLElement): void {
 			style:--diffs-min-number-column-width={gutterWidth}
 			use:pierreFile={{
 				file: { name: block.filePath, contents: block.content, lang: block.language },
-				prerenderedHtml: block.prerenderedHtml,
 				onPostRender: startLine > 1 ? offsetLineNumbers : undefined,
 			}}
 		></div>

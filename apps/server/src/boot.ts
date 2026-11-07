@@ -10,8 +10,8 @@ import { withGitHubOrigin } from "./observability/github-ledger/origin";
 import { DbMaintenance } from "./services/DbMaintenance";
 import { GitHubAccounts } from "./services/github/accounts";
 import { PollScheduler } from "./services/PollScheduler";
-import { ensureHighlighter } from "./services/PrerenderCache";
 import { ProjectRecapJobs } from "./services/ProjectRecapJobs";
+import { ensureHighlighter } from "./services/pr-file-prerender";
 import { RecapScheduler } from "./services/RecapScheduler";
 import { RepoCloneService } from "./services/RepoClone";
 import { StackBriefJobs } from "./services/stacks/StackBriefJobs";
@@ -81,8 +81,7 @@ export const BootLive = Layer.effectDiscard(
         step("stack-review", stackReview.resumePending()),
         step("stack-merge", stackMerge.expireStale()),
         step("db-maintenance", dbMaintenance.start()),
-        // The shared highlighter every prerender uses, so the first
-        // walkthrough emit hits a warm one.
+        // Warm, so the first PR files request doesn't pay for it.
         step(
           "prerender",
           Effect.tryPromise(() => ensureHighlighter()),

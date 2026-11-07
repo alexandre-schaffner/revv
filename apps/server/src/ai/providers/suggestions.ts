@@ -9,15 +9,19 @@
 // renders sensible defaults instead of going blank.
 
 import { CHAT_SUGGESTION_COUNT, CHAT_SUGGESTION_FALLBACKS } from "@revv/shared";
+import { Effect } from "effect";
 import { debug, logError } from "../../logger";
-import type { AgentLaunch } from "../acp/agent-launch";
+import { DiffCacheService } from "../../services/DiffCache";
+import { PullRequestService } from "../../services/PullRequest";
+import { WalkthroughService } from "../../services/Walkthrough";
+import { type AgentLaunch, resolveAgentLaunch } from "../acp/agent-launch";
 import { promptOnce } from "../acp/run-turn";
 
 const SUGGESTIONS_TIMEOUT_MS = 30_000;
 const MAX_PROMPT_LENGTH = 80;
 const MAX_FILES_LISTED = 30;
 
-export interface SuggestionsWalkthroughContext {
+interface SuggestionsWalkthroughContext {
   readonly summary: string;
   readonly riskLevel: string;
   readonly sentiment: string | null;
@@ -29,7 +33,7 @@ export interface SuggestionsWalkthroughContext {
   }>;
 }
 
-export interface GenerateSuggestionsInput {
+interface GenerateSuggestionsInput {
   readonly prTitle: string;
   readonly prBody: string | null;
   readonly changedFiles: ReadonlyArray<string>;
@@ -175,7 +179,7 @@ async function generateViaAcp(input: GenerateSuggestionsInput): Promise<string[]
   return parsed;
 }
 
-export async function generateSuggestions(input: GenerateSuggestionsInput): Promise<string[]> {
+async function generateSuggestions(input: GenerateSuggestionsInput): Promise<string[]> {
   try {
     const result = await generateViaAcp(input);
     debug(
@@ -191,4 +195,87 @@ export async function generateSuggestions(input: GenerateSuggestionsInput): Prom
     );
     return [...CHAT_SUGGESTION_FALLBACKS];
   }
+}
+
+// Keyed on `${prId}:${headSha}:${agent}:${model}`, so any of those changing
+// means a fresh model call; entries expire lazily on read. A reconstructible
+// cache (invariant 1): it only saves re-spending tokens when the user reopens
+// a PR within one server session.
+
+interface SuggestionsCacheEntry {
+  readonly suggestions: string[];
+  readonly expiresAt: number;
+}
+
+const SUGGESTIONS_CACHE_TTL_MS = 60 * 60 * 1000;
+const SUGGESTIONS_CACHE_MAX_ENTRIES = 256;
+const suggestionsCache = new Map<string, SuggestionsCacheEntry>();
+
+function readSuggestionsCache(key: string): string[] | null {
+  const entry = suggestionsCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt < Date.now()) {
+    suggestionsCache.delete(key);
+    return null;
+  }
+  return entry.suggestions;
+}
+
+function writeSuggestionsCache(key: string, suggestions: string[]): void {
+  if (suggestionsCache.size >= SUGGESTIONS_CACHE_MAX_ENTRIES) {
+    const oldest = suggestionsCache.keys().next().value;
+    if (oldest !== undefined) suggestionsCache.delete(oldest);
+  }
+  suggestionsCache.set(key, {
+    suggestions,
+    expiresAt: Date.now() + SUGGESTIONS_CACHE_TTL_MS,
+  });
+}
+
+/**
+ * Starter prompts for a PR, from its metadata, its cached diff (never fetched
+ * here) and its complete walkthrough for the current head when there is one.
+ */
+export function suggestionsForPr(prId: string, accountId: string) {
+  return Effect.gen(function* () {
+    const launch = yield* resolveAgentLaunch("suggestions");
+    if (!launch) return [...CHAT_SUGGESTION_FALLBACKS];
+
+    const pr = yield* (yield* PullRequestService).getPr(prId, accountId);
+    const key = `${prId}:${pr.headSha ?? "no-head"}:${launch.agent}:${launch.model}`;
+    const cached = readSuggestionsCache(key);
+    if (cached !== null) return cached;
+
+    const walkthrough = pr.headSha
+      ? yield* (yield* WalkthroughService).getCached(prId, pr.headSha)
+      : null;
+    const cachedFiles = yield* (yield* DiffCacheService).getCachedFiles(prId);
+
+    const suggestions = yield* Effect.promise(() =>
+      generateSuggestions({
+        prTitle: pr.title,
+        prBody: pr.body,
+        changedFiles: (cachedFiles ?? []).map((f) => f.path),
+        additions: pr.additions,
+        deletions: pr.deletions,
+        walkthrough: walkthrough
+          ? {
+              summary: walkthrough.summary,
+              riskLevel: walkthrough.riskLevel,
+              sentiment: walkthrough.sentiment ?? null,
+              issues: walkthrough.issues.map((i) => ({
+                severity: i.severity,
+                title: i.title,
+                description: i.description,
+                filePath: i.filePath ?? null,
+              })),
+            }
+          : null,
+        launch,
+      }),
+    );
+
+    writeSuggestionsCache(key, suggestions);
+    return suggestions;
+  });
 }

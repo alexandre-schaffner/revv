@@ -1,44 +1,28 @@
-import type { DiffLineAnnotation } from "@pierre/diffs";
-import {
-  buildGitPatchHeader,
-  CHAT_SUGGESTION_FALLBACKS,
-  type CommentThread,
-  guessImageContentType,
-  PR_DIFF_RENDER_OPTIONS,
-} from "@revv/shared";
+import { guessImageContentType } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { resolveAgentLaunch } from "../ai/acp/agent-launch";
-import {
-  generateSuggestions,
-  type SuggestionsWalkthroughContext,
-} from "../ai/providers/suggestions";
+import { suggestionsForPr } from "../ai/providers/suggestions";
 import { pinnedPullRequests } from "../db/schema";
 import { tryDb } from "../effects/db-try";
-import { logError } from "../logger";
-import { type CachedDiffFile, DiffCacheService, toCachedDiffFiles } from "../services/DiffCache";
+import { DiffCacheService, toCachedDiffFiles } from "../services/DiffCache";
 import { GitHubGateway } from "../services/github/gateway";
 import { checkMergeEligibility } from "../services/merge-eligibility";
 import { PollScheduler } from "../services/PollScheduler";
 import { PrContextService } from "../services/PrContext";
-import {
-  prerenderDiff,
-  SSR_PATCH_BYTE_LIMIT,
-  SSR_PATCH_LINE_LIMIT,
-  type SsrDiffOptions,
-} from "../services/PrerenderCache";
 import { PrMirror } from "../services/PrMirror";
 import { PullRequestService } from "../services/PullRequest";
 import { resolvePullRequestLink } from "../services/pr-deep-link";
+import {
+  prFilesWithPrerender,
+  SSR_PATCH_BYTE_LIMIT,
+  SSR_PATCH_LINE_LIMIT,
+} from "../services/pr-file-prerender";
 import { RepoCloneService } from "../services/RepoClone";
 import { RepositoryService } from "../services/Repository";
 import { ReviewService } from "../services/Review";
-import { WalkthroughService } from "../services/Walkthrough";
 import { runRoute, withAccount } from "./middleware";
 import { ownedBy } from "./ownership";
-
-const PR_DIFF_SSR_OPTIONS: SsrDiffOptions = PR_DIFF_RENDER_OPTIONS;
 
 /**
  * Resolve the `?at=` query param to the SHA the review should be scoped to,
@@ -56,55 +40,6 @@ function resolveScopedSha(at: string | undefined, headSha: string | null): strin
   const shorter = Math.min(at.length, headSha.length);
   const isHead = at.slice(0, shorter).toLowerCase() === headSha.slice(0, shorter).toLowerCase();
   return isHead ? null : at;
-}
-
-function buildPrFilePatch(file: CachedDiffFile): string {
-  const header = buildGitPatchHeader({
-    path: file.path,
-    oldPath: file.oldPath,
-    isNew: file.status === "added",
-    isDeleted: file.status === "removed",
-  });
-  return file.patch !== null ? `${header}\n${file.patch}` : header;
-}
-
-function annotationsForFile(
-  filePath: string,
-  threads: CommentThread[],
-): DiffLineAnnotation<unknown>[] {
-  return threads
-    .filter((thread) => thread.filePath === filePath)
-    .map((thread) => ({
-      side: thread.diffSide === "old" ? "deletions" : "additions",
-      lineNumber: thread.startLine,
-      metadata: null,
-    }));
-}
-
-/**
- * The prerendered HTML, or undefined when the file has no patch (binary),
- * exceeds the SSR guardrails, or rendering failed: the client renders it then.
- */
-async function prerenderPrFile(
-  file: CachedDiffFile,
-  threads: CommentThread[],
-): Promise<string | undefined> {
-  if (file.patch === null) return undefined;
-  try {
-    const annotations = annotationsForFile(file.path, threads);
-    const html = await prerenderDiff(buildPrFilePatch(file), PR_DIFF_SSR_OPTIONS, annotations);
-    return html ?? undefined;
-  } catch (err) {
-    logError("pr-files-prerender", `prerender failed for ${file.path}:`, err);
-    return undefined;
-  }
-}
-
-function selectPrerenderPath(files: CachedDiffFile[], activePath?: string): string | null {
-  if (activePath !== undefined && files.some((file) => file.path === activePath)) {
-    return activePath;
-  }
-  return files[0]?.path ?? null;
 }
 
 export const prRoutes = new Elysia({ prefix: "/api/prs" })
@@ -174,26 +109,10 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
   .get(
     "/archived",
     async (ctx) => {
-      const params: {
-        repoId?: string;
-        since?: string;
-        until?: string;
-        cursor?: string;
-        limit?: number;
-        authorLogins?: string[];
-      } = {};
-      if (ctx.query.repo !== undefined) params.repoId = ctx.query.repo;
-      if (ctx.query.since !== undefined) params.since = ctx.query.since;
-      if (ctx.query.until !== undefined) params.until = ctx.query.until;
+      const params: { cursor?: string; authorLogins?: string[] } = {};
       if (ctx.query.cursor !== undefined) params.cursor = ctx.query.cursor;
-      if (ctx.query.limit !== undefined) {
-        const n = Number(ctx.query.limit);
-        if (Number.isFinite(n) && n > 0) params.limit = Math.floor(n);
-      }
       if (ctx.query.authors !== undefined) {
-        // Comma-separated author logins. GitHub logins never contain commas,
-        // so a plain split is safe. Empty segments (e.g. trailing comma) are
-        // dropped so an all-empty value behaves as "no author filter".
+        // GitHub logins never contain commas.
         const logins = ctx.query.authors.split(",").filter((s) => s.length > 0);
         if (logins.length > 0) params.authorLogins = logins;
       }
@@ -207,11 +126,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     },
     {
       query: t.Object({
-        repo: t.Optional(t.String()),
-        since: t.Optional(t.String()),
-        until: t.Optional(t.String()),
         cursor: t.Optional(t.String()),
-        limit: t.Optional(t.String()),
         authors: t.Optional(t.String()),
       }),
     },
@@ -230,60 +145,29 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     (ctx) =>
       runRoute(
         Effect.gen(function* () {
-          const prService = yield* PullRequestService;
-          const repoService = yield* RepositoryService;
+          const prContext = yield* PrContextService;
           const reviewService = yield* ReviewService;
           const github = yield* GitHubGateway;
           const diffCache = yield* DiffCacheService;
-          const { accountId } = ctx.account;
-
-          const pr = yield* prService.getPr(ctx.params.id, accountId);
-          const repo = yield* repoService.getRepoById(pr.repositoryId, accountId);
+          const { pr, repo, client } = yield* prContext.forPr(ctx.params.id, ctx.account.accountId);
 
           // Unscoped (or scoped to head) means the full PR diff (merge-base
           // 3-dot, matching GitHub's "Files changed" tab) served from the
           // `pr_diff_files` cache. `?at=<sha>` scopes the review to the PR as
           // of that commit via a `base...at` compare, which is three-dot too
           // and returns the same fields in the same hunks-only patch format.
-          // Ranged results deliberately never reach `pr_diff_files`: its PK
-          // `(prId, path)` has no range dimension and `cacheFiles` wipes the
-          // PR's rows, so caching them would poison the full-PR view.
+          // Ranged results never reach `pr_diff_files`: its PK `(prId, path)`
+          // has no range dimension and `cacheFiles` wipes the PR's rows.
           const atSha = resolveScopedSha(ctx.query.at, pr.headSha);
           const files =
             atSha === null || pr.baseSha === null
-              ? (yield* diffCache.getOrFetch(pr, repo.fullName, ctx.account.client)).files
+              ? (yield* diffCache.getOrFetch(pr, repo.fullName, client)).files
               : toCachedDiffFiles(
-                  yield* github.prs.compareFiles(
-                    ctx.account.client,
-                    repo.fullName,
-                    pr.baseSha,
-                    atSha,
-                  ),
+                  yield* github.prs.compareFiles(client, repo.fullName, pr.baseSha, atSha),
                 );
           const threads = yield* reviewService.threadsForPr(pr.id);
-
-          // SSR only the first visible file. Shiki tokenization is synchronous CPU
-          // work, so rendering every file before returning makes cold /files calls
-          // scale with total PR size. Oversized patches skip SSR entirely and use
-          // the client renderer instead.
-          const prerenderPath = selectPrerenderPath(files, ctx.query.active);
           return yield* Effect.promise(() =>
-            Promise.all(
-              files.map(async (f) => {
-                const prerenderedHtml =
-                  f.path === prerenderPath ? await prerenderPrFile(f, threads) : undefined;
-                return {
-                  path: f.path,
-                  oldPath: f.oldPath,
-                  patch: f.patch,
-                  additions: f.additions,
-                  deletions: f.deletions,
-                  isNew: f.status === "added",
-                  isDeleted: f.status === "removed",
-                  ...(prerenderedHtml ? { prerenderedHtml } : {}),
-                };
-              }),
-            ),
+            prFilesWithPrerender(files, threads, ctx.query.active),
           );
         }),
       ),
@@ -353,19 +237,13 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
       // sidesteps that — it works for any ref + path the user can see.
       return runRoute(
         Effect.gen(function* () {
-          const prService = yield* PullRequestService;
-          const repoService = yield* RepositoryService;
-          const { accountId, client } = ctx.account;
+          const prContext = yield* PrContextService;
           const github = yield* GitHubGateway;
-
-          const pr = yield* prService.getPr(ctx.params.id, accountId);
-          const side = ctx.query.side;
-          const sha = side === "base" ? pr.baseSha : pr.headSha;
+          const { pr, repo, client } = yield* prContext.forPr(ctx.params.id, ctx.account.accountId);
+          const sha = ctx.query.side === "base" ? pr.baseSha : pr.headSha;
           if (!sha) {
             return new Response("PR is missing the requested SHA", { status: 404 });
           }
-
-          const repo = yield* repoService.getRepoById(pr.repositoryId, accountId);
 
           const bytes = yield* github.files.rawBytes(client, repo.fullName, ctx.query.path, sha);
 
@@ -394,7 +272,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
   )
   .get("/:id/suggestions", (ctx) =>
     runRoute(
-      resolveSuggestionsForPr(ctx.params.id, ctx.account.accountId).pipe(
+      suggestionsForPr(ctx.params.id, ctx.account.accountId).pipe(
         Effect.map((suggestions) => ({ suggestions })),
       ),
     ),
@@ -446,15 +324,10 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
   .get("/:id/commits", (ctx) =>
     runRoute(
       Effect.gen(function* () {
-        const prService = yield* PullRequestService;
-        const repoService = yield* RepositoryService;
-        const { accountId, client } = ctx.account;
-        const githubService = yield* GitHubGateway;
-
-        const pr = yield* prService.getPr(ctx.params.id, accountId);
-        const repo = yield* repoService.getRepoById(pr.repositoryId, accountId);
-
-        return yield* githubService.prs.commits(client, repo.fullName, pr.externalId);
+        const prContext = yield* PrContextService;
+        const github = yield* GitHubGateway;
+        const { pr, repo, client } = yield* prContext.forPr(ctx.params.id, ctx.account.accountId);
+        return yield* github.prs.commits(client, repo.fullName, pr.externalId);
       }),
     ),
   )
@@ -572,116 +445,6 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
       ).pipe(Effect.as({ success: true })),
     ),
   );
-
-// Keyed on `${prId}:${headSha}:${agent}:${model}`, so any of those changing
-// means a fresh model call; entries expire lazily on read. A reconstructible
-// cache (invariant 1): it only saves re-spending tokens when the user reopens
-// a PR within one server session. A settings change needs no invalidation:
-// the next request lands on a different `model` key.
-
-interface SuggestionsCacheEntry {
-  readonly suggestions: string[];
-  readonly expiresAt: number;
-}
-
-const SUGGESTIONS_CACHE_TTL_MS = 60 * 60 * 1000;
-const SUGGESTIONS_CACHE_MAX_ENTRIES = 256;
-const suggestionsCache = new Map<string, SuggestionsCacheEntry>();
-
-function suggestionsCacheKey(prId: string, headSha: string, agent: string, model: string): string {
-  return `${prId}:${headSha}:${agent}:${model}`;
-}
-
-function readSuggestionsCache(key: string): string[] | null {
-  const entry = suggestionsCache.get(key);
-  if (!entry) return null;
-  if (entry.expiresAt < Date.now()) {
-    suggestionsCache.delete(key);
-    return null;
-  }
-  return entry.suggestions;
-}
-
-function writeSuggestionsCache(key: string, suggestions: string[]): void {
-  // Map iterates in insertion order, so the first key is the oldest.
-  if (suggestionsCache.size >= SUGGESTIONS_CACHE_MAX_ENTRIES) {
-    const oldest = suggestionsCache.keys().next().value;
-    if (oldest !== undefined) suggestionsCache.delete(oldest);
-  }
-  suggestionsCache.set(key, {
-    suggestions,
-    expiresAt: Date.now() + SUGGESTIONS_CACHE_TTL_MS,
-  });
-}
-
-function resolveSuggestionsForPr(prId: string, accountId: string) {
-  return Effect.gen(function* () {
-    const prService = yield* PullRequestService;
-    const walkthroughSvc = yield* WalkthroughService;
-    const diffCache = yield* DiffCacheService;
-
-    const launch = yield* resolveAgentLaunch("suggestions");
-    if (!launch) return [...CHAT_SUGGESTION_FALLBACKS];
-
-    const pr = yield* prService.getPr(prId, accountId);
-    const headSha = pr.headSha ?? "no-head";
-
-    const key = suggestionsCacheKey(prId, headSha, launch.agent, launch.model);
-    const cached = readSuggestionsCache(key);
-    if (cached !== null) return cached;
-
-    // Walkthrough context (best-effort) — only available when a
-    // walkthrough has reached `status='complete'` for the current head
-    // SHA. Without it we still produce PR-metadata-only suggestions.
-    let walkthroughContext: SuggestionsWalkthroughContext | null = null;
-    if (pr.headSha) {
-      const walkthrough = yield* walkthroughSvc.getCached(prId, pr.headSha);
-      if (walkthrough) {
-        walkthroughContext = {
-          summary: walkthrough.summary,
-          riskLevel: walkthrough.riskLevel,
-          sentiment: walkthrough.sentiment ?? null,
-          issues: walkthrough.issues.map((i) => ({
-            severity: i.severity,
-            title: i.title,
-            description: i.description,
-            filePath: i.filePath ?? null,
-          })),
-        };
-      }
-    }
-
-    // Diff files (best-effort, cache-only) — we explicitly do NOT
-    // hit GitHub here. If the diff isn't cached yet (e.g., the user
-    // just opened this PR for the first time), we still produce
-    // suggestions from title/body/walkthrough alone.
-    const cachedFiles = yield* diffCache.getCachedFiles(prId);
-    const changedFiles = (cachedFiles ?? []).map((f) => f.path);
-
-    const suggestions = yield* Effect.tryPromise({
-      try: () =>
-        generateSuggestions({
-          prTitle: pr.title,
-          prBody: pr.body,
-          changedFiles,
-          additions: pr.additions,
-          deletions: pr.deletions,
-          walkthrough: walkthroughContext,
-          launch,
-        }),
-      // Provider has its own internal fallback; this catch is
-      // belt-and-suspenders for the rare case where the Promise
-      // rejects despite the provider's try/catch.
-      catch: () => null as null,
-    }).pipe(
-      Effect.catch(() => Effect.succeed([...CHAT_SUGGESTION_FALLBACKS] as string[])),
-      Effect.map((v) => (v === null ? [...CHAT_SUGGESTION_FALLBACKS] : v)),
-    );
-
-    writeSuggestionsCache(key, suggestions);
-    return suggestions;
-  });
-}
 
 type PrMutationAction = "convert-to-draft" | "ready-for-review" | "close";
 
