@@ -298,6 +298,29 @@ describe("external review tools", () => {
     expect(ctx.pushedStatuses).toHaveLength(0);
   });
 
+  it("marks a local status on a GitHub thread pending, so the next pull pushes it instead of reverting it", async () => {
+    const db = seededDb();
+    db.$client.run(
+      "UPDATE comment_threads SET external_comment_id = '77', external_thread_id = 'PRRT_1' WHERE id = 'thread-1'",
+    );
+    const ctx = context(db);
+    const input = {
+      thread_id: "thread-1",
+      expected_head_sha: HEAD_SHA,
+      status: "resolved",
+      publish_to_github: false,
+    };
+
+    await tool("update_comment_status").handler(ctx.value, input);
+    await tool("update_comment_status").handler(ctx.value, input);
+
+    const thread = db.$client
+      .query("SELECT status, status_push_pending AS pending FROM comment_threads WHERE id = ?")
+      .get("thread-1");
+    expect(thread).toEqual({ status: "resolved", pending: 1 });
+    expect(ctx.threadEvents.map((e) => e.type)).toEqual(["thread:updated"]);
+  });
+
   it("reports the walkthrough a review request started", async () => {
     const db = seededDb();
     const ctx = context(db);

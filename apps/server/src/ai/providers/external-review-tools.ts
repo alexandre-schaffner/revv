@@ -1,12 +1,9 @@
 import { createHash } from "node:crypto";
 import type {
   ExternalAgentProvider,
-  ThreadMessage,
-  ThreadStatus,
   WalkthroughGenerationMode,
   WalkthroughStatus,
 } from "@revv/shared";
-import { isThreadResolved } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { commentThreads } from "../../db/schema/comment-threads";
@@ -14,7 +11,9 @@ import { reviewSessions } from "../../db/schema/review-sessions";
 import { threadMessages } from "../../db/schema/thread-messages";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
 import { walkthroughs } from "../../db/schema/walkthroughs";
+import { NotFoundError } from "../../domain/errors";
 import { type ExternalAgentScope, SHA_PATTERN } from "../../services/ExternalIntegrations";
+import { threadWrites } from "../../services/Review";
 import {
   decodeIssue,
   decodeStringArray,
@@ -194,70 +193,33 @@ const replyToCommentSpec: ExternalReviewToolSpec = {
     if (!located) return fail(`Thread '${parsed.thread_id}' is not part of this PR.`);
 
     const id = replyId(ctx.integrationId, parsed.thread_id, parsed.idempotency_key);
-    let message = ctx.db.select().from(threadMessages).where(eq(threadMessages.id, id)).get();
-    let newStatus: ThreadStatus | null = null;
-    let inserted = false;
-    if (message) {
-      if (message.threadId !== parsed.thread_id || message.body !== parsed.body) {
-        return fail(
-          "That idempotency_key was already used with different reply content. Use a new key.",
-        );
-      }
-    } else {
-      const createdAt = new Date().toISOString();
-      ctx.db.transaction(() => {
-        ctx.db
-          .insert(threadMessages)
-          .values({
-            id,
-            threadId: parsed.thread_id,
+    const recorded = ctx.db.select().from(threadMessages).where(eq(threadMessages.id, id)).get();
+    if (recorded && (recorded.threadId !== parsed.thread_id || recorded.body !== parsed.body)) {
+      return fail(
+        "That idempotency_key was already used with different reply content. Use a new key.",
+      );
+    }
+    let message = recorded;
+    if (!message) {
+      const written = ctx.db.transaction((tx) =>
+        threadWrites.reply(
+          tx,
+          parsed.thread_id,
+          {
             authorRole: "coder",
             authorName: ctx.providerName,
             body: parsed.body,
             messageType: "reply",
-            createdAt,
-          })
-          .run();
-        if (!isThreadResolved(located.thread.status)) {
-          newStatus = "pending_reviewer";
-          ctx.db
-            .update(commentThreads)
-            .set({ status: newStatus, resolvedAt: null })
-            .where(eq(commentThreads.id, parsed.thread_id))
-            .run();
-        }
-      });
+          },
+          id,
+        ),
+      );
+      if (written instanceof NotFoundError) return fail(`Thread '${parsed.thread_id}' is gone.`);
+      for (const envelope of written.envelopes) ctx.broadcastThreadEvent(envelope);
       message = ctx.db.select().from(threadMessages).where(eq(threadMessages.id, id)).get();
-      inserted = true;
     }
     if (!message) return fail("Reply was not persisted.");
-
-    const eventMessage: ThreadMessage = {
-      id: message.id,
-      threadId: message.threadId,
-      authorRole: "coder",
-      authorName: message.authorName,
-      authorLogin: message.authorLogin ?? null,
-      authorAvatarContent: null,
-      body: message.body,
-      messageType: "reply",
-      codeSuggestion: message.codeSuggestion ?? null,
-      createdAt: message.createdAt,
-      editedAt: message.editedAt ?? null,
-      externalId: message.externalId ?? null,
-    };
-    if (inserted) {
-      ctx.broadcastThreadEvent({
-        type: "thread:message",
-        data: { threadId: parsed.thread_id, message: eventMessage },
-      });
-      if (newStatus) {
-        ctx.broadcastThreadEvent({
-          type: "thread:updated",
-          data: { threadId: parsed.thread_id, status: newStatus, resolvedAt: null },
-        });
-      }
-    }
+    const inserted = recorded === undefined;
 
     if (parsed.publish_to_github && message.externalId === null) {
       try {
@@ -296,19 +258,12 @@ const updateCommentStatusSpec: ExternalReviewToolSpec = {
     const located = threadForPr(ctx, parsed.thread_id);
     if (!located) return fail(`Thread '${parsed.thread_id}' is not part of this PR.`);
 
-    const changed = located.thread.status !== parsed.status;
-    if (changed) {
-      const resolvedAt = isThreadResolved(parsed.status) ? new Date().toISOString() : null;
-      ctx.db
-        .update(commentThreads)
-        .set({ status: parsed.status, resolvedAt })
-        .where(eq(commentThreads.id, parsed.thread_id))
-        .run();
-      ctx.broadcastThreadEvent({
-        type: "thread:updated",
-        data: { threadId: parsed.thread_id, status: parsed.status, resolvedAt },
-      });
-    }
+    const written = ctx.db.transaction((tx) =>
+      threadWrites.setStatus(tx, parsed.thread_id, parsed.status),
+    );
+    if (written instanceof NotFoundError) return fail(`Thread '${parsed.thread_id}' is gone.`);
+    for (const envelope of written.envelopes) ctx.broadcastThreadEvent(envelope);
+    const changed = written.envelopes.length > 0;
     if (parsed.publish_to_github) {
       if (located.thread.externalThreadId === null) {
         return fail(

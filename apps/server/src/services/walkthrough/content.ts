@@ -35,7 +35,7 @@ import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
 import { walkthroughRatings } from "../../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../db/schema/walkthroughs";
-import { toMessage, toThread } from "../Review";
+import { type ThreadWrite, threadWrites } from "../Review";
 import type { GenerationProviderConfig } from "../walkthrough-cache-format";
 
 export type WalkthroughRow = typeof walkthroughs.$inferSelect;
@@ -568,7 +568,7 @@ export function upsertIssueComment(
   db: Db,
   params: {
     readonly walkthroughId: string;
-    readonly reviewSessionId: string;
+    readonly prId: string;
     readonly issueId: string;
     readonly filePath: string;
     readonly startLine: number;
@@ -576,7 +576,7 @@ export function upsertIssueComment(
     readonly diffSide: "old" | "new";
     readonly body: string;
   },
-): { readonly thread: CommentThread; readonly message: ThreadMessage } {
+): ThreadWrite<{ readonly thread: CommentThread; readonly message: ThreadMessage }> {
   const threadId = anchorThreadId(
     params.walkthroughId,
     params.issueId,
@@ -585,46 +585,17 @@ export function upsertIssueComment(
     params.endLine,
     params.diffSide,
   );
-  const messageId = issueCommentMessageId(threadId);
-  const now = new Date().toISOString();
-  db.insert(commentThreads)
-    .values({
-      id: threadId,
-      reviewSessionId: params.reviewSessionId,
+  return threadWrites.upsertIssueComment(db, {
+    prId: params.prId,
+    threadId,
+    messageId: issueCommentMessageId(threadId),
+    issueId: params.issueId,
+    anchor: {
       filePath: params.filePath,
       startLine: params.startLine,
       endLine: params.endLine,
       diffSide: params.diffSide,
-      status: "open",
-      createdAt: now,
-      walkthroughIssueId: params.issueId,
-    })
-    .onConflictDoNothing({ target: commentThreads.id })
-    .run();
-  db.insert(threadMessages)
-    .values({
-      id: messageId,
-      threadId,
-      authorRole: "ai_agent",
-      authorName: "Revv AI",
-      authorLogin: null,
-      body: params.body,
-      messageType: "comment",
-      codeSuggestion: null,
-      createdAt: now,
-      editedAt: null,
-      externalId: null,
-    })
-    .onConflictDoUpdate({
-      target: threadMessages.id,
-      set: { body: params.body, editedAt: now },
-    })
-    .run();
-
-  const thread = db.select().from(commentThreads).where(eq(commentThreads.id, threadId)).get();
-  const message = db.select().from(threadMessages).where(eq(threadMessages.id, messageId)).get();
-  if (!thread || !message) {
-    throw new Error(`issue comment ${threadId} was written but cannot be read back`);
-  }
-  return { thread: toThread(thread), message: toMessage(message, null) };
+    },
+    body: params.body,
+  });
 }
