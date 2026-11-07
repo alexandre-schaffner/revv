@@ -10,6 +10,10 @@ export type ApiErrorCode =
   | "FORBIDDEN"
   | "NOT_CONFIGURED"
   | "GITHUB_AUTH_ERROR"
+  // Signing in to the body's `host` needs a client id it doesn't have, or the
+  // one it has isn't valid there.
+  | "MISSING_GITHUB_CLIENT_ID"
+  | "INVALID_GITHUB_CLIENT_ID"
   | "GITHUB_RATE_LIMITED"
   | "GITHUB_ERROR"
   | "BUSY"

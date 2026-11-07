@@ -16,13 +16,18 @@ import {
 } from "../../domain/github-host";
 import { dbTry } from "../../effects/db-try";
 import { keyedSingleFlight } from "../../effects/keyed-single-flight";
-import { clientIdForHost, clientIdIsGitHubApp } from "../../github-oauth";
 import { logError } from "../../logger";
 import { DbService } from "../Db";
 import { Realtime } from "../Realtime";
 import { SecretStore, type TokenPair } from "../SecretStore";
 import { AvatarCache } from "./avatars";
-import { deviceFlowScopeFor, type IssuedTokens, refreshGrant } from "./oauth";
+import {
+  clientIdForHost,
+  clientIdIsGitHubApp,
+  deviceFlowScopeFor,
+  type IssuedTokens,
+  refreshGrant,
+} from "./oauth";
 import { type GitHubClient, githubClient, makeHttp, type TransportObserver } from "./transport";
 import { usersApi } from "./users";
 
@@ -266,11 +271,11 @@ export const GitHubAccountsLive = Layer.effect(
 
     const authFailure = (message: string) => new GitHubAuthError({ message });
 
-    /** The client the account's token was issued to; rows from before `client_id` resolve the bundled/env one. Throws without one. */
-    const issuedClientId = (row: {
-      readonly providerId: string;
-      readonly clientId: string | null;
-    }) => row.clientId ?? clientIdForHost(hostFromProviderId(row.providerId));
+    /** The client the account's token was issued to; rows from before `client_id` resolve the bundled/env one. */
+    const issuedClientId = (row: { readonly providerId: string; readonly clientId: string | null }) =>
+      row.clientId === null
+        ? clientIdForHost(hostFromProviderId(row.providerId))
+        : Effect.succeed(row.clientId);
 
     const reauthCache = new Map<string, boolean>();
 
@@ -345,10 +350,9 @@ export const GitHubAccountsLive = Layer.effect(
         }
 
         const host = hostFromProviderId(row.providerId);
-        const clientId = yield* Effect.try({
-          try: () => issuedClientId(row),
-          catch: (e) => authFailure(e instanceof Error ? e.message : String(e)),
-        });
+        const clientId = yield* issuedClientId(row).pipe(
+          Effect.mapError((e) => authFailure(e.message)),
+        );
         const { status, data } = yield* refreshGrant(host, clientId, refreshToken).pipe(
           Effect.mapError((e) => authFailure(String(e))),
         );
@@ -555,7 +559,7 @@ export const GitHubAccountsLive = Layer.effect(
     const signsInWithGitHubApp = (accountId: string): Effect.Effect<boolean> =>
       readRow(accountId).pipe(
         Effect.flatMap((row) =>
-          row ? Effect.try(() => clientIdIsGitHubApp(issuedClientId(row))) : Effect.succeed(false),
+          row ? issuedClientId(row).pipe(Effect.map(clientIdIsGitHubApp)) : Effect.succeed(false),
         ),
         Effect.orElseSucceed(() => false),
       );

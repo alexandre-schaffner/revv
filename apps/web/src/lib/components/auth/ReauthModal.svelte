@@ -28,9 +28,7 @@ const needsClientId = $derived(
   Boolean(
     reauth?.host &&
       !isPublicGitHub(reauth.host) &&
-      (signInErrorCode === "missing_github_client_id" ||
-        signInErrorCode === "invalid_github_client_id" ||
-        clientIdError),
+      (signInErrorCode !== null || clientIdError),
   ),
 );
 

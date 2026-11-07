@@ -1,56 +1,29 @@
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { NotFoundError } from "../domain/errors";
-import {
-  InvalidGitHubClientIdError,
-  MissingGitHubClientIdError,
-  resolveClientId,
-} from "../github-oauth";
+import { InvalidGitHubClientIdError, NotFoundError } from "../domain/errors";
 import { logError } from "../logger";
 import { GitHubAccounts } from "../services/github/accounts";
-import { exchangeDeviceCode, issuedTokens, requestDeviceCode } from "../services/github/oauth";
+import {
+  exchangeDeviceCode,
+  issuedTokens,
+  requestDeviceCode,
+  resolveClientId,
+} from "../services/github/oauth";
 import { SettingsService } from "../services/Settings";
 import { runRoute, withAuth } from "./middleware";
-
-type ClientIdError = MissingGitHubClientIdError | InvalidGitHubClientIdError;
-
-type SignInTarget =
-  | { readonly ok: true; readonly host: string; readonly clientId: string }
-  | { readonly ok: false; readonly error: ClientIdError };
 
 /**
  * The host and client_id a device-flow request targets: the request's own,
  * else the settings host and the client ID saved for it.
  */
-const signInTarget = (
-  hostOverride: string | undefined,
-  clientIdOverride: string | undefined,
-): Effect.Effect<SignInTarget, never, SettingsService> =>
+const signInTarget = (hostOverride: string | undefined, clientIdOverride: string | undefined) =>
   Effect.gen(function* () {
     const settings = yield* SettingsService;
     const saved = yield* settings.getSettings();
     const host = hostOverride?.trim() || (yield* settings.githubHost());
-    try {
-      return { ok: true, host, clientId: resolveClientId(host, saved, clientIdOverride) };
-    } catch (e) {
-      if (e instanceof MissingGitHubClientIdError || e instanceof InvalidGitHubClientIdError) {
-        return { ok: false, error: e };
-      }
-      throw e;
-    }
+    const clientId = yield* resolveClientId(host, saved, clientIdOverride);
+    return { host, clientId };
   });
-
-function clientIdErrorBody(e: ClientIdError) {
-  return { error: e.message, code: e.code, host: e.host };
-}
-
-function rejectedClientIdBody(host: string) {
-  return {
-    error: `GitHub rejected the client ID for ${host}. Check that it was copied from the GitHub App or OAuth App registered on that host.`,
-    code: "invalid_github_client_id" as const,
-    host,
-  };
-}
 
 function deviceFlowErrorMessage(
   host: string,
@@ -78,7 +51,6 @@ const deviceFlowRoutes = new Elysia()
       runRoute(
         Effect.gen(function* () {
           const target = yield* signInTarget(body?.host, body?.client_id);
-          if (!target.ok) return status(400, clientIdErrorBody(target.error));
           const answer = yield* requestDeviceCode(target.host, target.clientId);
           if (!answer.ok) {
             logError(
@@ -87,7 +59,12 @@ const deviceFlowRoutes = new Elysia()
               answer.text,
             );
             if (answer.status === 400 || answer.status === 401) {
-              return status(400, rejectedClientIdBody(target.host));
+              return yield* Effect.fail(
+                new InvalidGitHubClientIdError({
+                  host: target.host,
+                  message: `GitHub rejected the client ID for ${target.host}. Check that it was copied from the GitHub App or OAuth App registered on that host.`,
+                }),
+              );
             }
             return status(502, { error: deviceFlowErrorMessage(target.host, answer) });
           }

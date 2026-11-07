@@ -3,7 +3,7 @@
 // switch, end) lives in `$lib/session/lifecycle.svelte`; this store imports
 // no other store.
 
-import { isMaintainerLogin, type UserUpdatedEnvelope } from "@revv/shared";
+import { type ApiErrorCode, isMaintainerLogin, type UserUpdatedEnvelope } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
 import { ApiError, apiErrorCode, call } from "$lib/api/errors";
@@ -29,7 +29,11 @@ let isLoading = $state(false);
 let isSwitching = $state(false);
 let error = $state<string | null>(null);
 
-export type SignInErrorCode = "invalid_github_client_id" | "missing_github_client_id";
+/** A sign-in refused for its client id: the host needs one, or the one it has isn't valid. */
+export type SignInErrorCode = Extract<
+  ApiErrorCode,
+  "MISSING_GITHUB_CLIENT_ID" | "INVALID_GITHUB_CLIENT_ID"
+>;
 let signInErrorCode = $state<SignInErrorCode | null>(null);
 
 let deviceFlow = $state<{
@@ -174,14 +178,10 @@ export function clearIdentity(): void {
   void fetchLocalAccounts();
 }
 
-function parseSignInErrorCode(value: unknown): SignInErrorCode | null {
-  return value === "missing_github_client_id" || value === "invalid_github_client_id"
-    ? value
-    : null;
-}
-
 function signInRefusal(refusal: ApiError): Error {
-  signInErrorCode = parseSignInErrorCode(refusal.body?.code);
+  const code = apiErrorCode(refusal);
+  signInErrorCode =
+    code === "MISSING_GITHUB_CLIENT_ID" || code === "INVALID_GITHUB_CLIENT_ID" ? code : null;
   const detail = refusal.serverMessage ?? "";
   return new Error(`Sign-in request failed (${refusal.status})${detail ? `: ${detail}` : ""}`);
 }

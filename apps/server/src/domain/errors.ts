@@ -16,6 +16,18 @@ export class GitHubAuthError extends Data.TaggedError("GitHubAuthError")<{
   readonly message: string;
 }> {}
 
+/** No client id to sign in to `host` with: none bundled, configured, or entered for it. */
+export class MissingGitHubClientIdError extends Data.TaggedError("MissingGitHubClientIdError")<{
+  readonly host: string;
+  readonly message: string;
+}> {}
+
+/** The client id for `host` isn't a GitHub App or OAuth App client id, or GitHub refused it. */
+export class InvalidGitHubClientIdError extends Data.TaggedError("InvalidGitHubClientIdError")<{
+  readonly host: string;
+  readonly message: string;
+}> {}
+
 /**
  * Transport-level failure: DNS, TLS, connection reset, request timeout, a
  * 5xx/408 from GitHub, or GraphQL's "Something went wrong while executing
@@ -387,6 +399,8 @@ type AppError =
   | ProfilingError
   | GitHubRateLimitError
   | GitHubAuthError
+  | MissingGitHubClientIdError
+  | InvalidGitHubClientIdError
   | GitHubNetworkError
   | GitHubApiError
   | GitHubAccessDeniedError
@@ -476,6 +490,10 @@ const HTTP_ERRORS: {
   ValidationError: (e) => http(400, "INVALID", e.message),
   ForbiddenError: (e) => http(403, "FORBIDDEN", e.message),
   GitHubAuthError: () => http(401, "GITHUB_AUTH_ERROR", "GitHub token expired or invalid"),
+  MissingGitHubClientIdError: (e) =>
+    http(400, "MISSING_GITHUB_CLIENT_ID", e.message, { host: e.host }),
+  InvalidGitHubClientIdError: (e) =>
+    http(400, "INVALID_GITHUB_CLIENT_ID", e.message, { host: e.host }),
   GitHubAccessDeniedError: (e) => http(403, "FORBIDDEN", e.message),
   GitHubNotFoundError: () => http(404, "NOT_FOUND", "Not found on GitHub"),
   RepoNotAccessibleError: (e) =>
