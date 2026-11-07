@@ -40,14 +40,14 @@ describe("rankThreadSweep", () => {
 });
 
 describe("claimCycle", () => {
-  it("queues one more cycle when a manual sync coalesces onto the one in flight", () => {
+  it("queues one more cycle, for every requester, when manual syncs coalesce onto the one in flight", () => {
     const state = makePollState();
     expect(state.claimCycle("periodic", NOW)).toBe("claimed");
-    expect(state.claimCycle("manual", NOW)).toBe("in-flight");
-    expect(state.claimCycle("manual", NOW)).toBe("in-flight");
-    expect(state.releaseCycle()).toBe(true);
-    expect(state.claimCycle("manual", NOW)).toBe("claimed");
-    expect(state.releaseCycle()).toBe(false);
+    expect(state.claimCycle("manual", NOW, new Set(["user-a"]))).toBe("in-flight");
+    expect(state.claimCycle("manual", NOW, new Set(["user-b"]))).toBe("in-flight");
+    expect(state.releaseCycle()).toEqual(new Set(["user-a", "user-b"]));
+    expect(state.claimCycle("manual", NOW, new Set(["user-a"]))).toBe("claimed");
+    expect(state.releaseCycle()).toBeNull();
   });
 
   it("drops a coalesced freshen or periodic request", () => {
@@ -55,7 +55,7 @@ describe("claimCycle", () => {
     expect(state.claimCycle("manual", NOW)).toBe("claimed");
     expect(state.claimCycle("freshen", NOW)).toBe("in-flight");
     expect(state.claimCycle("periodic", NOW)).toBe("in-flight");
-    expect(state.releaseCycle()).toBe(false);
+    expect(state.releaseCycle()).toBeNull();
     expect(state.claimCycle("freshen", NOW + MINUTE)).toBe("fresh-enough");
   });
 });

@@ -83,6 +83,25 @@ describe("Realtime", () => {
     ).toEqual(["user-1"]);
   });
 
+  it("sends a user-wide signal once per user, however many of their accounts it names", async () => {
+    const db = seededDb();
+    db.$client.run(
+      "INSERT INTO account (id, account_id, provider_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ["account-2", "gh-2", "github:ghe.example.com", "user-1", Date.now(), Date.now()],
+    );
+    expect(
+      await sent(
+        db,
+        Effect.flatMap(Realtime, (r) =>
+          r.toUsers(
+            { userIds: ["user-1", "user-9"], ownersOf: ["account-1", "account-2"] },
+            { type: "prs:sync-complete" },
+          ),
+        ),
+      ),
+    ).toEqual(["user-1", "user-9"]);
+  });
+
   it("drops a push whose owner can't be resolved, without failing", async () => {
     const db = seededDb();
     expect(

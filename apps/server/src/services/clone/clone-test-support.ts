@@ -124,6 +124,7 @@ export function cloneServices(db: Db, base: string) {
     Layer.succeed(Realtime, {
       toAccount: () => Effect.void,
       toRepo: () => Effect.void,
+      toUsers: () => Effect.void,
       toPr: () => Effect.void,
     }),
     Layer.succeed(GitHubAccounts, {

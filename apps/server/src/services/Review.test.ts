@@ -78,6 +78,7 @@ function harness() {
   const realtime = Layer.succeed(Realtime, {
     toAccount: () => Effect.void,
     toRepo: () => Effect.void,
+    toUsers: () => Effect.void,
     toPr: (prId, msg) => Effect.sync(() => void events.push({ prId, msg })),
   });
   const layer = ReviewServiceLive.pipe(

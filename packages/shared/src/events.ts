@@ -181,19 +181,19 @@ export interface StackBriefStatusChangedEnvelope {
   data: { repositoryId: string; stackNumber: number; briefId: string; status: StackBriefStatus };
 }
 
-/** Signal: a PR-list sync cycle started for the account. */
+/** Signal: a PR-list sync cycle started; sent once to each user it syncs or who asked for it. */
 export interface PrsSyncStartedEnvelope {
   type: "prs:sync-started";
 }
 
-/** Signal: the account's PR-list sync cycle finished; `prs:updated` carried any change. */
+/** Signal: the PR-list sync cycle finished; `prs:updated` carried any change. */
 export interface PrsSyncCompleteEnvelope {
   type: "prs:sync-complete";
 }
 
 /**
- * Signal: the account's PR-list sync cycle failed; no `prs:sync-complete`
- * follows. `message` is user-facing, never a raw cause.
+ * Signal: the PR-list sync cycle failed; no `prs:sync-complete` follows.
+ * `message` is user-facing, never a raw cause.
  */
 export interface PrsSyncFailedEnvelope {
   type: "prs:sync-failed";

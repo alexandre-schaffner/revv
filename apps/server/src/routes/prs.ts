@@ -137,7 +137,12 @@ const prListRoutes = new Elysia({ prefix: "/api/prs" })
         authors: t.Optional(t.String()),
       }),
     },
-  )
+  );
+
+/** The user's own actions across all their accounts: syncs and pins. A pinned PR must be theirs. */
+const prUserRoutes = new Elysia({ prefix: "/api/prs" })
+  .use(withAuth)
+  .onBeforeHandle(ownedBy({ prId: "pull request" }))
   // Full sync of every repo. Forked, not awaited: a cold-start cycle also runs
   // the hourly metadata refresh and the archive backfill (up to 150 detail
   // fetches per repo), which is minutes of work — far too long to hold an HTTP
@@ -146,9 +151,9 @@ const prListRoutes = new Elysia({ prefix: "/api/prs" })
   // follow-up cycle that reuses its listings; more clicks join that one.
   .post("/sync", (ctx) =>
     runRoute(
-      Effect.flatMap(PollScheduler, (s) =>
-        Effect.forkDetach(s.syncNow(ctx.account.accountId)),
-      ).pipe(Effect.as({ success: true })),
+      Effect.flatMap(PollScheduler, (s) => Effect.forkDetach(s.syncNow(ctx.userId))).pipe(
+        Effect.as({ success: true }),
+      ),
     ),
   )
 
@@ -178,12 +183,8 @@ const prListRoutes = new Elysia({ prefix: "/api/prs" })
         ),
       ).pipe(Effect.map((rows) => rows.map((r) => r.prId))),
     ),
-  );
+  )
 
-/** A user pins PRs of any of their accounts. */
-const pinnedRoutes = new Elysia({ prefix: "/api/prs" })
-  .use(withAuth)
-  .onBeforeHandle(ownedBy({ prId: "pull request" }))
   .post(
     "/pinned",
     (ctx) =>
@@ -432,7 +433,7 @@ const prByIdRoutes = new Elysia({ prefix: "/api/prs" })
     },
   );
 
-export const prRoutes = new Elysia().use(prListRoutes).use(pinnedRoutes).use(prByIdRoutes);
+export const prRoutes = new Elysia().use(prListRoutes).use(prUserRoutes).use(prByIdRoutes);
 
 type PrMutationAction = "convert-to-draft" | "ready-for-review" | "close";
 

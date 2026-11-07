@@ -51,6 +51,7 @@ function recapJobs(db: Db, patch: Partial<ProjectRecapService["Service"]> = {}) 
   const realtime = Layer.succeed(Realtime, {
     toAccount: () => Effect.void,
     toRepo: (_repoId, msg) => Effect.sync(() => void broadcasts.push(msg)),
+    toUsers: () => Effect.void,
     toPr: () => Effect.void,
   });
   const dbLayer = Layer.succeed(DbService, { db });
