@@ -106,8 +106,12 @@ const ON_FOREGROUND: ReadonlyArray<(streamOpen: boolean) => void> = [
 
 const DEAD_CONNECTION_THRESHOLD_MS = 4 * SSE_HEARTBEAT_INTERVAL_MS;
 const KEEPALIVE_CHECK_INTERVAL_MS = 30_000;
-/** A reconnect and a focus, or a rapid alt-tab, re-read once. */
-const CATCH_UP_DEBOUNCE_MS = 4_000;
+/**
+ * A focus within this long of a reconnect's catch-up, or of the last focus
+ * (a rapid alt-tab), re-reads nothing. A reconnect always catches up: the
+ * focus re-reads only a subset of what it recovers.
+ */
+const FOREGROUND_DEBOUNCE_MS = 4_000;
 const RECOVER_BASE_MS = 1_000;
 const RECOVER_MAX_MS = 30_000;
 
@@ -116,7 +120,8 @@ let activeHostOverride: string | null = null;
 // EventSource fires `open` on the first connect AND on every auto-reconnect.
 let openCount = 0;
 let lastEventTime = 0;
-let lastCatchUpAt = 0;
+let lastReconnectAt = 0;
+let lastForegroundAt = 0;
 let watchdogTimer: ReturnType<typeof setInterval> | null = null;
 let recoverTimer: ReturnType<typeof setTimeout> | null = null;
 let recoverAttempts = 0;
@@ -241,15 +246,9 @@ function onStreamOpen(): void {
   recoverAttempts = 0;
   openCount += 1;
   for (const hook of ON_OPEN) hook();
-  if (openCount === 1 || !catchUpDue()) return;
+  if (openCount === 1) return;
+  lastReconnectAt = Date.now();
   for (const hook of ON_RECONNECT) hook();
-}
-
-function catchUpDue(): boolean {
-  const now = Date.now();
-  if (now - lastCatchUpAt < CATCH_UP_DEBOUNCE_MS) return false;
-  lastCatchUpAt = now;
-  return true;
 }
 
 function onWindowForeground(): void {
@@ -259,7 +258,9 @@ function onWindowForeground(): void {
     reopen();
     return;
   }
-  if (!catchUpDue()) return;
+  const now = Date.now();
+  if (now - Math.max(lastReconnectAt, lastForegroundAt) < FOREGROUND_DEBOUNCE_MS) return;
+  lastForegroundAt = now;
   const streamOpen = source.readyState === EventSource.OPEN;
   for (const hook of ON_FOREGROUND) hook(streamOpen);
 }
