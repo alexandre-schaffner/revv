@@ -5,7 +5,6 @@ import CaretRight from "phosphor-svelte/lib/CaretRight";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
 import RecapStats from "$lib/components/recaps/RecapStats.svelte";
-import { sanitizeLedeHtml } from "$lib/recaps/themes";
 import { RECAP_PERIOD_COPY } from "$lib/recaps/copy";
 import { formatRecapRange, pickLatestByWindow, recapSpan } from "$lib/recaps/period-window";
 import {
@@ -14,6 +13,7 @@ import {
   loadRecap,
   useRecapsForRepo,
 } from "$lib/recaps/store.svelte";
+import { sanitizeLedeHtml } from "$lib/recaps/themes";
 
 interface Props {
   repoId: string;

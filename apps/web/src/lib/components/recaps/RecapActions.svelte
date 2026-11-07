@@ -4,8 +4,8 @@ import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import GenActionBar from "$lib/components/shared/GenActionBar.svelte";
 import type { GenActionCopy } from "$lib/components/shared/gen-action";
 import { RECAP_PERIOD_COPY } from "$lib/recaps/copy";
-import type { RecapController } from "./recap-controller.svelte";
 import RecapGeneratePill from "./RecapGeneratePill.svelte";
+import type { RecapController } from "./recap-controller.svelte";
 
 /**
  * The floating actions over a recap, shown in the shell while this is

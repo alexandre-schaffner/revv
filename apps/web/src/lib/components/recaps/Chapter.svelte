@@ -7,9 +7,9 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "$lib/components/ui/collapsible";
+import { formatTheme, themeSlug } from "$lib/recaps/themes";
 import InlineText from "./InlineText.svelte";
 import PrRow from "./PrRow.svelte";
-import { formatTheme, themeSlug } from "$lib/recaps/themes";
 
 interface Props {
   theme: string;

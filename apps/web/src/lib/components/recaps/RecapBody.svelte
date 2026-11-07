@@ -1,7 +1,12 @@
 <script lang="ts">
 import type { ProjectRecap } from "@revv/shared";
+import {
+  buildChapters,
+  buildThemePalette,
+  paletteLookup,
+  sanitizeLedeHtml,
+} from "$lib/recaps/themes";
 import Chapter from "./Chapter.svelte";
-import { buildChapters, buildThemePalette, paletteLookup, sanitizeLedeHtml } from "$lib/recaps/themes";
 
 interface Props {
   recap: ProjectRecap;

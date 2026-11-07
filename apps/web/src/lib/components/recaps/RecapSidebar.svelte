@@ -1,11 +1,6 @@
 <script lang="ts">
 import type { ProjectRecap, RecapPeriod } from "@revv/shared";
-import {
-  buildRecapHeader,
-  formatTheme,
-  paletteLookup,
-  scrollToTheme,
-} from "$lib/recaps/themes";
+import { buildRecapHeader, formatTheme, paletteLookup, scrollToTheme } from "$lib/recaps/themes";
 import { now } from "$lib/utils/clock.svelte";
 import { formatCount } from "$lib/utils/format-count";
 

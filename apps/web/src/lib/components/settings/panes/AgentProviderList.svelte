@@ -11,8 +11,8 @@ import {
   startAgentInstall,
   startAgentSignIn,
 } from "$lib/agent-setup/store.svelte";
-import { acpAgentIcon } from "$lib/components/icons/acpAgentIcon";
 import AgentLoginTerminal from "$lib/components/agent-setup/AgentLoginTerminal.svelte";
+import { acpAgentIcon } from "$lib/components/icons/acpAgentIcon";
 import { Button } from "$lib/components/ui/button/index.js";
 import { fetchAgentStatus } from "$lib/stores/settings.svelte";
 import StatusDot from "../primitives/StatusDot.svelte";
