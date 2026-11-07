@@ -1,7 +1,7 @@
 import { normalizeGithubHost } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { InvalidGitHubClientIdError, NotFoundError } from "../domain/errors";
+import { GitHubApiError, InvalidGitHubClientIdError, NotFoundError } from "../domain/errors";
 import { logError } from "../logger";
 import { forgetAccount } from "../services/clone/forget";
 import { GitHubAccounts } from "../services/github/accounts";
@@ -49,7 +49,7 @@ function deviceFlowErrorMessage(
 const deviceFlowRoutes = new Elysia()
   .post(
     "/api/auth/device/init",
-    ({ body, status }) =>
+    ({ body }) =>
       runRoute(
         Effect.gen(function* () {
           const target = yield* signInTarget(body?.host, body?.client_id);
@@ -68,7 +68,12 @@ const deviceFlowRoutes = new Elysia()
                 }),
               );
             }
-            return status(502, { error: deviceFlowErrorMessage(target.host, answer) });
+            return yield* Effect.fail(
+              new GitHubApiError({
+                status: answer.status,
+                cause: deviceFlowErrorMessage(target.host, answer),
+              }),
+            );
           }
           const { code } = answer;
           return {
@@ -90,7 +95,7 @@ const deviceFlowRoutes = new Elysia()
   )
   .post(
     "/api/auth/device/poll",
-    ({ body, status }) =>
+    ({ body }) =>
       runRoute(
         Effect.gen(function* () {
           const accounts = yield* GitHubAccounts;
@@ -103,43 +108,48 @@ const deviceFlowRoutes = new Elysia()
           // The device code belongs to the client `/device/init` resolved, so
           // the poll uses exactly that host and client.
           const target = { host: normalizeGithubHost(body.host), clientId: body.client_id };
-          const { data } = yield* exchangeDeviceCode(
+          const exchanged = yield* exchangeDeviceCode(
             target.host,
             target.clientId,
             body.device_code,
           );
 
+          const { data } = exchanged;
+
           if (data.access_token) {
-            const signedIn = yield* accounts
+            const { sessionToken } = yield* accounts
               .signIn({
                 host: target.host,
                 clientId: target.clientId,
                 tokens: issuedTokens(data, new Date()),
                 linkToUserId,
               })
-              .pipe(Effect.result);
-            if (signedIn._tag === "Failure") {
-              const e = signedIn.failure;
-              logError("device-auth", "sign-in failed:", e);
-              return status(500, {
-                error: `${linkToUserId ? "Account link" : "Session creation"} failed: ${e.message}`,
-              });
-            }
-            const { sessionToken } = signedIn.success;
+              .pipe(
+                Effect.tapError((e) =>
+                  Effect.sync(() => logError("device-auth", "sign-in failed:", e)),
+                ),
+              );
             return sessionToken === null
               ? { status: "linked" as const }
               : { status: "success" as const, token: sessionToken };
           }
 
+          // GitHub's verdicts on the device code are answers, like `pending`:
+          // only a failure to ask is a refusal.
           if (data.error === "authorization_pending") return { status: "pending" as const };
           if (data.error === "slow_down") {
             return { status: "slow_down" as const, interval: data.interval ?? 10 };
           }
-          if (data.error === "expired_token") return status(400, { error: "expired" });
-          if (data.error === "access_denied") return status(400, { error: "access_denied" });
+          if (data.error === "expired_token") return { status: "expired" as const };
+          if (data.error === "access_denied") return { status: "denied" as const };
 
           logError("device-auth", "unexpected GitHub token response:", data);
-          return status(400, { error: data.error ?? "Unknown error from GitHub" });
+          return yield* Effect.fail(
+            new GitHubApiError({
+              status: exchanged.status,
+              cause: data.error_description ?? data.error ?? "Unknown error from GitHub",
+            }),
+          );
         }),
       ),
     {
