@@ -52,10 +52,11 @@ export interface WalkthroughLaunchPlan {
  * "Agent Subsystem Invariants" in the root CLAUDE.md for the full doctrine.
  *
  * Immutability: a walkthrough is pinned to one `pr_head_sha`. A new commit on
- * the PR never mutates an existing row — the old row is marked `'superseded'`
- * with `superseded_by` pointing at the replacement, and a fresh row is
- * inserted. This preserves audit trail and guarantees clients see a
- * consistent view even mid-regeneration.
+ * the PR never mutates an existing row: the old row is marked `'superseded'`
+ * and a fresh row is inserted. `superseded_by` names the replacement only
+ * when the replacement is created in the same step (a new row at the same
+ * key); a head move retires rows before any replacement exists, so it stays
+ * NULL there.
  */
 export const walkthroughs = sqliteTable(
   "walkthroughs",

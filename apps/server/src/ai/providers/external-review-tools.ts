@@ -54,7 +54,7 @@ export interface ExternalReviewToolContext extends ChatWalkthroughEditContext {
   readonly prHeadSha: string | null;
   readonly pushReply: (messageId: string) => Promise<void>;
   readonly pushStatus: (threadId: string) => Promise<void>;
-  /** Start (or join) generation through the orchestrator; see `walkthrough-request.ts`. */
+  /** Start (or join) generation through the orchestrator; see `services/walkthrough/request.ts`. */
   readonly requestWalkthrough: (input: {
     readonly headSha: string;
     readonly generationMode: WalkthroughGenerationMode;

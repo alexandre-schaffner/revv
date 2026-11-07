@@ -63,17 +63,6 @@ export class RemoteWalkthroughCache extends Context.Service<
   RemoteWalkthroughCache,
   {
     /**
-     * Cheap existence check. False when sharing is off for `mode`, the blob
-     * is missing, or the backend is unreachable. Never raises — callers
-     * treat truthiness as "object might exist".
-     */
-    readonly probe: (
-      repoFullName: string,
-      headSha: string,
-      mode: WalkthroughMode,
-    ) => Effect.Effect<boolean>;
-
-    /**
      * Download + verify + parse. `Option.none` on a miss, when sharing is
      * off for `mode`, or on any failure. Failures are logged but never
      * escape — the orchestrator falls back to running the agent.
@@ -119,19 +108,6 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
       settings.getSettings().pipe(Effect.map((s) => s.cache.enabled && s.cache.uploadsEnabled));
 
     return RemoteWalkthroughCache.of({
-      probe: (repoFullName, headSha, mode) =>
-        Effect.gen(function* () {
-          const ok = yield* isDownloadEnabled(mode);
-          if (!ok) return false;
-          const key = cacheObjectKey(repoFullName, headSha);
-          return yield* blob.exists(key).pipe(
-            Effect.catch((e) => {
-              debug("remote-cache", `probe failed key=${key}: ${e.message}`);
-              return Effect.succeed(false);
-            }),
-          );
-        }),
-
       fetch: (repoFullName, headSha, mode) =>
         Effect.gen(function* () {
           const ok = yield* isDownloadEnabled(mode);

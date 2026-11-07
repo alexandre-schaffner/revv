@@ -170,7 +170,6 @@ export interface NewRowPlan {
   readonly baseHeadSha: string | null;
   readonly stack: WalkthroughStackSnapshot | null;
   readonly diffFingerprint: DiffFingerprint;
-  readonly parentFingerprint: DiffFingerprint | null;
   /** A finished review the new row takes over instead of running an agent. */
   readonly restack: RestackCarry | null;
 }
@@ -207,14 +206,12 @@ export function planNewRow(input: {
           )
         : null;
     const generationMode = restack?.generationMode ?? resolvedGenerationMode;
-    const parentWalkthroughId = prior?.id ?? null;
     return {
       generationMode,
-      parentWalkthroughId,
+      parentWalkthroughId: prior?.id ?? null,
       baseHeadSha: prior?.prHeadSha ?? null,
       stack,
       diffFingerprint,
-      parentFingerprint: yield* parentFingerprintOf(stack, generationMode, parentWalkthroughId),
       restack,
     };
   });

@@ -1,6 +1,7 @@
-// Every write of `walkthroughs.status` after a row is created, and the event
-// announcing it after the commit (invariants 8 and 11). WalkthroughJobs is the
-// only caller.
+// The run-lifecycle transitions of `walkthroughs.status` (complete, fail,
+// supersede) and the event announcing each after the commit (invariants 8 and
+// 11). WalkthroughJobs is the only caller, as it is of the row adapter's other
+// status writes (`createRow`'s same-key supersede, `revive`).
 
 import type {
   WalkthroughEndReason,

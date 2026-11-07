@@ -23,8 +23,6 @@ export interface BlobStoreStatus {
 export class BlobStore extends Context.Service<
   BlobStore,
   {
-    readonly exists: (key: string) => Effect.Effect<boolean, BlobStoreUnavailable>;
-
     /**
      * The body comes back unverified: `RemoteWalkthroughCache` gunzips it and
      * checks its sha256 against the metadata.
