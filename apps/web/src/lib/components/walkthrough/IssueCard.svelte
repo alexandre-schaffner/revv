@@ -42,8 +42,9 @@ const resolved = $derived(resolutionLabel !== null);
 {#if clickable}
 	<button
 		type="button"
-		class="issue-card issue-card--{issue.severity}"
+		class="issue-card"
 		class:issue-card--resolved={resolved}
+		data-severity={issue.severity}
 		use:enterOnce={entrance}
 		{onclick}
 	>
@@ -51,8 +52,9 @@ const resolved = $derived(resolutionLabel !== null);
 	</button>
 {:else}
 	<div
-		class="issue-card issue-card--{issue.severity}"
+		class="issue-card"
 		class:issue-card--resolved={resolved}
+		data-severity={issue.severity}
 		use:enterOnce={entrance}
 	>
 		{@render cardContent()}
@@ -63,7 +65,7 @@ const resolved = $derived(resolutionLabel !== null);
 	<div class="issue-card-body">
 		<div class="issue-card-top" class:issue-card-top--tagged={!!stepTag}>
 			<span class="issue-card-marks">
-				<span class="issue-badge issue-badge--{issue.severity}">
+				<span class="issue-badge" data-severity={issue.severity}>
 					{ISSUE_SEVERITY_LABEL[issue.severity]}
 				</span>
 				{#if resolutionLabel}
@@ -88,7 +90,7 @@ const resolved = $derived(resolutionLabel !== null);
 	.issue-card {
 		padding: 10px 14px;
 		border-radius: 8px;
-		background: color-mix(in srgb, var(--severity-color, transparent) 5%, var(--color-bg-secondary));
+		background: color-mix(in srgb, var(--severity-color, transparent) 4%, var(--color-bg-secondary));
 		border: 1px solid color-mix(in srgb, var(--severity-color, transparent) 35%, var(--color-border));
 		display: flex;
 		flex-direction: row;
@@ -108,19 +110,6 @@ const resolved = $derived(resolutionLabel !== null);
 		container-type: inline-size;
 		container-name: issue-card;
 	}
-
-.issue-card--info {
-    --severity-color: var(--color-accent);
-    background: color-mix(in srgb, var(--color-accent) 4%, var(--color-bg-secondary));
-}
-.issue-card--warning {
-    --severity-color: var(--color-warning);
-    background: color-mix(in srgb, var(--color-warning) 4%, var(--color-bg-secondary));
-}
-.issue-card--critical {
-    --severity-color: var(--color-danger);
-    background: color-mix(in srgb, var(--color-danger) 4%, var(--color-bg-secondary));
-}
 
 	button.issue-card {
 		cursor: pointer;
@@ -275,24 +264,14 @@ const resolved = $derived(resolutionLabel !== null);
 		border: 1px solid transparent;
 		flex-shrink: 0;
 		white-space: nowrap;
+		background: color-mix(in srgb, var(--severity-color) 12%, transparent);
+		color: var(--severity-color);
+		border-color: color-mix(in srgb, var(--severity-color) 30%, transparent);
 	}
 
-	.issue-badge--info {
-		background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+	/* The accent is a step lighter as text than as a fill. */
+	.issue-badge[data-severity="info"] {
 		color: var(--color-accent-hover);
-		border-color: color-mix(in srgb, var(--color-accent) 30%, transparent);
-	}
-
-	.issue-badge--warning {
-		background: color-mix(in srgb, var(--color-warning) 12%, transparent);
-		color: var(--color-warning);
-		border-color: color-mix(in srgb, var(--color-warning) 30%, transparent);
-	}
-
-	.issue-badge--critical {
-		background: color-mix(in srgb, var(--color-danger) 12%, transparent);
-		color: var(--color-danger);
-		border-color: color-mix(in srgb, var(--color-danger) 30%, transparent);
 	}
 
 </style>

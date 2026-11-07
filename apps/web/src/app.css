@@ -2,6 +2,7 @@
 @import "./lib/components/ui/dotmatrix/dotmatrix-loader.css";
 @import "./lib/components/ui/glass-pill/glass-pill.css";
 @import "./lib/styles/review-columns.css";
+@import "./lib/styles/severity.css";
 @plugin "@tailwindcss/typography";
 /* prose.css must be imported *after* the typography @plugin, or Tailwind v4
    skips generating the prose component styles entirely.

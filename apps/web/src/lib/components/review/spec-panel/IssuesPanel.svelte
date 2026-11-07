@@ -5,11 +5,10 @@
  */
 import { isIssueResolved, type WalkthroughBlock, type WalkthroughIssue } from "@revv/shared";
 import CheckSquare from "phosphor-svelte/lib/CheckSquare";
-import Circle from "phosphor-svelte/lib/Circle";
 import Square from "phosphor-svelte/lib/Square";
 import Warning from "phosphor-svelte/lib/Warning";
-import WarningOctagon from "phosphor-svelte/lib/WarningOctagon";
 import LowSignalDisclosure from "$lib/components/walkthrough/LowSignalDisclosure.svelte";
+import SeverityIcon from "$lib/components/walkthrough/SeverityIcon.svelte";
 import { countBySeverity, sortBySeverity } from "$lib/walkthrough/issues";
 import { createExpandState } from "./expand-state.svelte";
 import IssueRow from "./IssueRow.svelte";
@@ -113,17 +112,17 @@ const keys = createRowKeys({
             {#snippet icon()}<Warning size={14} weight="fill" />{/snippet}
             {#snippet counts()}
                 <SpecCount tone="blocker" count={tally.critical} label="critical">
-                    <WarningOctagon size={11} weight="fill" />
+                    <SeverityIcon severity="critical" size={11} />
                 </SpecCount>
                 <SpecCount
                     tone="concern"
                     count={tally.warning}
                     label={tally.warning === 1 ? "warning" : "warnings"}
                 >
-                    <Warning size={11} weight="fill" />
+                    <SeverityIcon severity="warning" size={11} />
                 </SpecCount>
                 <SpecCount tone="info" count={tally.info} label="info">
-                    <Circle size={11} />
+                    <SeverityIcon severity="info" size={11} />
                 </SpecCount>
                 {#if tally.submittable > 0}
                     <span class="count-divider" aria-hidden="true">│</span>

@@ -1,9 +1,10 @@
 <script lang="ts">
-import { type IssueSeverity, severityRank, type WalkthroughSemanticStep } from "@revv/shared";
+import type { IssueSeverity, WalkthroughSemanticStep } from "@revv/shared";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import type { Snippet } from "svelte";
 import Markdown from "$lib/components/markdown/Markdown.svelte";
 import { type EnterCascade, enterOnce } from "$lib/motion";
+import { worstSeverity } from "$lib/walkthrough/issues";
 import WalkthroughArtifactBlock from "./WalkthroughArtifactBlock.svelte";
 import WalkthroughCodeBlock from "./WalkthroughCodeBlock.svelte";
 import WalkthroughDiffBlock from "./WalkthroughDiffBlock.svelte";
@@ -47,14 +48,7 @@ let {
 let collapsed = $state(false);
 
 // A collapsed section still shows the worst issue inside it.
-const rolledSeverity = $derived.by<IssueSeverity | null>(() => {
-  let worst: IssueSeverity | null = null;
-  for (const e of entries) {
-    const s = blockSeverity.get(e.block.id);
-    if (s && (!worst || severityRank(s) > severityRank(worst))) worst = s;
-  }
-  return worst;
-});
+const rolledSeverity = $derived(worstSeverity(entries.map((e) => blockSeverity.get(e.block.id))));
 
 // The margin note takes the first block's row too when that block has no
 // annotation of its own in the rail.
@@ -98,7 +92,8 @@ $effect(() => {
 		<div class="section-title-row">
 			{#if rolledSeverity !== null && collapsed}
 				<span
-					class="section-severity-dot section-severity-dot--{rolledSeverity}"
+					class="section-severity-dot"
+					data-severity={rolledSeverity}
 					aria-label="Section contains a flagged {rolledSeverity} issue"
 				></span>
 			{/if}
@@ -128,18 +123,14 @@ $effect(() => {
 				<div class="block-group">
 					<span
 						class="block-step-dot"
-						class:block-step-dot--info={severity === 'info'}
-						class:block-step-dot--warning={severity === 'warning'}
-						class:block-step-dot--critical={severity === 'critical'}
+						data-severity={severity}
 						data-col="gutter"
 						aria-hidden="true"
 					></span>
 					<div
 						id="step-{block.id}"
 						class="block-wrapper"
-						class:block-wrapper--selected-info={selected === 'info'}
-						class:block-wrapper--selected-warning={selected === 'warning'}
-						class:block-wrapper--selected-critical={selected === 'critical'}
+						data-severity={selected}
 						data-col="content"
 						data-prlens-breakout={annotation !== null ? "" : undefined}
 						use:enterOnce={{ key: `${enterScope}:block:${block.id}`, look: "rise", cascade: blockCascade(block.id) }}
@@ -273,18 +264,8 @@ $effect(() => {
 		width: 8px;
 		height: 8px;
 		border-radius: 50%;
-		background: var(--severity-dot-color, var(--color-text-muted));
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--severity-dot-color, var(--color-text-muted)) 18%, transparent);
-	}
-
-	.section-severity-dot--info {
-		--severity-dot-color: var(--color-accent);
-	}
-	.section-severity-dot--warning {
-		--severity-dot-color: var(--color-warning);
-	}
-	.section-severity-dot--critical {
-		--severity-dot-color: var(--color-danger);
+		background: var(--severity-color);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--severity-color) 18%, transparent);
 	}
 
 	.section-margin {
@@ -314,17 +295,9 @@ $effect(() => {
 		background: transparent;
 	}
 
-	.block-step-dot--info {
-		background: var(--color-accent);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 18%, transparent);
-	}
-	.block-step-dot--warning {
-		background: var(--color-warning);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-warning) 18%, transparent);
-	}
-	.block-step-dot--critical {
-		background: var(--color-danger);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-danger) 18%, transparent);
+	.block-step-dot[data-severity] {
+		background: var(--severity-color);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--severity-color) 18%, transparent);
 	}
 
 	/* `--jump-highlight` (0–1) is driven by `pulseHighlight` after a jump. */
@@ -339,14 +312,9 @@ $effect(() => {
 		transition: outline-color var(--duration-snap) var(--ease-soft);
 	}
 
-	.block-wrapper--selected-info {
-		outline-color: var(--color-accent);
-	}
-	.block-wrapper--selected-warning {
-		outline-color: var(--color-warning);
-	}
-	.block-wrapper--selected-critical {
-		outline-color: var(--color-danger);
+	/* The selected issue's block, outlined in its severity. */
+	.block-wrapper[data-severity] {
+		outline-color: var(--severity-color);
 	}
 
 	.block-annotation {

@@ -2,6 +2,7 @@ import {
   ISSUE_SEVERITIES,
   ISSUE_SEVERITY_LABEL,
   type IssueSeverity,
+  severityRank,
   type UserSettings,
   type WalkthroughIssue,
 } from "@revv/shared";
@@ -79,6 +80,17 @@ export function partitionBySignal(
 /** Low-signal issues collapse only while TypeSafe is on, so turning it off restores the full list. */
 export function shouldHideLowSignal(settings: UserSettings | null | undefined): boolean {
   return settings?.jev.enabled ?? false;
+}
+
+/** The most severe of `severities`, or null when none is given. */
+export function worstSeverity(
+  severities: Iterable<IssueSeverity | null | undefined>,
+): IssueSeverity | null {
+  let worst: IssueSeverity | null = null;
+  for (const severity of severities) {
+    if (severity && (!worst || severityRank(severity) > severityRank(worst))) worst = severity;
+  }
+  return worst;
 }
 
 export function countBySeverity(

@@ -5,6 +5,7 @@ import {
   outstandingItemsPhrase,
   partitionBySignal,
   sortBySeverity,
+  worstSeverity,
 } from "./issues";
 
 function issue(over: Partial<WalkthroughIssue> & { id: string }): WalkthroughIssue {
@@ -85,5 +86,14 @@ describe("outstandingItemsPhrase", () => {
     expect(outstandingItemsPhrase(2, 1)).toBe("2 walkthrough issues and 1 unresolved comment");
     expect(outstandingItemsPhrase(1, 0)).toBe("1 walkthrough issue");
     expect(outstandingItemsPhrase(0, 3)).toBe("3 unresolved comments");
+  });
+});
+
+describe("worstSeverity", () => {
+  it("picks the most severe, skipping blanks", () => {
+    expect(worstSeverity(["info", null, "warning", undefined])).toBe("warning");
+    expect(worstSeverity(["warning", "critical", "info"])).toBe("critical");
+    expect(worstSeverity([null, undefined])).toBeNull();
+    expect(worstSeverity([])).toBeNull();
   });
 });
