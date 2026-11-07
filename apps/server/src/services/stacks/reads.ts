@@ -24,14 +24,6 @@ export function prIdsByNumber(
   return new Map(rows.map((r) => [r.number, r.id]));
 }
 
-export function isCompleteReview(w: {
-  readonly phase: string;
-  readonly completedAt: string | null;
-  readonly status: string;
-}): boolean {
-  return w.phase === "D" && w.completedAt !== null && w.status !== "error";
-}
-
 export function readBriefLayers(db: Db, briefId: string): StackBriefLayer[] {
   return db
     .select({
