@@ -109,16 +109,19 @@ async function writeRow(db: Db, s: UserSettings): Promise<void> {
 }
 
 /**
- * Installs from before the DB kept settings in `~/.revv/settings.json`
- * (legacy-upgrade: settingsJson); that file is imported once, then removed.
+ * The settings row, written on first boot: the defaults pointed at
+ * `firstHost`. Installs from before the DB kept settings in
+ * `~/.revv/settings.json` (legacy-upgrade: settingsJson); that file is
+ * imported instead, once, then removed.
  */
-async function loadOrSeed(db: Db, settingsPath: string): Promise<UserSettings> {
+async function loadOrSeed(db: Db, settingsPath: string, firstHost: string): Promise<UserSettings> {
   const [row] = await db.select().from(userSettings).where(eq(userSettings.id, ROW_ID)).limit(1);
   if (row) return fromRow(row);
 
   const { existsSync, readFileSync, unlinkSync } = await import("node:fs");
 
-  let settings = DEFAULT_USER_SETTINGS;
+  const seed = { ...DEFAULT_USER_SETTINGS, githubHost: firstHost };
+  let settings = seed;
   if (existsSync(settingsPath)) {
     try {
       const raw: unknown = JSON.parse(readFileSync(settingsPath, "utf8"));
@@ -129,7 +132,7 @@ async function loadOrSeed(db: Db, settingsPath: string): Promise<UserSettings> {
           : raw;
       settings = withoutDerived(normalizeSettings(legacy));
     } catch {
-      settings = DEFAULT_USER_SETTINGS;
+      settings = seed;
     }
   }
 
@@ -157,7 +160,7 @@ export class SettingsService extends Context.Service<
     updateSettings: (patch: SettingsUpdate) => Effect.Effect<UserSettings, DbError>;
     /** Every committed change after subscription. React to settings here, not at the write site. */
     settingsChanges: () => Stream.Stream<UserSettings>;
-    /** The GitHub host for flows with no repository in hand: the settings host, else `GITHUB_HOST`. */
+    /** The GitHub host for flows with no repository in hand: the active host. */
     githubHost: () => Effect.Effect<string>;
     /**
      * The `select`ed value whenever a committed change alters it (compared with
@@ -170,15 +173,23 @@ export class SettingsService extends Context.Service<
   }
 >()("SettingsService") {}
 
-/** `legacySettingsPath` is the pre-DB JSON file to import on first boot (a test points it at a temp dir). */
-export const settingsServiceLayer = (legacySettingsPath: string) =>
+/**
+ * `legacySettingsPath` is the pre-DB JSON file to import on first boot (a test
+ * points it at a temp dir). A first boot with no such file points the row at
+ * `firstHost`: `GITHUB_HOST`, which the installer sets for a GitHub
+ * Enterprise install. An existing row is never touched.
+ */
+export const settingsServiceLayer = (
+  legacySettingsPath: string,
+  firstHost: string = serverEnv.githubHost,
+) =>
   Layer.effect(
     SettingsService,
     Effect.gen(function* () {
       const { db } = yield* DbService;
 
       const initial = yield* Effect.tryPromise({
-        try: () => loadOrSeed(db, legacySettingsPath),
+        try: () => loadOrSeed(db, legacySettingsPath, firstHost),
         catch: (cause) => new DbError({ message: "Failed to load settings", cause }),
       });
       const settingsRef = yield* SubscriptionRef.make(initial);
@@ -200,11 +211,7 @@ export const settingsServiceLayer = (legacySettingsPath: string) =>
 
         settingsChanges: () => SubscriptionRef.changes(settingsRef).pipe(Stream.drop(1)),
 
-        githubHost: () =>
-          Effect.map(
-            SubscriptionRef.get(settingsRef),
-            (s) => s.githubHost.trim() || serverEnv.githubHost,
-          ),
+        githubHost: () => Effect.map(SubscriptionRef.get(settingsRef), (s) => s.githubHost),
 
         // `changes` starts with the current value; it seeds the comparison, then is dropped.
         watch: (select) =>
