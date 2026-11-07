@@ -340,7 +340,7 @@ and exposes it through named `get<Field>()` getters and `set<Field>()` / verb-pr
 exports. No factory functions, no classes, no `useFoo()` hooks, no `$effect` inside a store.
 Action exports are verb-first (`setSelectedPrId`, `requestSync`); read accessors are noun-first
 (`getThreads`, `getActiveTab`). A component that wants a fetch to follow reactive inputs runs
-the `$effect` itself and calls the store's action (`ensureSelectedPrSizing`).
+the `$effect` itself and calls the store's action (`ensurePrSizing(prId)`).
 
 **Why.** Svelte 5 runes mean modules ARE the reactive boundary. Wrapping that in a factory
 imports a React mental model that the framework doesn't share. The getter/setter split keeps
@@ -351,8 +351,12 @@ in ways the store doesn't control.
 `$state` and exposes only `getLastSyncAt`, `getThreadsSyncing`, `requestSync`, etc.
 `apps/web/src/lib/walkthrough/store.svelte.ts` keeps its maps private and exposes getters that
 take the PR (`getBlocks(prId)`, `getWalkthroughUiState(prId)`); a store never reads an implicit
-"active" key. Its pure folding lives beside it in `reducer.ts` (unit-tested), its
-user verbs in `actions.ts`.
+"active" key, and its reconnect catch-up follows the PRs it watches, not the route. Its pure
+folding lives beside it in `reducer.ts` (unit-tested), its user verbs in `actions.ts`.
+
+**Sanctioned exception.** Only one review is ever on screen. `pr-view-state.svelte.ts` owns which
+PR that is (`openPrView` / `closePrView`, called by `useOpenReview`), and its tab and file
+accessors (`getActiveTab()`, `setActiveFilePath()`) act on it.
 
 **Anti-pattern.** `export function createWalkthroughStore() { ... }` returning an object with
 methods — the consumer instantiates per-component and reactive sharing across components breaks.
@@ -400,8 +404,8 @@ new entry, `hydrateFromCache` stores the merged snapshot as a new object. The ch
 
 **Anti-pattern.** `entry.blocks.push(b); entries.set(prId, entry)`.
 
-**Backlog.** `review`, `sync`, `stacks`, `hunk-scan` and `merge-eligibility` still hold a plain
-`Map` in `$state` and reassign it after each write (`m = new Map(m)`). It still works; move them
+**Backlog.** `review`, `sync`, `hunk-scan`, `conversation`, `base-conflicts` and `recaps` still
+hold a plain `Map` in `$state` and reassign it after each write (`m = new Map(m)`). It still works; move them
 when the store is next split.
 
 <a id="stores-request-state"></a>
@@ -410,8 +414,7 @@ when the store is next split.
 **Rule.** When a store represents the lifecycle of an async load (loading → success | error),
 model it as a tagged union `RequestState<T> = { status: 'idle' } | { status: 'loading' } | { status: 'error'; error: string } | { status: 'ok'; data: T }`,
 not as parallel boolean flags + nullable error/data fields. The `RequestState<T>` type lives at
-`apps/web/src/lib/stores/_types.ts` (to be created in the first store-domain fix PR; this
-conventions doc declares the shape, the type is introduced when the first migration ships).
+`apps/web/src/lib/stores/_types.ts`.
 
 **Why.** Boolean triplet (`isLoading` + `error: string | null` + `data: T | null`) admits
 illegal states like `{ isLoading: true, error: "foo", data: T }`. A tagged union forces
@@ -420,8 +423,8 @@ downstream.
 
 **Canonical example.** Every per-key fetch made through `createResource` (§4.7) is a
 `RequestState<T>` per key — `apps/web/src/lib/stores/repo-activity.svelte.ts` hands it straight
-to the component. `stacks.svelte.ts` and `conversation.svelte.ts` keep `RequestState` inside
-their own entries.
+to the component, and so does `stacks.svelte.ts`. `conversation.svelte.ts` keeps `RequestState`
+inside its own entries.
 
 **Anti-pattern.** Boolean + nullable shape from
 `apps/web/src/lib/walkthrough/reducer.ts` (`WalkthroughEntry`): `isStreaming: boolean; streamError: string | null`
@@ -441,17 +444,21 @@ Each takes the envelope's `data` whole, and the store filters on its fields itse
 store drops `thread:created` for a PR it isn't showing). Several stores may handle one
 message, each with its own `on<EventName>`; the router lists them all in the message's arm.
 
-The router knows nothing else about a store. A store whose state comes from the stream also
-owns its catch-up, by exporting `onEventsOpened` (every connect), `onEventsReconnected`
-(events sent while the stream was down are lost) or `onWindowForeground`, which the router
-lists in its `ON_OPEN` / `ON_RECONNECT` / `ON_FOREGROUND` arrays.
+A store whose state comes from the stream also owns its catch-up: the re-read that recovers
+what a missed envelope carried (invariant 8), usually exported as `onEventsReconnected`. The
+router's `CATCH_UP` table is an exhaustive `Record` over the event types: each type names its
+catch-up hooks, or says `"none: <why>"`, so a new event type doesn't compile until someone
+decides. `ON_RECONNECT` is built from it; keys waiting on a server signal are re-asked by
+`refreshAllWaiting()` (§4.7) first. `onEventsOpened` (every connect) and `onWindowForeground`
+stay in their own lists, and one 4 s debounce in the router covers reconnect and foreground
+re-reads.
 
 **Why.** Reading the dispatcher should make it obvious which store owns which message. The
 legacy `*FromWs` suffix style buried the event identity in the middle of the name and pluralized
 inconsistently (`updateThreadStatusFromWs` vs the event type `thread:updated`).
 
 **Canonical example.** `apps/web/src/lib/stores/review.svelte.ts` (`onThreadUpdated`,
-`onThreadCreated`, `onThreadMessageEdited`) and `walkthrough.svelte.ts` / `stacks.svelte.ts`
+`onThreadCreated`, `onThreadMessageEdited`) and `walkthrough/store.svelte.ts` / `stacks.svelte.ts`
 (both `onWalkthroughEvent`) match the event message types `thread:updated`, `thread:created`,
 `thread:message:edited` and `walkthrough:event`. The `dispatch` switch in `events.svelte.ts`
 reads as a flat list of these `on*` calls.
@@ -500,12 +507,16 @@ error: any concurrent SSE broadcast between snapshot and rollback is silently dr
 
 **Rule.** A store that fetches something per key (a PR, a repo, a head SHA) does it through
 `createResource` from `apps/web/src/lib/stores/resource.ts`, not a hand-rolled in-flight Map,
-freshness timestamp, generation counter or retry loop. The key carries every input the answer
+freshness timestamp, generation counter or retry loop. The key identifies every input the answer
 depends on — `(prId, headSha, agent, model)` for the sizing preview — so a settings change
-needs no cross-store invalidation: the next read simply misses. A server answer that is still
-`pending` waits for the server's completion envelope (`waitForSignalMs`: the store's handler
-calls `refresh`, `put` or `giveUp`, and its reconnect hook refreshes `waitingKeys()`); a
-pending answer the server never announces is re-asked on the bounded `retryDelaysMs` schedule.
+needs no cross-store invalidation: the next read simply misses. What the fetcher needs is its
+argument, which the resource remembers per key (`argOf`, `refreshAll(match)`,
+`refreshWaiting(match)`), so nothing is packed into a key string and parsed back out. A server
+answer that is still `pending` waits for the server's completion envelope (`waitForSignalMs`:
+the store's handler calls `refresh`, `refreshWaiting`, `put` or `giveUp`); such a resource
+registers itself, and the router's `refreshAllWaiting()` re-asks its waiting keys after a
+reconnect. A pending answer the server never announces is re-asked on the bounded
+`retryDelaysMs` schedule.
 A client poll is the fallback, not the design: when the server knows a computation finished,
 it says so.
 
@@ -517,8 +528,14 @@ primitive gives one answer to "is this in flight, fresh, retrying, superseded or
 question, the settled answer pushed as `pr:merge-eligibility`), `repo-activity.svelte.ts`
 (waits for `repo-activity:settled`, keeps data on error), `walkthrough/sizing.svelte.ts` (key
 includes the routing settings, waits for `diff:cached`).
-`stacks.svelte.ts` and `hunk-scan/store.svelte.ts` keep their own entries and use a resource only to
-schedule asks.
+`stacks.svelte.ts` keeps its data in the resource; `hunk-scan/store.svelte.ts` keeps its own
+entries (the stream writes them too) and uses a resource only to schedule asks.
+
+Ordering that isn't a per-key fetch keeps its own guard, with a comment saying why:
+`conversation.svelte.ts`'s `writeGeneration` (a read racing a write), `pr-deep-link`'s
+`requestVersion` (a multi-step workflow), `repos.svelte.ts`'s load sequence (a pushed list and a
+fetched one, each awaiting avatar decoding), the archive's fetch token (a paged feed reloaded by
+a filter).
 
 **Anti-pattern.** A module-level `const inFlight = new Map<string, Promise<void>>()` next to a
 `loadedAt` timestamp.
@@ -540,20 +557,26 @@ then resets every chat module (timeline, proposed commits, session context, queu
 `stacks.svelte.ts` `reset()` resets its resource and debounce timers.
 
 <a id="stores-transport"></a>
-### 4.9 JSON calls go through Eden; refusals through `apiErrorMessage`
+### 4.9 JSON calls go through `call(eden, fallback)`; streams through `sseError`
 
 **Rule.** Every JSON request goes through the Eden client in `apps/web/src/lib/api/client.ts`,
-and its types come from Eden inference (`EdenData<…>` in `api/wire.ts`) or `@revv/shared`,
-never a hand-written copy of the server's response. A refusal's text comes from
-`apiErrorMessage(error, fallback)` (`api/errors.ts`), its code from `apiErrorCode`. Raw `fetch`
-is for bytes (`ImageDiffViewer`'s blobs) and SSE streams (`api/sse-stream.ts`) only.
+awaited with `call(request, fallback)` (`api/errors.ts`): it returns the success body or throws
+an `ApiError { status, code, body, message }`, the message being the server's wording or the
+fallback with the status. Its types come from Eden inference (`EdenData<…>` in `api/wire.ts`) or
+`@revv/shared`, never a hand-written copy of the server's response. Branch on a refusal by its
+`code`, not its status. A stream's failure reads through `sseError` / `sseErrorMessage`
+(`api/sse-stream.ts`). Raw `fetch` is for bytes (`ImageDiffViewer`'s blobs) and SSE streams only.
 
 **Why.** The client sets `parseDate: false`, so a date is the ISO string the shared types and the
 SSE stream both carry; a hand-typed shape or an `as` cast silently drifts from the route, and
-seven copies of "read `error`, else `message`, else the status" had drifted already.
+seven copies of "read `error`, else `message`, else the status" had drifted already. Eden
+answers a refusal with `{ data: null, error }` and only throws on the network, so a store that
+`try`/`catch`es a bare Eden call treats every 4xx/5xx as success: refused pins stayed pinned
+and refused syncs left their spinners on.
 
-**Anti-pattern.** `(await res.json()) as Foo`, `error.value as { error?: string }`, or a store
-declaring the interface of a route's response.
+**Anti-pattern.** `try { await api.api.x.post() } catch { rollback() }`, `(await res.json()) as
+Foo`, `error.value as { error?: string }`, or a store declaring the interface of a route's
+response.
 
 ---
 

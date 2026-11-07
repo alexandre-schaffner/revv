@@ -20,22 +20,18 @@ import { fullWindow, type RecapPeriod, startOfUtcIsoWeek, windowIsCurrent } from
  * (`"YYYY-MM"`); both sort chronologically as plain strings.
  */
 
-/**
- * Compare through {@link utcDayKey}: a raw `Date < string` comparison
- * type-checks and silently misbehaves.
- */
+/** Compare bounds through {@link utcDayKey}, not as raw ISO strings. */
 export interface RecapWindow {
   period: RecapPeriod;
-  periodStart: string | Date;
-  periodEnd: string | Date;
+  periodStart: string;
+  periodEnd: string;
 }
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEK_MS = 7 * DAY_MS;
 
-export function utcDayKey(value: string | Date): string {
-  const s = typeof value === "string" ? value : value.toISOString();
-  return s.slice(0, 10);
+export function utcDayKey(value: string): string {
+  return value.slice(0, 10);
 }
 
 export function utcDateKey(d: Date): string {
@@ -59,7 +55,7 @@ export function addUtcDays(key: string, n: number): string {
   return utcDateKey(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + n)));
 }
 
-export function monthKeyOf(value: string | Date): string {
+export function monthKeyOf(value: string): string {
   return utcDayKey(value).slice(0, 7);
 }
 
@@ -168,7 +164,6 @@ export function pickLatestByWindow<T extends RecapWindow & { status: string; gen
 ): T | null {
   let best: T | null = null;
   for (const r of recaps) {
-    if (r.status === "superseded") continue;
     if (period !== undefined && r.period !== period) continue;
     if (best === null) {
       best = r;

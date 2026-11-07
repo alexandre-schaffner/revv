@@ -18,10 +18,10 @@ import { ZERO_TOKEN_USAGE } from "@revv/shared";
 import { SvelteMap, SvelteSet } from "svelte/reactivity";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
+import { call } from "$lib/api/errors";
+import { thrownMessage } from "$lib/api/wire";
 import { getReviewModeForPr } from "$lib/stores/prs.svelte";
 import { createResource } from "$lib/stores/resource";
-import { getSelectedPrId } from "$lib/stores/route.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
 import { shallowEntryEqual, updateEntryInMap } from "./entry-equal";
 import { addressesActiveWalkthrough } from "./event-target";
@@ -172,13 +172,22 @@ export function getSelectedMode(prId: string): WalkthroughMode {
   return entries.get(prId)?.mode ?? getReviewModeForPr(prId);
 }
 
+/** The tab bar's dot. A stopped or partial run is not complete: it shows none. */
 export function getPrWalkthroughStatus(prId: string): "idle" | "generating" | "complete" | "error" {
-  const entry = entries.get(prId);
-  if (!entry) return "idle";
-  if (entry.isStreaming) return "generating";
-  if (entry.streamError) return "error";
-  if (entry.summary) return "complete";
-  return "idle";
+  switch (getWalkthroughUiState(prId).kind) {
+    case "streaming":
+      return "generating";
+    case "complete":
+    case "complete-stale":
+      return "complete";
+    case "error-empty":
+    case "error-partial":
+      return "error";
+    case "absent":
+    case "idle":
+    case "resumable":
+      return "idle";
+  }
 }
 
 /**
@@ -198,8 +207,10 @@ export function getLastWalkthroughEventAt(prId: string): number | null {
 
 const reviewRounds = createResource<string, WalkthroughReviewRoundsResponse>({
   fetch: async (_key, prId) => {
-    const { data, error } = await api.api.reviews({ id: prId }).walkthrough.rounds.get();
-    if (error) return { status: "error", error: apiErrorMessage(error, "Review rounds failed") };
+    const data = await call(
+      api.api.reviews({ id: prId }).walkthrough.rounds.get(),
+      "Review rounds failed",
+    );
     return { status: "ok", data };
   },
 });
@@ -307,10 +318,7 @@ async function readSnapshot(prId: string, options?: HydrateOptions): Promise<boo
     }
     return true;
   } catch (e) {
-    wtTrace(
-      "lifecycle",
-      `hydrateFromCache prId=${prId} error=${e instanceof Error ? e.message : String(e)}`,
-    );
+    wtTrace("lifecycle", `hydrateFromCache prId=${prId} error=${thrownMessage(e)}`);
     return false;
   }
 }
@@ -452,8 +460,8 @@ export function onWalkthroughLive({
  */
 async function hydrateActiveWalkthroughs(): Promise<void> {
   try {
-    const { data } = await api.api.walkthroughs.active.get();
-    for (const row of data?.walkthroughs ?? []) {
+    const data = await call(api.api.walkthroughs.active.get(), "Active walkthroughs failed");
+    for (const row of data.walkthroughs) {
       const selectedReportId = selectedReportIds.get(row.prId) ?? null;
       if (selectedReportId !== null && selectedReportId !== row.walkthroughId) continue;
       if (!entries.has(row.prId)) {
@@ -472,10 +480,7 @@ async function hydrateActiveWalkthroughs(): Promise<void> {
       }
     }
   } catch (e) {
-    wtTrace(
-      "lifecycle",
-      `hydrateActiveWalkthroughs failed: ${e instanceof Error ? e.message : String(e)}`,
-    );
+    wtTrace("lifecycle", `hydrateActiveWalkthroughs failed: ${thrownMessage(e)}`);
   }
 }
 
@@ -485,12 +490,13 @@ export function onEventsOpened(): void {
 }
 
 /**
- * Events broadcast while the stream was down reached no one; merge the open
- * PR's snapshot back in. Background PRs catch up when their page opens.
+ * Events broadcast while the stream was down reached no one; merge each
+ * watched PR's snapshot back in, and re-read the review rounds this store
+ * holds. Background PRs' entries catch up when their page opens.
  */
 export function onEventsReconnected(): void {
-  const prId = getSelectedPrId();
-  if (prId) void hydrateFromCache(prId);
+  for (const prId of watched) void hydrateFromCache(prId);
+  reviewRounds.refreshAll();
 }
 
 export function reset(): void {

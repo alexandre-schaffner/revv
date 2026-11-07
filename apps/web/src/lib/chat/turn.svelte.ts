@@ -6,6 +6,7 @@ import {
 } from "@revv/shared";
 import { untrack } from "svelte";
 import { toast } from "svelte-sonner";
+import { thrownMessage } from "$lib/api/wire";
 import { openSettings } from "$lib/stores/settingsModal.svelte";
 import { agentAuthRecoveryDescription } from "$lib/utils/agent-auth-recovery";
 import {
@@ -227,7 +228,7 @@ export async function setInteractionMode(prId: string, mode: InteractionMode): P
     await setInteractionModeApi(prId, mode);
   } catch (err) {
     setInteractionModeLocally(prId, prior);
-    toast.error(err instanceof Error ? err.message : "Failed to set interaction mode");
+    toast.error(thrownMessage(err));
   }
 }
 
@@ -235,7 +236,7 @@ export async function approvePlanAction(prId: string, planId: string): Promise<v
   try {
     await approvePlan(prId, planId);
   } catch (err) {
-    toast.error(err instanceof Error ? err.message : "Approve failed");
+    toast.error(thrownMessage(err));
     return;
   }
   setPlanStatus(prId, planId, "approved");
@@ -254,7 +255,7 @@ export async function rejectPlanAction(prId: string, planId: string): Promise<vo
     await rejectPlan(prId, planId);
     setPlanStatus(prId, planId, "rejected");
   } catch (err) {
-    toast.error(err instanceof Error ? err.message : "Reject failed");
+    toast.error(thrownMessage(err));
   }
 }
 
@@ -299,7 +300,7 @@ export async function clearChatHistory(prId: string): Promise<void> {
   try {
     await clearChat(prId);
   } catch (err) {
-    toast.error(err instanceof Error ? err.message : "Failed to clear conversation");
+    toast.error(thrownMessage(err));
   }
 }
 

@@ -10,8 +10,8 @@ import type {
   StreamErrorBody,
 } from "@revv/shared";
 import { api } from "$lib/api/client";
-import { apiErrorCode, apiErrorMessage } from "$lib/api/errors";
-import { SseFrameError, SseHttpError, SseIdleError, streamSse } from "$lib/api/sse-stream";
+import { ApiError, call } from "$lib/api/errors";
+import { sseError, streamSse } from "$lib/api/sse-stream";
 import type { EdenData } from "$lib/api/wire";
 
 export type { Activity, ChatTask, InteractionMode };
@@ -96,9 +96,6 @@ function dispatchChatFrame(frame: ChatStreamFrame, callbacks: ChatCallbacks): vo
   }
 }
 
-const LOST_CONNECTION_MESSAGE =
-  "Lost connection to the local server. The agent may have stopped — check the server logs and try again.";
-
 /**
  * Report an agent stream's end through the chat-style callbacks: `onDone`
  * when it closed cleanly, `onError` otherwise, nothing when the caller
@@ -114,30 +111,11 @@ async function settleAgentStream(
   try {
     await stream;
   } catch (err) {
-    const error = agentStreamError(err);
+    const error = sseError(err, "The agent stream was refused");
     if (error) callbacks.onError(error);
     return;
   }
   callbacks.onDone();
-}
-
-function agentStreamError(err: unknown): StreamErrorBody | null {
-  if (err instanceof SseHttpError) {
-    return typeof err.body === "object" && err.body !== null
-      ? (err.body as StreamErrorBody)
-      : { code: "UNKNOWN", message: err.statusText };
-  }
-  if (err instanceof SseFrameError) return { code: err.code, message: err.message };
-  if (err instanceof SseIdleError)
-    return { code: "NETWORK_ERROR", message: LOST_CONNECTION_MESSAGE };
-  if (!(err instanceof Error)) return { code: "NETWORK_ERROR", message: String(err) };
-  if (err.name === "AbortError") return null;
-  // WebKit surfaces connection drops as "Load failed"; Chromium as "Failed to fetch".
-  const isConnectionDrop = err.message === "Load failed" || err.message === "Failed to fetch";
-  return {
-    code: "NETWORK_ERROR",
-    message: isConnectionDrop ? LOST_CONNECTION_MESSAGE : err.message,
-  };
 }
 
 function chat(prId: string) {
@@ -146,30 +124,25 @@ function chat(prId: string) {
 
 /** Clear the agent-side session and worktree+branch for this PR's chat. */
 export async function clearChat(prId: string): Promise<void> {
-  const { error } = await chat(prId).delete();
-  if (error) throw new Error(apiErrorMessage(error, "Failed to clear chat"));
+  await call(chat(prId).delete(), "Failed to clear chat");
 }
 
 export async function setInteractionMode(prId: string, mode: InteractionMode): Promise<void> {
-  const { error } = await chat(prId)["interaction-mode"].patch({ mode });
-  if (error) throw new Error(apiErrorMessage(error, "Failed to set interaction mode"));
+  await call(chat(prId)["interaction-mode"].patch({ mode }), "Failed to set interaction mode");
 }
 
 export async function approvePlan(prId: string, planId: string): Promise<void> {
-  const { error } = await chat(prId).plan({ planId }).approve.post();
-  if (error) throw new Error(apiErrorMessage(error, "Approve failed"));
+  await call(chat(prId).plan({ planId }).approve.post(), "Approve failed");
 }
 
 export async function rejectPlan(prId: string, planId: string): Promise<void> {
-  const { error } = await chat(prId).plan({ planId }).reject.post();
-  if (error) throw new Error(apiErrorMessage(error, "Reject failed"));
+  await call(chat(prId).plan({ planId }).reject.post(), "Reject failed");
 }
 
 export type AvailableAgents = EdenData<typeof api.api.chat.agents.available.get>;
 
 export async function fetchAvailableAgents(): Promise<AvailableAgents> {
-  const { data, error } = await api.api.chat.agents.available.get();
-  if (error) throw new Error(apiErrorMessage(error, "Failed to load available agents"));
+  const data = await call(api.api.chat.agents.available.get(), "Failed to load available agents");
   return data;
 }
 
@@ -180,10 +153,12 @@ export async function fetchSessionContext(
   // `warm=1` opts into the server's eager path (acquire worktree + harvest slash
   // commands) so the `/`-command menu works on a brand-new chat. The plain fetch
   // stays side-effect-free.
-  const { data, error } = await chat(prId)["session-context"].get({
-    query: opts.warm ? { warm: "1" } : {},
-  });
-  if (error) throw new Error(apiErrorMessage(error, "Failed to load chat session context"));
+  const data = await call(
+    chat(prId)["session-context"].get({
+      query: opts.warm ? { warm: "1" } : {},
+    }),
+    "Failed to load chat session context",
+  );
   return data;
 }
 
@@ -192,8 +167,7 @@ export type PersistedChatEntry = ChatTimeline["entries"][number];
 
 /** Fetch the persisted timeline for a PR's current head-SHA chat session. */
 export async function fetchChatMessages(prId: string): Promise<ChatTimeline> {
-  const { data, error } = await chat(prId).messages.get();
-  if (error) throw new Error(apiErrorMessage(error, "Failed to fetch chat messages"));
+  const data = await call(chat(prId).messages.get(), "Failed to fetch chat messages");
   return data;
 }
 
@@ -201,8 +175,7 @@ export type ProposedChanges = EdenData<ReturnType<typeof chat>["proposed-changes
 
 /** Fetch the list of commits the agent has made on top of the PR's head SHA. */
 export async function fetchProposedChanges(prId: string): Promise<ProposedChanges> {
-  const { data, error } = await chat(prId)["proposed-changes"].get();
-  if (error) throw new Error(apiErrorMessage(error, "Failed to fetch proposed changes"));
+  const data = await call(chat(prId)["proposed-changes"].get(), "Failed to fetch proposed changes");
   return data;
 }
 
@@ -213,8 +186,10 @@ export async function fetchProposedChanges(prId: string): Promise<ProposedChange
  * separator's expand-up / expand-down controls to be enabled.
  */
 export async function fetchProposedDiffFiles(prId: string, sha: string) {
-  const { data, error } = await chat(prId)["proposed-changes"]({ sha }).files.get();
-  if (error) throw new Error(apiErrorMessage(error, `Failed to fetch files for ${sha}`));
+  const data = await call(
+    chat(prId)["proposed-changes"]({ sha }).files.get(),
+    `Failed to fetch files for ${sha}`,
+  );
   return [...data.files];
 }
 
@@ -251,16 +226,19 @@ export async function pushProposedChanges(
   prId: string,
   options?: PushProposedOptions,
 ): Promise<MergePushResult> {
-  const { data, error } = await chat(prId)["proposed-changes"]["merge-and-push"].post({
-    ...(options?.newBranchName !== undefined ? { newBranchName: options.newBranchName } : {}),
-    ...(options?.force !== undefined ? { force: options.force } : {}),
-  });
-  if (!error) return data;
-  const refusal: MergePushError = {
-    code: apiErrorCode(error) ?? "GENERIC_ERROR",
-    message: apiErrorMessage(error, "Push failed"),
-  };
-  throw refusal;
+  try {
+    return await call(
+      chat(prId)["proposed-changes"]["merge-and-push"].post({
+        ...(options?.newBranchName !== undefined ? { newBranchName: options.newBranchName } : {}),
+        ...(options?.force !== undefined ? { force: options.force } : {}),
+      }),
+      "Push failed",
+    );
+  } catch (e) {
+    if (!(e instanceof ApiError)) throw e;
+    const refusal: MergePushError = { code: e.code ?? "GENERIC_ERROR", message: e.message };
+    throw refusal;
+  }
 }
 
 function notPushed(result: Exclude<MergePushResult, { status: "pushed" }>): Error {
@@ -288,8 +266,7 @@ export interface ResolvePushCallbacks {
 
 /** Discard a single proposed commit via interactive rebase. */
 export async function discardProposedCommit(prId: string, sha: string): Promise<void> {
-  const { error } = await chat(prId)["proposed-changes"]({ sha }).delete();
-  if (error) throw new Error(apiErrorMessage(error, "Failed"));
+  await call(chat(prId)["proposed-changes"]({ sha }).delete(), "Failed");
 }
 
 /** Rebase all agent commits onto a new head SHA. */
@@ -298,23 +275,23 @@ export async function rebaseProposedCommits(
   oldHeadSha: string,
   newHeadSha: string,
 ): Promise<void> {
-  const { error } = await chat(prId)["proposed-changes"]["rebase-onto"].post({
-    oldHeadSha,
-    newHeadSha,
-  });
-  if (error) throw new Error(apiErrorMessage(error, "Failed"));
+  await call(
+    chat(prId)["proposed-changes"]["rebase-onto"].post({
+      oldHeadSha,
+      newHeadSha,
+    }),
+    "Failed",
+  );
 }
 
 /** After all blocked commits are handled, advance the worktree to the new PR head. */
 export async function advanceWorktree(prId: string, newHeadSha: string): Promise<void> {
-  const { error } = await chat(prId)["proposed-changes"].advance.post({ newHeadSha });
-  if (error) throw new Error(apiErrorMessage(error, "Failed"));
+  await call(chat(prId)["proposed-changes"].advance.post({ newHeadSha }), "Failed");
 }
 
 /** Cherry-pick a single proposed commit onto the PR source branch and push. */
 export async function cherryPickProposedCommit(prId: string, sha: string): Promise<void> {
-  const { data, error } = await chat(prId)["proposed-changes"]["cherry-pick"].post({ sha });
-  if (error) throw new Error(apiErrorMessage(error, "Failed"));
+  const data = await call(chat(prId)["proposed-changes"]["cherry-pick"].post({ sha }), "Failed");
   if (data.status !== "pushed") throw notPushed(data);
 }
 
@@ -323,10 +300,12 @@ export async function batchCherryPickProposedCommits(
   prId: string,
   shas: readonly string[],
 ): Promise<{ pushedCommits: number; branch: string }> {
-  const { data, error } = await chat(prId)["proposed-changes"]["batch-cherry-pick"].post({
-    shas: [...shas],
-  });
-  if (error) throw new Error(apiErrorMessage(error, "Failed"));
+  const data = await call(
+    chat(prId)["proposed-changes"]["batch-cherry-pick"].post({
+      shas: [...shas],
+    }),
+    "Failed",
+  );
   if (data.status !== "pushed") throw notPushed(data);
   return { pushedCommits: data.pushedCommits, branch: data.branch };
 }
@@ -336,10 +315,12 @@ export async function batchDiscardProposedCommits(
   prId: string,
   shas: readonly string[],
 ): Promise<{ discardedCount: number }> {
-  const { data, error } = await chat(prId)["proposed-changes"]["batch-discard"].post({
-    shas: [...shas],
-  });
-  if (error) throw new Error(apiErrorMessage(error, "Failed"));
+  const data = await call(
+    chat(prId)["proposed-changes"]["batch-discard"].post({
+      shas: [...shas],
+    }),
+    "Failed",
+  );
   return { discardedCount: data.discardedCount ?? shas.length };
 }
 

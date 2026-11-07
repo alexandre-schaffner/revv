@@ -4,7 +4,12 @@
 // crash, the OS reclaiming the WKWebView socket) never resolves a pending
 // read, so only a timer can notice it.
 
-import { SSE_DONE_DATA, SSE_ERROR_EVENT, type StreamErrorCode } from "@revv/shared";
+import {
+  SSE_DONE_DATA,
+  SSE_ERROR_EVENT,
+  type StreamErrorBody,
+  type StreamErrorCode,
+} from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { bodyMessage } from "$lib/api/errors";
 import { authHeaders } from "$lib/session/token.svelte";
@@ -142,6 +147,45 @@ export async function streamSse<T>(opts: SseStreamOptions<T>): Promise<void> {
     opts.signal?.removeEventListener("abort", forwardAbort);
     reader?.cancel().catch(() => {});
   }
+}
+
+const LOST_CONNECTION_MESSAGE =
+  "Lost connection to the local server. The agent may have stopped — check the server logs and try again.";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/**
+ * How a {@link streamSse} call ended badly, as the server's `{ code, message }`
+ * body: its refusal, its `event: error` frame, or the client's own transport
+ * failure. Null when the caller aborted it. `fallback` words a refusal whose
+ * body says nothing.
+ */
+export function sseError(err: unknown, fallback: string): StreamErrorBody | null {
+  if (err instanceof SseHttpError) {
+    const code = isRecord(err.body) && typeof err.body.code === "string" ? err.body.code : null;
+    const message = err.serverMessage ?? `${fallback} (HTTP ${err.status})`;
+    return code !== null
+      ? { ...(err.body as Record<string, unknown>), code: code as StreamErrorCode, message }
+      : { code: "UNKNOWN", message };
+  }
+  if (err instanceof SseFrameError) return { code: err.code, message: err.message };
+  if (err instanceof SseIdleError)
+    return { code: "NETWORK_ERROR", message: LOST_CONNECTION_MESSAGE };
+  if (!(err instanceof Error)) return { code: "NETWORK_ERROR", message: String(err) };
+  if (err.name === "AbortError") return null;
+  // WebKit surfaces connection drops as "Load failed"; Chromium as "Failed to fetch".
+  const isConnectionDrop = err.message === "Load failed" || err.message === "Failed to fetch";
+  return {
+    code: "NETWORK_ERROR",
+    message: isConnectionDrop ? LOST_CONNECTION_MESSAGE : err.message,
+  };
+}
+
+/** {@link sseError}'s message; null when the caller aborted the stream. */
+export function sseErrorMessage(err: unknown, fallback: string): string | null {
+  return sseError(err, fallback)?.message ?? null;
 }
 
 function frameError(raw: string): SseFrameError {

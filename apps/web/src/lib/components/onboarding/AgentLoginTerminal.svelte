@@ -6,7 +6,7 @@ import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import { onDestroy, onMount } from "svelte";
 import { api } from "$lib/api/client";
 import { apiErrorMessage } from "$lib/api/errors";
-import { SseHttpError, streamSse } from "$lib/api/sse-stream";
+import { sseErrorMessage, streamSse } from "$lib/api/sse-stream";
 import { prefersReducedMotion } from "$lib/motion";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import { cssTokens, openXterm, xtermTheme } from "$lib/utils/xterm";
@@ -102,14 +102,10 @@ async function streamLoginEvents(id: string, signal: AbortSignal): Promise<void>
       onEvent: applyEvent,
     });
   } catch (e) {
-    if (signal.aborted) return;
+    const message = sseErrorMessage(e, "Sign-in stream failed");
+    if (signal.aborted || message === null) return;
     failed = true;
-    errorMsg =
-      e instanceof SseHttpError
-        ? `Sign-in stream failed (HTTP ${e.status})`
-        : e instanceof Error
-          ? e.message
-          : "Sign-in stream failed";
+    errorMsg = message;
   }
 }
 

@@ -6,7 +6,8 @@
 import { draftCommentBody, type WalkthroughIssue } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
+import { call } from "$lib/api/errors";
+import { thrownMessage } from "$lib/api/wire";
 import { acceptWriteResult } from "$lib/stores/conversation.svelte";
 import { getThreadMessages, getThreads, loadSession } from "$lib/stores/review.svelte";
 import { markIssuesAsSubmitted } from "$lib/walkthrough/store.svelte";
@@ -35,21 +36,19 @@ export async function submitReview(
     .filter((t) => draftCommentBody(t, getThreadMessages(t.id)) !== null)
     .map((t) => t.id);
   try {
-    const { data, error } = await api.api.reviews({ id: prId })["github-submit"].post({
-      action,
-      body: reviewBody(issues),
-      threadIds,
-      issueIds,
-    });
-    if (error) throw new Error(apiErrorMessage(error, "Failed to submit review"));
-    const result = data && "htmlUrl" in data ? data : null;
-    acceptWriteResult(prId, { conversation: result?.conversation ?? null });
+    const result = await call(
+      api.api
+        .reviews({ id: prId })
+        ["github-submit"].post({ action, body: reviewBody(issues), threadIds, issueIds }),
+      "Failed to submit review",
+    );
+    acceptWriteResult(prId, { conversation: result.conversation });
     // Re-read past the freshness window: rows still missing their externalId
     // would be posted again by the next submit.
     await loadSession(prId, true);
 
     toast.success(`${actionLabel(action)} on GitHub`);
-    const failedReplies = result?.failedReplies ?? 0;
+    const { failedReplies } = result;
     if (failedReplies > 0) {
       toast.warning(
         failedReplies === 1
@@ -59,7 +58,7 @@ export async function submitReview(
     }
     // Comments on lines no longer in the diff are held back by the server
     // rather than failing the whole review; they stay local drafts.
-    const skipped = result?.skippedComments ?? [];
+    const skipped = result.skippedComments;
     const first = skipped[0];
     if (first) {
       toast.warning(
@@ -69,14 +68,12 @@ export async function submitReview(
       );
     }
     // Echo the server's stamp so "already posted" shows before the next read.
-    markIssuesAsSubmitted(
-      prId,
-      result?.submittedIssueIds ?? issueIds,
-      result?.issuesSubmittedAt ?? new Date().toISOString(),
-    );
+    if (result.issuesSubmittedAt !== null) {
+      markIssuesAsSubmitted(prId, result.submittedIssueIds, result.issuesSubmittedAt);
+    }
     return true;
   } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to submit review");
+    toast.error(thrownMessage(e));
     return false;
   }
 }

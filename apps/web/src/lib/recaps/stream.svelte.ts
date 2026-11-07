@@ -6,7 +6,7 @@ import type {
   RecapStreamPhase,
   RecapThemeSummary,
 } from "@revv/shared";
-import { streamSse } from "$lib/api/sse-stream";
+import { sseErrorMessage, streamSse } from "$lib/api/sse-stream";
 
 export interface RecapStreamEntry {
   lede: string;
@@ -154,13 +154,9 @@ export async function streamRecap(recapId: string): Promise<void> {
   } catch (e) {
     const current = entries.get(recapId);
     if (!current) return;
-    if ((e as Error).name !== "AbortError") {
-      setEntry(recapId, {
-        ...current,
-        isStreaming: false,
-        streamError: e instanceof Error ? e.message : "Recap stream failed",
-      });
-    }
+    const message = sseErrorMessage(e, "The recap stream was refused");
+    if (message !== null)
+      setEntry(recapId, { ...current, isStreaming: false, streamError: message });
   } finally {
     const current = entries.get(recapId);
     if (current && !recapStreamEnded(current)) {

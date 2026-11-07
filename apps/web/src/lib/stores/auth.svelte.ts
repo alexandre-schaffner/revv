@@ -6,8 +6,8 @@
 import { isMaintainerLogin, type UserUpdatedEnvelope } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
-import { apiErrorMessage, bodyMessage } from "$lib/api/errors";
-import type { EdenData } from "$lib/api/wire";
+import { ApiError, call } from "$lib/api/errors";
+import { type EdenData, thrownMessage } from "$lib/api/wire";
 import { authClient } from "$lib/auth-client";
 import { getHeldSessions, holdSession, releaseSession } from "$lib/session/held-sessions";
 import { clearToken, getToken, setToken } from "$lib/session/token.svelte";
@@ -189,12 +189,9 @@ function parseSignInErrorCode(value: unknown): SignInErrorCode | null {
     : null;
 }
 
-function signInRefusal(refusal: { status: number; value: unknown }): Error {
-  const { value } = refusal;
-  signInErrorCode = parseSignInErrorCode(
-    typeof value === "object" && value !== null && "code" in value ? value.code : null,
-  );
-  const detail = typeof value === "string" ? value.trim() : (bodyMessage(value) ?? "");
+function signInRefusal(refusal: ApiError): Error {
+  signInErrorCode = parseSignInErrorCode(refusal.body?.code);
+  const detail = refusal.serverMessage ?? "";
   return new Error(`Sign-in request failed (${refusal.status})${detail ? `: ${detail}` : ""}`);
 }
 
@@ -263,10 +260,14 @@ export async function signIn(host?: string, clientId?: string): Promise<boolean>
   signInErrorCode = null;
   isLoading = true;
   try {
-    const { data, error: refusal } = await api.api.auth.device.init.post(
-      host ? { host, ...(clientId ? { client_id: clientId } : {}) } : undefined,
-    );
-    if (refusal) throw signInRefusal(refusal);
+    const data = await call(
+      api.api.auth.device.init.post(
+        host ? { host, ...(clientId ? { client_id: clientId } : {}) } : undefined,
+      ),
+      "Sign-in request failed",
+    ).catch((e: unknown) => {
+      throw e instanceof ApiError ? signInRefusal(e) : e;
+    });
     deviceFlow = {
       userCode: data.user_code,
       verificationUri: data.verification_uri,
@@ -314,7 +315,14 @@ async function poll(): Promise<void> {
       ...(deviceFlow.host ? { host: deviceFlow.host } : {}),
       ...(deviceFlow.clientId ? { client_id: deviceFlow.clientId } : {}),
     };
-    const { data, error: refusal } = await api.api.auth.device.poll.post(body);
+    let data: EdenData<typeof api.api.auth.device.poll.post> | null = null;
+    let reason: string | undefined;
+    try {
+      data = await call(api.api.auth.device.poll.post(body), "Sign-in failed");
+    } catch (e) {
+      if (!(e instanceof ApiError)) throw e;
+      reason = e.serverMessage;
+    }
     if (data?.status === "pending") {
       schedulePoll(deviceFlow.interval);
       return;
@@ -350,7 +358,6 @@ async function poll(): Promise<void> {
     // Surface the server-provided reason when it's anything other than the two
     // well-known device-flow outcomes (no email on account, GitHub API 4xx, DB
     // error, ...).
-    const reason = refusal ? bodyMessage(refusal.value) : undefined;
     error =
       reason === "expired"
         ? "Sign-in timed out. Please try again."
@@ -392,31 +399,8 @@ export async function loadUser(): Promise<void> {
         email: u.email,
         ...(u.image != null ? { image: u.image } : {}),
       };
-      // The server refreshes `user.image` on each poll cycle, so the identity
-      // read carries a fresh avatar even after GitHub's signed URL expired.
-      try {
-        const { data } = await api.api.user.identity.get();
-        if (data) {
-          if (user) {
-            const next: User = {
-              ...user,
-              githubLogin: data.login,
-              onboardedAt: data.onboardedAt ?? null,
-            };
-            if (data.avatarContent != null) {
-              next.image = data.avatarContent;
-            }
-            user = next;
-          }
-          reauthRequired = data.reauthRequired
-            ? { host: data.host ?? null, githubLogin: data.login }
-            : null;
-        }
-      } catch {
-        // best-effort
-      } finally {
-        identityAttempted = true;
-      }
+      await readIdentity();
+      identityAttempted = true;
       accountPickerDismissed = false;
       holdCurrentSession();
       void fetchLocalAccounts();
@@ -441,6 +425,35 @@ export async function loadUser(): Promise<void> {
   } finally {
     isLoading = false;
   }
+}
+
+/**
+ * Mirror the server's identity: login, onboarding, avatar and whether the
+ * account needs re-auth. The server refreshes `user.image` on each poll cycle,
+ * so this carries a fresh avatar even after GitHub's signed URL expired.
+ * Best-effort: a failed read keeps what's shown.
+ */
+async function readIdentity(): Promise<void> {
+  try {
+    const data = await call(api.api.user.identity.get(), "Identity read failed");
+    if (user) {
+      const next: User = {
+        ...user,
+        githubLogin: data.login,
+        onboardedAt: data.onboardedAt ?? null,
+      };
+      if (data.avatarContent != null) next.image = data.avatarContent;
+      user = next;
+    }
+    reauthRequired = data.reauthRequired
+      ? { host: data.host ?? null, githubLogin: data.login }
+      : null;
+  } catch {}
+}
+
+/** `auth:reauth-*` and `user:updated` sent while the stream was down reached no one. */
+export function onEventsReconnected(): void {
+  if (user) void readIdentity();
 }
 
 /** Keep the signed-in session, so a signed-out window can offer it again. */
@@ -481,8 +494,8 @@ export async function completeOnboarding(): Promise<void> {
   const localStamp = new Date().toISOString();
   user = { ...user, onboardedAt: localStamp };
   try {
-    const { data } = await api.api.onboarding.complete.post();
-    if (data && user) user = { ...user, onboardedAt: data.onboardedAt };
+    const data = await call(api.api.onboarding.complete.post(), "Onboarding failed");
+    if (user) user = { ...user, onboardedAt: data.onboardedAt };
   } catch {
     // best-effort — optimistic local stamp keeps the UI moving
   }
@@ -517,7 +530,7 @@ export async function resetOnboarding(): Promise<void> {
   }
   user = { ...user, onboardedAt: null };
   try {
-    await api.api.onboarding.reset.post();
+    await call(api.api.onboarding.reset.post(), "Onboarding reset failed");
   } catch {
     // best-effort — local mirror already flipped; the gate is showing.
   }
@@ -538,8 +551,7 @@ export async function fetchLocalAccounts(): Promise<void> {
 
 async function signedInLocalAccounts(): Promise<readonly LocalAccount[] | null> {
   try {
-    const { data } = await api.api.auth["local-accounts"].get();
-    return data ?? null;
+    return await call(api.api.auth["local-accounts"].get(), "Accounts read failed");
   } catch {
     return null;
   }
@@ -549,18 +561,18 @@ async function heldLocalAccounts(): Promise<readonly LocalAccount[]> {
   const rows = await Promise.all(
     getHeldSessions().map(async (held): Promise<LocalAccount | null> => {
       try {
-        const { data, error: refusal } = await api.api.auth.accounts.get({
-          headers: { Authorization: `Bearer ${held.token}` },
-        });
-        if (refusal?.status === 401) releaseSession({ token: held.token });
-        if (!data) return null;
+        const data = await call(
+          api.api.auth.accounts.get({ headers: { Authorization: `Bearer ${held.token}` } }),
+          "Accounts read failed",
+        );
         const accounts = data
           .filter((a) => a.connected)
           .map(({ host, githubLogin, avatarUrl }) => ({ host, githubLogin, avatarUrl }));
         return accounts.length > 0
           ? { id: held.userId, name: held.name, email: held.email, image: held.image, accounts }
           : null;
-      } catch {
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 401) releaseSession({ token: held.token });
         return null;
       }
     }),
@@ -581,7 +593,7 @@ export async function runAccountSwitch(run: () => Promise<void>): Promise<boolea
     await run();
     return true;
   } catch (e) {
-    error = `Failed to switch account: ${e instanceof Error ? e.message : String(e)}`;
+    error = `Failed to switch account: ${thrownMessage(e)}`;
     return false;
   } finally {
     isLoading = false;
@@ -591,14 +603,12 @@ export async function runAccountSwitch(run: () => Promise<void>): Promise<boolea
 
 /** Ask the server for a session token for another local user. */
 export async function requestAccountSwitch(userId: string): Promise<string> {
-  const { data, error: refusal } = await api.api.auth.switch.post({ userId });
-  if (refusal) throw new Error(apiErrorMessage(refusal, "Switch failed"));
-  return data.token;
+  const { token } = await call(api.api.auth.switch.post({ userId }), "Switch failed");
+  return token;
 }
 
 export async function deleteAccount(): Promise<void> {
-  const { error: refusal } = await api.api.user.account.delete();
-  if (refusal) throw new Error(apiErrorMessage(refusal, "Failed to remove account"));
+  await call(api.api.user.account.delete(), "Failed to remove account");
 }
 
 export function getUser(): User | null {

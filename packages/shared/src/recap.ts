@@ -3,6 +3,12 @@ import type { Activity } from "./activity";
 export type RecapPeriod = "daily" | "weekly";
 
 /**
+ * The most summaries one `GET /repos/:id/recaps` page holds. A calendar
+ * month's 6×7 grid (up to 42 daily + 6 weekly) fits in one page at this size.
+ */
+export const MAX_RECAP_PAGE_LIMIT = 100;
+
+/**
  * `stopped`: the user stopped generation. Unlike `error`, nothing went wrong,
  * so the UI offers to resume rather than reporting a failure.
  */

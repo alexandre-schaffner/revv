@@ -1,17 +1,18 @@
 // Owns the long-lived `EventSource` to `GET /api/events?token=…` and routes
 // each envelope, whole, to the stores that own its state. Stores filter on
-// envelope fields themselves and own their reconcile after a reconnect or a
-// return to the window; this module only knows who listens to what.
+// envelope fields themselves.
 //
 // There is no server-side replay: a client that missed events re-reads the
-// DB (invariant 8), through the hooks below.
+// DB (invariant 8). `CATCH_UP` makes that a decision per event type: each one
+// names the re-reads that recover what a missed envelope carried, or why none
+// is needed. A new event type doesn't compile until it says which.
 //
 // Auth: `?token=` query param. `EventSource` cannot set custom headers.
 
 import type { ServerEventMessage } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import * as hunkScan from "$lib/hunk-scan/store.svelte";
-import { onRecapAdded, onRecapStatusChanged } from "$lib/recaps/store.svelte";
+import * as recaps from "$lib/recaps/store.svelte";
 import { getToken } from "$lib/session/token.svelte";
 import * as walkthroughSizing from "$lib/walkthrough/sizing.svelte";
 import * as walkthrough from "$lib/walkthrough/store.svelte";
@@ -22,26 +23,73 @@ import * as mergeEligibility from "./merge-eligibility.svelte";
 import * as prs from "./prs.svelte";
 import * as repoActivity from "./repo-activity.svelte";
 import * as repos from "./repos.svelte";
+import { refreshAllWaiting } from "./resource";
 import * as review from "./review.svelte";
 import { getGithubHost } from "./settings.svelte";
 import * as stackHeadlines from "./stack-headlines.svelte";
-import { onStackMergeProgress } from "./stack-merge.svelte";
+import * as stackMerge from "./stack-merge.svelte";
 import * as stacks from "./stacks.svelte";
 import * as sync from "./sync.svelte";
 
-/** Every (re)connect, the first included. */
-const ON_OPEN: ReadonlyArray<() => void> = [walkthrough.onEventsOpened, sync.onEventsOpened];
+type CatchUp = () => void;
+/** Why a missed envelope of this type needs no re-read. */
+type NoCatchUp = `none: ${string}`;
+
+/**
+ * Every (re)connect, the first included: these read what the server is
+ * working on right now, so they double as catch-up for the events they seed.
+ */
+const ON_OPEN: readonly CatchUp[] = [walkthrough.onEventsOpened, sync.onEventsOpened];
+
+/**
+ * Per event type, the re-reads that recover a missed envelope. After a
+ * reconnect each distinct hook runs once; `refreshAllWaiting` runs first, so a
+ * store's own hook can tell an ask it just restarted from one it should make.
+ */
+const CATCH_UP: Record<ServerEventMessage["type"], readonly CatchUp[] | NoCatchUp> = {
+  "walkthrough:event": [walkthrough.onEventsReconnected, stacks.onEventsReconnected],
+  "walkthrough:live": "none: live-only progress, never replayed; the next event replaces it",
+  "stack:updated": [stacks.onEventsReconnected, stackHeadlines.onEventsReconnected],
+  "stack-merge:progress": [stackMerge.onEventsReconnected, stacks.onEventsReconnected],
+  "stack-brief:status-changed": [stacks.onEventsReconnected, stackHeadlines.onEventsReconnected],
+  "hunk-scan:started": [hunkScan.onEventsReconnected],
+  "hunk-scan:hunk": [hunkScan.onEventsReconnected],
+  "hunk-scan:complete": [hunkScan.onEventsReconnected],
+  "prs:updated": [prs.rereadLists, walkthrough.onEventsReconnected],
+  "pr:archived": [prs.rereadLists],
+  "pr:conversation-updated": [conversation.onEventsReconnected],
+  "pr:merge-eligibility": [refreshAllWaiting],
+  "diff:cached": [refreshAllWaiting],
+  "repo-activity:settled": [refreshAllWaiting],
+  "prs:sync-started": "none: the next poll cycle's prs:sync-complete settles the spinner",
+  "prs:sync-complete": "none: the next poll cycle's prs:sync-complete settles the spinner",
+  "prs:sync-summary": "none: toasts about changes the list re-read already shows",
+  "repos:updated": [repos.rereadRepos],
+  "repos:clone-status": [repos.rereadRepos],
+  "user:updated": [auth.onEventsReconnected],
+  error: "none: a toast; the failed sync's spinner settles with the next cycle",
+  "auth:reauth-required": [auth.onEventsReconnected],
+  "auth:reauth-cleared": [auth.onEventsReconnected],
+  "thread:created": [review.onEventsReconnected],
+  "thread:updated": [review.onEventsReconnected],
+  "thread:message": [review.onEventsReconnected],
+  "thread:deleted": [review.onEventsReconnected],
+  "thread:message:edited": [review.onEventsReconnected],
+  "thread:message:deleted": [review.onEventsReconnected],
+  "threads:synced": [review.onEventsReconnected],
+  "threads:sync-error": [review.onEventsReconnected],
+  "recap:status-changed": [recaps.onEventsReconnected],
+  "recap:added": [recaps.onEventsReconnected],
+};
 
 /** A reconnect: events sent while the stream was down reached no one. */
-const ON_RECONNECT: ReadonlyArray<() => void> = [
-  prs.onEventsReconnected,
-  repos.onEventsReconnected,
-  walkthrough.onEventsReconnected,
-  hunkScan.onEventsReconnected,
-  walkthroughSizing.onEventsReconnected,
-  repoActivity.onEventsReconnected,
-  mergeEligibility.onEventsReconnected,
-  review.onEventsReconnected,
+const ON_RECONNECT: readonly CatchUp[] = [
+  refreshAllWaiting,
+  ...new Set(
+    Object.values(CATCH_UP)
+      .flatMap((entry) => (typeof entry === "string" ? [] : entry))
+      .filter((hook) => hook !== refreshAllWaiting && !ON_OPEN.includes(hook)),
+  ),
 ];
 
 /** The window came back to the foreground while a stream exists. */
@@ -49,13 +97,14 @@ const ON_FOREGROUND: ReadonlyArray<(streamOpen: boolean) => void> = [
   sync.onWindowForeground,
   conversation.onWindowForeground,
   review.onWindowForeground,
-  prs.onWindowForeground,
-  repos.onWindowForeground,
+  prs.rereadLists,
+  repos.rereadRepos,
 ];
 
 const DEAD_CONNECTION_THRESHOLD_MS = 60_000;
 const KEEPALIVE_CHECK_INTERVAL_MS = 30_000;
-const RECONNECT_RECONCILE_DEBOUNCE_MS = 4_000;
+/** A reconnect and a focus, or a rapid alt-tab, re-read once. */
+const CATCH_UP_DEBOUNCE_MS = 4_000;
 const RECOVER_BASE_MS = 1_000;
 const RECOVER_MAX_MS = 30_000;
 
@@ -64,7 +113,7 @@ let activeHostOverride: string | null = null;
 // EventSource fires `open` on the first connect AND on every auto-reconnect.
 let openCount = 0;
 let lastEventTime = 0;
-let lastReconnectReconcileAt = 0;
+let lastCatchUpAt = 0;
 let watchdogTimer: ReturnType<typeof setInterval> | null = null;
 let recoverTimer: ReturnType<typeof setTimeout> | null = null;
 let recoverAttempts = 0;
@@ -84,7 +133,7 @@ function dispatch(msg: ServerEventMessage): void {
       stackHeadlines.onStackUpdated(msg.data);
       break;
     case "stack-merge:progress":
-      onStackMergeProgress(msg.data);
+      stackMerge.onStackMergeProgress(msg.data);
       break;
     case "stack-brief:status-changed":
       stacks.onStackBriefStatusChanged(msg.data);
@@ -173,10 +222,10 @@ function dispatch(msg: ServerEventMessage): void {
       sync.onThreadsSyncError(msg.data);
       break;
     case "recap:status-changed":
-      onRecapStatusChanged(msg.data);
+      recaps.onRecapStatusChanged(msg.data);
       break;
     case "recap:added":
-      onRecapAdded(msg.data);
+      recaps.onRecapAdded(msg.data);
       break;
     default: {
       const _exhaustive: never = msg;
@@ -190,11 +239,15 @@ function onStreamOpen(): void {
   recoverAttempts = 0;
   openCount += 1;
   for (const hook of ON_OPEN) hook();
-  if (openCount === 1) return;
-  const now = Date.now();
-  if (now - lastReconnectReconcileAt < RECONNECT_RECONCILE_DEBOUNCE_MS) return;
-  lastReconnectReconcileAt = now;
+  if (openCount === 1 || !catchUpDue()) return;
   for (const hook of ON_RECONNECT) hook();
+}
+
+function catchUpDue(): boolean {
+  const now = Date.now();
+  if (now - lastCatchUpAt < CATCH_UP_DEBOUNCE_MS) return false;
+  lastCatchUpAt = now;
+  return true;
 }
 
 function onWindowForeground(): void {
@@ -204,6 +257,7 @@ function onWindowForeground(): void {
     reopen();
     return;
   }
+  if (!catchUpDue()) return;
   const streamOpen = source.readyState === EventSource.OPEN;
   for (const hook of ON_FOREGROUND) hook(streamOpen);
 }

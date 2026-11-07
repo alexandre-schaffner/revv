@@ -44,9 +44,7 @@ $effect(() => {
 const recaps = $derived(getRecapsForRepo(repoId));
 const slotKey = $derived(slotKeyFor(period, dayKey));
 
-const existing = $derived(
-  recaps.find((r) => r.status !== "superseded" && recapSlotKey(r) === slotKey) ?? null,
-);
+const existing = $derived(recaps.find((r) => recapSlotKey(r) === slotKey) ?? null);
 
 // Hand off the moment the window stops being empty. `replaceState` rather than
 // a push: this page was a placeholder for a recap that now exists, and leaving

@@ -8,15 +8,16 @@
 
 import { untrack } from "svelte";
 import { api } from "$lib/api/client";
+import { call } from "$lib/api/errors";
 import { createResource } from "$lib/stores/resource";
 import { getSettings } from "$lib/stores/settings.svelte";
 
 const suggestions = createResource<string, string[]>({
   freshForMs: Number.POSITIVE_INFINITY,
   fetch: async (_key, prId) => {
-    const { data } = await api.api.prs({ id: prId }).suggestions.get();
+    const data = await call(api.api.prs({ id: prId }).suggestions.get(), "No suggestions");
     // An empty answer is not cached: the UI keeps the fallback.
-    return data && data.suggestions.length > 0
+    return data.suggestions.length > 0
       ? { status: "ok", data: data.suggestions }
       : { status: "error", error: "No suggestions" };
   },

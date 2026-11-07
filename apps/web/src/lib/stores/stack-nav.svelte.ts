@@ -1,5 +1,11 @@
-import { isOpenLayer, type PrStackDetail, type StackLayer } from "@revv/shared";
+import {
+  isOpenLayer,
+  type PrStackDetail,
+  type StackLayer,
+  type StackReviewStarted,
+} from "@revv/shared";
 import { toast } from "svelte-sonner";
+import { thrownMessage } from "$lib/api/wire";
 import { openStackLayer } from "$lib/stacks/open-layer";
 import { needsReview } from "$lib/stacks/stack-layer-facts";
 import type { NavigationDirection } from "./navigation-intent.svelte";
@@ -69,9 +75,11 @@ function numbers(list: readonly number[]): string {
 export async function reviewRemainingLayers(): Promise<void> {
   const view = getStackView();
   if (!view) return;
-  const started = await startStackReview(view.prId, "remaining");
-  if (!started) {
-    toast.error("Couldn't start the stack review.");
+  let started: StackReviewStarted;
+  try {
+    started = await startStackReview(view.prId, "remaining");
+  } catch (e) {
+    toast.error(thrownMessage(e));
     return;
   }
   const { queued, untracked } = started;

@@ -10,7 +10,12 @@ import type {
   RecapSummaryStats,
   RecapThemeSummary,
 } from "@revv/shared";
-import { EMPTY_RECAP_STATS, RECAP_EMPTY_WINDOW_LEDE, recapSummaryOf } from "@revv/shared";
+import {
+  EMPTY_RECAP_STATS,
+  MAX_RECAP_PAGE_LIMIT,
+  RECAP_EMPTY_WINDOW_LEDE,
+  recapSummaryOf,
+} from "@revv/shared";
 import { and, asc, desc, eq, gte, inArray, isNull, lt } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import {
@@ -164,7 +169,6 @@ export interface ListForRepoResult {
 }
 
 export const DEFAULT_RECAP_PAGE_LIMIT = 30;
-export const MAX_RECAP_PAGE_LIMIT = 100;
 
 export class ProjectRecapService extends Context.Service<
   ProjectRecapService,

@@ -1,5 +1,7 @@
 // What the review page shows for each PR — the tab, the open file and each
 // pane's scroll — so switching PRs and coming back lands where the user was.
+// It also owns which PR's review is on screen: there is only ever one, so the
+// tab and file accessors act on that one (conventions §4.1's exception).
 
 import { jsonCodec, readStored, STORAGE_KEYS, writeStored } from "$lib/stores/persisted.svelte";
 
@@ -44,49 +46,53 @@ function lastTabFor(prId: string): ReviewTab | null {
 
 const store = $state({
   entries: new Map<string, PrViewState>(),
-  activePrId: null as string | null,
+  /** The one review on screen, opened by `useOpenReview`. */
+  openPrId: null as string | null,
 });
 
-function getOrCreate(prId: string): PrViewState {
-  let s = store.entries.get(prId);
-  if (!s) {
-    s = emptyState();
-    store.entries.set(prId, s);
-    store.entries = new Map(store.entries);
-  }
-  return s;
+function stateOf(prId: string): PrViewState {
+  return store.entries.get(prId) ?? emptyState();
+}
+
+function updateState(prId: string, update: (state: PrViewState) => PrViewState): void {
+  const next = new Map(store.entries);
+  next.set(prId, update(stateOf(prId)));
+  store.entries = next;
 }
 
 export function getActiveTab(): ReviewTab {
-  if (store.activePrId === null) return FIRST_VISIT_TAB;
-  return store.entries.get(store.activePrId)?.activeTab ?? FIRST_VISIT_TAB;
+  if (store.openPrId === null) return FIRST_VISIT_TAB;
+  return store.entries.get(store.openPrId)?.activeTab ?? FIRST_VISIT_TAB;
 }
 
 export function setActiveTab(tab: ReviewTab): void {
-  if (tab === getActiveTab() || store.activePrId === null) return;
-  getOrCreate(store.activePrId).activeTab = tab;
-  store.entries = new Map(store.entries);
-  rememberLastTab(store.activePrId, tab);
+  const prId = store.openPrId;
+  if (prId === null || tab === getActiveTab()) return;
+  updateState(prId, (state) => ({ ...state, activeTab: tab }));
+  rememberLastTab(prId, tab);
 }
 
 export function getActiveFilePath(): string | null {
-  if (store.activePrId === null) return null;
-  return store.entries.get(store.activePrId)?.activeFilePath ?? null;
+  if (store.openPrId === null) return null;
+  return store.entries.get(store.openPrId)?.activeFilePath ?? null;
 }
 
 export function setActiveFilePath(path: string | null): void {
-  if (store.activePrId !== null) {
-    getOrCreate(store.activePrId).activeFilePath = path;
-    store.entries = new Map(store.entries);
-  }
+  const prId = store.openPrId;
+  if (prId !== null) updateState(prId, (state) => ({ ...state, activeFilePath: path }));
 }
 
-export function switchPrViewState(prId: string): void {
+/** Put `prId`'s review on screen, on the tab it was last left on. */
+export function openPrView(prId: string): void {
   const tab = store.entries.get(prId)?.activeTab ?? lastTabFor(prId) ?? FIRST_VISIT_TAB;
-  store.activePrId = prId;
-  getOrCreate(prId).activeTab = tab;
-  store.entries = new Map(store.entries);
+  store.openPrId = prId;
+  updateState(prId, (state) => ({ ...state, activeTab: tab }));
   rememberLastTab(prId, tab);
+}
+
+/** The review page for `prId` went away; a newer page may already have opened another. */
+export function closePrView(prId: string): void {
+  if (store.openPrId === prId) store.openPrId = null;
 }
 
 export function getPrScrollPosition(prId: string, key: ScrollPaneKey): number {
@@ -94,11 +100,10 @@ export function getPrScrollPosition(prId: string, key: ScrollPaneKey): number {
 }
 
 export function setPrScrollPosition(prId: string, key: ScrollPaneKey, value: number): void {
-  getOrCreate(prId).scroll[key] = value;
-  store.entries = new Map(store.entries);
+  updateState(prId, (state) => ({ ...state, scroll: { ...state.scroll, [key]: value } }));
 }
 
 export function reset(): void {
   store.entries = new Map();
-  store.activePrId = null;
+  store.openPrId = null;
 }

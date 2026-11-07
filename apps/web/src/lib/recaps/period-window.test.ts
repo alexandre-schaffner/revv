@@ -257,14 +257,13 @@ describe("pickLatestByWindow", () => {
     period: "daily" | "weekly",
     periodStart: string,
     generatedAt: string,
-    status = "complete",
   ) => ({
     id,
     period,
     periodStart,
     periodEnd: periodStart,
     generatedAt,
-    status,
+    status: "complete",
   });
 
   it("prefers the latest window over the latest generation", () => {
@@ -282,14 +281,6 @@ describe("pickLatestByWindow", () => {
       row("new", "daily", "2026-06-04T00:00:00.000Z", "2026-06-04T09:00:00.000Z"),
     ];
     expect(pickLatestByWindow(recaps, "daily")?.id).toBe("new");
-  });
-
-  it("skips superseded rows", () => {
-    const recaps = [
-      row("dead", "daily", "2026-06-04T00:00:00.000Z", "2026-06-04T09:00:00.000Z", "superseded"),
-      row("live", "daily", "2026-06-03T00:00:00.000Z", "2026-06-03T09:00:00.000Z"),
-    ];
-    expect(pickLatestByWindow(recaps, "daily")?.id).toBe("live");
   });
 
   it("filters by period when one is given, and ignores it when not", () => {

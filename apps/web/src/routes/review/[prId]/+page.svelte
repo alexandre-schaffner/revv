@@ -25,8 +25,7 @@ import { getFilesError, getIsLoadingFiles, getReviewFiles } from "$lib/stores/di
 import { getActiveTab, REVIEW_TABS, setActiveTab } from "$lib/stores/pr-view-state.svelte";
 import { scrollPane } from "$lib/stores/review-nav.svelte";
 import { getSelectedPr } from "$lib/stores/route.svelte";
-import { getRiskLevel as getWalkthroughRiskLevel } from "$lib/walkthrough/store.svelte";
-import { getWalkthroughSizing } from "$lib/walkthrough/sizing.svelte";
+import { getPrRiskTier } from "$lib/walkthrough/sizing.svelte";
 
 useOpenReview(() => page.params.prId ?? null);
 
@@ -36,20 +35,16 @@ const isLoading = $derived(getIsLoadingFiles());
 const loadError = $derived(getFilesError());
 const activeTab = $derived(getActiveTab());
 const routePrIdOrEmpty = $derived(page.params.prId ?? "");
-const generatedRiskLevel = $derived(getWalkthroughRiskLevel(routePrIdOrEmpty));
-
 // The tier is resolved from the diff before generation, so opening a PR shows
 // the attention it needs without a review. Same cached answer either way, so
 // the badge value doesn't change when generation starts.
-const sizing = $derived(getWalkthroughSizing(pr?.id ?? null, pr?.headSha ?? null));
+const riskTier = $derived(getPrRiskTier(routePrIdOrEmpty));
 
 const stackPlace = $derived(activeTab === "walkthrough" && pr ? readStackPlace(pr.id) : null);
 
-const walkthroughRiskLevel = $derived(
-  generatedRiskLevel ?? (sizing?.status === "ready" ? sizing.riskLevel : null),
-);
+const walkthroughRiskLevel = $derived(riskTier?.level ?? null);
 const riskTitle = $derived(
-  generatedRiskLevel !== null
+  riskTier?.fromReview
     ? "How much attention this pull request needs. It set the depth of the review below."
     : "How much attention this pull request needs, sized from the diff. A review has not run yet.",
 );
