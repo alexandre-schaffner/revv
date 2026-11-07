@@ -81,8 +81,9 @@ export const BootLive = Layer.effectDiscard(
           Effect.andThen(step("agent-worktrees", agentWorktrees.sweep())),
         ),
 
-        // A recap cut off mid-generation finishes (or fails) before the
-        // scheduler may count its window as covered or ask for it again.
+        // A window's `generating` recap is reused by any request for it
+        // (`requestRecap`), so the scheduler can't open a second one; resuming
+        // first only means it finds those runs already live.
         step("recap-jobs", recapJobs.resumePending()).pipe(
           Effect.andThen(step("recap-scheduler", recapScheduler.start())),
         ),

@@ -2,7 +2,12 @@
 // its open concerns (stack overlays, the stack brief and walkthrough agents'
 // stack context), and the current one for the chat prompt.
 
-import type { RiskLevel, WalkthroughMode, WalkthroughStackSnapshot } from "@revv/shared";
+import type {
+  IssueSeverity,
+  RiskLevel,
+  WalkthroughMode,
+  WalkthroughStackSnapshot,
+} from "@revv/shared";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { ChatWalkthroughContext } from "../../ai/prompts/chat";
 import type { Db } from "../../db";
@@ -38,7 +43,7 @@ export interface FinishedReview {
   /** Imported from an earlier head's review by a restack, with no agent run. */
   readonly carried: boolean;
   /** Concerns still open, in reading order. */
-  readonly openIssues: ReadonlyArray<{ readonly title: string; readonly severity: string }>;
+  readonly openIssues: ReadonlyArray<{ readonly title: string; readonly severity: IssueSeverity }>;
 }
 
 /**

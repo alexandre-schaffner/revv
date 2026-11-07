@@ -219,9 +219,11 @@ agent tomorrow). Any change that violates them is wrong by construction — push
      fine everywhere except two places, both closed in `ai/jev/pending.ts`:
      `complete_walkthrough` drains every scheduled judgment before it validates anything,
      and `add_issue_comment` answers a retracted id with an explanatory non-error rather
-     than "unknown issue". A retraction deletes linked `comment_threads` by FK cascade and
-     broadcasts `issue:deleted`; a concern already pushed to GitHub (`submittedAt`) is never
-     touched. Anything the agent marked `critical`, or that the rubric reads as must-fix, is
+     than "unknown issue". A retraction broadcasts `issue:deleted`; a concern already pushed
+     to GitHub (`submittedAt`) is never touched. Its AI threads go through
+     `threadWrites.retireAiThreads` before the issue row is deleted: drafts are deleted,
+     threads already posted to GitHub are detached and kept. The FK still cascades, so every
+     path that deletes an issue retires its threads first. Anything the agent marked `critical`, or that the rubric reads as must-fix, is
      pinned above the floor and can never be retracted. Because severity isn't final when
      `flag_issue` returns, **every line-anchored concern owes an inline comment**, whatever
      severity the agent sent.

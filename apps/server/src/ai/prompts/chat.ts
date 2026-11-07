@@ -5,6 +5,7 @@
 // The system prompt goes out only on a fresh ACP session; a resumed session
 // already holds it.
 
+import type { IssueSeverity } from "@revv/shared";
 import CHAT_RESOLVE_BASE_MERGE_TEMPLATE from "./chat-resolve-base-merge.md" with { type: "text" };
 import CHAT_RESOLVE_BASE_REBASE_TEMPLATE from "./chat-resolve-base-rebase.md" with { type: "text" };
 import CHAT_RESOLVE_CONFLICTS_TEMPLATE from "./chat-resolve-conflicts.md" with { type: "text" };
@@ -18,7 +19,7 @@ if (!CHAT_SYSTEM_TEMPLATE.includes(ARTIFACT_SPEC_MARKER)) {
 }
 
 export interface ChatWalkthroughIssue {
-  readonly severity: string; // 'info' | 'warning' | 'critical'
+  readonly severity: IssueSeverity;
   readonly title: string;
   readonly description: string;
   readonly filePath?: string | null;
