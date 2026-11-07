@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
-import { DEFAULT_USER_SETTINGS } from "@revv/shared";
+import { settingsStub } from "$lib/test-stubs";
 import type { ChatCallbacks, ResolvePushCallbacks } from "./api";
 
 let chatStreams: ChatCallbacks[] = [];
@@ -39,9 +39,7 @@ mock.module("svelte-sonner", () => ({
   toast: { error: () => {}, success: () => {}, message: () => {} },
 }));
 mock.module("$lib/api/client", () => ({ api: {} }));
-mock.module("$lib/stores/settings.svelte", () => ({
-  getSettings: () => DEFAULT_USER_SETTINGS,
-}));
+mock.module("$lib/stores/settings.svelte", settingsStub);
 mock.module("$lib/stores/settingsModal.svelte", () => ({ openSettings: () => {} }));
 
 const turn = await import("./turn.svelte");

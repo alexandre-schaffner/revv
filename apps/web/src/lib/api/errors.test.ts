@@ -37,6 +37,15 @@ describe("call", () => {
     expect(e.serverMessage).toBeUndefined();
   });
 
+  it("keeps a code only when the shared error table has it", async () => {
+    const e = (await call(refused(400, { error: "Nope", code: "made_up" }), "Failed").catch(
+      (err: unknown) => err,
+    )) as ApiError;
+    expect(e.code).toBeNull();
+    expect(e.body?.code).toBe("made_up");
+    expect(e.message).toBe("Nope");
+  });
+
   it("lets a network failure through as itself", async () => {
     const network = new TypeError("Load failed");
     expect(await call(Promise.reject(network), "Failed").catch((e: unknown) => e)).toBe(network);

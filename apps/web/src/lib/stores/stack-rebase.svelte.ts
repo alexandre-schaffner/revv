@@ -9,7 +9,8 @@ import {
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { call } from "$lib/api/errors";
-import { expectedHeads, thrownMessage } from "$lib/api/wire";
+import { thrownMessage } from "$lib/api/wire";
+import { expectedHeads } from "$lib/stacks/expected-heads";
 import { RequestState } from "./_types";
 import { refreshStack } from "./stacks.svelte";
 

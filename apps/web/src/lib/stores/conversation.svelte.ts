@@ -25,7 +25,7 @@ import type {
 import { ciHasPending, hydrateConversationAvatars } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
-import { ApiError, call } from "$lib/api/errors";
+import { apiErrorCode, call } from "$lib/api/errors";
 import { thrownMessage } from "$lib/api/wire";
 import {
   addAssigneesPatch,
@@ -151,12 +151,8 @@ function accept(prId: string, conversation: PrConversation, stale: boolean): voi
 
 /** A failed GitHub request, worded for this tab. */
 function describeFailure(e: unknown): string {
-  if (e instanceof ApiError) {
-    if (e.status === 429) return "GitHub's rate limit is exhausted. Try again shortly.";
-    // A 502 is any upstream failure GitHub answered badly, not only an outage;
-    // the server's own wording says which.
-    if (e.status === 502 && e.serverMessage === undefined)
-      return "GitHub couldn't be reached (HTTP 502)";
+  if (apiErrorCode(e) === "GITHUB_RATE_LIMITED") {
+    return "GitHub's rate limit is exhausted. Try again shortly.";
   }
   return thrownMessage(e);
 }
@@ -436,7 +432,7 @@ async function applyWrite(
       "GitHub didn't accept the change",
     );
   } catch (e) {
-    if (e instanceof ApiError && e.code === "FORBIDDEN") {
+    if (apiErrorCode(e) === "FORBIDDEN") {
       return fail(
         "GitHub refused this change for your account. Open the PR on GitHub to make it.",
         true,

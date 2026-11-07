@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it, jest, mock } from "bun:test";
+import { tokenStub } from "$lib/test-stubs";
 
 mock.module("$lib/api/base-url", () => ({ API_BASE_URL: "http://test" }));
-mock.module("$lib/session/token.svelte", () => ({
-  authHeaders: () => ({ Authorization: "Bearer t" }),
-}));
+mock.module("$lib/session/token.svelte", tokenStub);
 
-const { SseFrameError, SseHttpError, SseIdleError, sseError, sseErrorMessage, streamSse } =
-  await import("./sse-stream");
+const { SseFrameError, SseIdleError, sseError, sseErrorMessage, streamSse } = await import(
+  "./sse-stream"
+);
+const { ApiError } = await import("./errors");
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -43,7 +44,12 @@ async function collect(
   opts: Partial<Parameters<typeof streamSse<unknown>>[0]> = {},
 ): Promise<unknown[]> {
   const events: unknown[] = [];
-  await streamSse<unknown>({ path: "/s", onEvent: (e) => void events.push(e), ...opts });
+  await streamSse<unknown>({
+    path: "/s",
+    refused: "Refused",
+    onEvent: (e) => void events.push(e),
+    ...opts,
+  });
   return events;
 }
 
@@ -63,27 +69,30 @@ describe("streamSse", () => {
       'data: {"a":1}\n\nevent: error\ndata: {"code":"GENERATION_ERROR","message":"boom"}\n\n',
     ]);
     const events: unknown[] = [];
-    const err = await streamSse<unknown>({ path: "/s", onEvent: (e) => void events.push(e) }).catch(
-      (e: unknown) => e,
-    );
+    const err = await streamSse<unknown>({
+      path: "/s",
+      refused: "Refused",
+      onEvent: (e) => void events.push(e),
+    }).catch((e: unknown) => e);
     expect(events).toEqual([{ a: 1 }]);
     expect(err).toBeInstanceOf(SseFrameError);
     expect(err).toMatchObject({ code: "GENERATION_ERROR", message: "boom" });
   });
 
-  it("rejects a non-OK response with the server's message", async () => {
+  it("rejects a refusal as the same ApiError a REST call throws", async () => {
     globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ code: "NOPE", message: "Refused" }), {
+      new Response(JSON.stringify({ code: "BUSY", message: "Busy right now" }), {
         status: 409,
       })) as unknown as typeof fetch;
     const err = await collect().catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(SseHttpError);
-    expect(err).toMatchObject({ status: 409, message: "Refused", body: { code: "NOPE" } });
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).toMatchObject({ status: 409, code: "BUSY", message: "Busy right now" });
 
     globalThis.fetch = (async () =>
       new Response("oops", { status: 502 })) as unknown as typeof fetch;
     expect(await collect().catch((e: unknown) => e)).toMatchObject({
-      message: "HTTP 502",
+      message: "Refused (HTTP 502)",
+      code: null,
       serverMessage: undefined,
     });
   });
@@ -123,6 +132,7 @@ describe("streamSse", () => {
     let settled: unknown = "open";
     const done = streamSse<unknown>({
       path: "/s",
+      refused: "Refused",
       idleTimeoutMs: 30,
       onEvent: (e) => void events.push(e),
     }).then(
@@ -155,12 +165,11 @@ describe("streamSse", () => {
 
 describe("sseError", () => {
   it("keeps a refusal's code, details and wording", () => {
-    const err = new SseHttpError(409, "Conflict", {
-      code: "WORKTREE_BLOCKED",
-      message: "Commit first",
-      commits: ["a"],
-    });
-    expect(sseError(err, "Refused")).toEqual({
+    const err = new ApiError(
+      { status: 409, value: { code: "WORKTREE_BLOCKED", message: "Commit first", commits: ["a"] } },
+      "Refused",
+    );
+    expect(sseError(err)).toEqual({
       code: "WORKTREE_BLOCKED",
       message: "Commit first",
       commits: ["a"],
@@ -168,19 +177,19 @@ describe("sseError", () => {
   });
 
   it("words a bodyless refusal with the fallback and status", () => {
-    expect(sseError(new SseHttpError(500, "Internal", null), "Refused")).toEqual({
+    expect(sseError(new ApiError({ status: 500, value: null }, "Refused"))).toEqual({
       code: "UNKNOWN",
       message: "Refused (HTTP 500)",
     });
   });
 
   it("maps frame errors, idle timeouts and connection drops; an abort is no error", () => {
-    expect(sseError(new SseFrameError("GENERATION_ERROR", "boom"), "x")).toEqual({
+    expect(sseError(new SseFrameError("GENERATION_ERROR", "boom"))).toEqual({
       code: "GENERATION_ERROR",
       message: "boom",
     });
-    expect(sseError(new SseIdleError(90_000), "x")?.code).toBe("NETWORK_ERROR");
-    expect(sseErrorMessage(new TypeError("Load failed"), "x")).toMatch(/^Lost connection/);
-    expect(sseErrorMessage(new DOMException("aborted", "AbortError"), "x")).toBeNull();
+    expect(sseError(new SseIdleError(90_000))?.code).toBe("NETWORK_ERROR");
+    expect(sseErrorMessage(new TypeError("Load failed"))).toMatch(/^Lost connection/);
+    expect(sseErrorMessage(new DOMException("aborted", "AbortError"))).toBeNull();
   });
 });

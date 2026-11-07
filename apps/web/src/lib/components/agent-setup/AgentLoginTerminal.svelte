@@ -100,11 +100,12 @@ async function streamLoginEvents(id: string, signal: AbortSignal): Promise<void>
   try {
     await streamSse<LoginEvent>({
       path: `/api/onboarding/login/stream?jobId=${encodeURIComponent(id)}`,
+      refused: "Sign-in stream failed",
       signal,
       onEvent: applyEvent,
     });
   } catch (e) {
-    const message = sseErrorMessage(e, "Sign-in stream failed");
+    const message = sseErrorMessage(e);
     if (signal.aborted || message === null) return;
     failed = true;
     errorMsg = message;

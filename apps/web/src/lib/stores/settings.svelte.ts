@@ -14,7 +14,7 @@ import {
   type UserSettings,
 } from "@revv/shared";
 import { api } from "$lib/api/client";
-import { call } from "$lib/api/errors";
+import { apiErrorCode, call } from "$lib/api/errors";
 import { thrownMessage } from "$lib/api/wire";
 import { createResource } from "./resource";
 
@@ -34,14 +34,25 @@ const THINKING_EFFORT_OPTIONS: { label: string; value: ThinkingEffort }[] =
   THINKING_EFFORT_ORDER.map((value) => ({ label: THINKING_EFFORT_LABELS[value], value }));
 
 let loaded = $state<UserSettings | null>(null);
+
+/**
+ * The model catalog needs a session: the session lifecycle reads it when a
+ * session starts and resets it when one ends.
+ */
 const models = createResource<AcpAgentId, ModelOption[]>({
   keepDataOnError: true,
-  fetch: async (_key, agent) => {
-    const data = await call(
-      api.api.settings.models.get({ query: { agent } }),
-      "Couldn't load models",
-    );
-    return { status: "ok", data: data.models };
+  fetch: async (key, agent) => {
+    try {
+      const data = await call(
+        api.api.settings.models.get({ query: { agent } }),
+        "Couldn't load models",
+      );
+      return { status: "ok", data: data.models };
+    } catch (e) {
+      // Nothing was read, so nothing counts as loaded.
+      if (apiErrorCode(e) === "UNAUTHORIZED") models.invalidate(key);
+      throw e;
+    }
   },
 });
 
@@ -188,12 +199,13 @@ export async function fetchModels(agent: AcpAgentId): Promise<ModelOption[]> {
   return models.data(agent) ?? [];
 }
 
-/**
- * Prefetch models for every supported agent in parallel. Call this once at
- * app start so agent/model dropdowns render instantly without round-trips.
- */
+/** Read every agent's catalog, so the pickers open without a round-trip. */
 export async function fetchAllModels(): Promise<void> {
   await Promise.all(ACP_AGENT_IDS.map((id) => fetchModels(id)));
+}
+
+export function resetModels(): void {
+  models.reset();
 }
 
 let agentStatus = $state<AgentStatusReport | null>(null);

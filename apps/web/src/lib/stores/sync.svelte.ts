@@ -10,17 +10,16 @@ import { api } from "$lib/api/client";
 import { call } from "$lib/api/errors";
 import { thrownMessage } from "$lib/api/wire";
 
-// Per-PR last-successful-thread-sync timestamps (ISO). The bottom bar's
-// "Synced Xm ago" reflects the currently selected PR's entry, not a global.
+// Per-PR last-successful-thread-sync timestamps (ISO): the review page's
+// status "Synced Xm ago" reads its own PR's entry.
 let lastSyncAtByPr = $state<Map<string, string>>(new Map());
 
 let threadsSyncingByPr = $state<Set<string>>(new Set());
 
 let syncErrorByPr = $state<Map<string, string>>(new Map());
 
-// Separate flag for the global PR-list metadata poll (`prs:sync-started` →
-// `prs:sync-complete`). The sidebar spinner uses this; it is NOT tied to a
-// specific PR and does not affect the bottom bar's per-PR label.
+// The global PR-list poll (`prs:sync-started` → `prs:sync-complete`), for the
+// top bar's spinner. No PR's sync label reads it.
 let prListSyncing = $state(false);
 
 export function getLastSyncAt(prId: string | null): string | null {

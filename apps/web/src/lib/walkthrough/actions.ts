@@ -200,9 +200,8 @@ export async function invalidateForPull(prId: string): Promise<void> {
     entry.liveGeneration = false;
     entry.streamError = null;
   });
-  try {
-    await api.api.reviews({ id: prId }).walkthrough.supersede.post();
-  } catch {
-    // The next regenerate supersedes it anyway.
-  }
+  // A refusal or a network failure is ignored: the next regenerate supersedes it anyway.
+  await call(api.api.reviews({ id: prId }).walkthrough.supersede.post(), "Supersede failed").catch(
+    () => {},
+  );
 }

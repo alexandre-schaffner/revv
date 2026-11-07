@@ -1,6 +1,8 @@
 import type { BaseConflictFrame, BaseConflictsCheck } from "@revv/shared";
 import { toast } from "svelte-sonner";
-import { fetchBaseConflicts, streamBaseConflictResolve } from "$lib/api/base-conflicts";
+import { api } from "$lib/api/client";
+import { ApiError, call } from "$lib/api/errors";
+import { sseErrorMessage, streamSse } from "$lib/api/sse-stream";
 import { RequestState } from "./_types";
 import { createResource } from "./resource";
 
@@ -28,10 +30,11 @@ const checks = createResource<
   CheckAnswer
 >({
   fetch: async (prId, { headSha, force }) => {
-    const answer = await fetchBaseConflicts(prId, force);
-    return answer.ok
-      ? { status: "ok", data: { headSha, check: answer.check } }
-      : { status: "error", error: answer.message };
+    const check = await call(
+      api.api.prs({ id: prId })["base-conflicts"].get({ query: force ? { force: "1" } : {} }),
+      "Couldn't check for conflicts",
+    );
+    return { status: "ok", data: { headSha, check } };
   },
   freshForMs: 30_000,
 });
@@ -157,25 +160,54 @@ function onResult(prId: string, frame: Extract<BaseConflictFrame, { kind: "resul
   }
 }
 
-/** Start "Resolve with agent" for the PR, pinned to the head the user is looking at. */
+/**
+ * Start "Resolve with agent" for the PR, pinned to the head the user is
+ * looking at. The run carries on on the server if the stream drops; the
+ * re-check that follows tells where it ended.
+ */
 export function resolveBaseConflicts(prId: string, expectedHeadSha: string): void {
   if (runs.get(prId)?.outcome.status === "loading") return;
   setRun(prId, { status: "Starting…", rows: [], agentText: "", outcome: RequestState.loading() });
   const controller = new AbortController();
   resolveStreams.set(prId, controller);
-  void streamBaseConflictResolve(prId, expectedHeadSha, {
-    signal: controller.signal,
-    onFrame: (frame) => onFrame(prId, frame),
-    onError: (message) => {
-      if (runs.get(prId)?.outcome.status !== "loading") return;
-      updateRun(prId, (run) => ({ ...run, status: null, outcome: RequestState.error(message) }));
-    },
-  }).finally(() => {
+  void streamResolve(prId, expectedHeadSha, controller.signal).finally(() => {
     if (controller.signal.aborted) return;
     resolveStreams.delete(prId);
     const asked = checks.argOf(prId);
     if (asked) checkBaseConflicts(prId, asked.headSha, { force: true });
   });
+}
+
+async function streamResolve(
+  prId: string,
+  expectedHeadSha: string,
+  signal: AbortSignal,
+): Promise<void> {
+  let sawResult = false;
+  try {
+    await streamSse<BaseConflictFrame>({
+      path: `/api/prs/${prId}/base-conflicts/resolve`,
+      method: "POST",
+      body: { expectedHeadSha },
+      signal,
+      refused: "Couldn't start",
+      onEvent: (frame) => {
+        if (frame.kind === "result") sawResult = true;
+        onFrame(prId, frame);
+      },
+    });
+  } catch (e) {
+    const message = sseErrorMessage(e);
+    if (signal.aborted || message === null) return;
+    if (e instanceof ApiError || !sawResult) failRun(prId, message);
+    return;
+  }
+  if (!sawResult) failRun(prId, "Lost the connection before the run finished");
+}
+
+function failRun(prId: string, message: string): void {
+  if (runs.get(prId)?.outcome.status !== "loading") return;
+  updateRun(prId, (run) => ({ ...run, status: null, outcome: RequestState.error(message) }));
 }
 
 /** Resolve runs carry on server-side; only this window stops listening. */

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { prsStub } from "$lib/test-stubs";
 
 const PR = "repo:1";
 let headSha = "a";
@@ -21,9 +22,9 @@ mock.module("$lib/api/client", () => ({
     },
   },
 }));
-mock.module("$lib/stores/prs.svelte", () => ({
-  getPrById: (id: string) => (id === PR ? { id, headSha } : undefined),
-}));
+mock.module("$lib/stores/prs.svelte", () =>
+  prsStub({ getPrById: (id: string) => (id === PR ? { id, headSha } : undefined) }),
+);
 mock.module("$lib/stores/pr-view-state.svelte", () => ({
   getActiveFilePath: () => null,
   setActiveFilePath: () => {},
