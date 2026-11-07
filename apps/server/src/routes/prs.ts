@@ -4,14 +4,10 @@ import {
   normalizeGithubHost,
   sameGithubHost,
 } from "@revv/shared";
-import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { suggestionsForPr } from "../ai/providers/suggestions";
-import { pinnedPullRequests } from "../db/schema";
-import { dbTry } from "../effects/db-try";
 import { RepoCloneService } from "../services/clone/RepoClone";
-import { DbService } from "../services/Db";
 import { DiffCacheService, toCachedDiffFiles } from "../services/DiffCache";
 import { GitHubGateway } from "../services/github/gateway";
 import { checkMergeEligibility } from "../services/merge-eligibility";
@@ -19,6 +15,7 @@ import { PollScheduler } from "../services/PollScheduler";
 import { PrContextService } from "../services/PrContext";
 import { PrMirror } from "../services/PrMirror";
 import { PullRequestService } from "../services/PullRequest";
+import { listPinned, pinPr, unpinPr } from "../services/pinned-prs";
 import { resolvePullRequestLink } from "../services/pr-deep-link";
 import {
   prFilesWithPrerender,
@@ -170,50 +167,16 @@ const prUserRoutes = new Elysia({ prefix: "/api/prs" })
     ),
   )
 
-  .get("/pinned", (ctx) =>
-    runRoute(
-      Effect.flatMap(DbService, ({ db }) =>
-        dbTry("list pinned PRs", () =>
-          db
-            .select({ prId: pinnedPullRequests.prId })
-            .from(pinnedPullRequests)
-            .where(eq(pinnedPullRequests.userId, ctx.userId))
-            .orderBy(pinnedPullRequests.createdAt)
-            .all(),
-        ),
-      ).pipe(Effect.map((rows) => rows.map((r) => r.prId))),
-    ),
-  )
+  .get("/pinned", (ctx) => runRoute(listPinned(ctx.userId)))
 
   .post(
     "/pinned",
-    (ctx) =>
-      runRoute(
-        Effect.flatMap(DbService, ({ db }) =>
-          dbTry("pin PR", () =>
-            db.insert(pinnedPullRequests).values({ userId: ctx.userId, prId: ctx.body.prId }).run(),
-          ),
-        ).pipe(Effect.as({ success: true })),
-      ),
+    (ctx) => runRoute(pinPr(ctx.userId, ctx.body.prId).pipe(Effect.as({ success: true }))),
     { body: t.Object({ prId: t.String() }) },
   )
 
   .delete("/pinned/:prId", (ctx) =>
-    runRoute(
-      Effect.flatMap(DbService, ({ db }) =>
-        dbTry("unpin PR", () =>
-          db
-            .delete(pinnedPullRequests)
-            .where(
-              and(
-                eq(pinnedPullRequests.userId, ctx.userId),
-                eq(pinnedPullRequests.prId, ctx.params.prId),
-              ),
-            )
-            .run(),
-        ),
-      ).pipe(Effect.as({ success: true })),
-    ),
+    runRoute(unpinPr(ctx.userId, ctx.params.prId).pipe(Effect.as({ success: true }))),
   );
 
 /** One PR's routes, acting as the account that owns its repository. */
