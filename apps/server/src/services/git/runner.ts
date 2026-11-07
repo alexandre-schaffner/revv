@@ -1,7 +1,7 @@
 // The one place Revv spawns git. Every command gets the same policy:
 //
-//   - `GIT_ENV`: nothing may prompt. The production LaunchAgent has no TTY, so
-//     a credential helper or signer waiting for input would freeze the job.
+//   - `GIT_ENV`: nothing may prompt. The server has no TTY, so a credential
+//     helper or signer waiting for input would freeze the job.
 //   - `core.hooksPath=/dev/null`: the user's hooks never run. Revv's clones are
 //     often the user's own repository; their husky post-checkout or pre-push
 //     test run is theirs to trigger.
@@ -11,13 +11,13 @@
 //     (or hits the timeout) and its stderr says why.
 //   - a hard timeout, SIGTERM then SIGKILL;
 //   - registration in `activeProcs`, so a server shutdown kills every git
-//     process it started (orphaned `git clone`s otherwise fight the next
-//     lifetime for `.git/shallow.lock` and write into directories it removed);
+//     process it started ({@link killRunningGitProcesses}; orphaned `git clone`s
+//     otherwise fight the next lifetime for `.git/shallow.lock` and write into
+//     directories it removed);
 //   - stderr redaction, so a token echoed from an authed URL never leaves.
 //
 // Private to `services/git/`; `scripts/check-import-boundaries.ts` enforces it.
 
-import { serverEnv } from "../../config";
 import { redactGitAuth } from "./remote";
 
 const { GPG_TTY: _gpgTty, ...inherited } = process.env;
@@ -52,32 +52,27 @@ type SpawnedProc = ReturnType<typeof Bun.spawn> & {
 };
 const activeProcs = new Set<SpawnedProc>();
 
-let signalHandlersInstalled = false;
-export function ensureSignalHandlersInstalled(): void {
-  if (signalHandlersInstalled) return;
-  signalHandlersInstalled = true;
-  const killAll = () => {
+/**
+ * SIGTERM every git process this server started, then SIGKILL what is left.
+ * The runtime's owner calls it on shutdown.
+ */
+export function killRunningGitProcesses(): void {
+  for (const proc of activeProcs) {
+    try {
+      proc.kill("SIGTERM");
+    } catch {
+      /* already dead */
+    }
+  }
+  setTimeout(() => {
     for (const proc of activeProcs) {
       try {
-        proc.kill("SIGTERM");
+        proc.kill("SIGKILL");
       } catch {
         /* already dead */
       }
     }
-    setTimeout(() => {
-      for (const proc of activeProcs) {
-        try {
-          proc.kill("SIGKILL");
-        } catch {
-          /* already dead */
-        }
-      }
-    }, 2_000).unref?.();
-  };
-  process.once("SIGTERM", killAll);
-  process.once("SIGINT", killAll);
-  process.once("SIGHUP", killAll);
-  process.once("beforeExit", killAll);
+  }, 2_000).unref?.();
 }
 
 /** The outcome of one git command. `stderr` is redacted. */
@@ -129,7 +124,6 @@ export async function gitAttempt(
   timeoutMs: number,
   policy: GitPolicy = UNSIGNED,
 ): Promise<GitAttempt> {
-  ensureSignalHandlersInstalled();
   let proc: SpawnedProc;
   try {
     proc = Bun.spawn(["git", ...policyConfig(policy), ...args], {
@@ -219,9 +213,10 @@ export async function gitSucceeds(
   return (await gitAttempt(cwd, args, timeoutMs)).ok;
 }
 
-export async function killStaleCloneProcesses(): Promise<void> {
+/** Kill the git transfers an earlier server left running in `dir`. */
+export async function killStaleGitTransfers(dir: string): Promise<void> {
   try {
-    const escaped = serverEnv.cloneDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const escaped = dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const proc = Bun.spawn(
       ["pkill", "-TERM", "-f", `git (clone|fetch|index-pack|remote-https).*${escaped}`],
       { stdout: "ignore", stderr: "ignore", stdin: "ignore" },

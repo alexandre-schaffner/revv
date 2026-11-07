@@ -18,7 +18,6 @@ export const prBaseConflictsRoutes = new Elysia({ prefix: "/api/prs" })
         Effect.flatMap(BaseConflictsService, (s) =>
           s.check({
             prId: ctx.params.id,
-            userId: ctx.session.user.id,
             accountId: ctx.account.accountId,
             force: ctx.query.force === "1",
           }),
@@ -35,7 +34,6 @@ export const prBaseConflictsRoutes = new Elysia({ prefix: "/api/prs" })
         Effect.flatMap(BaseConflictsService, (s) =>
           s.resolve({
             prId: ctx.params.id,
-            userId: ctx.session.user.id,
             accountId: ctx.account.accountId,
             expectedHeadSha: ctx.body.expectedHeadSha,
           }),

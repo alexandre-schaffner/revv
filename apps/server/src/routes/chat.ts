@@ -11,7 +11,7 @@ import {
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { AttachmentRejectedError } from "../domain/errors";
-import { ChatSessionService } from "../services/ChatSession";
+import { ChatSessionService } from "../services/chat/ChatSession";
 import { ChatTurnService } from "../services/chat/ChatTurn";
 import { PrContextService } from "../services/PrContext";
 import { PrWorkspace } from "../services/workspace/PrWorkspace";

@@ -9,7 +9,9 @@ const featureRoots = [
   /^apps\/server\/src\/services\/walkthrough\//,
   /^apps\/server\/src\/services\/jobs\/agent-jobs\.ts$/,
   /^apps\/server\/src\/routes\/chat(?:-|\.ts)/,
-  /^apps\/server\/src\/services\/Chat[A-Za-z].*\.ts$/,
+  /^apps\/server\/src\/services\/chat\//,
+  /^apps\/server\/src\/services\/workspace\//,
+  /^apps\/server\/src\/services\/base-conflicts\//,
   /^apps\/server\/src\/services\/ProjectRecapJobs\.ts$/,
   /^apps\/server\/src\/services\/recap-[^/]+\.ts$/,
   /^apps\/server\/src\/ai\/providers\/recap(?:-|\/)/,
@@ -39,10 +41,10 @@ const githubTransportModule = "apps/server/src/services/github/transport";
 const githubModuleDir = "apps/server/src/services/github/";
 
 // `services/git/` is the one place Revv spawns git: its runner applies the
-// policy every git command needs (no prompts, none of the user's hooks or
-// signing, a timeout, the process registry, token redaction). Nothing outside
-// it may import the runner or spawn git itself. Tests build fixtures with the
-// git CLI directly.
+// policy every git command needs (no prompts, none of the user's hooks,
+// signing per `GitPolicy`, a timeout, the process registry, token redaction). Nothing outside
+// it may import the runner or spawn git itself. Tests (and their
+// `*-test-support.ts` helpers) build fixtures with the git CLI directly.
 const gitModuleDir = "apps/server/src/services/git/";
 const gitRunnerModule = "apps/server/src/services/git/runner";
 // `build-info.ts` reads the commit of Revv's own source checkout, never a clone.
@@ -157,7 +159,7 @@ for (const file of listTsFiles(join(repoRoot, "apps/server/src"))) {
   if (
     !rel.startsWith(gitModuleDir) &&
     !gitSpawnAllowed.has(rel) &&
-    !/\.test\.ts$/.test(rel) &&
+    !/(?:\.test|-test-support)\.ts$/.test(rel) &&
     gitSpawnPattern.test(source)
   ) {
     violations.push(`${rel} spawns git; run git through services/git/ops`);

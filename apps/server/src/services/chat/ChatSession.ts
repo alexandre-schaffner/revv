@@ -11,10 +11,10 @@ import {
   chatPlans,
   chatSessions,
   chatTasks,
-} from "../db/schema/index";
-import type { DbError } from "../domain/errors";
-import { dbTry } from "../effects/db-try";
-import { DbService } from "./Db";
+} from "../../db/schema/index";
+import type { DbError } from "../../domain/errors";
+import { dbTry } from "../../effects/db-try";
+import { DbService } from "../Db";
 
 export interface ChatSessionRow {
   readonly id: string;

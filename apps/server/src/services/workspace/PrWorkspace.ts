@@ -1,51 +1,46 @@
-// The one owner of a PR's agent workspace: the worktree `<holder>/pr-N` on the
-// agent branch `revv/pr-N`, where the chat agent works and commits. Everything
-// that touches it goes through here:
+// The one owner of a PR's agent workspace: the worktree on the agent branch
+// (`agent-worktrees.ts`), where the chat agent works and commits, and the
+// chat session that goes with it. Everything that touches it goes through
+// here:
 //
 //   - the claim: one chat turn, push or commit edit at a time, refused up
 //     front (`WorkspaceBusyError`) rather than racing in the worktree;
 //   - which chat session is the PR's: the one for the current chat launch at
-//     the PR's head, read the same way by the timeline, the turn and the push;
+//     the PR's head (the mirror's, recorded from GitHub first when it has
+//     none), read the same way by the timeline, the turn and the push;
 //   - the agent branch's baseline and proposed commits;
 //   - every operation on those commits: listing, discarding, rebasing, pushing.
 //
 // Walkthrough generation never reads this worktree: each job checks out its
 // own (`RepoClone.acquireReviewWorktree`).
 
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import type { ProposedCommit, ResolvePushFrame } from "@revv/shared";
 import { Context, Effect, Layer, type Scope } from "effect";
-import { resolveAgentLaunch } from "../../ai/acp/agent-launch";
-import { CHAT_TURN } from "../../ai/acp/run-turn";
+import { type AgentLaunch, resolveAgentLaunch } from "../../ai/acp/agent-launch";
 import {
   AgentBranchConflictError,
   type CloneError,
   type CloneNotReadyError,
   type DbError,
+  type GitHubError,
   GitOperationError,
   NoChatSessionError,
   NotFoundError,
   ValidationError,
-  WorkspaceBusyError,
+  type WorkspaceBusyError,
   type WorkspaceHolder,
   WorktreeBlockedByUnpushedCommits,
 } from "../../domain/errors";
-import { logError } from "../../logger";
 import { AiService } from "../Ai";
-import { type ChatSessionRow, ChatSessionService } from "../ChatSession";
-import { worktreeHolderPath } from "../clone-policy";
+import { type ChatSessionRow, ChatSessionService } from "../chat/ChatSession";
 import type { DbService } from "../Db";
 import { BranchPushLock } from "../git/branch-push-lock";
-import { assertNotFlagLike, commitPatch, fetch, isValidSha, resolveRef } from "../git/ops";
-import { agentBranch, agentWorktreeDir } from "../git/pr-refs";
+import { assertNotFlagLike, fetch, gitTry, isValidSha, resolveRef } from "../git/ops";
 import { authedRemoteUrl } from "../git/remote";
 import { type PrContextBasic, type PrContextError, PrContextService } from "../PrContext";
 import { PrMirror } from "../PrMirror";
-import { RepoCloneService } from "../RepoClone";
 import type { SettingsService } from "../Settings";
 import {
-  type AgentBranch,
   type CommitFile,
   commitFiles,
   commitsStrandedBy,
@@ -56,7 +51,8 @@ import {
   resetToBase,
   resolveBaseSha,
 } from "./agent-branch";
-import { createWorkspaceClaims, type WorkspaceClaim } from "./claims";
+import { type AgentBranch, AgentWorktrees } from "./agent-worktrees";
+import type { WorkspaceClaim } from "./claims";
 import { type AttemptPushResult, type ChatPushError, makeAgentPush } from "./push";
 
 export interface ProposedChanges {
@@ -66,40 +62,47 @@ export interface ProposedChanges {
   readonly commits: readonly ProposedCommit[];
 }
 
-type ReadError = PrContextError | DbError | NoChatSessionError;
+type ReadError = PrContextError | DbError | NoChatSessionError | GitOperationError;
 type EditError =
   | ReadError
   | WorkspaceBusyError
   | ValidationError
   | NotFoundError
   | AgentBranchConflictError
-  | GitOperationError
   | CloneError
   | CloneNotReadyError
   | WorktreeBlockedByUnpushedCommits;
 
+export type OpenError =
+  | WorkspaceBusyError
+  | WorktreeBlockedByUnpushedCommits
+  | CloneError
+  | CloneNotReadyError
+  | GitOperationError
+  | GitHubError
+  | DbError;
+
 export class PrWorkspace extends Context.Service<
   PrWorkspace,
   {
-    /** Hold the PR's workspace until the scope closes; refused while anyone else does. */
-    readonly claim: (
-      prId: string,
-      holder: WorkspaceHolder,
-    ) => Effect.Effect<WorkspaceClaim, WorkspaceBusyError, Scope.Scope>;
-    /** Claim the workspace and bring its worktree to `headSha` (or a descendant: the agent's commits). */
+    /**
+     * Claim the workspace and bring its worktree to the PR's head (or a
+     * descendant: the agent's commits).
+     */
     readonly open: (
       ctx: PrContextBasic,
-      headSha: string,
       holder: WorkspaceHolder,
     ) => Effect.Effect<
-      { readonly claim: WorkspaceClaim; readonly branch: AgentBranch },
-      | WorkspaceBusyError
-      | WorktreeBlockedByUnpushedCommits
-      | CloneError
-      | CloneNotReadyError
-      | DbError,
+      { readonly claim: WorkspaceClaim; readonly branch: AgentBranch; readonly headSha: string },
+      OpenError,
       Scope.Scope
     >;
+    /** The PR's chat session at `headSha` for the current chat launch, created on first use. */
+    readonly openSession: (
+      ctx: PrContextBasic,
+      headSha: string,
+      branch: AgentBranch,
+    ) => Effect.Effect<{ readonly session: ChatSessionRow; readonly launch: AgentLaunch }, DbError>;
     /** The PR's agent worktree and branch, if the agent ever worked on it. */
     readonly agentBranch: (ctx: PrContextBasic) => AgentBranch | null;
     /** The PR's chat session: the current chat launch's, at `pr.headSha`. */
@@ -107,16 +110,14 @@ export class PrWorkspace extends Context.Service<
       readonly id: string;
       readonly headSha: string | null;
     }) => Effect.Effect<ChatSessionRow | null, DbError>;
-    readonly unpushedCount: (ctx: PrContextBasic) => Effect.Effect<number, DbError>;
+    readonly unpushedCount: (
+      ctx: PrContextBasic,
+    ) => Effect.Effect<number, DbError | GitOperationError>;
     readonly proposed: (prId: string) => Effect.Effect<ProposedChanges, ReadError>;
-    readonly commitPatch: (
-      prId: string,
-      sha: string,
-    ) => Effect.Effect<string, ReadError | ValidationError | GitOperationError>;
     readonly commitFiles: (
       prId: string,
       sha: string,
-    ) => Effect.Effect<readonly CommitFile[], ReadError | ValidationError | GitOperationError>;
+    ) => Effect.Effect<readonly CommitFile[], ReadError | ValidationError>;
     readonly discard: (
       prId: string,
       shas: readonly string[],
@@ -128,7 +129,7 @@ export class PrWorkspace extends Context.Service<
     ) => Effect.Effect<void, EditError>;
     /** Move the worktree to `newHeadSha` once the agent's commits are handled. */
     readonly advance: (prId: string, newHeadSha: string) => Effect.Effect<void, EditError>;
-    /** Delete the PR's conversations and rewind the agent branch to its baseline. */
+    /** Rewind the agent branch to its baseline and delete the PR's conversations. */
     readonly clear: (prId: string) => Effect.Effect<void, EditError>;
     readonly mergeAndPush: (params: {
       readonly prId: string;
@@ -151,35 +152,15 @@ export const PrWorkspaceLive = Layer.effect(
     const context = yield* Effect.context<DbService | SettingsService>();
     const prCtx = yield* PrContextService;
     const chatSessions = yield* ChatSessionService;
-    const repoClone = yield* RepoCloneService;
+    const worktrees = yield* AgentWorktrees;
     const pushLock = yield* BranchPushLock;
     const ai = yield* AiService;
     const mirror = yield* PrMirror;
 
-    // A claim outlives its holder's idle deadline only if the holder leaked
-    // it: past that, the agent turn has already been cancelled upstream.
-    const claims = createWorkspaceClaims(CHAT_TURN.idleMs);
+    const chatLaunch = resolveAgentLaunch("chat").pipe(Effect.provide(context));
 
-    const claim = (prId: string, holder: WorkspaceHolder) =>
-      Effect.acquireRelease(
-        Effect.suspend(() => {
-          const taken = claims.take(prId, holder);
-          return typeof taken === "string"
-            ? Effect.fail(new WorkspaceBusyError({ prId, heldBy: taken }))
-            : Effect.succeed(taken);
-        }),
-        (held) => Effect.sync(held.release),
-      );
-
-    const agentBranchOf = ({ pr, repo }: PrContextBasic): AgentBranch | null => {
-      const worktreePath = join(
-        worktreeHolderPath(repo.owner, repo.name),
-        agentWorktreeDir(pr.externalId),
-      );
-      return existsSync(worktreePath)
-        ? { worktreePath, branchName: agentBranch(pr.externalId) }
-        : null;
-    };
+    const agentBranchOf = ({ pr, repo }: PrContextBasic) =>
+      worktrees.locate(repo.id, pr.externalId);
 
     const requireBranch = (ctx: PrContextBasic) => {
       const branch = agentBranchOf(ctx);
@@ -192,14 +173,24 @@ export const PrWorkspaceLive = Layer.effect(
       Effect.gen(function* () {
         const pinned = yield* chatSessions.baselinesForPr(ctx.pr.id);
         const candidates = ctx.pr.headSha ? [...pinned, ctx.pr.headSha] : pinned;
-        return yield* Effect.promise(() => resolveBaseSha(branch, candidates));
+        return yield* gitTry(() => resolveBaseSha(branch, candidates));
       });
 
     const session = (pr: { readonly id: string; readonly headSha: string | null }) =>
       Effect.gen(function* () {
         if (!pr.headSha) return null;
-        const { agent, model } = yield* resolveAgentLaunch("chat").pipe(Effect.provide(context));
+        const { agent, model } = yield* chatLaunch;
         return yield* chatSessions.find(pr.id, agent, model, pr.headSha);
+      });
+
+    /** The PR's conversation continues at `newHeadSha`: the latest session moves there. */
+    const moveSession = (prId: string, newHeadSha: string) =>
+      Effect.gen(function* () {
+        const { agent, model } = yield* chatLaunch;
+        const latest = yield* chatSessions.findLatest(prId, agent, model);
+        if (latest) {
+          yield* chatSessions.updatePrHeadSha({ chatSessionId: latest.id, prHeadSha: newHeadSha });
+        }
       });
 
     const validShas = (shas: readonly string[]) => {
@@ -211,13 +202,13 @@ export const PrWorkspaceLive = Layer.effect(
 
     const editBranch = <A, E>(
       prId: string,
-      edit: (ctx: PrContextBasic, branch: AgentBranch) => Effect.Effect<A, E>,
+      edit: (ctx: PrContextBasic, branch: AgentBranch, held: WorkspaceClaim) => Effect.Effect<A, E>,
     ) =>
       Effect.scoped(
         Effect.gen(function* () {
-          yield* claim(prId, "branch-edit");
+          const held = yield* worktrees.claim(prId, "branch-edit");
           const ctx = yield* prCtx.forPr(prId);
-          return yield* edit(ctx, yield* requireBranch(ctx));
+          return yield* edit(ctx, yield* requireBranch(ctx), held);
         }),
       );
 
@@ -226,12 +217,12 @@ export const PrWorkspaceLive = Layer.effect(
      * away the agent's unpushed commits (the PR moved underneath them). The
      * way out is `rebaseOnto` or `discard`, then `advance`.
      */
-    const acquireAgentWorktree = (ctx: PrContextBasic, headSha: string) =>
+    const acquireAgentWorktree = (held: WorkspaceClaim, ctx: PrContextBasic, headSha: string) =>
       Effect.gen(function* () {
         const branch = agentBranchOf(ctx);
         if (branch) {
           const pinned = yield* chatSessions.baselinesForPr(ctx.pr.id);
-          const stranded = yield* Effect.promise(() => commitsStrandedBy(branch, headSha, pinned));
+          const stranded = yield* gitTry(() => commitsStrandedBy(branch, headSha, pinned));
           if (stranded) {
             return yield* Effect.fail(
               new WorktreeBlockedByUnpushedCommits({
@@ -244,7 +235,7 @@ export const PrWorkspaceLive = Layer.effect(
             );
           }
         }
-        return yield* repoClone.acquirePrWorktree({
+        return yield* worktrees.ensure(held, {
           repoId: ctx.repo.id,
           prNumber: ctx.pr.externalId,
           prHeadSha: headSha,
@@ -254,23 +245,36 @@ export const PrWorkspaceLive = Layer.effect(
 
     const push = makeAgentPush({
       resolve: (prId) => prCtx.forPr(prId),
-      claim,
+      claim: worktrees.claim,
       pushLock,
       agentBranchOf,
       baselineOf,
-      sessionOf: session,
-      chatSessions,
+      moveSession,
       ai,
       mirror,
     });
 
     return {
-      claim,
-
-      open: (ctx, headSha, holder) =>
+      open: (ctx, holder) =>
         Effect.gen(function* () {
-          const held = yield* claim(ctx.pr.id, holder);
-          return { claim: held, branch: yield* acquireAgentWorktree(ctx, headSha) };
+          const held = yield* worktrees.claim(ctx.pr.id, holder);
+          const headSha = yield* mirror.headOf(ctx);
+          const branch = yield* acquireAgentWorktree(held, ctx, headSha);
+          return { claim: held, branch, headSha };
+        }),
+
+      openSession: (ctx, headSha, branch) =>
+        Effect.gen(function* () {
+          const launch = yield* chatLaunch;
+          const row = yield* chatSessions.findOrCreate({
+            prId: ctx.pr.id,
+            agent: launch.agent,
+            model: launch.model,
+            prHeadSha: headSha,
+            worktreePath: branch.worktreePath,
+            branchName: branch.branchName,
+          });
+          return { session: row, launch };
         }),
 
       agentBranch: agentBranchOf,
@@ -281,7 +285,7 @@ export const PrWorkspaceLive = Layer.effect(
           const branch = agentBranchOf(ctx);
           if (!branch) return 0;
           const baseSha = yield* baselineOf(ctx, branch);
-          return baseSha ? yield* Effect.promise(() => countProposed(branch, baseSha)) : 0;
+          return baseSha ? yield* gitTry(() => countProposed(branch, baseSha)) : 0;
         }),
 
       proposed: (prId) =>
@@ -291,33 +295,18 @@ export const PrWorkspaceLive = Layer.effect(
           if (!branch) return { branchName: null, baseSha: null, commits: [] };
           const baseSha = yield* baselineOf(ctx, branch);
           if (!baseSha) return { branchName: branch.branchName, baseSha: null, commits: [] };
-          const commits = yield* Effect.promise(() =>
-            listProposedCommits(branch, baseSha).catch((err) => {
-              logError("chat", "listing proposed commits failed:", err);
-              return [];
-            }),
+          const commits = yield* gitTry(
+            () => listProposedCommits(branch, baseSha),
+            "Listing the agent's commits failed",
           );
           return { branchName: branch.branchName, baseSha, commits };
-        }),
-
-      commitPatch: (prId, sha) =>
-        Effect.gen(function* () {
-          yield* validShas([sha]);
-          const branch = yield* requireBranch(yield* prCtx.forPr(prId));
-          return yield* Effect.tryPromise({
-            try: () => commitPatch(branch.worktreePath, sha),
-            catch: (err) => new GitOperationError({ message: String(err), cause: err }),
-          });
         }),
 
       commitFiles: (prId, sha) =>
         Effect.gen(function* () {
           yield* validShas([sha]);
           const branch = yield* requireBranch(yield* prCtx.forPr(prId));
-          return yield* Effect.tryPromise({
-            try: () => commitFiles(branch.worktreePath, sha),
-            catch: (err) => new GitOperationError({ message: String(err), cause: err }),
-          });
+          return yield* gitTry(() => commitFiles(branch.worktreePath, sha));
         }),
 
       discard: (prId, shas) =>
@@ -327,7 +316,7 @@ export const PrWorkspaceLive = Layer.effect(
             Effect.gen(function* () {
               const drop = new Set<string>();
               for (const sha of shas) {
-                const full = yield* Effect.promise(() => resolveRef(branch.worktreePath, sha));
+                const full = yield* gitTry(() => resolveRef(branch.worktreePath, sha));
                 if (!full)
                   return yield* Effect.fail(new NotFoundError({ resource: "commit", id: sha }));
                 drop.add(full);
@@ -338,9 +327,7 @@ export const PrWorkspaceLive = Layer.effect(
                   new NotFoundError({ resource: "commit", id: shas.join(",") }),
                 );
               }
-              const dropped = yield* Effect.promise(() =>
-                dropProposedCommits(branch, baseSha, drop),
-              );
+              const dropped = yield* gitTry(() => dropProposedCommits(branch, baseSha, drop));
               switch (dropped.kind) {
                 case "dropped":
                   return { discardedCount: dropped.count };
@@ -365,15 +352,26 @@ export const PrWorkspaceLive = Layer.effect(
           yield* editBranch(prId, (ctx, branch) =>
             Effect.gen(function* () {
               const { repo } = ctx;
-              const token = ctx.client.token;
-              yield* Effect.promise(() =>
+              const fetched = yield* gitTry(() =>
                 fetch(
                   branch.worktreePath,
-                  authedRemoteUrl({ host: repo.githubHost, fullName: repo.fullName, token }),
+                  authedRemoteUrl({
+                    host: repo.githubHost,
+                    fullName: repo.fullName,
+                    token: ctx.client.token,
+                  }),
                   [newHeadSha],
                 ),
               );
-              const oldTip = yield* Effect.promise(() =>
+              if (!fetched.ok) {
+                return yield* Effect.fail(
+                  new GitOperationError({
+                    message: `Couldn't fetch the PR's new head: ${fetched.stderr || "git failed"}`,
+                    stderr: fetched.stderr,
+                  }),
+                );
+              }
+              const oldTip = yield* gitTry(() =>
                 resolveRef(branch.worktreePath, branch.branchName),
               );
               if (!oldTip) {
@@ -381,7 +379,7 @@ export const PrWorkspaceLive = Layer.effect(
                   new GitOperationError({ message: "Couldn't read the agent branch" }),
                 );
               }
-              const replayed = yield* Effect.promise(() =>
+              const replayed = yield* gitTry(() =>
                 replayAgentCommits(branch, { onto: newHeadSha, upstream: oldHeadSha, oldTip }),
               );
               if (!replayed.ok) {
@@ -402,20 +400,11 @@ export const PrWorkspaceLive = Layer.effect(
             try: () => assertNotFlagLike(newHeadSha, "newHeadSha"),
             catch: (err) => new ValidationError({ message: String(err) }),
           });
-          yield* editBranch(prId, (ctx) =>
+          yield* editBranch(prId, (ctx, _branch, held) =>
             Effect.gen(function* () {
-              yield* acquireAgentWorktree(ctx, newHeadSha);
+              yield* acquireAgentWorktree(held, ctx, newHeadSha);
               // The conversation the block interrupted continues at the new head.
-              const { agent, model } = yield* resolveAgentLaunch("chat").pipe(
-                Effect.provide(context),
-              );
-              const interrupted = yield* chatSessions.findLatest(ctx.pr.id, agent, model);
-              if (interrupted) {
-                yield* chatSessions.updatePrHeadSha({
-                  chatSessionId: interrupted.id,
-                  prHeadSha: newHeadSha,
-                });
-              }
+              yield* moveSession(ctx.pr.id, newHeadSha);
             }),
           );
         }),
@@ -423,13 +412,23 @@ export const PrWorkspaceLive = Layer.effect(
       clear: (prId) =>
         Effect.scoped(
           Effect.gen(function* () {
-            yield* claim(prId, "branch-edit");
+            yield* worktrees.claim(prId, "branch-edit");
             const ctx = yield* prCtx.forPr(prId);
             const branch = agentBranchOf(ctx);
-            // Read the baseline before the sessions that pin it go.
-            const baseSha = branch ? yield* baselineOf(ctx, branch) : null;
+            // Rewound before the sessions that pin the baseline go: a clear
+            // that couldn't rewind keeps the conversation it would orphan.
+            if (branch) {
+              const baseSha = yield* baselineOf(ctx, branch);
+              const failed = baseSha ? yield* gitTry(() => resetToBase(branch, baseSha)) : null;
+              if (failed) {
+                return yield* Effect.fail(
+                  new GitOperationError({
+                    message: `Couldn't discard the agent's changes: ${failed}`,
+                  }),
+                );
+              }
+            }
             yield* chatSessions.clearForPr(ctx.pr.id);
-            if (branch && baseSha) yield* Effect.promise(() => resetToBase(branch, baseSha));
           }),
         ),
 

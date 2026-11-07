@@ -3,7 +3,6 @@
 // exposes no API for its server-side rebase, so Revv runs the same cascade in
 // the repo's clone (`stack-rebase-git.ts`) and pushes the result.
 
-import { join } from "node:path";
 import { isOpenLayer, type StackRebaseResult } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
 import {
@@ -14,15 +13,14 @@ import {
 } from "../../domain/errors";
 import { dbTry } from "../../effects/db-try";
 import { logError } from "../../logger";
-import { worktreeHolderPath } from "../clone-policy";
+import { RepoCloneService } from "../clone/RepoClone";
 import { DbService } from "../Db";
 import { BranchPushLock } from "../git/branch-push-lock";
-import { scratchWorktreeDir } from "../git/pr-refs";
-import { authedRemoteUrl } from "../git/remote";
+import { gitTry } from "../git/ops";
+import { describeFiles } from "../git/scratch";
 import { GitHubGateway } from "../github/gateway";
 import { type PrContextBasic, PrContextService } from "../PrContext";
-import { Realtime } from "../Realtime";
-import type { SettingsService } from "../Settings";
+import { PrMirror } from "../PrMirror";
 import type { GitHubStack } from "./map";
 import { planStackRebase } from "./rebase-plan";
 import { type StackError, StackService } from "./StackService";
@@ -61,58 +59,38 @@ export class StackRebaseService extends Context.Service<
 const rejected = (rejection: StackRejection, message: string) =>
   Effect.fail(new StackRejectedError({ message, rejection }));
 
-function describeFiles(files: readonly string[]): string {
-  const shown = files.slice(0, 3).join(", ");
-  return files.length > 3 ? `${shown} and ${files.length - 3} more` : shown;
-}
-
 export const StackRebaseServiceLive = Layer.effect(
   StackRebaseService,
   Effect.gen(function* () {
-    const context = yield* Effect.context<DbService | SettingsService>();
-    const { db } = Context.get(context, DbService);
+    const { db } = yield* DbService;
     const stacks = yield* StackService;
     const github = yield* GitHubGateway;
     const prContext = yield* PrContextService;
-    const realtime = yield* Realtime;
     const pushLock = yield* BranchPushLock;
+    const repoClone = yield* RepoCloneService;
+    const mirror = yield* PrMirror;
 
-    const replayInput = (ctx: PrContextBasic, stack: GitHubStack, steps: ReplayInput["steps"]) =>
-      Effect.gen(function* () {
-        const { repo } = ctx;
-        const [owner, name] = repo.fullName.split("/");
-        if (repo.cloneStatus !== "ready" || !repo.clonePath || !owner || !name) {
-          return yield* rejected(
-            { reason: "invalid" },
-            `Revv's copy of ${repo.fullName} isn't ready yet`,
-          );
-        }
-        return {
-          clonePath: repo.clonePath,
-          scratchPath: join(
-            worktreeHolderPath(owner, name),
-            scratchWorktreeDir.stackRebase(stack.number),
-          ),
-          remoteUrl: authedRemoteUrl({
-            host: repo.githubHost,
-            fullName: repo.fullName,
-            token: ctx.client.token,
-          }),
-          baseRefName: stack.baseRefName,
-          stackNumber: stack.number,
-          steps,
-        } satisfies ReplayInput;
-      });
+    const replayInput = (ctx: PrContextBasic, stack: GitHubStack, steps: ReplayInput["steps"]) => {
+      const place = repoClone.scratchPlace(ctx.repo, ctx.client.token, (layout) =>
+        layout.scratch.stackRebase(ctx.repo.id, stack.number),
+      );
+      return place
+        ? Effect.succeed({
+            ...place,
+            baseRefName: stack.baseRefName,
+            stackNumber: stack.number,
+            steps,
+          } satisfies ReplayInput)
+        : rejected({ reason: "invalid" }, `Revv's copy of ${ctx.repo.fullName} isn't ready yet`);
+    };
 
     const gitStep = <A>(what: string, run: () => Promise<A>) =>
-      Effect.tryPromise({
-        try: run,
-        catch: (cause) =>
-          new StackRejectedError({
-            message: `${what}: ${cause instanceof Error ? cause.message : String(cause)}`,
-            rejection: { reason: "failed" },
-          }),
-      });
+      gitTry(run, what).pipe(
+        Effect.mapError(
+          (err) =>
+            new StackRejectedError({ message: err.message, rejection: { reason: "failed" } }),
+        ),
+      );
 
     const replayAndPush = (input: ReplayInput, proceed: Effect.Effect<boolean>) =>
       Effect.gen(function* () {
@@ -161,7 +139,7 @@ export const StackRebaseServiceLive = Layer.effect(
 
     const checkMembership = (ctx: PrContextBasic, stack: GitHubStack, number: number) =>
       Effect.gen(function* () {
-        const reread = yield* stacks.fetchFresh({ ...ctx, pr: { ...ctx.pr, externalId: number } });
+        const reread = yield* stacks.fetchFresh(ctx, number);
         const contradicted = membershipAfterRetarget(stack, number, reread);
         if (contradicted) logContradiction("stack-rebase", contradicted);
       }).pipe(
@@ -205,14 +183,11 @@ export const StackRebaseServiceLive = Layer.effect(
           const retargeted: number[] = [];
           if (plan.retarget !== null) {
             const done = yield* Effect.result(
-              Effect.provide(
-                github.prs.updateBase(
-                  ctx.client,
-                  ctx.repo.fullName,
-                  plan.retarget,
-                  stack.baseRefName,
-                ),
-                context,
+              github.prs.updateBase(
+                ctx.client,
+                ctx.repo.fullName,
+                plan.retarget,
+                stack.baseRefName,
               ),
             );
             if (done._tag === "Success") {
@@ -223,14 +198,12 @@ export const StackRebaseServiceLive = Layer.effect(
             }
           }
 
+          yield* mirror.recordPushes(
+            ctx,
+            rebased.map(({ number, to }) => ({ prNumber: number, newTip: to })),
+          );
           if (rebased.length > 0 || retargeted.length > 0) {
-            yield* stacks
-              .markStale(ctx.repo.id, stack.number)
-              .pipe(Effect.catch(() => Effect.void));
-            yield* realtime.toAccount(accountId, {
-              type: "stack:updated",
-              data: { repositoryId: ctx.repo.id, stackNumber: stack.number },
-            });
+            yield* stacks.moved(accountId, ctx.repo.id, stack.number);
           }
           return { rebased, retargeted } satisfies StackRebaseResult;
         }),
@@ -246,7 +219,7 @@ export const StackRebaseServiceLive = Layer.effect(
     ) =>
       Effect.gen(function* () {
         const ctx = yield* prContext.forPr(prId, accountId);
-        const stack = yield* stacks.fetchFresh(ctx);
+        const stack = yield* stacks.fetchFresh(ctx, ctx.pr.externalId);
         if (!stack) return yield* Effect.fail(new NotFoundError({ resource: "stack", id: prId }));
         if (!stack.viewerCanPush) {
           return yield* rejected({ reason: "invalid" }, `You can't push to ${ctx.repo.fullName}`);
@@ -263,7 +236,7 @@ export const StackRebaseServiceLive = Layer.effect(
           return yield* rejected({ reason: "invalid" }, "A merge of this stack is running");
         }
         return yield* rebaseStack(ctx, stack, accountId);
-      }).pipe(Effect.provide(context));
+      });
 
     return { rebase, rebaseStack };
   }),

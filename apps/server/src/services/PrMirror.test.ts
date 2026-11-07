@@ -117,7 +117,7 @@ describe("PrMirror.apply", () => {
   });
 });
 
-describe("PrMirror.recordPushedHead", () => {
+describe("PrMirror.recordPushes", () => {
   const gatewayAnswering = (answer: ObservedPr) =>
     ({
       prs: { get: () => Effect.succeed(answer) },
@@ -128,7 +128,9 @@ describe("PrMirror.recordPushedHead", () => {
     const h = await makeHarness(db, gatewayAnswering(observed({ headSha: "tip", updatedAt: T2 })));
     const pr = await stored(h, observed({ headSha: "h1", updatedAt: T1 }));
 
-    await run(h.mirror.recordPushedHead({ pr, repo: REPO, client }, "tip"));
+    await run(
+      h.mirror.recordPushes({ repo: REPO, client }, [{ prNumber: pr.externalId, newTip: "tip" }]),
+    );
 
     const row = await readRow(h);
     expect([row.headSha, row.updatedAt]).toEqual(["tip", T2]);
@@ -141,7 +143,9 @@ describe("PrMirror.recordPushedHead", () => {
     const pr = await stored(h, observed({ headSha: "h1", updatedAt: T1 }));
     const before = Date.now();
 
-    await run(h.mirror.recordPushedHead({ pr, repo: REPO, client }, "tip"));
+    await run(
+      h.mirror.recordPushes({ repo: REPO, client }, [{ prNumber: pr.externalId, newTip: "tip" }]),
+    );
 
     const row = await readRow(h);
     expect(row.headSha).toBe("tip");

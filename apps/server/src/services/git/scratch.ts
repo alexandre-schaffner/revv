@@ -4,7 +4,8 @@
 // are the refs it fetched and whatever it pushes. A run that dies leaves the
 // directory behind; the next run with the same path clears it first.
 
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { dirname } from "node:path";
 import {
   abortMerge,
   abortRebase,
@@ -29,6 +30,12 @@ export const firstLine = (stderr: string) =>
     .map((l) => l.trim())
     .find((l) => l.length > 0 && !l.startsWith("hint:")) ?? "git failed";
 
+/** Up to three of `files`, then how many more: for a status line about conflicting files. */
+export function describeFiles(files: readonly string[]): string {
+  const shown = files.slice(0, 3).join(", ");
+  return files.length > 3 ? `${shown} and ${files.length - 3} more` : shown;
+}
+
 export async function clearScratch(clonePath: string, scratchPath: string): Promise<void> {
   if (existsSync(scratchPath)) {
     if (await isMergeInProgress(scratchPath)) await abortMerge(scratchPath);
@@ -47,6 +54,7 @@ export async function prepareScratch(
   sha: string,
 ): Promise<{ readonly kind: "ok" } | Failed> {
   await clearScratch(clonePath, scratchPath);
+  mkdirSync(dirname(scratchPath), { recursive: true });
   const added = await addDetachedWorktree(
     clonePath,
     scratchPath,

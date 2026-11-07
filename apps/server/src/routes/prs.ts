@@ -17,6 +17,7 @@ import {
 import { pinnedPullRequests } from "../db/schema";
 import { tryDb } from "../effects/db-try";
 import { logError } from "../logger";
+import { RepoCloneService } from "../services/clone/RepoClone";
 import { type CachedDiffFile, DiffCacheService, toCachedDiffFiles } from "../services/DiffCache";
 import { GitHubGateway } from "../services/github/gateway";
 import { checkMergeEligibility } from "../services/merge-eligibility";
@@ -31,7 +32,6 @@ import {
 import { PrMirror } from "../services/PrMirror";
 import { PullRequestService } from "../services/PullRequest";
 import { resolvePullRequestLink } from "../services/pr-deep-link";
-import { RepoCloneService } from "../services/RepoClone";
 import { RepositoryService } from "../services/Repository";
 import { ReviewService } from "../services/Review";
 import { WalkthroughService } from "../services/Walkthrough";

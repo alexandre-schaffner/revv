@@ -7,17 +7,19 @@ import { Cause, Effect, Layer } from "effect";
 import { stopAllAcpConnections } from "./ai/acp/acp-connection";
 import { logError } from "./logger";
 import { withGitHubOrigin } from "./observability/github-ledger/origin";
+import { RepoCloneService } from "./services/clone/RepoClone";
 import { DbMaintenance } from "./services/DbMaintenance";
+import { killRunningGitProcesses } from "./services/git/ops";
 import { GitHubAccounts } from "./services/github/accounts";
 import { PollScheduler } from "./services/PollScheduler";
 import { ensureHighlighter } from "./services/PrerenderCache";
 import { ProjectRecapJobs } from "./services/ProjectRecapJobs";
 import { RecapScheduler } from "./services/RecapScheduler";
-import { RepoCloneService } from "./services/RepoClone";
 import { StackBriefJobs } from "./services/stacks/StackBriefJobs";
 import { StackMergeService } from "./services/stacks/StackMerge";
 import { StackReviewService } from "./services/stacks/StackReview";
 import { WalkthroughJobs } from "./services/WalkthroughJobs";
+import { AgentWorktrees } from "./services/workspace/agent-worktrees";
 
 const step = <R>(
   scope: string,
@@ -41,9 +43,13 @@ export const BootLive = Layer.effectDiscard(
     const stackReview = yield* StackReviewService;
     const stackMerge = yield* StackMergeService;
     const repoClone = yield* RepoCloneService;
+    const agentWorktrees = yield* AgentWorktrees;
     const dbMaintenance = yield* DbMaintenance;
 
     yield* Effect.addFinalizer(() => Effect.sync(stopAllAcpConnections));
+    // Orphaned `git clone`s would fight the next lifetime for `.git/shallow.lock`
+    // and write into directories it removed.
+    yield* Effect.addFinalizer(() => Effect.sync(killRunningGitProcesses));
 
     const sequence = Effect.all(
       [
@@ -62,13 +68,14 @@ export const BootLive = Layer.effectDiscard(
         ).pipe(Effect.andThen(step("poll-scheduler", pollScheduler.start()))),
 
         // Clones cut off by the last shutdown restart before walkthroughs
-        // resume (a resumed run waits on its clone). The worktree sweep runs
-        // after resume: it reaps the agent worktrees of closed or untracked PRs
-        // and the review worktrees of walkthroughs no longer generating, so a
-        // resumed run's review worktree counts as generating.
-        step("repo-clone", repoClone.resumePendingClones()).pipe(
+        // resume (a resumed run waits on its clone). The worktree sweeps run
+        // after resume: they reap the agent worktrees of closed or untracked
+        // PRs and the review worktrees of walkthroughs no longer generating, so
+        // a resumed run's review worktree counts as generating.
+        step("repo-clone", repoClone.recoverAtBoot()).pipe(
           Effect.andThen(step("walkthrough-jobs", walkthroughJobs.resumePending())),
-          Effect.andThen(step("repo-clone", repoClone.sweepStaleWorktrees())),
+          Effect.andThen(step("repo-clone", repoClone.sweepReviewWorktrees())),
+          Effect.andThen(step("agent-worktrees", agentWorktrees.sweep())),
         ),
 
         // A recap cut off mid-generation finishes (or fails) before the

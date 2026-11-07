@@ -96,6 +96,7 @@ export function classifyPushFailure(stderr: string): PushFailureKind {
     lower.includes("stale info") ||
     lower.includes("non-fast-forward") ||
     lower.includes("fetch first") ||
+    lower.includes("already exists") ||
     lower.includes("[rejected]")
   ) {
     return "remote-moved";
@@ -146,7 +147,8 @@ export type PushOutcome =
   | { readonly kind: "moved" }
   | { readonly kind: "auth" | "rejected"; readonly message: string };
 
-export function pushOutcome(attempt: GitAttempt): PushOutcome {
+/** What a push came to: the one reading of a push failure every flow shares. */
+export function pushOutcome(attempt: Pick<GitAttempt, "ok" | "stderr">): PushOutcome {
   if (attempt.ok) return { kind: "pushed" };
   switch (classifyPushFailure(attempt.stderr)) {
     case "remote-moved":

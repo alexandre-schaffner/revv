@@ -53,6 +53,7 @@ import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { withTraceAnchor } from "../observability/span-graft";
 import { AiService } from "./Ai";
 import { CacheService } from "./Cache";
+import { RepoCloneService } from "./clone/RepoClone";
 import { DbService } from "./Db";
 import { HunkScanService } from "./HunkScan";
 import { JevService } from "./Jev";
@@ -61,7 +62,6 @@ import { type AgentRun, makeAgentJobs, type RunOutcome } from "./jobs/agent-jobs
 import { PrContextService } from "./PrContext";
 import { Realtime } from "./Realtime";
 import { RemoteWalkthroughCache } from "./RemoteWalkthroughCache";
-import { RepoCloneService } from "./RepoClone";
 import { ReviewService } from "./Review";
 import { SettingsService } from "./Settings";
 import { StackService } from "./stacks/StackService";

@@ -1,24 +1,43 @@
-import { and, eq, lt } from "drizzle-orm";
+import { and, eq, isNull, lt, or } from "drizzle-orm";
 import { Context, Effect, type Exit, Layer } from "effect";
-import type { RetentionPolicy } from "../db/retention";
+import { daysBefore, type RetentionPolicy } from "../db/retention";
 import { kvCache } from "../db/schema/index";
 import type { DbError } from "../domain/errors";
 import { dbTry } from "../effects/db-try";
 import { DbService } from "./Db";
 
+/**
+ * How long an entry that never goes stale is kept after it was written. Its
+ * key pins content (a head SHA, a diff), so once that content is this old
+ * nothing asks for it again; an entry that is asked for is simply recomputed.
+ */
+const IMMUTABLE_RETENTION_DAYS = 30;
+
+/** Entries past their expiry, and entries that never expire once they are old. */
 export const kvCacheRetention: RetentionPolicy = {
   table: "kv_cache",
   sweep: (db, now) =>
     db
       .delete(kvCache)
-      .where(lt(kvCache.expiresAt, now.toISOString()))
+      .where(
+        or(
+          lt(kvCache.expiresAt, now.toISOString()),
+          and(
+            isNull(kvCache.expiresAt),
+            lt(kvCache.fetchedAt, daysBefore(now, IMMUTABLE_RETENTION_DAYS)),
+          ),
+        ),
+      )
       .returning({ key: kvCache.key })
       .all().length,
 };
 
+/** Entries held in memory in front of SQLite; the least recently used go first. */
+const MEMORY_ENTRIES = 2_000;
+
 /**
  * Keys that never go stale (anything containing `headSha` / `baseSha` / `ref`)
- * should set `immutable: true` so the expiry sweep leaves them alone.
+ * should set `immutable: true`: no expiry, kept until retention ages them out.
  * `immutable: true` overrides `ttlMs`; passing neither is treated as immutable.
  */
 export interface CacheSetOptions {
@@ -50,7 +69,7 @@ export class CacheService extends Context.Service<
       value: T,
       opts?: CacheSetOptions,
     ) => Effect.Effect<void, DbError, DbService>;
-    readonly invalidate: (ns: string, key?: string) => Effect.Effect<void, DbError, DbService>;
+    readonly invalidate: (ns: string, key: string) => Effect.Effect<void, DbError, DbService>;
     readonly getOrFetch: <T, E, R>(
       ns: string,
       key: string,
@@ -85,15 +104,22 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
     const k = cacheKey(ns, key);
     const entry = memory.get(k);
     if (!entry) return undefined;
-    if (isExpired(entry.expiresAt)) {
-      memory.delete(k);
-      return undefined;
-    }
+    memory.delete(k);
+    if (isExpired(entry.expiresAt)) return undefined;
+    memory.set(k, entry);
     return entry.value;
   };
 
   const writeMemory = (ns: string, key: string, value: unknown, expiresAt: number | null): void => {
-    memory.set(cacheKey(ns, key), { value, expiresAt });
+    const k = cacheKey(ns, key);
+    memory.delete(k);
+    memory.set(k, { value, expiresAt });
+    // A Map iterates in insertion order, and a read re-inserts: the first key is the coldest.
+    while (memory.size > MEMORY_ENTRIES) {
+      const coldest = memory.keys().next().value;
+      if (coldest === undefined) break;
+      memory.delete(coldest);
+    }
   };
 
   const get = <T>(ns: string, key: string) =>
@@ -179,26 +205,16 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
       writeMemory(ns, key, value, expiresAtMs);
     });
 
-  const invalidate = (ns: string, key?: string) =>
+  const invalidate = (ns: string, key: string) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      if (key === undefined) {
-        yield* dbTry(`cache.invalidate(${ns})`, () =>
-          db.delete(kvCache).where(eq(kvCache.ns, ns)).run(),
-        );
-        const prefix = `${ns}\0`;
-        for (const k of memory.keys()) {
-          if (k.startsWith(prefix)) memory.delete(k);
-        }
-      } else {
-        yield* dbTry(`cache.invalidate(${ns}, ${key})`, () =>
-          db
-            .delete(kvCache)
-            .where(and(eq(kvCache.ns, ns), eq(kvCache.key, key)))
-            .run(),
-        );
-        memory.delete(cacheKey(ns, key));
-      }
+      yield* dbTry(`cache.invalidate(${ns}, ${key})`, () =>
+        db
+          .delete(kvCache)
+          .where(and(eq(kvCache.ns, ns), eq(kvCache.key, key)))
+          .run(),
+      );
+      memory.delete(cacheKey(ns, key));
     });
 
   const getOrFetch = <T, E, R>(
@@ -248,12 +264,6 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
   const stats = () =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-
-      const nowIso = new Date().toISOString();
-      yield* dbTry("cache.stats sweep", () =>
-        db.delete(kvCache).where(lt(kvCache.expiresAt, nowIso)).run(),
-      );
-
       const rows = yield* dbTry("cache.stats scan", () =>
         db.select({ ns: kvCache.ns }).from(kvCache).all(),
       );

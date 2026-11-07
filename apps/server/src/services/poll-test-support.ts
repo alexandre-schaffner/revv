@@ -12,12 +12,12 @@ import { GitHubGateway } from "./github/gateway";
 import { PrMirror, PrMirrorLive } from "./PrMirror";
 import { PullRequestService, PullRequestServiceLive } from "./PullRequest";
 import { Realtime } from "./Realtime";
-import { RepoCloneService } from "./RepoClone";
 import { RepositoryServiceLive } from "./Repository";
 import { SecretStore } from "./SecretStore";
 import { SettingsService } from "./Settings";
 import { StackService } from "./stacks/StackService";
 import { WalkthroughJobs } from "./WalkthroughJobs";
+import { AgentWorktrees } from "./workspace/agent-worktrees";
 
 export const ACCOUNT_ID = "acc-1";
 
@@ -93,7 +93,7 @@ export interface Harness {
   readonly recorded: Recorded;
 }
 
-/** `github` is the gateway PrMirror sees (only `recordPushedHead` calls it). */
+/** `github` is the gateway PrMirror sees (only `recordPushes` and `headOf` call it). */
 export async function makeHarness(
   db: Db,
   github: Partial<Context.Service.Shape<typeof GitHubGateway>> = {},
@@ -135,15 +135,15 @@ export async function makeHarness(
           );
         }),
     } as unknown as Context.Service.Shape<typeof WalkthroughJobs>),
-    Layer.succeed(RepoCloneService, {
-      pruneWorktree: (params: { repoId: string; prNumber: number }) =>
+    Layer.succeed(AgentWorktrees, {
+      prune: (params: { repoId: string; prNumber: number }) =>
         Effect.sync(() => {
           recorded.pruned.push({ repoId: params.repoId, prNumber: params.prNumber });
-          return "pruned";
+          return { pruned: true };
         }),
-    } as unknown as Context.Service.Shape<typeof RepoCloneService>),
+    } as unknown as Context.Service.Shape<typeof AgentWorktrees>),
     Layer.succeed(StackService, {
-      markStale: (repositoryId: string, stackNumber: number) =>
+      moved: (_accountId: string, repositoryId: string, stackNumber: number) =>
         Effect.sync(() => {
           recorded.staleStacks.push(`${repositoryId}:${stackNumber}`);
         }),

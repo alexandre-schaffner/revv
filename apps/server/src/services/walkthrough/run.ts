@@ -33,10 +33,10 @@ import { type AiError, AiGenerationError, type DbError } from "../../domain/erro
 import { dbTry } from "../../effects/db-try";
 import { debug } from "../../logger";
 import type { AiService } from "../Ai";
+import type { RepoCloneService } from "../clone/RepoClone";
 import type { HunkScanService } from "../HunkScan";
 import { JevService } from "../Jev";
 import type { AgentRun, RunEnd } from "../jobs/agent-jobs";
-import type { RepoCloneService } from "../RepoClone";
 import { leadsRecorded, prepareFirstPassLeads } from "../walkthrough-leads";
 import { type PromptFile, resolveIncrementalPromptFiles } from "../walkthrough-prompt-files";
 import { orchestratorCompletionBlocker } from "./completion";

@@ -21,7 +21,7 @@ import {
   type WalkthroughTurnResult,
 } from "../ai/providers/walkthrough-acp";
 import { type AiError, AiNotConfiguredError } from "../domain/errors";
-import { ChatMcpTokens } from "./ChatMcpTokens";
+import { ChatMcpTokens } from "./chat/ChatMcpTokens";
 import { SettingsService } from "./Settings";
 
 export interface ChatParams {

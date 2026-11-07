@@ -5,8 +5,8 @@
 
 import type { InteractionMode } from "@revv/shared";
 import { Context, Layer } from "effect";
-import { CHAT_TURN } from "../ai/acp/run-turn";
-import { makeSessionTokenStore, type SessionTokenStore } from "./session-token-store";
+import { CHAT_TURN } from "../../ai/acp/run-turn";
+import { makeSessionTokenStore, type SessionTokenStore } from "../session-token-store";
 
 export interface ChatTokenResolved {
   readonly prId: string;

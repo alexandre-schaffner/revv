@@ -16,7 +16,7 @@
 import { SpanStatusCode, trace } from "@opentelemetry/api";
 import { Cause, type Context, Effect, Exit } from "effect";
 import type { ChatStreamFrame, RawChatStreamFrame } from "../../ai/providers/chat-types";
-import type { ChatSessionService } from "../ChatSession";
+import type { ChatSessionService } from "./ChatSession";
 
 interface JournalParams {
   readonly source: ReadableStream<RawChatStreamFrame>;

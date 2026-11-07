@@ -3,12 +3,13 @@ import { resolve } from "node:path";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { NotFoundError, ValidationError } from "../domain/errors";
-import { CLONE_BASE_DIR, expandUserPath, pathIsUnder } from "../services/clone-policy";
+import { CLONE_BASE_DIR } from "../services/clone/layout";
+import { expandUserPath, pathIsUnder } from "../services/clone/policy";
+import { RepoCloneService } from "../services/clone/RepoClone";
 import { GitHubAccounts } from "../services/github/accounts";
 import { GitHubGateway } from "../services/github/gateway";
 import { PollScheduler } from "../services/PollScheduler";
 import { getRepoActivityResponse } from "../services/RepoActivity";
-import { RepoCloneService } from "../services/RepoClone";
 import { RepositoryService } from "../services/Repository";
 import { diagnoseRepoNotFound } from "../services/repo-access";
 import { errorResponse, runRoute, withAccount } from "./middleware";
@@ -57,7 +58,6 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
           const cloneSvc = yield* RepoCloneService;
 
           const { accountId, client } = ctx.account;
-          const token = client.token;
           const repoData = yield* github.repos
             .get(client, body.fullName)
             .pipe(
@@ -85,22 +85,19 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
 
           yield* Effect.forkDetach(scheduler.syncNow());
 
+          // The outcome is the repo's clone status, so the add never fails on it.
           if (isLink) {
             yield* cloneSvc
-              .linkExisting(saved, body.clonePath, accountId)
+              .linkExisting(saved.id, body.clonePath)
               .pipe(Effect.catch(() => Effect.void));
           } else {
             yield* Effect.forkDetach(
               cloneSvc
-                .cloneRepo(
-                  saved,
-                  token,
-                  accountId,
+                .ensureClone(
+                  saved.id,
                   body.basePath === undefined ? undefined : { basePath: body.basePath },
                 )
-                .pipe(
-                  Effect.catch(() => Effect.void), // errors tracked in DB, don't fail the add
-                ),
+                .pipe(Effect.catch(() => Effect.void)),
             );
           }
 
@@ -166,23 +163,10 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
         const repoSvc = yield* RepositoryService;
         const cloneSvc = yield* RepoCloneService;
 
-        const { accountId, client } = ctx.account;
-        const repo = yield* repoSvc.getRepoById(ctx.params.id, accountId);
-
-        if (repo.managed) {
-          yield* Effect.forkDetach(
-            cloneSvc.cloneRepo(repo, client.token, accountId).pipe(Effect.catch(() => Effect.void)),
-          );
-        } else if (repo.clonePath) {
-          // Linked repo: never route through `cloneRepo`. A missing path
-          // would be treated as an empty managed-clone destination, flip
-          // `managed: true`, and make a later removal `rm -rf` a path the
-          // user owns. Revalidate / re-link the existing checkout instead.
-          yield* cloneSvc
-            .linkExisting(repo, repo.clonePath, accountId)
-            .pipe(Effect.catch(() => Effect.void));
-        }
-
+        const repo = yield* repoSvc.getRepoById(ctx.params.id, ctx.account.accountId);
+        // A clone takes minutes; revalidating a linked checkout doesn't.
+        const ensured = cloneSvc.ensureClone(repo.id).pipe(Effect.catch(() => Effect.void));
+        yield* repo.managed ? Effect.forkDetach(ensured) : ensured;
         return { success: true };
       }),
     ),
@@ -196,7 +180,7 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
         // The account check comes first: it is what keeps the clone of a
         // repository this account doesn't own on disk.
         yield* repoSvc.getRepoById(ctx.params.id, accountId);
-        yield* cloneSvc.deleteClone(ctx.params.id).pipe(Effect.catch(() => Effect.void));
+        yield* cloneSvc.deleteClone(ctx.params.id);
         yield* repoSvc.deleteRepo(ctx.params.id, accountId);
         return { success: true };
       }),

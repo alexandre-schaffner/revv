@@ -23,19 +23,6 @@ export const chatProposedChangesRoutes = new Elysia()
     { params: prParams },
   )
   .get(
-    "/api/chat/:prId/proposed-changes/:sha/diff",
-    (ctx) =>
-      runRoute(
-        Effect.flatMap(PrWorkspace, (w) => w.commitPatch(ctx.params.prId, ctx.params.sha)).pipe(
-          Effect.map(
-            (diff) =>
-              new Response(diff, { headers: { "Content-Type": "text/plain; charset=utf-8" } }),
-          ),
-        ),
-      ),
-    { params: commitParams },
-  )
-  .get(
     "/api/chat/:prId/proposed-changes/:sha/files",
     (ctx) =>
       runRoute(
