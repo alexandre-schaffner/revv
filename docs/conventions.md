@@ -352,10 +352,18 @@ ends the signed-in session. No store imports the lifecycle back.
 
 **Rule.** A store is a module that declares its reactive state at module-scope (with `$state`)
 and exposes it through named `get<Field>()` getters and `set<Field>()` / verb-prefixed action
-exports. No factory functions, no classes, no `useFoo()` hooks, no `$effect` inside a store.
-Action exports are verb-first (`setSelectedPrId`, `requestSync`); read accessors are noun-first
+exports. No factory functions, no classes, no `$effect` at a store's module scope. Action
+exports are verb-first (`setSelectedPrId`, `requestSync`); read accessors are noun-first
 (`getThreads`, `getActiveTab`). A component that wants a fetch to follow reactive inputs runs
 the `$effect` itself and calls the store's action (`ensurePrSizing(prId)`).
+
+When several components need the same effects, the store ships them as a `use<Thing>()` helper
+beside it, called during component init so the effects live and die with the component:
+`useOpenReview` (`review/open-review.svelte.ts`), `useWalkthroughWatch`
+(`walkthrough/watch.svelte.ts`), `useRecapsForRepo` (`recaps/store.svelte.ts`), `useCommands`
+(`stores/commands.svelte.ts`), `useAvailableRepos` (`repos/add-repo.svelte.ts`). A helper takes
+its reactive inputs as getters (`() => prId`). Shared state stays in the store; a helper keeps
+only its own mount's bookkeeping (`useAvailableRepos`' retry count).
 
 **Why.** Svelte 5 runes mean modules ARE the reactive boundary. Wrapping that in a factory
 imports a React mental model that the framework doesn't share. The getter/setter split keeps
@@ -369,9 +377,15 @@ take the PR (`getBlocks(prId)`, `getWalkthroughUiState(prId)`); a store never re
 "active" key, and its reconnect catch-up follows the PRs it watches, not the route. Its pure
 folding lives beside it in `reducer.ts` (unit-tested), its user verbs in `actions.ts`.
 
-**Sanctioned exception.** Only one review is ever on screen. `pr-view-state.svelte.ts` owns which
+**Sanctioned exceptions.** Only one review is ever on screen. `pr-view-state.svelte.ts` owns which
 PR that is (`openPrView` / `closePrView`, called by `useOpenReview`), and its tab and file
 accessors (`getActiveTab()`, `setActiveFilePath()`) act on it.
+
+Two modules own an `$effect.root` because their effects outlive every component:
+`stores/sidebar.svelte.ts` persists the panel widths and tracks the viewport width for the life
+of the app, and `deep-link/pr-deep-link.svelte.ts`'s `listenForPrDeepLinks()` moves a parked
+`revv://` link on when sign-in or onboarding lands (the root layout calls it once and calls
+the teardown it returns).
 
 **Anti-pattern.** `export function createWalkthroughStore() { ... }` returning an object with
 methods — the consumer instantiates per-component and reactive sharing across components breaks.
@@ -577,10 +591,13 @@ then resets every chat module (timeline, proposed commits, session context, queu
 **Rule.** Every JSON request goes through the Eden client in `apps/web/src/lib/api/client.ts`,
 awaited with `call(request, fallback)` (`api/errors.ts`): it returns the success body or throws
 an `ApiError { status, code, body, message }`, the message being the server's wording or the
-fallback with the status. Its types come from Eden inference (`EdenData<…>` in `api/wire.ts`) or
-`@revv/shared`, never a hand-written copy of the server's response. Branch on a refusal by its
-`code`, not its status. A stream's failure reads through `sseError` / `sseErrorMessage`
-(`api/sse-stream.ts`). Raw `fetch` is for bytes (`ImageDiffViewer`'s blobs) and SSE streams only.
+fallback with the status. `code` is one of the shared `API_ERROR_CODES`, or null. Its types come
+from Eden inference (`EdenData<…>` in `api/wire.ts`) or `@revv/shared`, never a hand-written copy
+of the server's response. Branch on a refusal by its `code`, not its status. A stream
+(`streamSse({ refused, … })`, `api/sse-stream.ts`) refused before it opens throws the same
+`ApiError`, `refused` being its fallback; any stream failure reads through `sseError` /
+`sseErrorMessage`. Raw `fetch` is for bytes (`ImageDiffViewer`'s blobs, worded with an
+`ApiError` too) and SSE streams only.
 
 **Why.** The client sets `parseDate: false`, so a date is the ISO string the shared types and the
 SSE stream both carry; a hand-typed shape or an `as` cast silently drifts from the route, and
