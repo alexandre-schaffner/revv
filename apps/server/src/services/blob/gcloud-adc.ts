@@ -2,7 +2,6 @@
 // authenticates with. The SDK discovers them on its own; this module answers
 // the Settings UI's "are they there, and can we sign in" questions.
 
-import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -33,16 +32,20 @@ function findGcloud(): string | null {
  * The credentials file alone isn't proof: `gcloud auth revoke` leaves it in
  * place, so ask gcloud for a token. Without gcloud, the file is all there is.
  */
-function isAdcValid(gcloudPath: string | null, adcExists: boolean): boolean {
+async function isAdcValid(gcloudPath: string | null, adcExists: boolean): Promise<boolean> {
   if (!gcloudPath) return adcExists;
-  const result = spawnSync(gcloudPath, ["auth", "application-default", "print-access-token"], {
-    timeout: 5000,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  return result.status === 0;
+  try {
+    const proc = Bun.spawn([gcloudPath, "auth", "application-default", "print-access-token"], {
+      timeout: 5000,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    return (await proc.exited) === 0;
+  } catch {
+    return false;
+  }
 }
 
-export function adcStatus(): AdcStatus {
+export async function adcStatus(): Promise<AdcStatus> {
   const gcloudPath = findGcloud();
   // An explicit service-account key is trusted as configured: service-account
   // JSON keys don't work with `print-access-token`.
@@ -59,7 +62,7 @@ export function adcStatus(): AdcStatus {
   const adcPath = join(homedir(), ".config", "gcloud", "application_default_credentials.json");
   const adcExists = existsSync(adcPath);
   return {
-    available: adcExists && isAdcValid(gcloudPath, adcExists),
+    available: adcExists && (await isAdcValid(gcloudPath, adcExists)),
     source: adcExists ? "default" : null,
     gcloudFound: gcloudPath !== null,
     gcloudPath,
