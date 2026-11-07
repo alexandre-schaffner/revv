@@ -44,7 +44,6 @@ function makeFakeHub() {
     toAccount: push,
     toRepo: push,
     toPr: push,
-    toAll: (msg) => push("*", msg),
   });
   return { layer, events };
 }

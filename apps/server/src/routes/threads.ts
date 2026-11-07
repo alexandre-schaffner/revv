@@ -4,7 +4,7 @@ import { logError } from "../logger";
 import { ReviewService } from "../services/Review";
 import { humanAuthor, viewerOnPr } from "../services/review-mode";
 import { SyncService } from "../services/Sync";
-import { runRoute, withAccount } from "./middleware";
+import { runRoute, withAuth } from "./middleware";
 import { ownedBy } from "./ownership";
 import { threadMessageBody } from "./thread-message";
 
@@ -15,7 +15,7 @@ const viewerOnThread = (threadId: string) =>
   );
 
 export const threadRoutes = new Elysia({ prefix: "/api/threads" })
-  .use(withAccount)
+  .use(withAuth)
   .onBeforeHandle(ownedBy({ id: "thread" }))
   .patch(
     "/:id",

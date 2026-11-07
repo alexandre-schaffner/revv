@@ -58,14 +58,25 @@ const check = (
   );
 
 describe("checkOwnership", () => {
-  it("lets through ids in the user's own repositories", async () => {
+  it("lets through ids in the user's own repositories, resolving the account that owns them", async () => {
     const db = seededDb();
     const exit = await check(
       db,
       { id: "pull request", threadId: "thread", repoId: "repository" },
       { params: { id: "pr-1", threadId: "thread-1", repoId: "repo-1" } },
     );
-    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(exit).toEqual(Exit.succeed("account-1"));
+  });
+
+  it("resolves the owning account even when it isn't on the user's active host", async () => {
+    const db = seededDb();
+    db.$client.run(
+      "INSERT INTO account (id, account_id, provider_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ["account-1-ghe", "gh-9", "github:ghe.example.com", "user-1", Date.now(), Date.now()],
+    );
+    db.$client.run("UPDATE repositories SET account_id = 'account-1-ghe' WHERE id = 'repo-1'");
+    const exit = await check(db, { id: "pull request" }, { params: { id: "pr-1" } });
+    expect(exit).toEqual(Exit.succeed("account-1-ghe"));
   });
 
   it("answers NotFound for another user's pull request, thread or repository", async () => {
@@ -90,6 +101,6 @@ describe("checkOwnership", () => {
     const fromBody = await check(db, { prId: "pull request" }, { body: { prId: "pr-2" } });
     expect(Exit.isFailure(fromBody)).toBe(true);
     const absent = await check(db, { prId: "pull request" }, { body: { other: "pr-2" } });
-    expect(Exit.isSuccess(absent)).toBe(true);
+    expect(absent).toEqual(Exit.succeed(null));
   });
 });

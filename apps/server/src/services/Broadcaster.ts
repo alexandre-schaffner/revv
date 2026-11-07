@@ -1,6 +1,6 @@
 // The transport under `Realtime`: each client connected to `/api/events` is
-// registered under the account its session resolved to, and a send fans out
-// to that account's clients. Who receives a push is `Realtime`'s business.
+// registered under its session's local user, and a send fans out to that
+// user's clients. Who receives a push is `Realtime`'s business.
 //
 // The interface carries no sequence cursor: the walkthrough emitter owns
 // `bumpSeq` (durable wire cursor) and stamps `seq` onto the envelope before it
@@ -18,7 +18,7 @@ interface EventWriter {
 
 interface Registration {
   readonly id: number;
-  readonly accountId: string;
+  readonly userId: string;
   readonly writer: EventWriter;
 }
 
@@ -26,14 +26,9 @@ export class Broadcaster extends Context.Service<
   Broadcaster,
   {
     /** Returns an unsubscribe fn the route MUST call from its close hook. */
-    readonly register: (accountId: string, writer: EventWriter) => Effect.Effect<() => void>;
+    readonly register: (userId: string, writer: EventWriter) => Effect.Effect<() => void>;
 
-    readonly broadcastToAccount: (
-      accountId: string,
-      msg: ServerEventMessage,
-    ) => Effect.Effect<void>;
-
-    readonly broadcastAll: (msg: ServerEventMessage) => Effect.Effect<void>;
+    readonly broadcastToUser: (userId: string, msg: ServerEventMessage) => Effect.Effect<void>;
   }
 >()("Broadcaster") {}
 
@@ -53,9 +48,9 @@ export const BroadcasterLive = Layer.effect(
     };
 
     return {
-      register: (accountId, writer) =>
+      register: (userId, writer) =>
         Effect.gen(function* () {
-          const reg: Registration = { id: nextId++, accountId, writer };
+          const reg: Registration = { id: nextId++, userId, writer };
           yield* Ref.update(registrations, (set) => {
             const next = new Set(set);
             next.add(reg);
@@ -74,19 +69,11 @@ export const BroadcasterLive = Layer.effect(
           };
         }),
 
-      broadcastToAccount: (accountId, msg) =>
+      broadcastToUser: (userId, msg) =>
         Effect.gen(function* () {
           const set = yield* Ref.get(registrations);
           for (const reg of set) {
-            if (reg.accountId !== accountId) continue;
-            dispatch(reg, msg);
-          }
-        }),
-
-      broadcastAll: (msg) =>
-        Effect.gen(function* () {
-          const set = yield* Ref.get(registrations);
-          for (const reg of set) {
+            if (reg.userId !== userId) continue;
             dispatch(reg, msg);
           }
         }),

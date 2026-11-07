@@ -3,17 +3,17 @@
 // agent's own surface is `/mcp/walkthrough` (routes/mcp/walkthrough.ts).
 
 import { REVIEW_MODES, WALKTHROUGH_GENERATION_MODES } from "@revv/shared";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { pullRequests, repositories } from "../../db/schema";
+import { pullRequests } from "../../db/schema";
 import { NotFoundError } from "../../domain/errors";
 import { dbTry } from "../../effects/db-try";
 import { DbService } from "../../services/Db";
 import { PrContextService } from "../../services/PrContext";
 import { WalkthroughService } from "../../services/walkthrough/Walkthrough";
 import { WalkthroughJobs } from "../../services/walkthrough/WalkthroughJobs";
-import { runRoute, withAccount } from "../middleware";
+import { runRoute, withAuth } from "../middleware";
 import { ownedBy } from "../ownership";
 import { literalUnion } from "../schemas";
 import { currentWalkthrough } from "./current";
@@ -25,7 +25,7 @@ const perspectiveBody = t.Optional(t.Object({ mode: t.Optional(perspective) }));
 
 /** Routes on a PR's walkthrough: `:id` names the pull request. */
 const prWalkthroughRoutes = new Elysia({ prefix: "/api/reviews" })
-  .use(withAccount)
+  .use(withAuth)
   .onBeforeHandle(ownedBy({ id: "pull request" }))
   .post(
     "/:id/walkthrough/start",
@@ -77,13 +77,7 @@ const prWalkthroughRoutes = new Elysia({ prefix: "/api/reviews" })
             db
               .select({ id: pullRequests.id, headSha: pullRequests.headSha })
               .from(pullRequests)
-              .innerJoin(repositories, eq(repositories.id, pullRequests.repositoryId))
-              .where(
-                and(
-                  eq(pullRequests.id, ctx.params.id),
-                  eq(repositories.accountId, ctx.account.accountId),
-                ),
-              )
+              .where(eq(pullRequests.id, ctx.params.id))
               .get(),
           ),
         );
@@ -171,17 +165,17 @@ const prWalkthroughRoutes = new Elysia({ prefix: "/api/reviews" })
     { body: perspectiveBody },
   );
 
-/** Account-scoped: in-flight jobs and their seq cursors, to seed the SSE client on (re)connect. */
-const accountWalkthroughRoutes = new Elysia({ prefix: "/api/walkthroughs" })
-  .use(withAccount)
+/** The user's in-flight jobs on every account and their seq cursors, to seed the SSE client on (re)connect. */
+const userWalkthroughRoutes = new Elysia({ prefix: "/api/walkthroughs" })
+  .use(withAuth)
   .get("/active", (ctx) =>
     runRoute(
       Effect.flatMap(WalkthroughService, (wts) =>
-        wts.listActiveForAccount(ctx.account.accountId),
+        wts.listActiveForUser(ctx.userId),
       ).pipe(Effect.map((walkthroughs) => ({ walkthroughs }))),
     ),
   );
 
 export const walkthroughRoutes = new Elysia()
   .use(prWalkthroughRoutes)
-  .use(accountWalkthroughRoutes);
+  .use(userWalkthroughRoutes);

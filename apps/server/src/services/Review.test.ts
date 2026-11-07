@@ -68,7 +68,6 @@ function harness() {
     toAccount: () => Effect.void,
     toRepo: () => Effect.void,
     toPr: (prId, msg) => Effect.sync(() => void events.push({ prId, msg })),
-    toAll: () => Effect.void,
   });
   const layer = ReviewServiceLive.pipe(
     Layer.provide(Layer.merge(realtime, Layer.succeed(DbService, { db }))),

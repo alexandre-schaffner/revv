@@ -19,6 +19,7 @@ import type {
 import { and, asc, desc, eq, inArray, ne, type SQL } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import type { Db } from "../../db";
+import { account } from "../../db/schema/auth";
 import { commentThreads } from "../../db/schema/comment-threads";
 import { pullRequests } from "../../db/schema/pull-requests";
 import { avatarOfPrLogin } from "../../db/schema/remote-users";
@@ -329,13 +330,13 @@ export class WalkthroughService extends Context.Service<
     readonly bumpSeq: (walkthroughId: string) => Effect.Effect<number, DbError>;
 
     /**
-     * The account's `generating` walkthroughs, each with the cursor
+     * The `generating` walkthroughs on every account of the user, each with the cursor
      * (`seqAt = next_seq - 1`) the client uses to drop events that arrived on
      * the SSE before the snapshot. The client calls this once on SSE open to
      * seed sidebar spinners and `lastSeenSeq` cursors for jobs the user isn't
      * viewing.
      */
-    readonly listActiveForAccount: (accountId: string) => Effect.Effect<
+    readonly listActiveForUser: (userId: string) => Effect.Effect<
       Array<{
         readonly prId: string;
         readonly walkthroughId: string;
@@ -867,8 +868,8 @@ export const WalkthroughServiceLive = Layer.effect(
           });
         }),
 
-      listActiveForAccount: (accountId) =>
-        dbTry("listActiveForAccount", () => {
+      listActiveForUser: (userId) =>
+        dbTry("listActiveForUser", () => {
           const rows = db
             .select({
               walkthroughId: walkthroughs.id,
@@ -880,9 +881,8 @@ export const WalkthroughServiceLive = Layer.effect(
             .from(walkthroughs)
             .innerJoin(pullRequests, eq(pullRequests.id, walkthroughs.pullRequestId))
             .innerJoin(repositories, eq(repositories.id, pullRequests.repositoryId))
-            .where(
-              and(eq(walkthroughs.status, "generating"), eq(repositories.accountId, accountId)),
-            )
+            .innerJoin(account, eq(account.id, repositories.accountId))
+            .where(and(eq(walkthroughs.status, "generating"), eq(account.userId, userId)))
             .all();
           return rows.map((r) => ({
             prId: r.prId,

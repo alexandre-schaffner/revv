@@ -1,7 +1,10 @@
 // Several local users can share one Revv install, each with their own GitHub
-// accounts. A router registers `ownedBy` once, right after its auth plugin,
-// and every route it then declares answers 404, before its handler runs, for
-// an id that names something in another user's repository.
+// accounts. A router registers `ownedBy` (or `asOwner`) once, right after its
+// auth plugin, and every route it then declares answers 404, before its
+// handler runs, for an id that names something in another user's repository.
+//
+// A request about a repository acts as the account that owns it, whichever
+// host the user has active: `asOwner` hands the route that account.
 
 import { and, eq } from "drizzle-orm";
 import { Cause, Effect, Exit } from "effect";
@@ -64,33 +67,63 @@ interface GuardedRequest {
 /**
  * Every field of `fields` the request carries, in its path or its JSON body,
  * names something in one of `userId`'s repositories; else `NotFoundError`.
+ * Resolves the account owning the first one carried, or null when it carries
+ * none.
  */
 export const checkOwnership = (fields: Fields, request: GuardedRequest, userId: string) =>
   Effect.flatMap(DbService, ({ db }) =>
     dbTry("check ownership", () => {
       const body = typeof request.body === "object" && request.body !== null ? request.body : {};
+      let owner: string | null = null;
       for (const [field, kind] of Object.entries(fields)) {
         const id = request.params[field] ?? (body as Record<string, unknown>)[field];
         if (typeof id !== "string") continue;
         const repositoryId = OWNING_REPOSITORY[kind](db, id);
-        const owned =
-          repositoryId !== undefined &&
-          db
-            .select({ id: repositories.id })
-            .from(repositories)
-            .innerJoin(account, eq(account.id, repositories.accountId))
-            .where(and(eq(repositories.id, repositoryId), eq(account.userId, userId)))
-            .get() !== undefined;
-        if (!owned) return new NotFoundError({ resource: kind, id });
+        const row =
+          repositoryId === undefined
+            ? undefined
+            : db
+                .select({ accountId: repositories.accountId })
+                .from(repositories)
+                .innerJoin(account, eq(account.id, repositories.accountId))
+                .where(and(eq(repositories.id, repositoryId), eq(account.userId, userId)))
+                .get();
+        if (row === undefined) return new NotFoundError({ resource: kind, id });
+        owner ??= row.accountId;
       }
-      return null;
+      return owner;
     }),
-  ).pipe(Effect.flatMap((missing) => (missing ? Effect.fail(missing) : Effect.void)));
+  ).pipe(
+    Effect.flatMap((owner) =>
+      owner instanceof NotFoundError ? Effect.fail(owner) : Effect.succeed(owner),
+    ),
+  );
 
 /** {@link checkOwnership} as a router's `beforeHandle` hook, for the signed-in user. */
 export function ownedBy(fields: Fields) {
   return async (ctx: GuardedRequest & { readonly userId: string }) => {
     const exit = await AppRuntime.runPromiseExit(checkOwnership(fields, ctx, ctx.userId));
     return Exit.isFailure(exit) ? errorResponse(Cause.squash(exit.cause)) : undefined;
+  };
+}
+
+/**
+ * {@link checkOwnership} as a router's `resolve` hook: derives `owner`, the
+ * account the route acts as. Every route of the router carries one of
+ * `fields`.
+ */
+export function asOwner(fields: Fields) {
+  const [field, kind] = Object.entries(fields)[0] ?? [];
+  return async (ctx: GuardedRequest & { readonly userId: string }) => {
+    const exit = await AppRuntime.runPromiseExit(
+      checkOwnership(fields, ctx, ctx.userId).pipe(
+        Effect.flatMap((owner) =>
+          owner === null
+            ? Effect.fail(new NotFoundError({ resource: kind ?? "resource", id: field ?? "" }))
+            : Effect.succeed({ owner }),
+        ),
+      ),
+    );
+    return Exit.isSuccess(exit) ? exit.value : errorResponse(Cause.squash(exit.cause));
   };
 }

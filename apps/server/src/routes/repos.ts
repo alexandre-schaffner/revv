@@ -12,12 +12,12 @@ import { PrContextService } from "../services/PrContext";
 import { getRepoActivityResponse } from "../services/RepoActivity";
 import { RepositoryService } from "../services/Repository";
 import { diagnoseRepoNotFound } from "../services/repo-access";
-import { errorResponse, runRoute, withAccount } from "./middleware";
-import { ownedBy } from "./ownership";
+import { errorResponse, runRoute, withAccount, withAuth } from "./middleware";
+import { asOwner } from "./ownership";
 
-export const repoRoutes = new Elysia({ prefix: "/api/repos" })
+/** The repository list and adding to it: the active account's view. */
+const repoListRoutes = new Elysia({ prefix: "/api/repos" })
   .use(withAccount)
-  .onBeforeHandle(ownedBy({ id: "repository" }))
   .get("/", (ctx) =>
     runRoute(
       Effect.gen(function* () {
@@ -133,7 +133,12 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
       );
     },
     { body: t.Object({ path: t.String() }) },
-  )
+  );
+
+/** One repository's routes, acting as the account that owns it. */
+const repoByIdRoutes = new Elysia({ prefix: "/api/repos" })
+  .use(withAuth)
+  .resolve(asOwner({ id: "repository" }))
   .get("/:id/clone-status", (ctx) =>
     runRoute(
       Effect.gen(function* () {
@@ -157,7 +162,7 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
         const repoSvc = yield* RepositoryService;
         const cloneSvc = yield* RepoCloneService;
 
-        const repo = yield* repoSvc.getRepoById(ctx.params.id, ctx.account.accountId);
+        const repo = yield* repoSvc.getRepoById(ctx.params.id, ctx.owner);
         // A clone takes minutes; revalidating a linked checkout doesn't.
         const ensured = cloneSvc.ensureClone(repo.id).pipe(Effect.catch(() => Effect.void));
         yield* repo.managed ? Effect.forkDetach(ensured) : ensured;
@@ -170,7 +175,7 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
       Effect.gen(function* () {
         const cloneSvc = yield* RepoCloneService;
         const repoSvc = yield* RepositoryService;
-        const { accountId } = ctx.account;
+        const accountId = ctx.owner;
         // The account check comes first: it is what keeps the clone of a
         // repository this account doesn't own on disk.
         yield* repoSvc.getRepoById(ctx.params.id, accountId);
@@ -180,3 +185,5 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
       }),
     ),
   );
+
+export const repoRoutes = new Elysia().use(repoListRoutes).use(repoByIdRoutes);

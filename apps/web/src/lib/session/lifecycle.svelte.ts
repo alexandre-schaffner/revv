@@ -61,12 +61,6 @@ import { getToken, setToken } from "./token.svelte";
 
 let sessionUserId: string | null = null;
 let switchingTo = $state<string | null>(null);
-/**
- * The GitHub host an account switch targets. The settings store may not hold
- * it yet, so the realtime stream is told the host explicitly and binds to the
- * right account on its first attempt.
- */
-let sessionHost: string | undefined;
 
 /**
  * Every store that holds account data. A new one adds its reset here.
@@ -126,7 +120,7 @@ function beginSession(userId: string): void {
     resetAccountStores();
   }
   sessionUserId = userId;
-  connect(sessionHost);
+  connect();
   void Promise.allSettled([fetchSettings(), fetchPrs(), fetchRepos(), fetchPinnedPrs()]);
 }
 
@@ -134,7 +128,6 @@ function stopSession(): void {
   disconnect();
   resetAccountStores();
   sessionUserId = null;
-  sessionHost = undefined;
 }
 
 /** Drop the realtime stream without ending the session (root layout teardown). */
@@ -164,7 +157,6 @@ async function runSwitch(userId: string, host: string | undefined): Promise<void
   if (token === null) throw new Error("This account is signed out. Sign in again.");
   stopSession();
   setToken(token);
-  sessionHost = host;
   // Not awaited: `goto` waits on SvelteKit's load/render cycle, and the
   // session below starts the same way whichever route ends up showing.
   if (isOnAccountPage()) {

@@ -128,7 +128,9 @@ export class GitHubAccounts extends Context.Service<
   GitHubAccounts,
   {
     /** A client for the account, its token refreshed when near expiry. Fails without a token. */
-    readonly clientFor: (accountId: string) => Effect.Effect<GitHubClient, GitHubAuthError>;
+    readonly clientFor: (
+      accountId: string,
+    ) => Effect.Effect<GitHubClient, GitHubAuthError | DbError>;
     /**
      * The user's account on `host`, for work a signed-in user asked for. A
      * user with no usable account there gets another of their accounts (whose
@@ -137,7 +139,7 @@ export class GitHubAccounts extends Context.Service<
     readonly accountForUser: (
       userId: string,
       host: string,
-    ) => Effect.Effect<AccountIdentity, GitHubAuthError>;
+    ) => Effect.Effect<AccountIdentity, GitHubAuthError | DbError>;
     /**
      * A client for background work, or null when the account must not be
      * called now: it needs re-auth, has no token, or is paused for `budget`
@@ -330,11 +332,11 @@ export const GitHubAccountsLive = Layer.effect(
 
     // One grant per account at a time: concurrent grants would each invalidate
     // the previous one's rotated refresh token.
-    const refreshOnce = keyedSingleFlight<string, string, GitHubAuthError>();
+    const refreshOnce = keyedSingleFlight<string, string, GitHubAuthError | DbError>();
 
-    const doRefresh = (accountId: string): Effect.Effect<string, GitHubAuthError> =>
+    const doRefresh = (accountId: string): Effect.Effect<string, GitHubAuthError | DbError> =>
       Effect.gen(function* () {
-        const row = yield* readRow(accountId).pipe(Effect.mapError((e) => authFailure(e.message)));
+        const row = yield* readRow(accountId);
         if (!row) return yield* Effect.fail(authFailure(`account ${accountId} not found`));
         const refreshToken = (yield* tokensOf(accountId))?.refreshToken ?? null;
         if (!refreshToken) return yield* Effect.fail(authFailure("no refresh token available"));
@@ -374,8 +376,8 @@ export const GitHubAccountsLive = Layer.effect(
             })
             .where(eq(account.id, accountId))
             .run(),
-        ).pipe(Effect.mapError((e) => authFailure(e.message)));
-        yield* clearReauthRequired(accountId).pipe(Effect.mapError((e) => authFailure(e.message)));
+        );
+        yield* clearReauthRequired(accountId);
         return accessToken;
       });
 
@@ -385,7 +387,7 @@ export const GitHubAccountsLive = Layer.effect(
     const liveToken = (
       accountId: string,
       expiresAt: Date | null,
-    ): Effect.Effect<string, GitHubAuthError> =>
+    ): Effect.Effect<string, GitHubAuthError | DbError> =>
       Effect.gen(function* () {
         const stored = yield* tokensOf(accountId);
         if (!stored?.accessToken) {
@@ -398,9 +400,9 @@ export const GitHubAccountsLive = Layer.effect(
         return yield* refresh(accountId).pipe(Effect.orElseSucceed(() => token));
       });
 
-    const clientFor = (accountId: string): Effect.Effect<GitHubClient, GitHubAuthError> =>
+    const clientFor = (accountId: string): Effect.Effect<GitHubClient, GitHubAuthError | DbError> =>
       Effect.gen(function* () {
-        const row = yield* readRow(accountId).pipe(Effect.mapError((e) => authFailure(e.message)));
+        const row = yield* readRow(accountId);
         if (!row) return yield* Effect.fail(authFailure(`account ${accountId} not found`));
         const token = yield* liveToken(accountId, row.accessTokenExpiresAt);
         return githubClient(hostFromProviderId(row.providerId), token, accountId);
@@ -409,7 +411,7 @@ export const GitHubAccountsLive = Layer.effect(
     const accountForUser = (
       userId: string,
       host: string,
-    ): Effect.Effect<AccountIdentity, GitHubAuthError> =>
+    ): Effect.Effect<AccountIdentity, GitHubAuthError | DbError> =>
       Effect.gen(function* () {
         const rows = yield* dbTry("read user accounts", () =>
           db
@@ -422,7 +424,7 @@ export const GitHubAccountsLive = Layer.effect(
             .from(account)
             .where(eq(account.userId, userId))
             .all(),
-        ).pipe(Effect.mapError((e) => authFailure(e.message)));
+        );
         const preferred = providerIdsForHost(host);
         const ordered = [
           ...preferred.flatMap((pid) => rows.filter((r) => r.providerId === pid)),

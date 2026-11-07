@@ -4,7 +4,7 @@ import { Elysia } from "elysia";
 import { NotFoundError } from "../domain/errors";
 import { GitHubAccounts } from "../services/github/accounts";
 import { AvatarCache } from "../services/github/avatars";
-import { requestAccount, runRoute, withAuth } from "./middleware";
+import { activeAccount, runRoute, withAuth } from "./middleware";
 
 export const userRoutes = new Elysia({ prefix: "/api/user" })
   .use(withAuth)
@@ -16,7 +16,7 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
         const profile = yield* accounts.userProfile(ctx.userId);
         if (!profile)
           return yield* Effect.fail(new NotFoundError({ resource: "user", id: ctx.userId }));
-        const active = yield* requestAccount(ctx.userId, {}).pipe(
+        const active = yield* activeAccount(ctx.userId).pipe(
           Effect.catchTag("GitHubAuthError", () => Effect.succeed(null)),
         );
         const login = active?.githubLogin ?? null;

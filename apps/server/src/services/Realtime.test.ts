@@ -42,8 +42,7 @@ async function sent(db: Db, push: Effect.Effect<void, never, Realtime>) {
   const deliveries: string[] = [];
   const broadcaster = Layer.succeed(Broadcaster, {
     register: () => Effect.succeed(() => undefined),
-    broadcastToAccount: (accountId) => Effect.sync(() => void deliveries.push(accountId)),
-    broadcastAll: () => Effect.sync(() => void deliveries.push("*")),
+    broadcastToUser: (userId) => Effect.sync(() => void deliveries.push(userId)),
   });
   await Effect.runPromise(
     push.pipe(
@@ -58,20 +57,30 @@ async function sent(db: Db, push: Effect.Effect<void, never, Realtime>) {
 }
 
 describe("Realtime", () => {
-  it("addresses a repository's or a pull request's push to the account that tracks it", async () => {
+  it("addresses an account's, a repository's or a pull request's push to the user who owns it", async () => {
     const db = seededDb();
+    db.$client.run(
+      "INSERT INTO account (id, account_id, provider_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ["account-2", "gh-2", "github:ghe.example.com", "user-1", Date.now(), Date.now()],
+    );
     expect(
       await sent(
         db,
         Effect.flatMap(Realtime, (r) => r.toRepo("repo-1", MSG)),
       ),
-    ).toEqual(["account-1"]);
+    ).toEqual(["user-1"]);
     expect(
       await sent(
         db,
         Effect.flatMap(Realtime, (r) => r.toPr("pr-1", MSG)),
       ),
-    ).toEqual(["account-1"]);
+    ).toEqual(["user-1"]);
+    expect(
+      await sent(
+        db,
+        Effect.flatMap(Realtime, (r) => r.toAccount("account-2", MSG)),
+      ),
+    ).toEqual(["user-1"]);
   });
 
   it("drops a push whose owner can't be resolved, without failing", async () => {

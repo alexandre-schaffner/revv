@@ -108,7 +108,6 @@ export async function makeHarness(
     toAccount: push,
     toRepo: push,
     toPr: push,
-    toAll: (msg) => push("*", msg),
   });
   const secretStore = Layer.succeed(SecretStore, {
     setTokens: () => Effect.void,

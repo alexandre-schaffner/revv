@@ -70,7 +70,6 @@ function resume(db: Db) {
       toAccount: (_accountId, msg) => record(msg),
       toRepo: (_repoId, msg) => record(msg),
       toPr: (_prId, msg) => record(msg),
-      toAll: () => Effect.void,
     }),
     Layer.succeed(PrContextService, {
       getAccountIdForRepo: () => Effect.succeed("acct-1"),

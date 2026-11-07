@@ -132,7 +132,6 @@ function run<A, E>(
         toAccount: () => Effect.void,
         toRepo: () => Effect.void,
         toPr: () => Effect.void,
-        toAll: () => Effect.void,
       }),
     ),
   );

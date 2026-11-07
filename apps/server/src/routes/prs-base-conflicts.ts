@@ -4,13 +4,13 @@
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { BaseConflictsService } from "../services/base-conflicts/BaseConflicts";
-import { runRoute, withAccount } from "./middleware";
-import { ownedBy } from "./ownership";
+import { runRoute, withAuth } from "./middleware";
+import { asOwner } from "./ownership";
 import { pipeToSse, runStream } from "./sse";
 
 export const prBaseConflictsRoutes = new Elysia({ prefix: "/api/prs" })
-  .use(withAccount)
-  .onBeforeHandle(ownedBy({ id: "pull request" }))
+  .use(withAuth)
+  .resolve(asOwner({ id: "pull request" }))
   .get(
     "/:id/base-conflicts",
     (ctx) =>
@@ -18,7 +18,7 @@ export const prBaseConflictsRoutes = new Elysia({ prefix: "/api/prs" })
         Effect.flatMap(BaseConflictsService, (s) =>
           s.check({
             prId: ctx.params.id,
-            accountId: ctx.account.accountId,
+            accountId: ctx.owner,
             force: ctx.query.force === "1",
           }),
         ),
@@ -34,7 +34,7 @@ export const prBaseConflictsRoutes = new Elysia({ prefix: "/api/prs" })
         Effect.flatMap(BaseConflictsService, (s) =>
           s.resolve({
             prId: ctx.params.id,
-            accountId: ctx.account.accountId,
+            accountId: ctx.owner,
             expectedHeadSha: ctx.body.expectedHeadSha,
           }),
         ).pipe(Effect.map(pipeToSse)),

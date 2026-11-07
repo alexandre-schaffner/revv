@@ -38,7 +38,6 @@ const recordingRealtime = (sent: Sent) =>
       Effect.sync(
         () => void sent.push({ prId, type: msg.type, data: "data" in msg ? msg.data : null }),
       ),
-    toAll: () => Effect.void,
   });
 
 const runWalkthrough = <A, E>(
@@ -323,7 +322,6 @@ describe("supersede", () => {
           threadsWhenAnnounced.push(db.select().from(commentThreads).all().length);
           sent.push({ prId, type: msg.type, data: "data" in msg ? msg.data : null });
         }),
-      toAll: () => Effect.void,
     });
 
     const ids = await Effect.runPromise(
