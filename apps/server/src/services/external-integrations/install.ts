@@ -83,6 +83,14 @@ export interface BridgeInstallInput {
 
 const LOOPBACK = "127.0.0.1,localhost";
 const TOKEN_VARIABLE = "REVV_INTEGRATION_TOKEN";
+const API_URL_VARIABLE = "REVV_API_URL";
+
+/** What an installed bridge carries: its credential, and the server it talks to. */
+export interface InstalledBinding {
+  readonly token: string;
+  /** Null for a config written before the bridge carried one (legacy-upgrade: unpinnedBridge). */
+  readonly apiUrl: string | null;
+}
 
 /**
  * Environment for the bridge process. `runtimeExecutable` is the server's own
@@ -94,7 +102,7 @@ const TOKEN_VARIABLE = "REVV_INTEGRATION_TOKEN";
 function bridgeEnvironment(input: BridgeInstallInput): Record<string, string> {
   return {
     [TOKEN_VARIABLE]: input.token,
-    REVV_API_URL: input.apiUrl,
+    [API_URL_VARIABLE]: input.apiUrl,
     NO_PROXY: LOOPBACK,
     no_proxy: LOOPBACK,
     BUN_BE_BUN: "1",
@@ -415,22 +423,25 @@ function uninstallCodex(paths: CodexPaths, serverName: string): void {
   removeManagedDirectory(paths.installDir);
 }
 
-function codexToken(paths: CodexPaths, serverName: string): string | null {
+function codexBinding(paths: CodexPaths, serverName: string): InstalledBinding | null {
   const existing = readTextIfExists(paths.configFile);
   if (existing === null) return null;
   try {
     const span = managedBlockSpan(existing, serverName);
     if (!span) return null;
     const block = existing.slice(span.begin, span.end);
-    return new RegExp(`^${TOKEN_VARIABLE} = "([^"\\\\]+)"$`, "m").exec(block)?.[1] ?? null;
+    const variable = (name: string) =>
+      new RegExp(`^${name} = "([^"\\\\]+)"$`, "m").exec(block)?.[1] ?? null;
+    const token = variable(TOKEN_VARIABLE);
+    return token === null ? null : { token, apiUrl: variable(API_URL_VARIABLE) };
   } catch {
     return null;
   }
 }
 
-function claudeCodeToken(paths: ClaudeCodePaths): string | null {
+function claudeCodeBinding(paths: ClaudeCodePaths): InstalledBinding | null {
   if (!existsSync(join(paths.installDir, MANAGED_MARKER))) return null;
-  return jsonEntryToken(join(paths.installDir, ".mcp.json"), "mcpServers", "review");
+  return jsonEntryBinding(join(paths.installDir, ".mcp.json"), "mcpServers", "review");
 }
 
 function codexInstalled(paths: CodexPaths, serverName: string): boolean {
@@ -450,21 +461,28 @@ function isRevvManagedEntry(entry: unknown): boolean {
   return false;
 }
 
-function tokenIn(env: unknown): string | null {
+function bindingIn(env: unknown): InstalledBinding | null {
   if (env === null || typeof env !== "object" || Array.isArray(env)) return null;
-  const token = (env as Record<string, unknown>)[TOKEN_VARIABLE];
-  return typeof token === "string" && token !== "" ? token : null;
+  const record = env as Record<string, unknown>;
+  const token = record[TOKEN_VARIABLE];
+  if (typeof token !== "string" || token === "") return null;
+  const apiUrl = record[API_URL_VARIABLE];
+  return { token, apiUrl: typeof apiUrl === "string" && apiUrl !== "" ? apiUrl : null };
 }
 
-/** The credential in Revv's entry of a JSON MCP config, or null. */
-function jsonEntryToken(file: string, section: string, serverName: string): string | null {
+/** The binding in Revv's entry of a JSON MCP config, or null. */
+function jsonEntryBinding(
+  file: string,
+  section: string,
+  serverName: string,
+): InstalledBinding | null {
   try {
     const servers = readJsonConfig(file)[section];
     if (servers === null || typeof servers !== "object" || Array.isArray(servers)) return null;
     const entry = (servers as Record<string, unknown>)[serverName];
     if (!isRevvManagedEntry(entry)) return null;
     const record = entry as Record<string, unknown>;
-    return tokenIn(record.env) ?? tokenIn(record.environment);
+    return bindingIn(record.env) ?? bindingIn(record.environment);
   } catch {
     return null;
   }
@@ -649,8 +667,8 @@ export interface ExternalIntegrationInstaller {
   readonly install: (input: BridgeInstallInput) => void;
   readonly uninstall: () => void;
   readonly installed: () => boolean;
-  /** The credential the installed bridge carries, or null when none is installed. */
-  readonly installedToken: () => string | null;
+  /** What the installed bridge carries, or null when none is installed. */
+  readonly installedBinding: () => InstalledBinding | null;
 }
 
 export function externalIntegrationInstaller(
@@ -669,7 +687,7 @@ export function externalIntegrationInstaller(
         install: (input) => installClaudeCode(input, paths, serverName),
         uninstall: () => removeManagedDirectory(paths.installDir),
         installed: () => existsSync(join(paths.installDir, MANAGED_MARKER)),
-        installedToken: () => claudeCodeToken(paths),
+        installedBinding: () => claudeCodeBinding(paths),
       };
     }
     case "codex": {
@@ -680,7 +698,7 @@ export function externalIntegrationInstaller(
         install: (input) => installCodex(input, paths, serverName),
         uninstall: () => uninstallCodex(paths, serverName),
         installed: () => codexInstalled(paths, serverName),
-        installedToken: () => codexToken(paths, serverName),
+        installedBinding: () => codexBinding(paths, serverName),
       };
     }
     case "opencode": {
@@ -691,7 +709,7 @@ export function externalIntegrationInstaller(
         install: (input) => installOpenCode(input, paths, serverName),
         uninstall: () => uninstallOpenCode(paths, serverName),
         installed: () => jsonMcpEntryInstalled(paths.configFile, "mcp", serverName),
-        installedToken: () => jsonEntryToken(paths.configFile, "mcp", serverName),
+        installedBinding: () => jsonEntryBinding(paths.configFile, "mcp", serverName),
       };
     }
     case "cursor": {
@@ -702,7 +720,7 @@ export function externalIntegrationInstaller(
         install: (input) => installCursor(input, paths, serverName),
         uninstall: () => uninstallCursor(paths, serverName),
         installed: () => jsonMcpEntryInstalled(paths.configFile, "mcpServers", serverName),
-        installedToken: () => jsonEntryToken(paths.configFile, "mcpServers", serverName),
+        installedBinding: () => jsonEntryBinding(paths.configFile, "mcpServers", serverName),
       };
     }
   }

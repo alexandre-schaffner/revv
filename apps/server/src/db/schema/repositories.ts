@@ -21,6 +21,14 @@ export const repositories = sqliteTable(
     clonePath: text("clone_path"),
     cloneError: text("clone_error"),
     managed: integer("managed", { mode: "boolean" }).notNull().default(true),
+    /**
+     * Revv wrote the folder at `clone_path`: set before a clone writes into it
+     * (or when Revv adopts its own leftover), cleared when Revv refuses or
+     * lets go of the folder. A clone cut off mid-way keeps it, so a retry
+     * clears the partial clone instead of refusing it, and removing the repo
+     * deletes the folder only when it is set.
+     */
+    revvWroteClone: integer("revv_wrote_clone", { mode: "boolean" }).notNull().default(false),
     githubHost: text("github_host").notNull().default("github.com"),
     accountId: text("account_id")
       .notNull()

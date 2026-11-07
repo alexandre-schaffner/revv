@@ -53,8 +53,10 @@ export interface RepoSeed {
   readonly accountId: string;
   readonly addedAt?: string;
   readonly clonePath?: string | null;
-  readonly cloneStatus?: "pending" | "ready";
+  readonly cloneStatus?: "pending" | "cloning" | "ready" | "error";
   readonly managed?: boolean;
+  readonly revvWroteClone?: boolean;
+  readonly githubHost?: string;
 }
 
 /** A user with two github.com accounts, `acc-a` and `acc-b`, tracking these repo rows. */
@@ -84,11 +86,12 @@ export function seedDb(repos: readonly RepoSeed[]): Db {
         name: "repo",
         fullName: "octo/repo",
         addedAt: repo.addedAt ?? now.toISOString(),
-        githubHost: "github.com",
+        githubHost: repo.githubHost ?? "github.com",
         accountId: repo.accountId,
         clonePath: repo.clonePath ?? null,
         cloneStatus: repo.cloneStatus ?? "pending",
         managed: repo.managed ?? true,
+        revvWroteClone: repo.revvWroteClone ?? false,
       })
       .run();
   }

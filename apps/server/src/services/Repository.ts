@@ -61,7 +61,14 @@ export class RepositoryService extends Context.Service<
   RepositoryService,
   {
     readonly listRepos: (accountId?: string) => Effect.Effect<Repository[], DbError>;
-    readonly addRepo: (data: AddRepoData, accountId: string) => Effect.Effect<Repository, DbError>;
+    /**
+     * Track a repository for the account. One it already tracks gets its
+     * GitHub metadata refreshed and keeps its clone; `added` says which.
+     */
+    readonly addRepo: (
+      data: AddRepoData,
+      accountId: string,
+    ) => Effect.Effect<{ readonly repo: Repository; readonly added: boolean }, DbError>;
     readonly getRepoById: (
       id: string,
       accountId?: string,
@@ -127,21 +134,17 @@ export const RepositoryServiceLive = Layer.effect(
                 name: sql`excluded.name`,
                 defaultBranch: sql`excluded.default_branch`,
                 avatarUrl: sql`excluded.avatar_url`,
-                addedAt: sql`excluded.added_at`,
                 githubHost: sql`excluded.github_host`,
-                managed: sql`excluded.managed`,
-                cloneStatus: sql`excluded.clone_status`,
-                clonePath: sql`excluded.clone_path`,
-                cloneError: sql`excluded.clone_error`,
               },
             })
             .returning({ id: repositories.id })
             .get();
-          return saved ? readRepo(db, saved.id) : undefined;
+          const stored = saved ? readRepo(db, saved.id) : undefined;
+          return stored ? { repo: rowToRepo(stored), added: stored.row.id === row.id } : undefined;
         }).pipe(
-          Effect.flatMap((stored) =>
-            stored
-              ? Effect.succeed(rowToRepo(stored))
+          Effect.flatMap((saved) =>
+            saved
+              ? Effect.succeed(saved)
               : Effect.fail(new DbError({ message: "add repository: the upsert returned no row" })),
           ),
         );

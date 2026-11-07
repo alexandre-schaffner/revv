@@ -255,7 +255,17 @@ export const StackMergeServiceLive = Layer.effect(
                   }),
                 );
                 if (failed) yield* announce(accountId, toRun(failed));
-              }).pipe(Effect.catch(() => Effect.void)),
+              }).pipe(
+                Effect.catch((err) =>
+                  Effect.sync(() =>
+                    logError(
+                      "stack-merge",
+                      `run ${run.id} couldn't be marked failed; it reads as running until the next boot:`,
+                      err,
+                    ),
+                  ),
+                ),
+              ),
             ),
             Effect.ensuring(Effect.sync(() => driving.delete(run.id))),
             withGitHubOrigin("stack:merge"),

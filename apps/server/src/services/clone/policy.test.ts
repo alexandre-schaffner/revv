@@ -63,21 +63,27 @@ describe("decideCloneDestination", () => {
     });
   });
 
-  it("links a matching git repository outside the managed base", () => {
+  it("links a matching git repository that is the user's", () => {
     expect(decideCloneDestination("matching-git-repo", false)).toEqual({ action: "link" });
   });
 
-  it("adopts a matching git repository inside the managed base", () => {
-    // A base-internal clone must become managed, not linked — otherwise
-    // delete would never reclaim it and it would leak in `~/.revv`.
+  it("adopts a matching git repository that is Revv's own", () => {
     expect(decideCloneDestination("matching-git-repo", true)).toEqual({ action: "adopt" });
+  });
+
+  it("clears its own cut-off clone, and refuses the user's", () => {
+    expect(decideCloneDestination("broken-git-repo", true)).toEqual({
+      action: "clone",
+      removeExisting: true,
+    });
+    expect(decideCloneDestination("broken-git-repo", false).action).toBe("fail");
   });
 
   it("refuses different git repositories", () => {
     expect(decideCloneDestination("different-git-repo", true).action).toBe("fail");
   });
 
-  it("only removes non-git collisions under the default Revv base", () => {
+  it("only removes non-git collisions in a folder that is Revv's", () => {
     expect(decideCloneDestination("non-empty-non-git", true)).toEqual({
       action: "clone",
       removeExisting: true,
@@ -87,7 +93,7 @@ describe("decideCloneDestination", () => {
 });
 
 describe("managedCloneRemovalRefusal", () => {
-  const repo = { githubHost: "github.com", fullName: "octo/repo", cloneStatus: "ready" as const };
+  const repo = { githubHost: "github.com", fullName: "octo/repo", revvWroteClone: true };
   const base = "/srv/revv-clones";
 
   it("allows a folder under Revv's base", async () => {
@@ -102,7 +108,7 @@ describe("managedCloneRemovalRefusal", () => {
     expect(await managedCloneRemovalRefusal(dirname(homedir()), base, repo)).not.toBeNull();
   });
 
-  it("outside the base, removes only a clone of the repository", async () => {
+  it("outside the base, removes only a folder Revv wrote, and not once it holds another repository", async () => {
     const root = mkdtempSync(join(tmpdir(), "revv-removal-"));
     try {
       const clone = join(root, "octo", "repo");
@@ -118,9 +124,11 @@ describe("managedCloneRemovalRefusal", () => {
       expect(await managedCloneRemovalRefusal(clone, base, repo)).toBeNull();
       expect(await managedCloneRemovalRefusal(other, base, repo)).not.toBeNull();
       expect(await managedCloneRemovalRefusal(join(root, "octo"), base, repo)).not.toBeNull();
-      // A clone Revv never finished there may be a folder it refused to clone into.
+      const cutOff = join(root, "cut-off");
+      mkdirSync(cutOff);
+      expect(await managedCloneRemovalRefusal(cutOff, base, repo)).toBeNull();
       expect(
-        await managedCloneRemovalRefusal(clone, base, { ...repo, cloneStatus: "error" }),
+        await managedCloneRemovalRefusal(clone, base, { ...repo, revvWroteClone: false }),
       ).not.toBeNull();
     } finally {
       rmSync(root, { recursive: true, force: true });

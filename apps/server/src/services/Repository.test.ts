@@ -64,45 +64,36 @@ function addRepo(
 }
 
 describe("RepositoryService.addRepo", () => {
-  it("upserts an existing repository and returns the persisted row id", async () => {
+  it("refreshes a tracked repository's metadata and keeps its clone", async () => {
     const db = createDb(":memory:");
     seedAccount(db);
 
-    const first = await addRepo(db);
-    const relinked = await addRepo(db, {
+    const first = await addRepo(db, { managed: true });
+    expect(first.added).toBe(true);
+    db.update(repositories)
+      .set({ cloneStatus: "ready", clonePath: "/picked/acme-web", revvWroteClone: true })
+      .run();
+    const addedAt = db.select().from(repositories).get()?.addedAt;
+
+    const again = await addRepo(db, {
       managed: false,
-      clonePath: "/tmp/acme-web",
+      clonePath: "/tmp/elsewhere",
       defaultBranch: "develop",
       avatarUrl: "https://example.com/avatar.png",
     });
 
-    expect(relinked.id).toBe(first.id);
-    expect(relinked.managed).toBe(false);
-    expect(relinked.cloneStatus).toBe("pending");
-    expect(relinked.clonePath).toBe("/tmp/acme-web");
-    expect(relinked.cloneError).toBeNull();
-    expect(relinked.defaultBranch).toBe("develop");
-    expect(relinked.avatarUrl).toBe("https://example.com/avatar.png");
-
+    expect(again.added).toBe(false);
+    expect(again.repo).toMatchObject({
+      id: first.repo.id,
+      managed: true,
+      cloneStatus: "ready",
+      clonePath: "/picked/acme-web",
+      defaultBranch: "develop",
+      avatarUrl: "https://example.com/avatar.png",
+    });
     const rows = db.select().from(repositories).all();
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.id).toBe(first.id);
-  });
-
-  it("clears linked checkout state when re-added as a managed clone", async () => {
-    const db = createDb(":memory:");
-    seedAccount(db);
-
-    const linked = await addRepo(db, { managed: false, clonePath: "/tmp/acme-web" });
-    db.update(repositories).set({ cloneStatus: "ready", cloneError: "stale error" }).run();
-
-    const managed = await addRepo(db, { managed: true });
-
-    expect(managed.id).toBe(linked.id);
-    expect(managed.managed).toBe(true);
-    expect(managed.cloneStatus).toBe("pending");
-    expect(managed.clonePath).toBeNull();
-    expect(managed.cloneError).toBeNull();
+    expect(rows[0]).toMatchObject({ addedAt, revvWroteClone: true });
   });
 
   it("serves the owner's cached avatar for its host, never another host's", async () => {
@@ -129,7 +120,7 @@ describe("RepositoryService.addRepo", () => {
       ])
       .run();
 
-    const repo = await addRepo(db, { avatarUrl: "https://example.com/raw.png" });
+    const { repo } = await addRepo(db, { avatarUrl: "https://example.com/raw.png" });
 
     expect(repo.avatarUrl).toBe("data:image/png;base64,public");
   });
@@ -138,7 +129,7 @@ describe("RepositoryService.addRepo", () => {
     const db = createDb(":memory:");
     seedAccount(db);
 
-    const repo = await addRepo(db, { avatarUrl: "https://example.com/raw.png" });
+    const { repo } = await addRepo(db, { avatarUrl: "https://example.com/raw.png" });
 
     expect(repo.avatarUrl).toBe("https://example.com/raw.png");
   });

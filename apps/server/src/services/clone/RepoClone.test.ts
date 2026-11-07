@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, setDefaultTimeout } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -124,11 +124,17 @@ describe("one folder per repository row", () => {
     }
   });
 
-  it("deletes a managed clone in a folder the user picked, and only a clone of the repo", async () => {
+  it("deletes a clone Revv wrote in a folder the user picked, and only a clone of the repo", async () => {
     const custom = join(root, "picked", "octo", "repo");
     makeClone(custom);
     const db = seedDb([
-      { id: "repo-a", accountId: "acc-a", clonePath: custom, cloneStatus: "ready" },
+      {
+        id: "repo-a",
+        accountId: "acc-a",
+        clonePath: custom,
+        cloneStatus: "ready",
+        revvWroteClone: true,
+      },
     ]);
     const { run, dispose } = cloneServices(db, base);
     try {
@@ -141,7 +147,13 @@ describe("one folder per repository row", () => {
     const other = join(root, "picked", "octo", "other");
     makeClone(other, "octo/other");
     const db2 = seedDb([
-      { id: "repo-a", accountId: "acc-a", clonePath: other, cloneStatus: "ready" },
+      {
+        id: "repo-a",
+        accountId: "acc-a",
+        clonePath: other,
+        cloneStatus: "ready",
+        revvWroteClone: true,
+      },
     ]);
     const second = cloneServices(db2, base);
     try {
@@ -149,6 +161,75 @@ describe("one folder per repository row", () => {
       expect(existsSync(join(other, "README.md"))).toBe(true);
     } finally {
       await second.dispose();
+    }
+  });
+});
+
+describe("a clone into a folder the user picked, cut off mid-way", () => {
+  // Nothing listens on port 1, so the retried clone fails at once, offline.
+  const unreachableHost = "127.0.0.1:1";
+  const settled = async (db: Db, id: string) => {
+    for (let i = 0; i < 200; i++) {
+      const status = rowOf(db, id)?.cloneStatus;
+      if (status !== "pending" && status !== "cloning") return;
+      await Bun.sleep(50);
+    }
+  };
+
+  it("retries at boot over its own partial clone instead of refusing it", async () => {
+    const dest = join(root, "picked", "octo", "repo");
+    mkdirSync(dest, { recursive: true });
+    git(dest, ["init", "--quiet"]);
+    const db = seedDb([
+      {
+        id: "repo-a",
+        accountId: "acc-a",
+        clonePath: dest,
+        cloneStatus: "cloning",
+        revvWroteClone: true,
+        githubHost: unreachableHost,
+      },
+    ]);
+    const { run, dispose } = cloneServices(db, base);
+    try {
+      await run(clone((svc) => svc.recoverAtBoot()));
+      await settled(db, "repo-a");
+      const row = rowOf(db, "repo-a");
+      expect(row?.cloneError).toStartWith("git clone failed");
+      expect(row).toMatchObject({ clonePath: dest, cloneStatus: "error" });
+      // The failed attempt cleared what it wrote: nothing there is Revv's now.
+      expect(existsSync(dest)).toBe(false);
+      expect(row?.revvWroteClone).toBe(false);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("is removed with the repository, while one Revv never wrote is kept", async () => {
+    const written = join(root, "picked", "octo", "repo");
+    const users = join(root, "mine", "octo", "repo");
+    for (const dest of [written, users]) {
+      mkdirSync(dest, { recursive: true });
+      git(dest, ["init", "--quiet"]);
+    }
+    const db = seedDb([
+      {
+        id: "repo-a",
+        accountId: "acc-a",
+        clonePath: written,
+        cloneStatus: "error",
+        revvWroteClone: true,
+      },
+      { id: "repo-b", accountId: "acc-b", clonePath: users, cloneStatus: "error" },
+    ]);
+    const { run, dispose } = cloneServices(db, base);
+    try {
+      await run(clone((svc) => svc.deleteClone("repo-a")));
+      await run(clone((svc) => svc.deleteClone("repo-b")));
+      expect(existsSync(written)).toBe(false);
+      expect(existsSync(join(users, ".git"))).toBe(true);
+    } finally {
+      await dispose();
     }
   });
 });

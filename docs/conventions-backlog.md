@@ -44,7 +44,8 @@ fetch, typed failures for every caller, the entry dropped on settle) without lea
 - jobs: `job-mutex.ts`, `session-token-store.ts`
 - recaps: `job-subscribers.ts` (only `recaps/ProjectRecapJobs.ts` uses it)
 - base conflicts: `conflict-resolve-run.ts`
-- team cache: `Cache.ts`, `cache-eligibility.ts`, beside `cache-signing/` and `blob/`
+- team cache: `cache-eligibility.ts`, beside `cache-signing/` and `blob/` (`Cache.ts` is the
+  generic kv cache every feature reads through, not a team-cache file)
 - no folder yet:
   - poll: `PollScheduler.ts`, `poll-{gate,maintenance,notifications,open-prs,state}.ts`
   - PR mirror: `PrMirror.ts`, `pr-head-move.ts`, `pr-head-moves.ts` (which only the mirror and its listeners use)

@@ -91,7 +91,10 @@ describe.each([...EXTERNAL_AGENT_PROVIDERS])("%s install", (provider: ExternalAg
     integrationInstaller.install(input(home, "second-token"));
 
     expect(integrationInstaller.installed()).toBe(true);
-    expect(integrationInstaller.installedToken()).toBe("second-token");
+    expect(integrationInstaller.installedBinding()).toEqual({
+      token: "second-token",
+      apiUrl: "http://127.0.0.1:45678/mcp/external",
+    });
     expect(writtenUnder(home)).not.toContain("first-token");
   });
 
@@ -107,9 +110,9 @@ describe.each([...EXTERNAL_AGENT_PROVIDERS])("%s install", (provider: ExternalAg
     const copy = copies[0] ?? "";
     writeFileSync(copy, "// an older bridge\n");
 
-    const token = target.installedToken();
-    expect(token).toBe("token");
-    target.install({ ...given, token: token ?? "" });
+    const binding = target.installedBinding();
+    expect(binding).toEqual({ token: "token", apiUrl: "http://127.0.0.1:1/mcp/external" });
+    target.install({ ...given, token: binding?.token ?? "" });
 
     expect(readFileSync(copy, "utf8")).toBe("#!/usr/bin/env bun\n");
     const written = writtenUnder(home);

@@ -4,8 +4,10 @@ import { pullRequests } from "./pull-requests";
 /**
  * The right-pane AI chat's durable handle on an agent conversation, scoped to
  * `(pullRequestId, agent, model, prHeadSha)`. A new PR head means a new row
- * and a new agent session; the unique index makes the chat turn's upsert
- * idempotent.
+ * and a new agent session, except where the conversation itself moved the
+ * head (the agent's push, or advancing past its commits): there the latest
+ * row's `prHeadSha` moves with it (`PrWorkspace.moveSession`). The unique
+ * index makes the chat turn's upsert idempotent.
  *   - `sessionId`     — the agent's ACP session id. Null until the agent opens
  *                       the session; follow-up turns resume it.
  *   - `worktreePath`  — the PR's agent worktree (see `PrWorkspace`), the

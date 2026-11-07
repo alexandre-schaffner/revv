@@ -3,9 +3,10 @@
 // status write, and the review worktrees walkthrough jobs check out of it.
 // Agent worktrees belong to `workspace/agent-worktrees.ts`.
 //
-// A managed clone is Revv's: cloned (or adopted) by it, deleted with the repo.
-// A linked one is the user's checkout: never cloned over, never deleted; only
-// Revv's own branches and refs are removed from it. A folder belongs to one row.
+// A managed clone is Revv's: cloned (or adopted) by it, deleted with the repo
+// when Revv wrote its folder (`revvWroteClone`). A linked one is the user's
+// checkout: never cloned over, never deleted; only Revv's own branches and
+// refs are removed from it. A folder belongs to one row.
 
 import { existsSync, mkdirSync, readdirSync, realpathSync, rmdirSync } from "node:fs";
 import { rm } from "node:fs/promises";
@@ -303,6 +304,7 @@ export const repoCloneLayer = (base: string) =>
           readonly cloneError: string | null;
           readonly clonePath?: string | null;
           readonly managed?: boolean;
+          readonly revvWroteClone?: boolean;
         },
       ) =>
         Effect.gen(function* () {
@@ -323,12 +325,22 @@ export const repoCloneLayer = (base: string) =>
        * Record the failure with the destination it was for, so a retry or a
        * boot resume tries the same folder instead of falling back to Revv's base.
        */
-      const failClone = (row: RepoRow, dest: string, message: string) =>
+      const failClone = (
+        row: RepoRow,
+        dest: string,
+        message: string,
+        written?: { readonly revvWroteClone: boolean },
+      ) =>
         Effect.gen(function* () {
           // Callers fork the clone and drop its error, so this is the only
           // server-side trace of the failure.
           logError("repo-clone", `clone failed for ${row.fullName}: ${message}`);
-          yield* setCloneState(row, { cloneStatus: "error", cloneError: message, clonePath: dest });
+          yield* setCloneState(row, {
+            cloneStatus: "error",
+            cloneError: message,
+            clonePath: dest,
+            ...written,
+          });
           return yield* Effect.fail(new CloneError({ message }));
         });
 
@@ -363,13 +375,17 @@ export const repoCloneLayer = (base: string) =>
             try: () => readCloneDestinationState(dest, row.githubHost, row.fullName),
             catch: toCloneError,
           }).pipe(Effect.catch((err) => failClone(row, dest, err.message)));
-          const decision = decideCloneDestination(state, pathIsUnder(dest, layout.base));
+          const revvsFolder =
+            pathIsUnder(dest, layout.base) ||
+            (row.revvWroteClone && row.clonePath !== null && samePath(row.clonePath, dest));
+          const decision = decideCloneDestination(state, revvsFolder);
           switch (decision.action) {
             case "fail":
-              return yield* failClone(row, dest, decision.message);
+              return yield* failClone(row, dest, decision.message, { revvWroteClone: false });
             case "link":
               return yield* setCloneState(row, {
                 managed: false,
+                revvWroteClone: false,
                 cloneStatus: "ready",
                 clonePath: dest,
                 cloneError: null,
@@ -377,6 +393,7 @@ export const repoCloneLayer = (base: string) =>
             case "adopt":
               return yield* setCloneState(row, {
                 managed: true,
+                revvWroteClone: true,
                 cloneStatus: "ready",
                 clonePath: dest,
                 cloneError: null,
@@ -385,8 +402,11 @@ export const repoCloneLayer = (base: string) =>
               break;
           }
 
+          // Recorded before the first write, so a clone cut off from here on
+          // leaves a folder the next attempt knows is its own.
           yield* setCloneState(row, {
             managed: true,
+            revvWroteClone: true,
             cloneStatus: "cloning",
             clonePath: dest,
             cloneError: null,
@@ -406,7 +426,8 @@ export const repoCloneLayer = (base: string) =>
           if (!cloned.ok) {
             // Remove what this attempt wrote, and only that: before it began
             // the destination was missing, empty, or Revv's own leftover.
-            yield* Effect.tryPromise(async () => {
+            // What a failed removal leaves stays Revv's, for the retry to clear.
+            const cleaned = yield* Effect.tryPromise(async () => {
               if (state === "empty") {
                 for (const entry of readdirSync(dest)) {
                   await rm(join(dest, entry), { recursive: true, force: true });
@@ -414,13 +435,22 @@ export const repoCloneLayer = (base: string) =>
               } else {
                 await rm(dest, { recursive: true, force: true });
               }
-            }).pipe(Effect.catch(() => Effect.void));
+            }).pipe(
+              Effect.as(true),
+              Effect.catch((err) =>
+                Effect.sync(() => {
+                  logError("repo-clone", `clearing the failed clone at ${dest}:`, err.cause);
+                  return false;
+                }),
+              ),
+            );
             return yield* failClone(
               row,
               dest,
               cloned.timedOut
                 ? `git clone timed out after ${CLONE_TIMEOUT_MS / 1000}s; tail: ${cloned.stderr.slice(-512)}`
                 : `git clone failed: ${cloned.stderr}`,
+              { revvWroteClone: !cleaned },
             );
           }
           debug("repo-clone", `clone ready for ${row.fullName} at ${dest}`);
@@ -435,6 +465,7 @@ export const repoCloneLayer = (base: string) =>
             Effect.gen(function* () {
               yield* setCloneState(row, {
                 managed: false,
+                revvWroteClone: false,
                 cloneStatus: "error",
                 clonePath: localPath,
                 cloneError: message,
@@ -465,6 +496,7 @@ export const repoCloneLayer = (base: string) =>
           }
           yield* setCloneState(row, {
             managed: false,
+            revvWroteClone: false,
             cloneStatus: "ready",
             clonePath: localPath,
             cloneError: null,
@@ -537,8 +569,8 @@ export const repoCloneLayer = (base: string) =>
               await rm(clonePath, { recursive: true, force: true });
             } else {
               if (refusal) logError("repo-clone", refusal);
-              // A folder Revv never finished cloning into holds none of its branches.
-              if (row.managed && row.cloneStatus !== "ready") return;
+              // A managed folder Revv keeps isn't a clone it worked in.
+              if (row.managed) return;
               for (const ref of await listRefs(clonePath, ["refs/heads/revv/"])) {
                 if (agentBranchPr(ref) !== null) {
                   await deleteBranch(clonePath, ref.slice("refs/heads/".length));
@@ -556,7 +588,12 @@ export const repoCloneLayer = (base: string) =>
             ),
           );
 
-          yield* setCloneState(row, { cloneStatus: "pending", clonePath: null, cloneError: null });
+          yield* setCloneState(row, {
+            cloneStatus: "pending",
+            clonePath: null,
+            revvWroteClone: false,
+            cloneError: null,
+          });
         });
 
       /**
@@ -585,6 +622,7 @@ export const repoCloneLayer = (base: string) =>
           yield* setCloneState(row, {
             managed: true,
             clonePath: null,
+            revvWroteClone: false,
             cloneStatus: "pending",
             cloneError: null,
           });
@@ -654,6 +692,12 @@ export const repoCloneLayer = (base: string) =>
             db.select().from(repositories).where(eq(repositories.cloneStatus, "cloning")).all(),
           );
           for (const row of interrupted) {
+            // A clone into a folder the user picked is outside the base the
+            // service reaps at startup; its orphaned git would race the resume.
+            const dest = row.clonePath;
+            if (dest && !pathIsUnder(dest, layout.base)) {
+              yield* Effect.promise(() => reapOrphanedGitProcesses(dest));
+            }
             yield* setCloneState(row, {
               cloneStatus: "pending",
               cloneError: "Server restarted during clone",

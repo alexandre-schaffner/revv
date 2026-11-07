@@ -182,7 +182,8 @@ function insertData(sqlite: Database, d: Recovered) {
   }
 
   // pull_requests — new cols (requested_reviewers, comments_synced_at,
-  // threads_fingerprint) have defaults or are nullable; insert old 22 cols
+  // threads_fingerprint) have defaults or are nullable; insert the old columns
+  // still in the schema (review_status was dropped in 0550)
   const recoverablePrs = d.prs.filter((pr) => {
     const repositoryId = pr.repository_id as string | undefined;
     return repositoryId ? recoveredRepoIds.has(repositoryId) : false;
@@ -203,7 +204,6 @@ function insertData(sqlite: Database, d: Recovered) {
     "author_login",
     "author_avatar_url",
     "status",
-    "review_status",
     "is_draft",
     "source_branch",
     "target_branch",
