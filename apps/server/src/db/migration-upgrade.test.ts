@@ -530,3 +530,60 @@ describe("one review session per pull request (0490)", () => {
     after.close();
   });
 });
+
+describe("which clone folders Revv wrote (0550)", () => {
+  it("marks the managed clones Revv finished, was writing, or refused as its own cut-off clone", () => {
+    const before = migratedThrough("0540_drop_stack_user_id");
+    const run = (sql: string, ...values: Array<string | number | null>) =>
+      before.prepare(sql).run(...values);
+    run(
+      "INSERT INTO user (id, name, email, email_verified, created_at, updated_at) VALUES ('user-1', 'A', 'a@example.com', 1, 0, 0)",
+    );
+    run(
+      "INSERT INTO account (id, account_id, provider_id, user_id, created_at, updated_at) VALUES ('account-1', '1', 'github:github.com', 'user-1', 0, 0)",
+    );
+    const incomplete = "The clone at that location is incomplete; delete it or choose another.";
+    for (const [id, managed, status, path, error] of [
+      ["ready", 1, "ready", "/c/ready", null],
+      ["cloning", 1, "cloning", "/c/cloning", null],
+      ["restarted", 1, "pending", "/c/restarted", "Server restarted during clone"],
+      ["cut-off", 1, "error", "/c/cut-off", incomplete],
+      [
+        "refused",
+        1,
+        "error",
+        "/c/refused",
+        "A non-empty directory already exists at that location.",
+      ],
+      ["linked", 0, "ready", "/c/linked", null],
+      ["never-cloned", 1, "pending", null, null],
+    ] as const) {
+      run(
+        `INSERT INTO repositories (id, owner, name, full_name, added_at, account_id, managed, clone_status, clone_path, clone_error)
+         VALUES (?, 'acme', ?, ?, 'now', 'account-1', ?, ?, ?, ?)`,
+        id,
+        id,
+        `acme/${id}`,
+        managed,
+        status,
+        path,
+        error,
+      );
+    }
+    run(
+      `INSERT INTO pull_requests (id, external_id, repository_id, title, author_login, source_branch,
+        target_branch, url, created_at, updated_at, fetched_at, review_status)
+       VALUES ('pr-1', 1, 'ready', 'PR', 'a', 'feat', 'main', 'https://example.com', 'now', 'now', 'now', 'approved')`,
+    );
+
+    const after = createDb(writeInstall(before, "clone-written")).$client;
+
+    const written = after
+      .query("SELECT id FROM repositories WHERE revv_wrote_clone = 1 ORDER BY id")
+      .all() as Array<{ id: string }>;
+    expect(written.map((row) => row.id)).toEqual(["cloning", "cut-off", "ready", "restarted"]);
+    expect(columnNames(after, "pull_requests")).not.toContain("review_status");
+    expect(rowCount(after, "pull_requests")).toBe(1);
+    after.close();
+  });
+});
