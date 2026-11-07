@@ -10,8 +10,7 @@ import {
   renderUnknownBlockRefs,
   resolveBlockRefs,
 } from "../../../services/walkthrough/content";
-import type { ToolSpecBundle } from "../mcp-tool-gateway";
-import { fail, ok } from "../mcp-tool-gateway";
+import { defineTool, fail, ok, type ToolSpecBundle } from "../mcp-tool-gateway";
 import { withContentWriteMetrics } from "../walkthrough-metrics";
 import { unwrapJsonWrappedString } from "./helpers";
 import { resolveLeadHandler } from "./lead-handler";
@@ -49,7 +48,6 @@ import {
   type WalkthroughToolContext,
   type WalkthroughToolHandler,
   type WalkthroughToolResult,
-  type WalkthroughToolSpec,
 } from "./spec";
 
 export type { WalkthroughToolContext, WalkthroughToolResult } from "./spec";
@@ -286,130 +284,7 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthro
   );
 };
 
-export const TOOL_SPECS: ReadonlyArray<WalkthroughToolSpec> = [
-  {
-    name: "get_walkthrough_state",
-    description:
-      "Read-only. Call FIRST on every run, including resumes. Returns current phase, the chapter manifest (semanticSteps), per-chapter atomic blocks, rated axes, and metadata so you can pick up exactly where the previous run stopped. Skipping this risks duplicating work.",
-    activity: "Reading walkthrough state...",
-    inputSchema: getWalkthroughStateSchema,
-    handler: getWalkthroughStateHandler,
-  },
-  {
-    name: "get_commit_history",
-    description:
-      "Read-only. Reviewer mode only: returns the PR commit list (sha, first-line message, author, date) in oldest → newest order. Call this once before opening chapter 0 ('How we got here' journey chapter). In author self-review mode, do not call this tool; focus on current-diff preflight review.",
-    activity: "Reading commit history...",
-    inputSchema: getCommitHistorySchema,
-    handler: getCommitHistoryHandler,
-  },
-  {
-    name: "get_repo_context",
-    description:
-      "Read-only. Returns the most-recent complete project recaps for this repository (daily and/or weekly summaries of what shipped, themes, risk patterns). Call this once during Phase A to ground your overview in repo-level context. Returns an empty list when no recaps exist yet — proceed without context in that case. Do not pad the overview with repo-context references when none are directly relevant to this PR.",
-    activity: "Reading recent project recaps...",
-    inputSchema: getRepoContextSchema,
-    handler: getRepoContextHandler,
-  },
-  {
-    name: "get_stack_context",
-    description:
-      "Read-only. For a PR that is one layer of a GitHub stack: the stack as captured at job start (layers base-first, this PR marked), the takeaway and open issue titles of each reviewed lower layer, and the title, description excerpt, and changed files of each upper layer. Call once during Phase A, and before flagging anything as missing — a higher layer may add it. Returns `stack: null` for a PR outside any stack.",
-    activity: "Reading the PR stack...",
-    inputSchema: getStackContextSchema,
-    handler: getStackContextHandler,
-  },
-  {
-    name: "set_overview",
-    description: phaseDescription(
-      "set_overview",
-      "Call exactly once, before any other write tool. Sets the PR overview — a six-part briefing (takeaway, Context, Why, What changed, How, Watch) that a stranger to the code can follow — and the overall risk level (low/medium/high). Advances phase to A.",
-    ),
-    activity: "Writing overview...",
-    inputSchema: setOverviewSchema,
-    handler: withContentWriteMetrics(setOverviewHandler),
-  },
-  {
-    name: "add_semantic_step",
-    description: phaseDescription(
-      "add_semantic_step",
-      "Open a chapter AND write its first atomic block in one atomic transaction. Provide a monotonic zero-based semantic_step_index, a short title, an optional summary, and a REQUIRED initial_block (exactly one of markdown/code/diff — same shape as add_diff_step). The first call advances the pipeline from Phase A to Phase B. Subsequent blocks in the same chapter use add_diff_step with step_index starting at 1. Idempotent upsert on (walkthroughId, semantic_step_index) for both the chapter row and its step_index=0 block — retries replace, never duplicate.",
-    ),
-    activity: "Writing walkthrough step...",
-    inputSchema: addSemanticStepSchema,
-    handler: withContentWriteMetrics(addSemanticStepHandler),
-  },
-  {
-    name: "add_diff_step",
-    description: phaseDescription(
-      "add_diff_step",
-      "Append one atomic block (markdown, code excerpt, or diff hunk — exactly one of the three) to an already-opened chapter. Required: semantic_step_index (the parent chapter, opened by add_semantic_step), step_index (monotonic zero-based within the chapter — typically 1, 2, 3, ... since step_index=0 is already written by add_semantic_step's initial_block). Retries with the same composite key are idempotent upserts. Each chapter typically holds 2–5 atomic blocks total (1 from add_semantic_step + 1–4 from add_diff_step).",
-    ),
-    activity: "Writing walkthrough step...",
-    inputSchema: addDiffStepSchema,
-    handler: withContentWriteMetrics(addDiffStepHandler),
-  },
-  {
-    name: "flag_issue",
-    description: phaseDescription(
-      "flag_issue",
-      "Flag a structured concern (security, correctness, tests, perf, etc.). Must be called AFTER the diff step(s) that explain the concern, and must link to them via block_refs = [{ semantic_step_index, step_index }, ...].",
-    ),
-    activity: "Flagging a concern...",
-    inputSchema: flagIssueSchema,
-    handler: withContentWriteMetrics(flagIssueHandler),
-  },
-  {
-    name: "add_issue_comment",
-    description: phaseDescription(
-      "add_issue_comment",
-      "Attach a line-anchored comment to a previously flagged issue — appears inline in the diff view like a human review comment. Call AFTER flag_issue, passing its returned issue id. You may call this multiple times per issue to annotate multiple lines (one tool call per anchor). Idempotent per (issue_id, file_path, start_line, end_line, diff_side): a retry replaces the comment body, never duplicates the thread.",
-    ),
-    activity: "Commenting on a concern...",
-    inputSchema: addIssueCommentSchema,
-    handler: withContentWriteMetrics(addIssueCommentHandler),
-  },
-  {
-    name: "resolve_lead",
-    description: phaseDescription(
-      "resolve_lead",
-      "Record your verdict on one first-pass lead from the prompt (lead_id `L1`, `L2`, …): `confirmed` with the issue_id of the issue you raised for it, or `rejected` with a one-sentence reason. Every lead needs one before complete_walkthrough. Idempotent per lead_id — a later call replaces the verdict. Independent calls can go out in parallel.",
-    ),
-    activity: "Resolving a first-pass lead...",
-    inputSchema: resolveLeadSchema,
-    handler: withContentWriteMetrics(resolveLeadHandler),
-  },
-  {
-    name: "set_sentiment",
-    description: phaseDescription(
-      "set_sentiment",
-      "Call exactly once, after all diff steps are persisted. 2–4 sentence overall verdict on the PR. Advances phase to C.",
-    ),
-    activity: "Writing the overall verdict...",
-    inputSchema: setSentimentSchema,
-    handler: withContentWriteMetrics(setSentimentHandler),
-  },
-  {
-    name: "rate_axis",
-    description: phaseDescription(
-      "rate_axis",
-      `Call exactly once for each of the ${RATING_AXES.length} axes (${RATING_AXES.join(", ")}), sending all ${RATING_AXES.length} as parallel tool calls in a single turn. Calls are independent and may land in any order. Idempotent per axis — retries replace the prior rating. The ${RATING_AXES.length}th distinct axis advances phase to D.`,
-    ),
-    activity: "Scoring PR quality...",
-    inputSchema: rateAxisSchema,
-    handler: withContentWriteMetrics(rateAxisHandler),
-  },
-  {
-    name: "complete_walkthrough",
-    description: phaseDescription(
-      "complete_walkthrough",
-      `Signal that the walkthrough is complete. Fails unless Phase D is reached with all ${RATING_AXES.length} axes rated, summary + sentiment non-empty, ≥1 diff step, every line-anchored issue commented, and every first-pass lead resolved. The orchestrator performs the final status transition when your turn ends.`,
-    ),
-    activity: "Finalizing walkthrough...",
-    inputSchema: completeWalkthroughSchema,
-    handler: completeWalkthroughHandler,
-  },
-];
+const tool = defineTool<WalkthroughToolContext, WalkthroughToolResult>();
 
 export const WALKTHROUGH_TOOL_BUNDLE: ToolSpecBundle<
   WalkthroughToolContext,
@@ -417,5 +292,142 @@ export const WALKTHROUGH_TOOL_BUNDLE: ToolSpecBundle<
 > = {
   name: "revv-walkthrough",
   version: "2.0.0",
-  specs: TOOL_SPECS,
+  route: "/mcp/walkthrough",
+  specs: [
+    tool({
+      name: "get_walkthrough_state",
+      access: "read",
+      description:
+        "Read-only. Call FIRST on every run, including resumes. Returns current phase, the chapter manifest (semanticSteps), per-chapter atomic blocks, rated axes, and metadata so you can pick up exactly where the previous run stopped. Skipping this risks duplicating work.",
+      activity: { kind: "tool.mcp", summary: "Reading walkthrough state..." },
+      inputSchema: getWalkthroughStateSchema,
+      handler: getWalkthroughStateHandler,
+    }),
+    tool({
+      name: "get_commit_history",
+      access: "read",
+      description:
+        "Read-only. Reviewer mode only: returns the PR commit list (sha, first-line message, author, date) in oldest → newest order. Call this once before opening chapter 0 ('How we got here' journey chapter). In author self-review mode, do not call this tool; focus on current-diff preflight review.",
+      activity: { kind: "tool.mcp", summary: "Reading commit history..." },
+      inputSchema: getCommitHistorySchema,
+      handler: getCommitHistoryHandler,
+    }),
+    tool({
+      name: "get_repo_context",
+      access: "read",
+      description:
+        "Read-only. Returns the most-recent complete project recaps for this repository (daily and/or weekly summaries of what shipped, themes, risk patterns). Call this once during Phase A to ground your overview in repo-level context. Returns an empty list when no recaps exist yet — proceed without context in that case. Do not pad the overview with repo-context references when none are directly relevant to this PR.",
+      activity: { kind: "tool.mcp", summary: "Reading recent project recaps..." },
+      inputSchema: getRepoContextSchema,
+      handler: getRepoContextHandler,
+    }),
+    tool({
+      name: "get_stack_context",
+      access: "read",
+      description:
+        "Read-only. For a PR that is one layer of a GitHub stack: the stack as captured at job start (layers base-first, this PR marked), the takeaway and open issue titles of each reviewed lower layer, and the title, description excerpt, and changed files of each upper layer. Call once during Phase A, and before flagging anything as missing — a higher layer may add it. Returns `stack: null` for a PR outside any stack.",
+      activity: { kind: "tool.mcp", summary: "Reading the PR stack..." },
+      inputSchema: getStackContextSchema,
+      handler: getStackContextHandler,
+    }),
+    tool({
+      name: "set_overview",
+      access: "write",
+      description: phaseDescription(
+        "set_overview",
+        "Call exactly once, before any other write tool. Sets the PR overview — a six-part briefing (takeaway, Context, Why, What changed, How, Watch) that a stranger to the code can follow — and the overall risk level (low/medium/high). Advances phase to A.",
+      ),
+      activity: { kind: "tool.mcp", summary: "Writing overview..." },
+      inputSchema: setOverviewSchema,
+      handler: withContentWriteMetrics(setOverviewHandler),
+    }),
+    tool({
+      name: "add_semantic_step",
+      access: "write",
+      description: phaseDescription(
+        "add_semantic_step",
+        "Open a chapter AND write its first atomic block in one atomic transaction. Provide a monotonic zero-based semantic_step_index, a short title, an optional summary, and a REQUIRED initial_block (exactly one of markdown/code/diff — same shape as add_diff_step). The first call advances the pipeline from Phase A to Phase B. Subsequent blocks in the same chapter use add_diff_step with step_index starting at 1. Idempotent upsert on (walkthroughId, semantic_step_index) for both the chapter row and its step_index=0 block — retries replace, never duplicate.",
+      ),
+      activity: { kind: "tool.mcp", summary: "Writing walkthrough step..." },
+      inputSchema: addSemanticStepSchema,
+      handler: withContentWriteMetrics(addSemanticStepHandler),
+    }),
+    tool({
+      name: "add_diff_step",
+      access: "write",
+      description: phaseDescription(
+        "add_diff_step",
+        "Append one atomic block (markdown, code excerpt, or diff hunk — exactly one of the three) to an already-opened chapter. Required: semantic_step_index (the parent chapter, opened by add_semantic_step), step_index (monotonic zero-based within the chapter — typically 1, 2, 3, ... since step_index=0 is already written by add_semantic_step's initial_block). Retries with the same composite key are idempotent upserts. Each chapter typically holds 2–5 atomic blocks total (1 from add_semantic_step + 1–4 from add_diff_step).",
+      ),
+      activity: { kind: "tool.mcp", summary: "Writing walkthrough step..." },
+      inputSchema: addDiffStepSchema,
+      handler: withContentWriteMetrics(addDiffStepHandler),
+    }),
+    tool({
+      name: "flag_issue",
+      access: "write",
+      description: phaseDescription(
+        "flag_issue",
+        "Flag a structured concern (security, correctness, tests, perf, etc.). Must be called AFTER the diff step(s) that explain the concern, and must link to them via block_refs = [{ semantic_step_index, step_index }, ...].",
+      ),
+      activity: { kind: "tool.mcp", summary: "Flagging a concern..." },
+      inputSchema: flagIssueSchema,
+      handler: withContentWriteMetrics(flagIssueHandler),
+    }),
+    tool({
+      name: "add_issue_comment",
+      access: "write",
+      description: phaseDescription(
+        "add_issue_comment",
+        "Attach a line-anchored comment to a previously flagged issue — appears inline in the diff view like a human review comment. Call AFTER flag_issue, passing its returned issue id. You may call this multiple times per issue to annotate multiple lines (one tool call per anchor). Idempotent per (issue_id, file_path, start_line, end_line, diff_side): a retry replaces the comment body, never duplicates the thread.",
+      ),
+      activity: { kind: "tool.mcp", summary: "Commenting on a concern..." },
+      inputSchema: addIssueCommentSchema,
+      handler: withContentWriteMetrics(addIssueCommentHandler),
+    }),
+    tool({
+      name: "resolve_lead",
+      access: "write",
+      description: phaseDescription(
+        "resolve_lead",
+        "Record your verdict on one first-pass lead from the prompt (lead_id `L1`, `L2`, …): `confirmed` with the issue_id of the issue you raised for it, or `rejected` with a one-sentence reason. Every lead needs one before complete_walkthrough. Idempotent per lead_id — a later call replaces the verdict. Independent calls can go out in parallel.",
+      ),
+      activity: { kind: "tool.mcp", summary: "Resolving a first-pass lead..." },
+      inputSchema: resolveLeadSchema,
+      handler: withContentWriteMetrics(resolveLeadHandler),
+    }),
+    tool({
+      name: "set_sentiment",
+      access: "write",
+      description: phaseDescription(
+        "set_sentiment",
+        "Call exactly once, after all diff steps are persisted. 2–4 sentence overall verdict on the PR. Advances phase to C.",
+      ),
+      activity: { kind: "tool.mcp", summary: "Writing the overall verdict..." },
+      inputSchema: setSentimentSchema,
+      handler: withContentWriteMetrics(setSentimentHandler),
+    }),
+    tool({
+      name: "rate_axis",
+      access: "write",
+      description: phaseDescription(
+        "rate_axis",
+        `Call exactly once for each of the ${RATING_AXES.length} axes (${RATING_AXES.join(", ")}), sending all ${RATING_AXES.length} as parallel tool calls in a single turn. Calls are independent and may land in any order. Idempotent per axis — retries replace the prior rating. The ${RATING_AXES.length}th distinct axis advances phase to D.`,
+      ),
+      activity: { kind: "tool.mcp", summary: "Scoring PR quality..." },
+      inputSchema: rateAxisSchema,
+      handler: withContentWriteMetrics(rateAxisHandler),
+    }),
+    tool({
+      name: "complete_walkthrough",
+      access: "write",
+      description: phaseDescription(
+        "complete_walkthrough",
+        `Signal that the walkthrough is complete. Fails unless Phase D is reached with all ${RATING_AXES.length} axes rated, summary + sentiment non-empty, ≥1 diff step, every line-anchored issue commented, and every first-pass lead resolved. The orchestrator performs the final status transition when your turn ends.`,
+      ),
+      activity: { kind: "tool.mcp", summary: "Finalizing walkthrough..." },
+      inputSchema: completeWalkthroughSchema,
+      handler: completeWalkthroughHandler,
+    }),
+  ],
 };

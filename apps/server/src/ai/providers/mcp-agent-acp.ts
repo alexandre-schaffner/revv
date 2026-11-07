@@ -7,7 +7,13 @@ import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import type { AgentFailureKind } from "../../domain/errors";
 import { logError } from "../../logger";
 import type { AgentLaunch } from "../acp/agent-launch";
-import { type ActivityBeacon, JOB_TURN, runAcpTurn, type TurnSettle } from "../acp/run-turn";
+import {
+  type ActivityBeacon,
+  JOB_TURN,
+  runAcpTurn,
+  type TurnMcpServer,
+  type TurnSettle,
+} from "../acp/run-turn";
 
 export interface RunMcpAgentAcpParams {
   readonly launch: AgentLaunch;
@@ -19,9 +25,7 @@ export interface RunMcpAgentAcpParams {
   readonly settle: TurnSettle;
   /** The job id its trace anchor is published under, and the span attribute naming it. */
   readonly trace: { readonly key: string; readonly attribute: string };
-  readonly route: string;
-  readonly mcpServerName: string;
-  readonly sessionToken: string;
+  readonly mcp: TurnMcpServer;
   /** System prompt and user message in one: ACP has no separate system channel. */
   readonly prompt: string;
   readonly calledAnyTool: () => boolean;
@@ -41,12 +45,7 @@ export async function runMcpAgentViaAcp(params: RunMcpAgentAcpParams): Promise<M
     label: params.debugLabel,
     launch,
     cwd: params.workingDir,
-    mcp: {
-      route: params.route,
-      name: params.mcpServerName,
-      token: params.sessionToken,
-      required: true,
-    },
+    mcp: params.mcp,
     deadlines: JOB_TURN,
     activity: params.activity,
     signal: params.abortController.signal,

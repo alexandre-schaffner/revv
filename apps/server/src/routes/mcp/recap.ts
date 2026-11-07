@@ -1,12 +1,11 @@
 import { Effect } from "effect";
-import { buildRecapActivity } from "../../ai/providers/recap-activity";
+import { toolCallActivity } from "../../ai/providers/mcp-tool-gateway";
 import type { RecapToolContext } from "../../ai/providers/recap-tools";
 import { RECAP_TOOL_BUNDLE } from "../../ai/providers/recap-tools";
 import { ProjectRecapJobs } from "../../services/ProjectRecapJobs";
 import { bindTokenMcpRoute } from "./utils";
 
 export const mcpRecapRoute = bindTokenMcpRoute({
-  path: "/recap",
   logScope: "mcp-recap-route",
   bundle: RECAP_TOOL_BUNDLE,
   resolveToken: (token) =>
@@ -17,9 +16,10 @@ export const mcpRecapRoute = bindTokenMcpRoute({
   trace: { attribute: "recapId", key: (meta) => meta.recapId },
   // The agent's stream names an MCP tool call only by a human title; this is
   // the one place that knows which recap tool ran.
-  beforeToolCall: ({ toolName, input, ctx }) => {
-    ctx.onToolCall(toolName);
-    ctx.emit({ type: "activity", data: buildRecapActivity(toolName, input) });
+  beforeToolCall: ({ spec, input, ctx }) => {
+    ctx.onToolCall(spec.name);
+    const activity = toolCallActivity(spec, input);
+    if (activity) ctx.emit({ type: "activity", data: { ...activity, payload: input } });
   },
   servedMessage: (requests, _ctx, meta) =>
     `served ${requests.length} request(s), recapId=${meta.recapId}`,

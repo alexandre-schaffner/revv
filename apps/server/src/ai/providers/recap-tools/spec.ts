@@ -6,7 +6,7 @@ import type { Effect } from "effect";
 import { z } from "zod";
 import type { Db } from "../../../db";
 import type { RecapSourceBundle } from "../../../db/schema/project-recaps";
-import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gateway";
+import type { McpToolResult } from "../mcp-tool-gateway";
 
 export interface RecapToolContext {
   readonly db: Db;
@@ -26,16 +26,12 @@ export interface RecapToolContext {
   readonly onToolCall: (toolName: string) => void;
 }
 
-export interface RecapToolResult extends McpToolResult {
-  [k: string]: unknown;
-}
+export type RecapToolResult = McpToolResult;
 
 export type RecapToolHandler<TInput> = (
   ctx: RecapToolContext,
   input: TInput,
 ) => Promise<RecapToolResult>;
-
-export type RecapToolSpecRecord = GatewayToolSpec<RecapToolContext, RecapToolResult>;
 
 /**
  * A `pr_diff_files` row with its patch clipped to a per-file budget, for PRs
@@ -74,6 +70,9 @@ export interface RecapSourcePrDiff {
 
 export const getRecapStateSchema = z.object({});
 
+/** The bundle holds at most the 20 most recently updated open PRs. */
+export const OPEN_PRS_MAX_PAGE_SIZE = 20;
+
 export const listOpenPrsSchema = z.object({
   offset: z.coerce
     .number()
@@ -87,7 +86,7 @@ export const listOpenPrsSchema = z.object({
     .number()
     .int()
     .positive()
-    .max(20)
+    .max(OPEN_PRS_MAX_PAGE_SIZE)
     .optional()
     .describe(
       "Maximum number of open PRs to return in this page. Defaults to 5 and is hard-capped at 20 to keep each tool response small. Stick with the default unless you have a reason to read more at once.",

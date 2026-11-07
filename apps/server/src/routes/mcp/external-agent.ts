@@ -69,7 +69,6 @@ async function resolveContext(
       db,
       prId: resolved.prId,
       prHeadSha: resolved.prHeadSha,
-      userId: resolved.userId,
       actor: resolved.provider,
       provider: resolved.provider,
       providerName: EXTERNAL_AGENT_PROVIDER_NAMES[resolved.provider],
@@ -117,18 +116,14 @@ async function resolveConnection(request: Request) {
 }
 
 export const mcpExternalAgentRoute = bindHttp({
-  path: "/external",
   logScope: LOG_SCOPE,
   bundle: EXTERNAL_REVIEW_TOOL_BUNDLE,
   resolveContext,
   resolveConnection,
-  serverVersion: "1.0.0",
-  specsForList: (specs, resolved) =>
-    specs.filter((spec) => hasExternalToolScope(spec.name, resolved.scopes)),
-  rejectToolCall: (name, resolved) =>
-    hasExternalToolScope(name, resolved.scopes)
+  refuse: (spec, resolved) =>
+    hasExternalToolScope(spec.name, resolved.scopes)
       ? null
-      : `tools/call: '${name}' is not authorized for this integration.`,
+      : `tools/call: '${spec.name}' is not authorized for this integration.`,
   servedMessage: (requests, ctx) =>
     `served ${requests.length} request(s), prId=${ctx.prId}, actor=${ctx.actor}`,
 });

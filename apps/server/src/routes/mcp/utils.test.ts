@@ -13,11 +13,13 @@ function request(body: unknown): Request {
 const echoProject = {
   name: "test",
   version: "1",
+  route: "/mcp/test",
   specs: [
     {
       name: "echo",
       description: "Echo",
       inputSchema: z.object({}),
+      access: "read" as const,
       handler: async (ctx: { project: string }) => ({
         content: [{ type: "text" as const, text: ctx.project }],
       }),
@@ -28,7 +30,6 @@ const echoProject = {
 describe("bindHttp connection resolution", () => {
   it("answers initialize and tools/list on the credential alone, without a project", async () => {
     const app = bindHttp({
-      path: "/test",
       logScope: "mcp-test",
       bundle: echoProject,
       resolveConnection: async () => ({ ok: true, meta: null }),
@@ -46,7 +47,6 @@ describe("bindHttp connection resolution", () => {
 
   it("refuses the handshake when the credential doesn't resolve", async () => {
     const app = bindHttp({
-      path: "/test",
       logScope: "mcp-test",
       bundle: echoProject,
       resolveConnection: async () => ({ ok: false, status: 401, message: "Missing bearer token" }),
@@ -61,7 +61,6 @@ describe("bindHttp connection resolution", () => {
 
   it("hands tools/call the resolved project context", async () => {
     const app = bindHttp({
-      path: "/test",
       logScope: "mcp-test",
       bundle: echoProject,
       resolveConnection: async () => ({ ok: true, meta: null }),
@@ -85,7 +84,6 @@ describe("bindHttp connection resolution", () => {
 
   it("keeps handshake responses when project resolution fails in a mixed batch", async () => {
     const app = bindHttp({
-      path: "/test",
       logScope: "mcp-test",
       bundle: echoProject,
       resolveConnection: async () => ({ ok: true, meta: null }),
@@ -118,5 +116,27 @@ describe("bindHttp connection resolution", () => {
         data: { httpStatus: 400 },
       },
     });
+  });
+
+  it("neither lists nor runs a tool the caller is refused", async () => {
+    const app = bindHttp({
+      logScope: "mcp-test",
+      bundle: echoProject,
+      resolveContext: async () => ({ ok: true, ctx: { project: "resolved" }, meta: null }),
+      refuse: (spec) => `'${spec.name}' is off`,
+    });
+
+    const list = await app.handle(request({ jsonrpc: "2.0", id: 1, method: "tools/list" }));
+    const call = await app.handle(
+      request({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "echo", arguments: {} },
+      }),
+    );
+
+    expect(await list.json()).toMatchObject({ result: { tools: [] } });
+    expect(await call.json()).toMatchObject({ error: { code: -32601, message: "'echo' is off" } });
   });
 });

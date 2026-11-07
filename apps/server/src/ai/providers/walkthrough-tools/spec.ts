@@ -10,7 +10,7 @@ import {
   SENTIMENT_CONTRACT,
   SUMMARY_CONTRACT,
 } from "../../prompts/review-copy-contract";
-import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gateway";
+import type { McpToolResult } from "../mcp-tool-gateway";
 import {
   artifactBlockField,
   blockRefSchema,
@@ -76,11 +76,6 @@ export type WalkthroughToolHandler<TInput> = (
   ctx: WalkthroughToolContext,
   input: TInput,
 ) => Promise<WalkthroughToolResult>;
-
-export type WalkthroughToolSpec = GatewayToolSpec<WalkthroughToolContext, WalkthroughToolResult> & {
-  /** What the exploration feed shows while the call runs. */
-  readonly activity: string;
-};
 
 const getWalkthroughStateSchema = z.object({});
 

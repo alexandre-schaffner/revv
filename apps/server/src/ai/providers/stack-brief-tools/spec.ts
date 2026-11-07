@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Db } from "../../../db";
-import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gateway";
+import type { McpToolResult } from "../mcp-tool-gateway";
 
 export interface StackBriefToolContext {
   readonly db: Db;
@@ -10,16 +10,12 @@ export interface StackBriefToolContext {
   readonly onToolCall: (toolName: string) => void;
 }
 
-export interface StackBriefToolResult extends McpToolResult {
-  [k: string]: unknown;
-}
+export type StackBriefToolResult = McpToolResult;
 
 export type StackBriefToolHandler<TInput> = (
   ctx: StackBriefToolContext,
   input: TInput,
 ) => Promise<StackBriefToolResult>;
-
-export type StackBriefToolSpecRecord = GatewayToolSpec<StackBriefToolContext, StackBriefToolResult>;
 
 export const LAYER_LINE_MAX_CHARS = 240;
 export const ARC_MAX_CHARS = 600;

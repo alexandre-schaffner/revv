@@ -28,6 +28,7 @@ import type {
   SetLedeInput,
   SetThemeSummaryInput,
 } from "./spec";
+import { OPEN_PRS_MAX_PAGE_SIZE } from "./spec";
 
 /** `add_pr_entry` and `set_theme_summary` join on this key. */
 function normalizeTheme(raw: string): string {
@@ -36,8 +37,6 @@ function normalizeTheme(raw: string): string {
 
 /** 20 open PRs split into ≤4 pages, each well under the MCP response budget. */
 const OPEN_PRS_DEFAULT_PAGE_SIZE = 5;
-/** Must match `listOpenPrsSchema`'s `.max(20)`. */
-const OPEN_PRS_MAX_PAGE_SIZE = 20;
 
 export const getRecapStateHandler: RecapToolHandler<GetRecapStateInput> = async (ctx) => {
   // A resume sees what a prior partial run wrote, so it skips covered PRs

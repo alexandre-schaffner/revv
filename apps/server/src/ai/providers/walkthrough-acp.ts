@@ -34,13 +34,13 @@ import {
   type WalkthroughPromptHints,
   type WalkthroughReviewMode,
 } from "../prompts/walkthrough";
+import { turnMcpServer } from "./mcp-tool-gateway";
 import { recordWalkthroughToken, startWalkthroughPrompt } from "./walkthrough-metrics";
 import { mergeContextOccupancy } from "./walkthrough-token-usage";
+import { WALKTHROUGH_TOOL_BUNDLE } from "./walkthrough-tools";
 
 /** A `phase` heartbeat while the prompt is in flight, so the client's stall watchdog sees a live run through long thinking gaps. */
 const WALKTHROUGH_HEARTBEAT_MS = 45_000;
-
-const WALKTHROUGH_MCP_SERVER = "revv-walkthrough";
 
 export interface WalkthroughTurnParams extends WalkthroughPromptHints {
   walkthroughId: string;
@@ -213,12 +213,7 @@ export async function runWalkthroughTurn(
       label: "walkthrough-acp",
       launch: params.launch,
       cwd: params.worktreePath,
-      mcp: {
-        route: "/mcp/walkthrough",
-        name: `${WALKTHROUGH_MCP_SERVER}-${params.walkthroughId}`,
-        token: params.mcpToken,
-        required: true,
-      },
+      mcp: turnMcpServer(WALKTHROUGH_TOOL_BUNDLE, params.walkthroughId, params.mcpToken, true),
       deadlines: JOB_TURN,
       activity,
       signal: params.abortController.signal,

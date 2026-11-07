@@ -3,8 +3,8 @@ import type { AgentLaunch } from "../acp/agent-launch";
 import type { ActivityBeacon, TurnSettle } from "../acp/run-turn";
 import { buildStackBriefUserMessage, STACK_BRIEF_SYSTEM_PROMPT } from "../prompts/stack-brief";
 import { type McpAgentRunError, runMcpAgentViaAcp } from "./mcp-agent-acp";
-import type { StackBriefToolContext } from "./stack-brief-tools";
-import { STACK_BRIEF_MCP_SERVER } from "./stack-brief-tools";
+import { turnMcpServer } from "./mcp-tool-gateway";
+import { STACK_BRIEF_TOOL_BUNDLE, type StackBriefToolContext } from "./stack-brief-tools";
 
 export interface RunStackBriefAcpParams {
   readonly ctx: StackBriefToolContext;
@@ -29,9 +29,7 @@ export function runStackBriefAgentViaAcp(
     activity: params.activity,
     settle: params.completion,
     trace: { key: params.ctx.briefId, attribute: "briefId" },
-    route: "/mcp/stack-brief",
-    mcpServerName: `${STACK_BRIEF_MCP_SERVER}-${params.ctx.briefId}`,
-    sessionToken: params.sessionToken,
+    mcp: turnMcpServer(STACK_BRIEF_TOOL_BUNDLE, params.ctx.briefId, params.sessionToken, true),
     prompt: `${STACK_BRIEF_SYSTEM_PROMPT}\n\n---\n\n${buildStackBriefUserMessage(params.snapshot)}`,
     calledAnyTool: params.calledAnyTool,
     debugLabel: "stack-brief-acp",

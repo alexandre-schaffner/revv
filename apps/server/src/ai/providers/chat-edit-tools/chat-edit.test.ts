@@ -77,7 +77,6 @@ function context(db: Db) {
   const ctx: ChatWalkthroughEditContext = {
     db,
     prId: "pr-1",
-    userId: "user-1",
     actor: "chat:acp",
     publishEdit: (walkthroughId, events) => published.push({ walkthroughId, events }),
     broadcastThreadEvent: (msg) => threadEvents.push(msg),

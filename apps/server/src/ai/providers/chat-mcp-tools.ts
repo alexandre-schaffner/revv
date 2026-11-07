@@ -20,13 +20,8 @@ import {
   loadIssueThreads,
 } from "../../services/walkthrough/content";
 import { EDIT_TOOL_SPECS } from "./chat-edit-tools";
-import type {
-  ChatEditToolHandler,
-  ChatEditToolSpecRecord,
-  ChatWalkthroughEditContext,
-} from "./chat-edit-tools/spec";
-import type { McpToolResult, ToolSpecBundle } from "./mcp-tool-gateway";
-import { fail, ok } from "./mcp-tool-gateway";
+import type { ChatEditToolHandler, ChatWalkthroughEditContext } from "./chat-edit-tools/spec";
+import { defineTool, fail, type McpToolResult, ok, type ToolSpecBundle } from "./mcp-tool-gateway";
 
 interface ParsedBlock {
   readonly orderIndex: number;
@@ -260,19 +255,18 @@ const getReviewContextHandler: ChatEditToolHandler<GetReviewContextInput> = asyn
   return ok(JSON.stringify(payload, null, 2));
 };
 
-export const CHAT_TOOL_SPECS: ReadonlyArray<ChatEditToolSpecRecord> = [
-  {
-    name: "get_review_context",
-    description:
-      "Fetch the structured review context for the current PR — walkthrough analysis, all flagged issues (with their associated diff steps and inline review comments), and standalone reviewer comment threads. Returns a single JSON-stringified payload. Call this at the start of a conversation when the user asks you to address issues or comments, instead of grepping the worktree for them.",
-    inputSchema: getReviewContextSchema,
-    handler: getReviewContextHandler,
-  },
-  ...EDIT_TOOL_SPECS,
-];
+export const getReviewContextTool = defineTool<ChatWalkthroughEditContext>()({
+  name: "get_review_context",
+  access: "read",
+  description:
+    "Fetch the structured review context for the current PR — walkthrough analysis, all flagged issues (with their associated diff steps and inline review comments), and standalone reviewer comment threads. Returns a single JSON-stringified payload. Call this at the start of a conversation when the user asks you to address issues or comments, instead of grepping the worktree for them.",
+  inputSchema: getReviewContextSchema,
+  handler: getReviewContextHandler,
+});
 
 export const CHAT_TOOL_BUNDLE: ToolSpecBundle<ChatWalkthroughEditContext, McpToolResult> = {
   name: "revv-chat-context",
-  version: "1.0.0",
-  specs: CHAT_TOOL_SPECS,
+  version: "2.0.0",
+  route: "/mcp/chat-context",
+  specs: [getReviewContextTool, ...EDIT_TOOL_SPECS],
 };

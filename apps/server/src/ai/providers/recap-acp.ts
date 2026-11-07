@@ -14,8 +14,8 @@ import { makeReasoningFeed } from "../agent-stream/reasoning-feed";
 import { buildActivity, isExplorationTool } from "../agent-stream/tool-activity";
 import { buildRecapUserMessage, RECAP_SYSTEM_PROMPT } from "../prompts/recap";
 import { type McpAgentRunError, runMcpAgentViaAcp } from "./mcp-agent-acp";
-import type { RecapToolContext } from "./recap-tools";
-import { RECAP_MCP_SERVER } from "./recap-tools";
+import { turnMcpServer } from "./mcp-tool-gateway";
+import { RECAP_TOOL_BUNDLE, type RecapToolContext } from "./recap-tools";
 
 export interface RunRecapAgentAcpParams {
   readonly ctx: RecapToolContext;
@@ -76,9 +76,7 @@ export async function runRecapAgentViaAcp(
     activity: params.activity,
     settle: params.completion,
     trace: { key: params.ctx.recapId, attribute: "recapId" },
-    route: "/mcp/recap",
-    mcpServerName: `${RECAP_MCP_SERVER}-${params.ctx.recapId}`,
-    sessionToken: params.sessionToken,
+    mcp: turnMcpServer(RECAP_TOOL_BUNDLE, params.ctx.recapId, params.sessionToken, true),
     prompt: userMessage,
     calledAnyTool: params.calledAnyTool,
     debugLabel: "recap-acp",
