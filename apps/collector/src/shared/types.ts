@@ -92,7 +92,7 @@ export interface GenerationRun {
   readonly walkthroughId: string | null;
   readonly prId: string | null;
   readonly model: string | null;
-  /** `manual` / `regenerate` / … from the job's `trigger` attribute. */
+  /** The job's `trigger` attribute: a `WalkthroughStartTrigger` from `@revv/shared`. */
   readonly trigger: string | null;
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;

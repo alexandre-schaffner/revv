@@ -1,3 +1,4 @@
+import { SPAN_ATTR } from "@revv/shared/telemetry";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
 import type { McpToolResult, ToolSpec, ToolSpecBundle } from "../../ai/providers/mcp-tool-gateway";
@@ -181,7 +182,12 @@ async function handleToolsCall<Ctx, Meta, Result extends McpToolResult>(
     const result = await withGraftedSpan(
       anchorKey,
       `Mcp.${name}`,
-      { attributes: { mcp_tool: name, ...(anchorKey ? { walkthrough_id: anchorKey } : {}) } },
+      {
+        attributes: {
+          mcp_tool: name,
+          ...(anchorKey ? { [SPAN_ATTR.walkthroughId]: anchorKey } : {}),
+        },
+      },
       () => spec.handler(resolved.ctx, parsed.data),
     );
     return jsonRpcSuccess(id, result);

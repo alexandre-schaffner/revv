@@ -3,7 +3,7 @@
 // normalize.
 
 import type { DuckDBConnection } from "@duckdb/node-api";
-import { SPAN, SPAN_ATTR } from "@revv/shared/telemetry";
+import { SPAN, SPAN_ATTR, SPAN_NAMESPACE } from "@revv/shared/telemetry";
 import type {
   GenerationRun,
   Kpis,
@@ -18,21 +18,23 @@ import type {
 
 type Row = Record<string, unknown>;
 
-// Exact names come from the shared telemetry contract; the LIKE prefixes are the
-// server's span namespaces and must follow renames there.
+const inNamespace = (...namespaces: (keyof typeof SPAN_NAMESPACE)[]) =>
+  namespaces.map((ns) => `name LIKE '${SPAN_NAMESPACE[ns]}.%'`).join(" OR ");
+
+// `claude_code.*` spans come from Claude Code's own OTel exporter, not Revv.
 const CATEGORY_SQL = `CASE
   WHEN service_name = 'revv-web' THEN 'rum'
-  WHEN name LIKE 'GitHub.%' THEN 'github'
+  WHEN ${inNamespace("github")} THEN 'github'
   -- The agent's own tool calls (Read/Grep/Bash in our worktree) are broken out
   -- from 'agent' on purpose: they are OUR latency, not the model's, and lumping
   -- them together is what made "the agent is slow" unactionable.
-  WHEN name LIKE 'Agent.%' OR name LIKE 'claude_code.tool%' THEN 'agent-tools'
-  WHEN name LIKE 'Mcp.%' THEN 'mcp'
-  WHEN name = '${SPAN.walkthroughGenerate}' OR name LIKE 'Ai.%' OR name LIKE 'Chat.%'
-       OR name LIKE 'Acp.%' OR name LIKE 'Walkthrough.%' OR name LIKE 'claude_code.%'
-       OR name LIKE 'ProjectRecapJobs.%' OR service_name = 'revv-opencode' THEN 'agent'
-  WHEN name LIKE 'RepoClone.%' THEN 'git'
-  WHEN name LIKE '%Scheduler.%' OR name LIKE 'PollScheduler%' THEN 'sync'
+  WHEN ${inNamespace("agentTool")} OR name LIKE 'claude_code.tool%' THEN 'agent-tools'
+  WHEN ${inNamespace("mcp")} THEN 'mcp'
+  WHEN name = '${SPAN.walkthroughGenerate}'
+       OR ${inNamespace("ai", "chat", "acp", "walkthrough", "recapJobs")}
+       OR name LIKE 'claude_code.%' THEN 'agent'
+  WHEN ${inNamespace("repoClone")} THEN 'git'
+  WHEN name LIKE '%Scheduler.%' THEN 'sync'
   WHEN name = '${SPAN.httpRequest}' THEN 'http'
   ELSE 'internal'
 END`;
@@ -40,10 +42,7 @@ END`;
 // Bookkeeping spans: the server's in-memory debug ring buffer wants them, but
 // they are near-zero-duration and high-volume, so the summary hides them unless
 // asked (`includeNoise`).
-const NOISE_SQL = `name IN (
-  '${SPAN.walkthroughEmitEvent}', '${SPAN.walkthroughSetStatus}', '${SPAN.walkthroughJob}',
-  'OpencodeSupervisor.jobStarted', 'OpencodeSupervisor.jobEnded', 'OpencodeSupervisor.stopNow'
-)`;
+const NOISE_SQL = `name IN ('${SPAN.walkthroughEmitEvent}')`;
 
 /** Read rows, coercing DuckDB BIGINTs (returned as JS bigint) to numbers. */
 async function read(
@@ -347,8 +346,8 @@ export async function generations(
     SELECT g.trace_id, g.span_id, g.name, g.start_ms, g.duration_ms, g.status_code,
            g.walkthrough_id, g.pr_id, g.model,
            g.input_tokens, g.output_tokens, g.tool_call_count,
-           g.attributes->>'trigger' AS trigger,
-           g.attributes->>'recapId' AS recap_id,
+           g.attributes->>'${SPAN_ATTR.trigger}' AS trigger,
+           g.attributes->>'${SPAN_ATTR.recapId}' AS recap_id,
            COALESCE(c.span_count, 1) AS span_count
     FROM spans g
     LEFT JOIN counts c ON c.trace_id = g.trace_id

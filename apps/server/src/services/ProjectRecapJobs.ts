@@ -20,7 +20,7 @@ import type {
   RecapWindowBounds,
 } from "@revv/shared";
 import { rollingWindow, windowIsCurrent } from "@revv/shared";
-import { SPAN } from "@revv/shared/telemetry";
+import { SPAN, SPAN_ATTR } from "@revv/shared/telemetry";
 import { sql } from "drizzle-orm";
 import { Cause, Context, Effect, Layer } from "effect";
 import { resolveAgentLaunch } from "../ai/acp/agent-launch";
@@ -640,7 +640,7 @@ export const ProjectRecapJobsLive = Layer.effect(
             isValidated: () => run.context.validated,
           }),
         );
-        if (ttftMs !== null) yield* Effect.annotateCurrentSpan("ttft_ms", ttftMs);
+        if (ttftMs !== null) yield* Effect.annotateCurrentSpan(SPAN_ATTR.ttftMs, ttftMs);
 
         return {
           kind: "journal",
@@ -668,7 +668,7 @@ export const ProjectRecapJobsLive = Layer.effect(
               // Before the span, so the anchor resolves to it.
               withTraceAnchor(recapId),
               Effect.annotateLogs({ recapId }),
-              Effect.withSpan(SPAN.recapGenerate, { attributes: { recapId } }),
+              Effect.withSpan(SPAN.recapGenerate, { attributes: { [SPAN_ATTR.recapId]: recapId } }),
               withGitHubOrigin("recap:job"),
             ),
         })
