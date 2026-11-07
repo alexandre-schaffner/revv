@@ -496,6 +496,7 @@ write_desktop_server_config() {
     const path = require("node:path");
     const [target, executable, projectRoot, logDir, supportDir, claude, opencode, codex, host, clientId, legacy] = process.argv.slice(1);
     let previousEnv = {};
+    // legacy-upgrade: launchAgent (the app migrates it too, in server_config.rs).
     if (fs.existsSync(legacy)) {
       const migrated = Bun.spawnSync(["/usr/bin/plutil", "-convert", "json", "-o", "-", legacy]);
       if (migrated.exitCode !== 0) throw new Error("Cannot read legacy Revv server configuration");

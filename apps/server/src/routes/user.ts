@@ -37,7 +37,8 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
           let avatarUrl = profile?.image ?? null;
           const active = yield* activeAccount(userId);
 
-          // Accounts that predate the login column, or never got an avatar.
+          // Accounts that never got an avatar, or that predate the login
+          // column (legacy-upgrade: userLoginBackfill).
           if (active && (!login || !avatarUrl)) {
             const github = yield* GitHubGateway;
             const viewer = yield* github.users

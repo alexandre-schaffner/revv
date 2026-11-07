@@ -1024,6 +1024,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         prHeadSha: row.prHeadSha,
       }));
 
+      // legacy-upgrade: walkthroughOnlyReviewRounds.
       if (rounds.length === 0) {
         const legacyRows = db
           .select({

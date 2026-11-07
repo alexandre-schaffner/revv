@@ -4,7 +4,8 @@ const PREFIX = "github:";
 
 /**
  * Accounts created before Revv keyed them by host carry the bare better-auth
- * social-provider id. They belong to the host the install was configured for.
+ * social-provider id (legacy-upgrade: providerIdWithoutHost). They belong to
+ * the host the install was configured for.
  */
 export const LEGACY_GITHUB_PROVIDER_ID = "github";
 
