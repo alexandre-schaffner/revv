@@ -302,6 +302,13 @@ export const StackServiceLive = Layer.effect(
     const cache = yield* CacheService;
     const realtime = yield* Realtime;
     const revalidating = new Set<string>();
+    // Bumped by every move, so a background re-read that started before one
+    // can't write the pre-move stack back.
+    const moves = new Map<string, number>();
+    const movesOf = (key: string) => moves.get(key) ?? 0;
+
+    const store = (repositoryId: string, stack: GitHubStack) =>
+      cache.set(CACHE_NS, cacheKey(repositoryId, stack.number), stack, { ttlMs: CACHE_TTL_MS });
 
     const fetchFresh = (
       { client, repo }: { readonly client: GitHubClient; readonly repo: RepoContext["repo"] },
@@ -309,11 +316,7 @@ export const StackServiceLive = Layer.effect(
     ) =>
       Effect.gen(function* () {
         const stack = yield* github.stacks.ofPr(client, repo.fullName, prNumber);
-        if (stack) {
-          yield* cache.set(CACHE_NS, cacheKey(repo.id, stack.number), stack, {
-            ttlMs: CACHE_TTL_MS,
-          });
-        }
+        if (stack) yield* store(repo.id, stack);
         return stack;
       });
 
@@ -321,13 +324,18 @@ export const StackServiceLive = Layer.effect(
       const key = cacheKey(ctx.repo.id, stackNumber);
       if (revalidating.has(key)) return Effect.void;
       revalidating.add(key);
-      return fetchFresh(ctx, ctx.pr.externalId).pipe(
+      const started = movesOf(key);
+      return github.stacks.ofPr(ctx.client, ctx.repo.fullName, ctx.pr.externalId).pipe(
         Effect.flatMap((stack) =>
-          stack
-            ? realtime.toAccount(accountId, {
-                type: "stack:updated",
-                data: { repositoryId: ctx.repo.id, stackNumber: stack.number },
-              })
+          stack && movesOf(key) === started
+            ? store(ctx.repo.id, stack).pipe(
+                Effect.andThen(
+                  realtime.toAccount(accountId, {
+                    type: "stack:updated",
+                    data: { repositoryId: ctx.repo.id, stackNumber: stack.number },
+                  }),
+                ),
+              )
             : Effect.void,
         ),
         Effect.catchCause((cause) =>
@@ -401,8 +409,10 @@ export const StackServiceLive = Layer.effect(
         ),
       );
 
-    const moved = (accountId: string, repositoryId: string, stackNumber: number) =>
-      cache.invalidate(CACHE_NS, cacheKey(repositoryId, stackNumber)).pipe(
+    const moved = (accountId: string, repositoryId: string, stackNumber: number) => {
+      const key = cacheKey(repositoryId, stackNumber);
+      moves.set(key, movesOf(key) + 1);
+      return cache.invalidate(CACHE_NS, key).pipe(
         Effect.catch((err) =>
           Effect.sync(() =>
             logError("stacks", `dropping the cached read of stack #${stackNumber}:`, err),
@@ -415,6 +425,7 @@ export const StackServiceLive = Layer.effect(
           }),
         ),
       );
+    };
 
     return { detail, fetchFresh, snapshot, moved };
   }),

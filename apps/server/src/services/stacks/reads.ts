@@ -1,7 +1,28 @@
 import type { StackBriefLayer } from "@revv/shared";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "../../db";
+import { pullRequests } from "../../db/schema/pull-requests";
 import { stackBriefLayers } from "../../db/schema/stack-briefs";
+
+/** Revv's PR ids for the repository's PR numbers it tracks. */
+export function prIdsByNumber(
+  db: Db,
+  repositoryId: string,
+  numbers: readonly number[],
+): Map<number, string> {
+  if (numbers.length === 0) return new Map();
+  const rows = db
+    .select({ id: pullRequests.id, number: pullRequests.externalId })
+    .from(pullRequests)
+    .where(
+      and(
+        eq(pullRequests.repositoryId, repositoryId),
+        inArray(pullRequests.externalId, [...numbers]),
+      ),
+    )
+    .all();
+  return new Map(rows.map((r) => [r.number, r.id]));
+}
 
 export function isCompleteReview(w: {
   readonly phase: string;

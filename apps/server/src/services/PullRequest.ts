@@ -263,6 +263,7 @@ export class PullRequestService extends Context.Service<
       updates: Array<{ id: string; status: "closed" | "merged"; closedAt: string }>,
     ) => Effect.Effect<void, DbError>;
     readonly setPrDraft: (id: string, isDraft: boolean) => Effect.Effect<void, DbError>;
+    readonly setPrTargetBranch: (id: string, targetBranch: string) => Effect.Effect<void, DbError>;
     /**
      * The review-comment sync watermark, sent as `?since=` on the next poll.
      * Null before the first sync.
@@ -615,6 +616,13 @@ export const PullRequestServiceLive = Layer.effect(
         Effect.gen(function* () {
           yield* dbTry("setPrDraft", () =>
             db.update(pullRequests).set({ isDraft }).where(eq(pullRequests.id, id)).run(),
+          );
+        }),
+
+      setPrTargetBranch: (id, targetBranch) =>
+        Effect.gen(function* () {
+          yield* dbTry("setPrTargetBranch", () =>
+            db.update(pullRequests).set({ targetBranch }).where(eq(pullRequests.id, id)).run(),
           );
         }),
 

@@ -24,7 +24,7 @@ import type { GitHubStack } from "../github/stacks";
 import { type PrContextBasic, PrContextService } from "../PrContext";
 import { PrMirror } from "../PrMirror";
 import { Realtime } from "../Realtime";
-import { driveRun, type MergeDriverPort, type SaveEffects } from "./merge-driver";
+import { driveRun, type MergeDriverPort } from "./merge-driver";
 import {
   defaultThrough,
   initialRunLayers,
@@ -35,6 +35,7 @@ import {
   stackAskOrder,
   startRefusal,
 } from "./merge-plan";
+import { prIdsByNumber } from "./reads";
 import { StackRebaseService } from "./StackRebase";
 import { type StackError, StackService } from "./StackService";
 import { liveRunFor, type RunRow, toRun, updateLiveRun } from "./stack-merge-runs";
@@ -121,20 +122,7 @@ export const StackMergeServiceLive = Layer.effect(
       });
 
     const prIdsFor = (repositoryId: string, numbers: readonly number[]) =>
-      dbTry("stack merge PR lookup", () => {
-        if (numbers.length === 0) return new Map<number, string>();
-        const rows = db
-          .select({ id: pullRequests.id, number: pullRequests.externalId })
-          .from(pullRequests)
-          .where(
-            and(
-              eq(pullRequests.repositoryId, repositoryId),
-              inArray(pullRequests.externalId, [...numbers]),
-            ),
-          )
-          .all();
-        return new Map(rows.map((r) => [r.number, r.id]));
-      });
+      dbTry("stack merge PR lookup", () => prIdsByNumber(db, repositoryId, numbers));
 
     const announce = (accountId: string, run: StackMergeRun) =>
       realtime.toAccount(accountId, { type: "stack-merge:progress", data: run });
@@ -147,6 +135,12 @@ export const StackMergeServiceLive = Layer.effect(
         for (const id of ids.values()) {
           yield* mirror.recordMutation(id, { kind: "terminal", status: "merged", closedAt });
         }
+      });
+
+    const recordRetarget = (repositoryId: string, number: number, targetBranch: string) =>
+      Effect.gen(function* () {
+        const id = (yield* prIdsFor(repositoryId, [number])).get(number);
+        if (id) yield* mirror.recordMutation(id, { kind: "base", targetBranch });
       });
 
     const readStack = (ctx: PrContextBasic, run: StackMergeRun) =>
@@ -185,11 +179,19 @@ export const StackMergeServiceLive = Layer.effect(
         merge: (number, method, sha) =>
           withCurrent((c) => github.prs.merge(c.client, c.repo.fullName, number, method, { sha })),
         retarget: (number, base) =>
-          withCurrent((c) => github.prs.updateBase(c.client, c.repo.fullName, number, base)),
+          withCurrent((c) => github.prs.updateBase(c.client, c.repo.fullName, number, base)).pipe(
+            Effect.andThen(
+              recordRetarget(ctx.repo.id, number, base).pipe(
+                Effect.catch((err) =>
+                  Effect.sync(() => logError("stack-merge", `recording #${number}'s base`, err)),
+                ),
+              ),
+            ),
+          ),
         enableAutoMerge: (nodeId, method, sha) =>
           withCurrent((c) => github.prs.enableAutoMerge(c.client, nodeId, method, sha)),
         rebase: (stack, proceed) =>
-          withCurrent((c) => rebaser.rebaseStack(c, stack, accountId, proceed)).pipe(
+          withCurrent((c) => rebaser.rebaseStack(c, stack, proceed)).pipe(
             Effect.map((result) => result.rebased),
             Effect.mapError((e) =>
               e._tag === "StackRejectedError"
@@ -199,7 +201,7 @@ export const StackMergeServiceLive = Layer.effect(
                   : `Couldn't rebase the stack: GitHub answered ${e._tag}`,
             ),
           ),
-        save: (run, effects: SaveEffects) =>
+        save: (run, merged) =>
           Effect.gen(function* () {
             const kept = yield* dbTry("stack merge run write", () =>
               updateLiveRun(db, run.id, {
@@ -211,15 +213,12 @@ export const StackMergeServiceLive = Layer.effect(
             );
             if (!kept) return "ended";
             yield* announce(accountId, run);
-            if (effects.merged.length > 0) {
-              yield* markMerged(run.repositoryId, effects.merged).pipe(
+            if (merged.length > 0) {
+              yield* markMerged(run.repositoryId, merged).pipe(
                 Effect.catch((err) =>
                   Effect.sync(() => logError("stack-merge", "merged PR rows update failed", err)),
                 ),
               );
-            }
-            if (effects.stackMoved) {
-              yield* stacks.moved(accountId, run.repositoryId, run.stackNumber);
             }
             return "live";
           }),

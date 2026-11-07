@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import type { PullRequest } from "@revv/shared";
 import type { Context } from "effect";
 import { Effect } from "effect";
-import { asStored, type ObservedPr, STACK_UNSEEN } from "../domain/observed-pr";
+import { asStored, type ObservedPr, STACK_UNSEEN, stackSeen } from "../domain/observed-pr";
 import type { GitHubGateway } from "./github/gateway";
 import { githubClient } from "./github/transport";
 import { ACCOUNT_ID, type Harness, makeHarness, REPO, seedDb } from "./poll-test-support";
@@ -150,5 +150,20 @@ describe("PrMirror.recordPushes", () => {
     expect(row.headSha).toBe("tip");
     expect(Date.parse(row.updatedAt)).toBeGreaterThanOrEqual(before - 1000);
     expect(h.recorded.superseded).toEqual([{ prId: pr.id, exceptHeadSha: "tip" }]);
+  });
+});
+
+describe("PrMirror.recordMutation", () => {
+  it("records a retarget and marks the PR's stack stale", async () => {
+    const h = await makeHarness(seedDb());
+    const pr = await stored(
+      h,
+      observed({ targetBranch: "layer-1", stack: stackSeen({ number: 7, position: 2 }) }),
+    );
+
+    await run(h.mirror.recordMutation(pr.id, { kind: "base", targetBranch: "main" }));
+
+    expect((await readRow(h)).targetBranch).toBe("main");
+    expect(h.recorded.staleStacks).toEqual([`${REPO.id}:7`]);
   });
 });

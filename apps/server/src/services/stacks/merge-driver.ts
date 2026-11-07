@@ -31,11 +31,6 @@ export const MAX_READ_FAILURES = 5;
 /** `ended`: the row left `running`/`waiting` (the user cancelled); the loop stops. */
 export type RunLiveness = "live" | "ended";
 
-export interface SaveEffects {
-  readonly merged: readonly number[];
-  readonly stackMoved: boolean;
-}
-
 export interface MergeDriverPort {
   readonly read: (run: StackMergeRun) => Effect.Effect<StackRead | null, GitHubError>;
   readonly merge: (
@@ -53,7 +48,11 @@ export interface MergeDriverPort {
     stack: GitHubStack,
     proceed: Effect.Effect<boolean>,
   ) => Effect.Effect<StackRebaseResult["rebased"], string>;
-  readonly save: (run: StackMergeRun, effects: SaveEffects) => Effect.Effect<RunLiveness, DbError>;
+  /** Persist the run; `merged` are the layers it just saw merge. */
+  readonly save: (
+    run: StackMergeRun,
+    merged: readonly number[],
+  ) => Effect.Effect<RunLiveness, DbError>;
   readonly isActive: (runId: string) => Effect.Effect<boolean, DbError>;
   readonly reportContradiction: (contradiction: Contradiction) => Effect.Effect<void>;
   readonly now: () => number;
@@ -103,30 +102,27 @@ export function driveRun(
     const waiting: { key: string | null; since: number } = { key: null, since: 0 };
     let readFailures = 0;
 
-    const commit = (next: StackMergeRun, effects: SaveEffects) =>
+    const commit = (next: StackMergeRun, merged: readonly number[] = []) =>
       Effect.gen(function* () {
-        if (sameRun(run, next) && effects.merged.length === 0 && !effects.stackMoved) {
+        if (sameRun(run, next) && merged.length === 0) {
           return (yield* port.isActive(run.id)) ? "live" : "ended";
         }
         const stamped = { ...next, updatedAt: new Date(port.now()).toISOString() };
-        const liveness = yield* port.save(stamped, effects);
+        const liveness = yield* port.save(stamped, merged);
         if (liveness === "live") run = stamped;
         return liveness;
       });
 
     const stop = (number: number | null, message: string) =>
-      commit(
-        {
-          ...run,
-          status: "failed",
-          error: message,
-          layers:
-            number === null
-              ? run.layers
-              : withLayer(run.layers, number, { state: "failed", message }),
-        },
-        { merged: [], stackMoved: false },
-      );
+      commit({
+        ...run,
+        status: "failed",
+        error: message,
+        layers:
+          number === null
+            ? run.layers
+            : withLayer(run.layers, number, { state: "failed", message }),
+      });
 
     while (true) {
       const read = yield* Effect.result(port.read(run));
@@ -175,11 +171,10 @@ export function driveRun(
               })
             : layers,
       };
-      const moved = { merged: mergedNow, stackMoved: mergedNow.length > 0 };
 
       switch (decision.kind) {
         case "complete": {
-          yield* commit({ ...stepped, status: "complete", error: null }, moved);
+          yield* commit({ ...stepped, status: "complete", error: null }, mergedNow);
           return run;
         }
         case "fail": {
@@ -190,17 +185,17 @@ export function driveRun(
               runId: run.id,
             });
           }
-          yield* commit({ ...stepped, status: "failed", error: decision.message }, moved);
+          yield* commit({ ...stepped, status: "failed", error: decision.message }, mergedNow);
           return run;
         }
         case "wait": {
-          if ((yield* commit({ ...stepped, status: "waiting" }, moved)) === "ended") return run;
+          if ((yield* commit({ ...stepped, status: "waiting" }, mergedNow)) === "ended") return run;
           const slow = decision.reason === "checks" || decision.reason === "auto_merge";
           yield* port.sleep(slow ? SLOW_POLL_MS : STEP_POLL_MS);
           continue;
         }
         case "rebase": {
-          if ((yield* commit({ ...stepped, status: "running" }, moved)) === "ended") return run;
+          if ((yield* commit({ ...stepped, status: "running" }, mergedNow)) === "ended") return run;
           const stillOurs = port.isActive(run.id).pipe(Effect.orElseSucceed(() => false));
           const done = yield* Effect.result(port.rebase(stackRead.stack, stillOurs));
           if (done._tag === "Failure") {
@@ -231,19 +226,14 @@ export function driveRun(
                 : {}),
             };
           });
-          if (
-            (yield* commit({ ...run, layers: rebased }, { merged: [], stackMoved: true })) ===
-            "ended"
-          ) {
-            return run;
-          }
+          if ((yield* commit({ ...run, layers: rebased })) === "ended") return run;
           yield* port.sleep(STEP_POLL_MS);
           continue;
         }
         case "retarget":
         case "merge":
         case "auto_merge": {
-          if ((yield* commit({ ...stepped, status: "running" }, moved)) === "ended") return run;
+          if ((yield* commit({ ...stepped, status: "running" }, mergedNow)) === "ended") return run;
           const write =
             decision.kind === "retarget"
               ? port.retarget(decision.number, decision.base)
@@ -260,17 +250,11 @@ export function driveRun(
               state: "merged",
               message: null,
             });
-            if (
-              (yield* commit(
-                { ...run, layers: merged },
-                { merged: [decision.number], stackMoved: true },
-              )) === "ended"
-            ) {
+            if ((yield* commit({ ...run, layers: merged }, [decision.number])) === "ended") {
               return run;
             }
             yield* port.sleep(STEP_POLL_MS);
           } else if (decision.kind === "retarget") {
-            yield* commit(run, { merged: [], stackMoved: true });
             yield* port.sleep(STEP_POLL_MS);
           } else {
             yield* port.sleep(SLOW_POLL_MS);
