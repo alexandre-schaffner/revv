@@ -132,8 +132,8 @@ export class ChatSessionService extends Context.Service<
      */
     readonly baselinesForPr: (prId: string) => Effect.Effect<readonly string[], DbError>;
     /**
-     * A new row starts with `session_id = NULL`: the route calls this at the
-     * start of a turn so message/activity rows can FK to it before the agent
+     * A new row starts with `session_id = NULL`: a turn creates it before the
+     * agent starts, so message/activity rows can FK to it before the agent
      * reports its session id mid-stream.
      */
     readonly findOrCreate: (
@@ -166,7 +166,7 @@ export class ChatSessionService extends Context.Service<
     }) => Effect.Effect<{ readonly id: string; readonly sequence: number }, DbError>;
 
     /**
-     * Starts streaming with empty content; the route appends via
+     * Starts streaming with empty content; the turn journal appends via
      * `appendAssistantContent` and finalizes via `finalizeAssistantMessage`.
      */
     readonly beginAssistantMessage: (params: {
@@ -275,27 +275,39 @@ export const ChatSessionServiceLive = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* DbService;
 
-    // Two turns on one session can overlap during retries; the transaction
-    // keeps them from double-issuing a sequence.
-    const allocateSequence = (chatSessionId: string): number =>
-      db.transaction((tx) => {
-        const row = tx
-          .select({ next: chatSessions.nextSequence })
-          .from(chatSessions)
-          .where(eq(chatSessions.id, chatSessionId))
-          .get();
-        if (!row) {
-          throw new Error(
-            `chat_sessions row ${chatSessionId} disappeared during sequence allocation`,
-          );
-        }
-        const seq = row.next;
-        tx.update(chatSessions)
-          .set({ nextSequence: seq + 1, lastActivityAt: nowIso() })
-          .where(eq(chatSessions.id, chatSessionId))
-          .run();
-        return seq;
-      });
+    type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+    /**
+     * The session's next transcript sequence, taken inside the transaction
+     * that inserts the row it numbers: two turns overlapping on one session
+     * (a retry) can't double-issue one, and a failed insert issues none.
+     */
+    const allocateSequence = (tx: Tx, chatSessionId: string, now: string): number => {
+      const row = tx
+        .select({ next: chatSessions.nextSequence })
+        .from(chatSessions)
+        .where(eq(chatSessions.id, chatSessionId))
+        .get();
+      if (!row) {
+        throw new Error(
+          `chat_sessions row ${chatSessionId} disappeared during sequence allocation`,
+        );
+      }
+      tx.update(chatSessions)
+        .set({ nextSequence: row.next + 1, lastActivityAt: now })
+        .where(eq(chatSessions.id, chatSessionId))
+        .run();
+      return row.next;
+    };
+
+    /** A session is keyed on its PR, its agent and model, and the PR head it is pinned to. */
+    const sessionKey = (prId: string, agent: string, model: string, prHeadSha: string) =>
+      and(
+        eq(chatSessions.pullRequestId, prId),
+        eq(chatSessions.agent, agent),
+        eq(chatSessions.model, model),
+        eq(chatSessions.prHeadSha, prHeadSha),
+      );
 
     const rowToSessionRow = (row: typeof chatSessions.$inferSelect): ChatSessionRow => ({
       id: row.id,
@@ -373,14 +385,7 @@ export const ChatSessionServiceLive = Layer.effect(
           const row = db
             .select()
             .from(chatSessions)
-            .where(
-              and(
-                eq(chatSessions.pullRequestId, prId),
-                eq(chatSessions.agent, agent),
-                eq(chatSessions.model, model),
-                eq(chatSessions.prHeadSha, prHeadSha),
-              ),
-            )
+            .where(sessionKey(prId, agent, model, prHeadSha))
             .get();
           return row ? rowToSessionRow(row) : null;
         }),
@@ -419,14 +424,7 @@ export const ChatSessionServiceLive = Layer.effect(
           const existing = db
             .select()
             .from(chatSessions)
-            .where(
-              and(
-                eq(chatSessions.pullRequestId, prId),
-                eq(chatSessions.agent, agent),
-                eq(chatSessions.model, model),
-                eq(chatSessions.prHeadSha, prHeadSha),
-              ),
-            )
+            .where(sessionKey(prId, agent, model, prHeadSha))
             .get();
           if (existing) {
             // The PR's worktree may have been reseated to a new path.
@@ -501,52 +499,56 @@ export const ChatSessionServiceLive = Layer.effect(
         }),
 
       appendUserMessage: ({ chatSessionId, turnId, content, attachments }) =>
-        dbTry("chat appendUserMessage", () => {
-          const sequence = allocateSequence(chatSessionId);
-          const id = crypto.randomUUID();
-          const now = nowIso();
-          const attachmentsJson =
-            attachments && attachments.length > 0 ? JSON.stringify(attachments) : null;
-          db.insert(chatMessages)
-            .values({
-              id,
-              chatSessionId,
-              role: "user",
-              content,
-              attachmentsJson,
-              isStreaming: 0,
-              sequence,
-              turnId,
-              error: null,
-              createdAt: now,
-              finalizedAt: now,
-            })
-            .run();
-          return { id, sequence };
-        }),
+        dbTry("chat appendUserMessage", () =>
+          db.transaction((tx) => {
+            const id = crypto.randomUUID();
+            const now = nowIso();
+            const sequence = allocateSequence(tx, chatSessionId, now);
+            const attachmentsJson =
+              attachments && attachments.length > 0 ? JSON.stringify(attachments) : null;
+            tx.insert(chatMessages)
+              .values({
+                id,
+                chatSessionId,
+                role: "user",
+                content,
+                attachmentsJson,
+                isStreaming: 0,
+                sequence,
+                turnId,
+                error: null,
+                createdAt: now,
+                finalizedAt: now,
+              })
+              .run();
+            return { id, sequence };
+          }),
+        ),
 
       beginAssistantMessage: ({ chatSessionId, turnId }) =>
-        dbTry("chat beginAssistantMessage", () => {
-          const sequence = allocateSequence(chatSessionId);
-          const id = crypto.randomUUID();
-          const now = nowIso();
-          db.insert(chatMessages)
-            .values({
-              id,
-              chatSessionId,
-              role: "assistant",
-              content: "",
-              attachmentsJson: null,
-              isStreaming: 1,
-              sequence,
-              turnId,
-              error: null,
-              createdAt: now,
-              finalizedAt: null,
-            })
-            .run();
-          return { id, sequence };
-        }),
+        dbTry("chat beginAssistantMessage", () =>
+          db.transaction((tx) => {
+            const id = crypto.randomUUID();
+            const now = nowIso();
+            const sequence = allocateSequence(tx, chatSessionId, now);
+            tx.insert(chatMessages)
+              .values({
+                id,
+                chatSessionId,
+                role: "assistant",
+                content: "",
+                attachmentsJson: null,
+                isStreaming: 1,
+                sequence,
+                turnId,
+                error: null,
+                createdAt: now,
+                finalizedAt: null,
+              })
+              .run();
+            return { id, sequence };
+          }),
+        ),
 
       appendAssistantContent: ({ messageId, chunk }) =>
         dbTry("chat appendAssistantContent", () => {
@@ -579,28 +581,30 @@ export const ChatSessionServiceLive = Layer.effect(
         payload,
         callId,
       }) =>
-        dbTry("chat appendActivity", () => {
-          const sequence = allocateSequence(chatSessionId);
-          const id = crypto.randomUUID();
-          const now = nowIso();
-          db.insert(chatActivities)
-            .values({
-              id,
-              chatSessionId,
-              turnId,
-              activityKind,
-              toolName: toolName ?? null,
-              summary,
-              payloadJson: payload === undefined ? null : JSON.stringify(payload),
-              callId: callId ?? null,
-              output: null,
-              isError: null,
-              sequence,
-              createdAt: now,
-            })
-            .run();
-          return { id, sequence };
-        }),
+        dbTry("chat appendActivity", () =>
+          db.transaction((tx) => {
+            const id = crypto.randomUUID();
+            const now = nowIso();
+            const sequence = allocateSequence(tx, chatSessionId, now);
+            tx.insert(chatActivities)
+              .values({
+                id,
+                chatSessionId,
+                turnId,
+                activityKind,
+                toolName: toolName ?? null,
+                summary,
+                payloadJson: payload === undefined ? null : JSON.stringify(payload),
+                callId: callId ?? null,
+                output: null,
+                isError: null,
+                sequence,
+                createdAt: now,
+              })
+              .run();
+            return { id, sequence };
+          }),
+        ),
 
       updateActivityResult: ({ chatSessionId, turnId, callId, output, isError }) =>
         dbTry("chat updateActivityResult", () => {
@@ -795,24 +799,7 @@ export const ChatSessionServiceLive = Layer.effect(
                   turnId,
                 });
               } else {
-                const seqRow = tx
-                  .select({ next: chatSessions.nextSequence })
-                  .from(chatSessions)
-                  .where(eq(chatSessions.id, chatSessionId))
-                  .get();
-                if (!seqRow) {
-                  throw new Error(
-                    `chat_sessions row ${chatSessionId} disappeared during task insert`,
-                  );
-                }
-                const sequence = seqRow.next;
-                tx.update(chatSessions)
-                  .set({
-                    nextSequence: sequence + 1,
-                    lastActivityAt: now,
-                  })
-                  .where(eq(chatSessions.id, chatSessionId))
-                  .run();
+                const sequence = allocateSequence(tx, chatSessionId, now);
                 const id = crypto.randomUUID();
                 tx.insert(chatTasks)
                   .values({
@@ -855,22 +842,7 @@ export const ChatSessionServiceLive = Layer.effect(
           const now = nowIso();
           let row: ChatPlanRow | null = null;
           db.transaction((tx) => {
-            const seqRow = tx
-              .select({ next: chatSessions.nextSequence })
-              .from(chatSessions)
-              .where(eq(chatSessions.id, chatSessionId))
-              .get();
-            if (!seqRow) {
-              throw new Error(`chat_sessions row ${chatSessionId} disappeared during plan insert`);
-            }
-            const sequence = seqRow.next;
-            tx.update(chatSessions)
-              .set({
-                nextSequence: sequence + 1,
-                lastActivityAt: now,
-              })
-              .where(eq(chatSessions.id, chatSessionId))
-              .run();
+            const sequence = allocateSequence(tx, chatSessionId, now);
             tx.insert(chatPlans)
               .values({
                 id,

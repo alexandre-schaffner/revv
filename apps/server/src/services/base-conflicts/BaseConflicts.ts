@@ -11,7 +11,7 @@
 // next run clears before it starts.
 
 import type { BaseConflictFrame, BaseConflictsCheck } from "@revv/shared";
-import { Context, Effect, Exit, Layer, Queue, Scope } from "effect";
+import { Context, Effect, Exit, Layer, Scope } from "effect";
 import type { ResolveConflictsTask } from "../../ai/prompts/chat";
 import {
   AiNotConfiguredError,
@@ -22,8 +22,8 @@ import {
 import { keyedSingleFlight } from "../../effects/keyed-single-flight";
 import { logError } from "../../logger";
 import { AiService } from "../Ai";
-import { pumpAgentFrames, queueToStream } from "../agent-frame-pump";
 import { RepoCloneService } from "../clone/RepoClone";
+import { runConflictResolve } from "../conflict-resolve-run";
 import type { DbService } from "../Db";
 import { BranchPushLock, type PushTarget } from "../git/branch-push-lock";
 import { assertNotFlagLike, gitTry, isAncestor } from "../git/ops";
@@ -341,86 +341,83 @@ export const BaseConflictsServiceLive = Layer.effect(
           return yield* prepare(ctx, params.expectedHeadSha, scratch);
         }).pipe(Effect.onError(() => cleanup));
         const { pr } = ctx;
-        const queue = yield* Queue.unbounded<BaseConflictFrame>();
-        const offer = (frame: BaseConflictFrame) => Queue.offer(queue, frame);
         const task: ResolveConflictsTask =
           op.strategy === "merge"
             ? { kind: "base-merge", baseBranch: op.baseBranch, sourceBranch: op.sourceBranch }
             : { kind: "base-rebase", baseBranch: op.baseBranch, sourceBranch: op.sourceBranch };
         const conflictFiles = started.kind === "conflict" ? started.files : [];
+        const result = (frame: Extract<BaseConflictFrame, { kind: "result" }>) => frame;
 
-        const run = Effect.gen(function* () {
-          yield* offer({
-            kind: "status",
-            message:
-              op.strategy === "merge"
-                ? `Merging ${op.baseBranch} into ${op.sourceBranch}…`
-                : `Rebasing ${op.sourceBranch} onto ${op.baseBranch}…`,
-          });
-          if (started.kind === "conflict") {
-            yield* offer({ kind: "conflict-files", files: conflictFiles });
-            yield* offer({
+        return yield* runConflictResolve<BaseConflictFrame, never>({
+          opening: [
+            {
               kind: "status",
-              message: `Asking the agent to resolve ${describeFiles(conflictFiles)}…`,
-            });
-            const agentStream = yield* ai.resolveMergeConflict({
-              cwd: op.scratchPath,
-              task,
-              conflictFiles,
-            });
-            yield* pumpAgentFrames(agentStream, offer);
-          }
+              message:
+                op.strategy === "merge"
+                  ? `Merging ${op.baseBranch} into ${op.sourceBranch}…`
+                  : `Rebasing ${op.sourceBranch} onto ${op.baseBranch}…`,
+            },
+            ...(started.kind === "conflict"
+              ? [
+                  { kind: "conflict-files" as const, files: conflictFiles },
+                  {
+                    kind: "status" as const,
+                    message: `Asking the agent to resolve ${describeFiles(conflictFiles)}…`,
+                  },
+                ]
+              : []),
+          ],
+          agent:
+            started.kind === "conflict"
+              ? ai.resolveMergeConflict({ cwd: op.scratchPath, task, conflictFiles })
+              : null,
+          finish: (offer) =>
+            Effect.gen(function* () {
+              const verified = yield* gitStep("Couldn't check the result", () =>
+                verifyResolution({ ...op, conflictFiles }),
+              );
+              if (verified.kind === "failed") {
+                return result({ kind: "result", status: "failed", message: verified.message });
+              }
 
-          const verified = yield* gitStep("Couldn't check the result", () =>
-            verifyResolution({ ...op, conflictFiles }),
-          );
-          if (verified.kind === "failed") {
-            return yield* offer({ kind: "result", status: "failed", message: verified.message });
-          }
+              yield* offer({ kind: "status", message: `Pushing to ${op.sourceBranch}…` });
+              const pushed = yield* gitStep("git push failed", () =>
+                pushResult(
+                  op.scratchPath,
+                  repo.remoteUrl,
+                  op.sourceBranch,
+                  remoteHead,
+                  verified.head,
+                ),
+              );
+              switch (pushed.kind) {
+                case "moved":
+                  return result({
+                    kind: "result",
+                    status: "remote-changed",
+                    branch: op.sourceBranch,
+                  });
+                case "auth":
+                case "rejected":
+                  logError("base-conflicts", `push failed (pr=${pr.id}): ${pushed.message}`);
+                  return result({ kind: "result", status: "failed", message: pushed.message });
+                case "pushed":
+                  break;
+              }
 
-          yield* offer({ kind: "status", message: `Pushing to ${op.sourceBranch}…` });
-          const pushed = yield* gitStep("git push failed", () =>
-            pushResult(op.scratchPath, repo.remoteUrl, op.sourceBranch, remoteHead, verified.head),
-          );
-          switch (pushed.kind) {
-            case "moved":
-              return yield* offer({
+              yield* mirror.recordPushes(ctx, [{ prNumber: pr.externalId, newTip: verified.head }]);
+              return result({
                 kind: "result",
-                status: "remote-changed",
+                status: "pushed",
+                newSha: verified.head,
                 branch: op.sourceBranch,
+                strategy: op.strategy,
               });
-            case "auth":
-            case "rejected":
-              logError("base-conflicts", `push failed (pr=${pr.id}): ${pushed.message}`);
-              return yield* offer({ kind: "result", status: "failed", message: pushed.message });
-            case "pushed":
-              break;
-          }
-
-          yield* mirror.recordPushes(ctx, [{ prNumber: pr.externalId, newTip: verified.head }]);
-          yield* offer({
-            kind: "result",
-            status: "pushed",
-            newSha: verified.head,
-            branch: op.sourceBranch,
-            strategy: op.strategy,
-          });
+            }),
+          failed: (message) =>
+            Effect.succeed(result({ kind: "result", status: "failed", message })),
+          cleanup,
         });
-
-        yield* Effect.forkDetach(
-          run.pipe(
-            Effect.catch((err) =>
-              offer({
-                kind: "result",
-                status: "failed",
-                message: err instanceof Error ? err.message : String(err),
-              }),
-            ),
-            Effect.ensuring(cleanup.pipe(Effect.ensuring(Queue.shutdown(queue)))),
-          ),
-        );
-
-        return queueToStream(queue);
       });
 
     return { check, resolve };

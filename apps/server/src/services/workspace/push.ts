@@ -6,7 +6,7 @@
 // flow is refused up front.
 
 import type { ResolvePushFrame } from "@revv/shared";
-import { type Context, Effect, Exit, Queue, Scope } from "effect";
+import { type Context, Effect, Exit, Scope } from "effect";
 import {
   type AiError,
   type CloneError,
@@ -26,7 +26,7 @@ import {
 } from "../../domain/errors";
 import { logError } from "../../logger";
 import type { AiService } from "../Ai";
-import { pumpAgentFrames, queueToStream } from "../agent-frame-pump";
+import { runConflictResolve } from "../conflict-resolve-run";
 import type { DbService } from "../Db";
 import type { BranchPushLock } from "../git/branch-push-lock";
 import {
@@ -413,47 +413,37 @@ export function makeAgentPush(deps: PushDeps) {
         })
         .pipe(Effect.onError(() => backOut.pipe(Effect.andThen(release))));
 
-      const queue = yield* Queue.unbounded<ResolvePushFrame>();
-      const offer = (frame: ResolvePushFrame) =>
-        Effect.sync(() => run.claim.touch()).pipe(Effect.andThen(Queue.offer(queue, frame)));
-      const fail = (message: string) =>
-        backOut.pipe(Effect.andThen(offer({ kind: "result", status: "failed", message })));
-
-      yield* Effect.forkDetach(
-        Effect.gen(function* () {
-          yield* offer({
-            kind: "status",
-            message: `Re-running merge into ${ctx.pr.sourceBranch}...`,
-          });
-          yield* offer({ kind: "conflict-files", files: merged.files });
-          yield* offer({
+      return yield* runConflictResolve<ResolvePushFrame, PushR>({
+        opening: [
+          { kind: "status", message: `Re-running merge into ${ctx.pr.sourceBranch}...` },
+          { kind: "conflict-files", files: merged.files },
+          {
             kind: "status",
             message: "Asking the agent to resolve conflicts and run git merge --continue.",
-          });
-          yield* pumpAgentFrames(agentStream, offer);
-
-          if (yield* Effect.promise(() => isMergeInProgress(branch.worktreePath))) {
-            return yield* fail("Agent finished but the merge is still in conflict. Aborting.");
-          }
-          const clean = yield* gitTry(() => workingTreeIsClean(branch.worktreePath));
-          if (!clean.clean) {
-            return yield* fail(
-              `Worktree has uncommitted changes after agent run:\n${clean.output}`,
-            );
-          }
-          yield* offer({ kind: "status", message: "Merge resolved. Pushing..." });
-          yield* offer(resultFrame(yield* pushHead(run, leaseSha, run.ahead)));
-        }).pipe(
-          Effect.catch((err) => fail(err instanceof Error ? err.message : String(err))),
-          Effect.ensuring(
-            Queue.shutdown(queue).pipe(
-              Effect.catch(() => Effect.void),
-              Effect.andThen(release),
-            ),
-          ),
-        ),
-      );
-      return queueToStream(queue);
+          },
+        ],
+        agent: Effect.succeed(agentStream),
+        finish: (offer) =>
+          Effect.gen(function* () {
+            if (yield* Effect.promise(() => isMergeInProgress(branch.worktreePath))) {
+              return yield* Effect.fail(
+                new Error("Agent finished but the merge is still in conflict. Aborting."),
+              );
+            }
+            const clean = yield* gitTry(() => workingTreeIsClean(branch.worktreePath));
+            if (!clean.clean) {
+              return yield* Effect.fail(
+                new Error(`Worktree has uncommitted changes after agent run:\n${clean.output}`),
+              );
+            }
+            yield* offer({ kind: "status", message: "Merge resolved. Pushing..." });
+            return resultFrame(yield* pushHead(run, leaseSha, run.ahead));
+          }),
+        failed: (message) =>
+          backOut.pipe(Effect.as<ResolvePushFrame>({ kind: "result", status: "failed", message })),
+        onProgress: run.claim.touch,
+        cleanup: release,
+      });
     });
 
   /** Push the chosen proposed commits, oldest first, onto the source branch; the rest stay proposed. */

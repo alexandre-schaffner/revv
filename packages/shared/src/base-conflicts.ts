@@ -53,17 +53,21 @@ export type AgentProgressFrame =
       readonly payload?: unknown;
     };
 
-/** Frames streamed by `POST /api/prs/:id/base-conflicts/resolve`; ends with one `result`. */
-export type BaseConflictFrame =
+/**
+ * Frames of a one-shot conflict-resolve run (the chat push's resolve-and-push,
+ * the base sync); it ends with one `result`. `Pushed` is what each flow
+ * reports about the push it made.
+ */
+export type ResolveFrame<Pushed> =
   | { readonly kind: "status"; readonly message: string }
   | { readonly kind: "conflict-files"; readonly files: readonly string[] }
   | AgentProgressFrame
-  | {
-      readonly kind: "result";
-      readonly status: "pushed";
-      readonly newSha: string;
-      readonly branch: string;
-      readonly strategy: BaseConflictStrategy;
-    }
+  | ({ readonly kind: "result"; readonly status: "pushed"; readonly newSha: string } & Pushed)
   | { readonly kind: "result"; readonly status: "remote-changed"; readonly branch: string }
   | { readonly kind: "result"; readonly status: "failed"; readonly message: string };
+
+/** Frames streamed by `POST /api/prs/:id/base-conflicts/resolve`. */
+export type BaseConflictFrame = ResolveFrame<{
+  readonly branch: string;
+  readonly strategy: BaseConflictStrategy;
+}>;
