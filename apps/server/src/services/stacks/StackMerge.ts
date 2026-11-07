@@ -6,7 +6,6 @@ import {
 } from "@revv/shared";
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { Cause, Context, Effect, Layer } from "effect";
-import { pullRequests } from "../../db/schema/pull-requests";
 import { stackMergeRuns } from "../../db/schema/stack-merge-runs";
 import {
   type DbError,

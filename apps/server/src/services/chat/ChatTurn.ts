@@ -11,10 +11,8 @@ import type {
   ChatStreamFrame,
   InteractionMode,
 } from "@revv/shared";
-import { eq } from "drizzle-orm";
 import { Context, Effect, Exit, Layer, Scope } from "effect";
-import type { ChatHistoryEntry, ChatWalkthroughContext } from "../../ai/prompts/chat";
-import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
+import type { ChatHistoryEntry } from "../../ai/prompts/chat";
 import {
   type AiError,
   type CloneError,
@@ -31,7 +29,7 @@ import { logError } from "../../logger";
 import { AiService } from "../Ai";
 import { DbService } from "../Db";
 import { type PrContextError, PrContextService } from "../PrContext";
-import { latestCompleteWalkthrough } from "../walkthrough/content";
+import { chatContextOf } from "../walkthrough/review-reads";
 import { PrWorkspace } from "../workspace/PrWorkspace";
 import { ChatSessionService } from "./ChatSession";
 import { journalTurn } from "./turn-journal";
@@ -71,8 +69,6 @@ export class ChatTurnService extends Context.Service<
   }
 >()("ChatTurnService") {}
 
-const MAX_PROMPT_ISSUES = 40;
-
 export const ChatTurnServiceLive = Layer.effect(
   ChatTurnService,
   Effect.gen(function* () {
@@ -83,30 +79,7 @@ export const ChatTurnServiceLive = Layer.effect(
     const ai = yield* AiService;
 
     const walkthroughContext = (prId: string) =>
-      dbTry("chat walkthrough context", (): ChatWalkthroughContext | null => {
-        const row = latestCompleteWalkthrough(db, prId);
-        if (!row) return null;
-        const issues = db
-          .select()
-          .from(walkthroughIssues)
-          .where(eq(walkthroughIssues.walkthroughId, row.id))
-          .orderBy(walkthroughIssues.order)
-          .limit(MAX_PROMPT_ISSUES)
-          .all();
-        return {
-          summary: row.summary ?? "",
-          riskLevel: row.riskLevel ?? "low",
-          sentiment: row.sentiment ?? null,
-          issues: issues.map((i) => ({
-            severity: i.severity,
-            title: i.title,
-            description: i.description,
-            filePath: i.filePath,
-            startLine: i.startLine,
-            endLine: i.endLine,
-          })),
-        };
-      }).pipe(
+      dbTry("chat walkthrough context", () => chatContextOf(db, prId)).pipe(
         // The prompt reads fine without it.
         Effect.catch((err) =>
           Effect.sync(() => {

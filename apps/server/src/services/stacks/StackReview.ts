@@ -12,6 +12,7 @@ import { withGitHubOrigin } from "../../observability/github-ledger/origin";
 import { DbService } from "../Db";
 import { makeStartJobMutex } from "../job-mutex";
 import { WalkthroughJobs } from "../walkthrough/WalkthroughJobs";
+import { STACK_REVIEW_REQUEST } from "./overlay";
 import { StackBriefJobs } from "./StackBriefJobs";
 import { type StackError, StackService } from "./StackService";
 
@@ -107,7 +108,12 @@ export const StackReviewServiceLive = Layer.effect(
         const layer = review.layers[review.started];
         if (!layer) return;
         const walkthroughId = yield* walkthroughJobs
-          .startJob({ prId: layer.prId, trigger: "stack_review", replace: "finished" })
+          .startJob({
+            prId: layer.prId,
+            trigger: "stack_review",
+            replace: "finished",
+            ...STACK_REVIEW_REQUEST,
+          })
           .pipe(
             Effect.map((r) => r.walkthroughId),
             Effect.catchCause((cause) =>

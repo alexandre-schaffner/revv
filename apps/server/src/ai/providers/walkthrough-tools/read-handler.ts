@@ -1,17 +1,11 @@
 import { STACK_CITATION_FORMAT } from "@revv/shared";
-import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { projectRecaps } from "../../../db/schema/project-recaps";
 import { pullRequests } from "../../../db/schema/pull-requests";
-import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
-import { walkthroughs as walkthroughsTable } from "../../../db/schema/walkthroughs";
 import { readCurrentHeadFiles } from "../../../services/DiffCache";
-import { takeawayOf } from "../../../services/stacks/overlay";
 import { readWalkthroughState } from "../../../services/walkthrough/agent-state";
-import {
-  decodePrCommits,
-  finishedReview,
-  loadWalkthroughRow,
-} from "../../../services/walkthrough/content";
+import { decodePrCommits, loadWalkthroughRow } from "../../../services/walkthrough/content";
+import { latestFinishedReviews } from "../../../services/walkthrough/review-reads";
 import { fail } from "../mcp-tool-gateway";
 import type {
   GetCommitHistoryInput,
@@ -263,6 +257,10 @@ export const getStackContextHandler: WalkthroughToolHandler<GetStackContextInput
           )
           .all();
   const prByNumber = new Map(prRows.map((p) => [p.externalId, p]));
+  const reviews = latestFinishedReviews(
+    ctx.db,
+    prRows.map((p) => p.id),
+  );
 
   const lowerLayers = others
     .filter((l) => l.position < stack.position)
@@ -271,32 +269,16 @@ export const getStackContextHandler: WalkthroughToolHandler<GetStackContextInput
       const pr = prByNumber.get(l.number);
       const base = { position: l.position, number: l.number, status: l.status };
       if (!pr) return { ...base, title: l.title, tracked: false, review: null };
-      const reviewed = ctx.db
-        .select({ id: walkthroughsTable.id, summary: walkthroughsTable.summary })
-        .from(walkthroughsTable)
-        .where(and(eq(walkthroughsTable.pullRequestId, pr.id), finishedReview()))
-        .orderBy(desc(walkthroughsTable.generatedAt))
-        .get();
+      const reviewed = reviews.get(pr.id);
       if (!reviewed) return { ...base, title: pr.title, tracked: true, review: null };
-      const openIssues = ctx.db
-        .select({ title: walkthroughIssues.title, severity: walkthroughIssues.severity })
-        .from(walkthroughIssues)
-        .where(
-          and(
-            eq(walkthroughIssues.walkthroughId, reviewed.id),
-            eq(walkthroughIssues.resolutionStatus, "open"),
-          ),
-        )
-        .orderBy(asc(walkthroughIssues.order))
-        .all();
       return {
         ...base,
         title: pr.title,
         tracked: true,
         review: {
-          takeaway: takeawayOf(reviewed.summary),
-          openIssueCount: openIssues.length,
-          openIssues: openIssues.slice(0, STACK_ISSUES_PER_LAYER),
+          takeaway: reviewed.takeaway,
+          openIssueCount: reviewed.openIssues.length,
+          openIssues: reviewed.openIssues.slice(0, STACK_ISSUES_PER_LAYER),
         },
       };
     });

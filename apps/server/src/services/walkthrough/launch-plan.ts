@@ -34,9 +34,9 @@ import type { DiffFingerprint, WalkthroughLaunchPlan } from "../../db/schema/wal
 import type { DbError } from "../../domain/errors";
 import type { CacheService } from "../Cache";
 import type { JevService } from "../Jev";
-import { changedFiles, fingerprintFiles, isComparable } from "../stacks/fingerprint";
 import type { GeneratedBy, GenerationProviderConfig } from "./cache-format";
-import { type RestackSource, WalkthroughService } from "./Walkthrough";
+import { fingerprintFiles, type RestackCarry, restackCarry } from "./restack";
+import { WalkthroughService } from "./Walkthrough";
 
 export interface JobStartPlan {
   readonly assignedRisk: RiskLevel | null;
@@ -76,23 +76,6 @@ export function buildJobStartPlan(input: {
       configuredEffort: settings.aiThinkingEffort,
     }),
   };
-}
-
-export interface RestackCarry {
-  readonly fromWalkthroughId: string;
-  readonly generationMode: WalkthroughGenerationMode;
-}
-
-/** A restack left this layer's own changes byte-identical: carry the finished review over. */
-export function planRestackCarry(
-  source: RestackSource | null,
-  requestedMode: WalkthroughGenerationMode,
-  fingerprint: DiffFingerprint,
-): RestackCarry | null {
-  if (source === null || !isComparable(fingerprint)) return null;
-  if (source.generationMode !== "full" && source.generationMode !== requestedMode) return null;
-  if (changedFiles(source.diffFingerprint, fingerprint).length > 0) return null;
-  return { fromWalkthroughId: source.id, generationMode: source.generationMode };
 }
 
 /** The agent launch for `plan`'s sizing under the current settings. */
@@ -200,7 +183,7 @@ export function planNewRow(input: {
     const stack = yield* input.snapshotStack;
     const restack =
       stack !== null
-        ? planRestackCarry(
+        ? restackCarry(
             yield* walkthroughService.findRestackSource(prId, headSha, mode),
             input.requestedGenerationMode,
             diffFingerprint,

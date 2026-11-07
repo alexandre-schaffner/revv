@@ -3,36 +3,32 @@ import {
   isOpenLayer,
   type PrStackDetail,
   type RestackVerdict,
-  type RiskLevel,
   type StackBrief,
   type StackFileOverlap,
   type StackLayer,
   type StackLayerReview,
-  type WalkthroughStackSnapshot,
+  type WalkthroughStatus,
 } from "@revv/shared";
 import type { DiffFingerprint } from "../../db/schema/walkthroughs";
 import type { GitHubStack, GitHubStackLayer } from "../github/stacks";
-import { changedFiles, isComparable } from "./fingerprint";
+import { changedFiles } from "../walkthrough/restack";
+import type { FinishedReview } from "../walkthrough/review-reads";
 
-export interface WalkthroughFact {
-  readonly id: string;
-  readonly status: "generating" | "complete" | "error" | "superseded";
-  readonly prHeadSha: string | null;
-  readonly riskLevel: RiskLevel | null;
-  readonly summary: string;
-  readonly openIssues: number;
-  readonly criticalIssues: number;
-  readonly stackContext: WalkthroughStackSnapshot | null;
-  readonly fingerprint: DiffFingerprint | null;
-  readonly carried: boolean;
-}
+/**
+ * What "Review the stack" asks for when it queues a layer: the overlay's
+ * `restacked` verdict says whether that request carries a review over.
+ */
+export const STACK_REVIEW_REQUEST = { mode: "reviewer", generationMode: "full" } as const;
 
 export interface TrackedLayer {
   readonly prId: string;
   readonly currentFingerprint: DiffFingerprint | null;
   readonly files: readonly string[] | null;
-  readonly current: WalkthroughFact | null;
-  readonly latestComplete: WalkthroughFact | null;
+  /** The review of the PR's head that stands, finished or not. */
+  readonly current: { readonly id: string; readonly status: WalkthroughStatus } | null;
+  readonly latestFinished: FinishedReview | null;
+  /** A {@link STACK_REVIEW_REQUEST} run of this head would carry a finished review over. */
+  readonly carries: boolean;
 }
 
 export interface RevvStackFacts {
@@ -41,34 +37,20 @@ export interface RevvStackFacts {
   readonly brief: StackBrief | null;
 }
 
-export function takeawayOf(summary: string): string | null {
-  for (const raw of summary.split("\n")) {
-    const line = raw
-      .replace(/^[#>*\-\s]+/, "")
-      .replace(/\*\*/g, "")
-      .trim();
-    if (line) return line;
-  }
-  return null;
-}
-
-function reviewOf(layer: GitHubStackLayer, tracked: TrackedLayer | undefined): StackLayerReview {
+function reviewOf(tracked: TrackedLayer | undefined): StackLayerReview {
   if (!tracked) return { kind: "none" };
-  const { current, latestComplete } = tracked;
+  const { current, latestFinished: done } = tracked;
   if (current?.status === "generating") return { kind: "generating", walkthroughId: current.id };
-  if (current?.status === "error" && !latestComplete) {
-    return { kind: "error", walkthroughId: current.id };
-  }
-  const done = current?.status === "complete" ? current : latestComplete;
+  if (current?.status === "error" && !done) return { kind: "error", walkthroughId: current.id };
   if (!done) return { kind: "none" };
   return {
     kind: "complete",
     walkthroughId: done.id,
     riskLevel: done.riskLevel,
-    openIssues: done.openIssues,
-    criticalIssues: done.criticalIssues,
-    takeaway: takeawayOf(done.summary),
-    reviewedHeadSha: done.prHeadSha ?? layer.headSha,
+    openIssues: done.openIssues.length,
+    criticalIssues: done.openIssues.filter((i) => i.severity === "critical").length,
+    takeaway: done.takeaway,
+    reviewedHeadSha: done.prHeadSha,
     carried: done.carried,
   };
 }
@@ -92,15 +74,14 @@ export function restackVerdict(
     return { kind: "needs-rebase" };
   }
 
-  const reviewed = tracked?.latestComplete;
+  const reviewed = tracked?.latestFinished;
   if (!reviewed) return { kind: "unknown" };
 
-  if (reviewed.prHeadSha !== null && reviewed.prHeadSha !== layer.headSha) {
+  if (reviewed.prHeadSha !== layer.headSha) {
+    if (tracked.carries) return { kind: "restacked" };
     const now = tracked.currentFingerprint;
-    if (!reviewed.fingerprint || !now) return { kind: "unknown" };
-    const files = changedFiles(reviewed.fingerprint, now);
-    if (files.length === 0 && isComparable(now)) return { kind: "restacked" };
-    return { kind: "layer-changed", files };
+    if (!reviewed.diffFingerprint || !now) return { kind: "unknown" };
+    return { kind: "layer-changed", files: changedFiles(reviewed.diffFingerprint, now) };
   }
 
   const snapshot = reviewed.stackContext;
@@ -149,7 +130,7 @@ export function overlayStack(
     return {
       ...rest,
       prId: tracked?.prId ?? null,
-      review: reviewOf(layer, tracked),
+      review: reviewOf(tracked),
       restack: restackVerdict(layer, github.layers, tracked),
     };
   });

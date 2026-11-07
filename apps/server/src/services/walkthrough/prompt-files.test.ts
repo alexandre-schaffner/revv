@@ -1,13 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import type { WalkthroughStackSnapshot } from "@revv/shared";
 import { Effect } from "effect";
-import { fingerprintFiles } from "../stacks/fingerprint";
 import {
   type PromptFile,
   REVERTED_FILE_STATUS,
   resolveIncrementalPromptFiles,
   stackLayerDeltaFiles,
 } from "./prompt-files";
+import { fingerprintFiles } from "./restack";
 
 const file = (filename: string, patch: string | null, status = "modified"): PromptFile => ({
   filename,
