@@ -279,7 +279,6 @@ export class WalkthroughView {
                   type: "markdown",
                   id: "overview-block",
                   order: -1,
-                  phase: "diff_analysis",
                   semanticStepIndex: -1,
                   stepIndex: 0,
                   content: this.summary,

@@ -7,7 +7,6 @@ function block(id: string, semanticStepIndex: number, stepIndex: number): Walkth
     type: "markdown",
     id,
     order: semanticStepIndex * 10000 + stepIndex,
-    phase: "diff_analysis",
     semanticStepIndex,
     stepIndex,
     content: id,

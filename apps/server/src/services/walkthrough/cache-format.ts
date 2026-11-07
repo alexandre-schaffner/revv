@@ -63,7 +63,10 @@ export interface GeneratedBy {
  * is the durable handle used by `issue.blockIndexes` and `rating.blockIndexes`.
  */
 export interface WalkthroughSnapshotBlock {
-  /** Always `"diff_analysis"`: Phase A/C content lives on the row. */
+  /**
+   * Always `"diff_analysis"`: Phase A/C content lives on the row. Clients no
+   * longer read it, but older importers write it to the block's row.
+   */
   phase: "diff_analysis";
   semanticStepIndex: number;
   stepIndex: number;

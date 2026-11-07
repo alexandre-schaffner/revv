@@ -33,8 +33,8 @@ export interface BlockVariantInput {
   readonly artifact?: z.output<typeof artifactBlockField>;
 }
 
-type BlockPosition = "id" | "order" | "phase" | "semanticStepIndex" | "stepIndex";
-type ContentOf<B> = B extends WalkthroughBlock ? Omit<B, BlockPosition> : never;
+type PositionKey = "id" | "order" | "semanticStepIndex" | "stepIndex";
+type ContentOf<B> = B extends WalkthroughBlock ? Omit<B, PositionKey> : never;
 
 /** A block's content as it is persisted, without its position. */
 export type BlockContent = ContentOf<WalkthroughBlock>;
@@ -390,7 +390,6 @@ export function writeBlock(
     ...content,
     id: existing?.id ?? blockId(walkthroughId, semanticStepIndex, stepIndex),
     order: blockOrder(semanticStepIndex, stepIndex),
-    phase: "diff_analysis",
     semanticStepIndex,
     stepIndex,
   };
