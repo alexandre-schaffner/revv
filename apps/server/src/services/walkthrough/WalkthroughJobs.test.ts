@@ -54,11 +54,17 @@ function jobsAt(db: Db, head: string) {
   const sent: ServerEventMessage[] = [];
   const context = { pr: { ...PR, headSha: head }, repo: REPO, accountId: "account-1", client: {} };
   const unused = {} as never;
+  const realtime = Layer.succeed(Realtime, {
+    toAccount: (_accountId: string, msg: ServerEventMessage) => Effect.sync(() => sent.push(msg)),
+    toPr: (_prId: string, msg: ServerEventMessage) => Effect.sync(() => sent.push(msg)),
+  } as never);
   const layer = WalkthroughJobsLive.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(DbService, { db }),
-        WalkthroughServiceLive.pipe(Layer.provide(Layer.succeed(DbService, { db }))),
+        WalkthroughServiceLive.pipe(
+          Layer.provide(Layer.merge(Layer.succeed(DbService, { db }), realtime)),
+        ),
         Layer.succeed(PrContextService, {
           forPr: () => Effect.succeed(context),
           withDiff: () =>
@@ -72,11 +78,7 @@ function jobsAt(db: Db, head: string) {
         Layer.succeed(RepoCloneService, {
           getCloneStatus: () => Effect.succeed({ status: "ready", path: "/tmp/x", error: null }),
         } as never),
-        Layer.succeed(Realtime, {
-          toAccount: (_accountId: string, msg: ServerEventMessage) =>
-            Effect.sync(() => sent.push(msg)),
-          toPr: (_prId: string, msg: ServerEventMessage) => Effect.sync(() => sent.push(msg)),
-        } as never),
+        realtime,
         Layer.succeed(AiService, unused),
         Layer.succeed(ReviewService, unused),
         Layer.succeed(SettingsService, unused),

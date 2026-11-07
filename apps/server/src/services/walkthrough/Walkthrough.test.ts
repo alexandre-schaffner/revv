@@ -2,8 +2,9 @@ import { describe, expect, it } from "bun:test";
 import { eq } from "drizzle-orm";
 import { Cause, type Context, Effect, Layer } from "effect";
 import { createDb, type Db } from "../../db/index";
-import { reviewRounds, walkthroughs } from "../../db/schema";
+import { commentThreads, reviewRounds, walkthroughIssues, walkthroughs } from "../../db/schema";
 import { DbService } from "../Db";
+import { Realtime } from "../Realtime";
 import { WalkthroughService, WalkthroughServiceLive } from "./Walkthrough";
 
 /** Rows for PR `pr-1`, with foreign keys off so the PR / session rows needn't exist. */
@@ -26,16 +27,31 @@ function insertWalkthroughs(
   }
 }
 
+/** What the service sent, by PR, in order. */
+type Sent = Array<{ readonly prId: string; readonly type: string; readonly data: unknown }>;
+
+const recordingRealtime = (sent: Sent) =>
+  Layer.succeed(Realtime, {
+    toAccount: () => Effect.void,
+    toRepo: () => Effect.void,
+    toPr: (prId, msg) =>
+      Effect.sync(
+        () => void sent.push({ prId, type: msg.type, data: "data" in msg ? msg.data : null }),
+      ),
+    toAll: () => Effect.void,
+  });
+
 const runWalkthrough = <A, E>(
   db: Db,
   f: (service: Context.Service.Shape<typeof WalkthroughService>) => Effect.Effect<A, E, DbService>,
+  sent: Sent = [],
 ) =>
   Effect.runPromise(
     Effect.gen(function* () {
       return yield* f(yield* WalkthroughService);
     }).pipe(
       Effect.provide(WalkthroughServiceLive),
-      Effect.provide(Layer.succeed(DbService, { db })),
+      Effect.provide(Layer.merge(Layer.succeed(DbService, { db }), recordingRealtime(sent))),
     ),
   );
 
@@ -65,7 +81,7 @@ describe("finish", () => {
         yield* service.finish("wt-1", "complete");
       }).pipe(
         Effect.provide(WalkthroughServiceLive),
-        Effect.provide(Layer.succeed(DbService, { db })),
+        Effect.provide(Layer.merge(Layer.succeed(DbService, { db }), recordingRealtime([]))),
       ),
     );
 
@@ -96,7 +112,7 @@ describe("finish", () => {
     const exit = await Effect.runPromiseExit(
       Effect.flatMap(WalkthroughService, (service) => service.finish("wt-1", "complete")).pipe(
         Effect.provide(WalkthroughServiceLive),
-        Effect.provide(Layer.succeed(DbService, { db })),
+        Effect.provide(Layer.merge(Layer.succeed(DbService, { db }), recordingRealtime([]))),
       ),
     );
 
@@ -125,7 +141,7 @@ describe("walkthrough risk hydration", () => {
         return yield* (yield* WalkthroughService).getPartial("pr-1", "head-1");
       }).pipe(
         Effect.provide(WalkthroughServiceLive),
-        Effect.provide(Layer.succeed(DbService, { db })),
+        Effect.provide(Layer.merge(Layer.succeed(DbService, { db }), recordingRealtime([]))),
       ),
     );
 
@@ -169,7 +185,7 @@ describe("resume incremental walkthrough", () => {
         return yield* (yield* WalkthroughService).listGenerating();
       }).pipe(
         Effect.provide(WalkthroughServiceLive),
-        Effect.provide(Layer.succeed(DbService, { db })),
+        Effect.provide(Layer.merge(Layer.succeed(DbService, { db }), recordingRealtime([]))),
       ),
     );
 
@@ -187,7 +203,7 @@ describe("resume incremental walkthrough", () => {
         return yield* (yield* WalkthroughService).findResumable("pr-1", "author");
       }).pipe(
         Effect.provide(WalkthroughServiceLive),
-        Effect.provide(Layer.succeed(DbService, { db })),
+        Effect.provide(Layer.merge(Layer.succeed(DbService, { db }), recordingRealtime([]))),
       ),
     );
 
@@ -210,7 +226,7 @@ describe("resume incremental walkthrough", () => {
         );
       }).pipe(
         Effect.provide(WalkthroughServiceLive),
-        Effect.provide(Layer.succeed(DbService, { db })),
+        Effect.provide(Layer.merge(Layer.succeed(DbService, { db }), recordingRealtime([]))),
       ),
     );
 
@@ -263,6 +279,88 @@ describe("a new row at a head", () => {
         { id: newId, status: "generating", supersededBy: null },
       ]),
     );
+  });
+});
+
+describe("supersede", () => {
+  /** `wt-old` at `head-1` with one AI thread on its only issue. */
+  function seedAiThread(db: Db): void {
+    insertWalkthroughs(db, { id: "wt-old", status: "complete", mode: "reviewer" });
+    db.insert(walkthroughIssues)
+      .values({
+        id: "issue-1",
+        walkthroughId: "wt-old",
+        order: 0,
+        severity: "warning",
+        title: "t",
+        description: "d",
+        createdAt: "2026-01-01T00:00:00Z",
+      })
+      .run();
+    db.insert(commentThreads)
+      .values({
+        id: "thread-ai",
+        reviewSessionId: "session-1",
+        filePath: "a.ts",
+        startLine: 1,
+        endLine: 1,
+        createdAt: "2026-01-01T00:00:00Z",
+        walkthroughIssueId: "issue-1",
+      })
+      .run();
+  }
+
+  it("announces the AI threads a head move deletes, after they are gone", async () => {
+    const db = createDb(":memory:");
+    seedAiThread(db);
+    const sent: Sent = [];
+    const threadsWhenAnnounced: number[] = [];
+    const watching = Layer.succeed(Realtime, {
+      toAccount: () => Effect.void,
+      toRepo: () => Effect.void,
+      toPr: (prId, msg) =>
+        Effect.sync(() => {
+          threadsWhenAnnounced.push(db.select().from(commentThreads).all().length);
+          sent.push({ prId, type: msg.type, data: "data" in msg ? msg.data : null });
+        }),
+      toAll: () => Effect.void,
+    });
+
+    const ids = await Effect.runPromise(
+      Effect.flatMap(WalkthroughService, (s) => s.supersedeAllForPr("pr-1", "head-2")).pipe(
+        Effect.provide(WalkthroughServiceLive),
+        Effect.provide(Layer.merge(Layer.succeed(DbService, { db }), watching)),
+      ),
+    );
+
+    expect(ids).toEqual(["wt-old"]);
+    expect(sent).toEqual([
+      { prId: "pr-1", type: "thread:deleted", data: { threadId: "thread-ai" } },
+    ]);
+    expect(threadsWhenAnnounced).toEqual([0]);
+  });
+
+  it("announces them when a new row at the same head replaces the old one", async () => {
+    const db = createDb(":memory:");
+    seedAiThread(db);
+    const sent: Sent = [];
+    await runWalkthrough(
+      db,
+      (service) =>
+        service.createRow({
+          reviewSessionId: "session-1",
+          prId: "pr-1",
+          prHeadSha: "head-1",
+          mode: "reviewer",
+          generationMode: "full",
+          parentWalkthroughId: null,
+          baseHeadSha: null,
+        }),
+      sent,
+    );
+    expect(sent).toEqual([
+      { prId: "pr-1", type: "thread:deleted", data: { threadId: "thread-ai" } },
+    ]);
   });
 });
 

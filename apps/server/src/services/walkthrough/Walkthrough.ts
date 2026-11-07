@@ -33,6 +33,7 @@ import type { DbError } from "../../domain/errors";
 import { dbTry } from "../../effects/db-try";
 import { DbService } from "../Db";
 import type { PrCommit } from "../github/pulls";
+import { Realtime } from "../Realtime";
 import type { GeneratedBy, GenerationProviderConfig } from "./cache-format";
 import {
   decodeBlock,
@@ -405,18 +406,25 @@ type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
  * The one way a row becomes `superseded`: its AI comment threads go with it
  * (Submit would otherwise post a retired review's comments), its
  * review round follows, and a run cut off mid-generation records why.
+ * Returns the deleted threads' ids, for the caller to announce once committed.
  */
-function supersedeRows(tx: Db | Tx, ids: readonly string[]): void {
-  if (ids.length === 0) return;
+function supersedeRows(tx: Db | Tx, ids: readonly string[]): string[] {
+  if (ids.length === 0) return [];
   const issueIds = tx
     .select({ id: walkthroughIssues.id })
     .from(walkthroughIssues)
     .where(inArray(walkthroughIssues.walkthroughId, [...ids]))
     .all()
     .map((r) => r.id);
-  if (issueIds.length > 0) {
-    tx.delete(commentThreads).where(inArray(commentThreads.walkthroughIssueId, issueIds)).run();
-  }
+  const threadIds =
+    issueIds.length === 0
+      ? []
+      : tx
+          .delete(commentThreads)
+          .where(inArray(commentThreads.walkthroughIssueId, issueIds))
+          .returning({ id: commentThreads.id })
+          .all()
+          .map((r) => r.id);
   tx.update(walkthroughs)
     .set({ status: "superseded", endReason: "superseded" })
     .where(and(inArray(walkthroughs.id, [...ids]), eq(walkthroughs.status, "generating")))
@@ -429,16 +437,24 @@ function supersedeRows(tx: Db | Tx, ids: readonly string[]): void {
     .set({ status: "superseded" })
     .where(inArray(reviewRounds.walkthroughId, [...ids]))
     .run();
+  return threadIds;
 }
 
 export const WalkthroughServiceLive = Layer.effect(
   WalkthroughService,
   Effect.gen(function* () {
     const { db } = yield* DbService;
+    const realtime = yield* Realtime;
+    const announceDeletedThreads = (prId: string, threadIds: readonly string[]) =>
+      Effect.forEach(
+        threadIds,
+        (threadId) => realtime.toPr(prId, { type: "thread:deleted", data: { threadId } }),
+        { discard: true },
+      );
     return WalkthroughService.of({
       createRow: (params) =>
         dbTry("create walkthrough", () =>
-          db.transaction((tx): string => {
+          db.transaction((tx) => {
             const id = crypto.randomUUID();
             const generatedAt = new Date().toISOString();
             const replaced = tx
@@ -455,7 +471,7 @@ export const WalkthroughServiceLive = Layer.effect(
               )
               .all()
               .map((r) => r.id);
-            supersedeRows(tx, replaced);
+            const deletedThreads = supersedeRows(tx, replaced);
 
             tx.insert(walkthroughs)
               .values({
@@ -512,8 +528,11 @@ export const WalkthroughServiceLive = Layer.effect(
                 createdAt: generatedAt,
               })
               .run();
-            return id;
+            return { id, deletedThreads };
           }),
+        ).pipe(
+          Effect.tap(({ deletedThreads }) => announceDeletedThreads(params.prId, deletedThreads)),
+          Effect.map(({ id }) => id),
         ),
 
       activeAt: (prId, headSha, mode, generationMode) =>
@@ -613,9 +632,11 @@ export const WalkthroughServiceLive = Layer.effect(
               .all()
               .map((r) => r.id);
 
-            supersedeRows(db, activeIds);
-            return activeIds;
+            return { activeIds, deletedThreads: supersedeRows(db, activeIds) };
           }),
+        ).pipe(
+          Effect.tap(({ deletedThreads }) => announceDeletedThreads(prId, deletedThreads)),
+          Effect.map(({ activeIds }) => activeIds),
         ),
 
       getCached: (prId, headSha, mode = "reviewer") =>

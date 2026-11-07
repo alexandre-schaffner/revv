@@ -16,6 +16,7 @@ import {
   walkthroughs,
 } from "../../db/schema";
 import { DbService } from "../Db";
+import { Realtime } from "../Realtime";
 import { fingerprintFiles } from "../stacks/fingerprint";
 import { blockId, issueId, semanticStepId } from "./content";
 import { planNewRow, planRestackCarry } from "./launch-plan";
@@ -127,6 +128,12 @@ function run<A, E>(
     eff.pipe(
       Effect.provide(Layer.mergeAll(WalkthroughServiceLive, WalkthroughSnapshotImporterLive)),
       Effect.provide(Layer.succeed(DbService, { db })),
+      Effect.provideService(Realtime, {
+        toAccount: () => Effect.void,
+        toRepo: () => Effect.void,
+        toPr: () => Effect.void,
+        toAll: () => Effect.void,
+      }),
     ),
   );
 }

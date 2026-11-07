@@ -3,6 +3,7 @@ import { Effect } from "effect";
 import { createDb, type Db } from "../../db";
 import { GitHubNetworkError, HeadShaMismatchError } from "../../domain/errors";
 import { DbService } from "../Db";
+import { Realtime } from "../Realtime";
 import {
   describeWalkthroughRequestError,
   MAX_RUNS_PER_HEAD,
@@ -103,6 +104,13 @@ function insertWalkthrough(
 
 type StartJob = (params: StartJobParams) => Effect.Effect<StartJobResult, StartJobError>;
 
+const silentRealtime = {
+  toAccount: () => Effect.void,
+  toRepo: () => Effect.void,
+  toPr: () => Effect.void,
+  toAll: () => Effect.void,
+};
+
 function request(db: Db, startJob: StartJob) {
   // `requestWalkthroughAtHead` only ever calls `startJob`.
   const jobs = { startJob } as never;
@@ -112,6 +120,7 @@ function request(db: Db, startJob: StartJob) {
     generationMode: "incremental",
   }).pipe(
     Effect.provide(WalkthroughServiceLive),
+    Effect.provideService(Realtime, silentRealtime),
     Effect.provideService(WalkthroughJobs, jobs),
     Effect.provideService(DbService, { db }),
   );

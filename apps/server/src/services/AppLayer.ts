@@ -65,7 +65,7 @@ const DbBackedLayers = Layer.mergeAll(
   WalkthroughSnapshotImporterLive,
   ProjectRecapServiceLive,
   CacheServiceLive,
-).pipe(Layer.provide(DbServiceLive));
+).pipe(Layer.provide(Layer.mergeAll(DbServiceLive, RealtimeWithDeps)));
 
 const SettingsServiceWithDeps = SettingsServiceLive.pipe(Layer.provide(DbServiceLive));
 
