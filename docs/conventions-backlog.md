@@ -18,8 +18,8 @@ default sort.
 
 ## Open
 
-<a id="e-003"></a>
-### E-003 — `CacheService.getOrFetch` runs its fetcher with `Effect.runPromiseWith`
+<a id="e-007"></a>
+### E-007 — `CacheService.getOrFetch` runs its fetcher with `Effect.runPromiseWith`
 
 **Rule violated:** [§2.2 — Stay inside Effect](./conventions.md#effect-stay-inside).
 
@@ -44,7 +44,8 @@ fetch, typed failures for every caller, the entry dropped on settle) without lea
 - jobs: `job-mutex.ts`, `session-token-store.ts`
 - recaps: `job-subscribers.ts` (only `recaps/ProjectRecapJobs.ts` uses it)
 - base conflicts: `conflict-resolve-run.ts`
-- team cache: `Cache.ts`, `cache-eligibility.ts`, beside `cache-signing/` and `blob/`
+- team cache: `cache-eligibility.ts`, beside `cache-signing/` and `blob/` (`Cache.ts` is the
+  generic kv cache every feature reads through, not a team-cache file)
 - no folder yet:
   - poll: `PollScheduler.ts`, `poll-{gate,maintenance,notifications,open-prs,state}.ts`
   - review: `Review.ts`, `review-submit.ts`, `review-mode.ts`, `github-review-comment.ts`, `Sync.ts`, `diff-anchors.ts`

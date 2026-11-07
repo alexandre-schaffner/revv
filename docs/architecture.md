@@ -121,8 +121,10 @@ two accounts tracking one repository never share one: a managed clone at
 `<base>/<owner>/<name>` (or `<name>.<row id>` when another row holds that), every worktree
 under `<base>/.worktrees/<row id>/`. `RepoCloneService` (`services/clone/`) owns clones, their
 status and its broadcast, the per-job review worktree (`acquireReviewWorktree`) and file reads at
-a SHA; a folder belongs to one row, and a clone is deleted only when Revv manages it and no
-other row uses it. `AgentWorktrees` (`services/workspace/agent-worktrees.ts`) owns the per-PR
+a SHA; a folder belongs to one row, and a clone is deleted only when Revv manages it, no
+other row uses it, and (outside Revv's base) Revv wrote the folder: `repositories.revv_wrote_clone`,
+set before a clone's first write, is also what lets a clone cut off mid-way retry over its own
+leftover instead of refusing it. `AgentWorktrees` (`services/workspace/agent-worktrees.ts`) owns the per-PR
 agent worktree and the claim on it: one chat turn, push, commit edit or prune at a time, so the
 prune when a PR closes waits for a running turn. `PrWorkspace` (`services/workspace/`) owns
 the worktree's use: the PR's chat session and every operation on the agent's commits. Every

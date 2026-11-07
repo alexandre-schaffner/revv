@@ -118,6 +118,7 @@ interface ExternalIntegrationsService {
     provider: ExternalAgentProvider
   }): Effect<ExternalIntegrationStatus, IntegrationError>
   disconnect(accountId: string, provider: ExternalAgentProvider): Effect<void, IntegrationError>
+  uninstallAccount(accountId: string): Effect<void, IntegrationError>
   refreshInstalls(): Effect<void>
   authenticate(token: string): Effect<ExternalAuthorizedContext, IntegrationError>
   resolve(
