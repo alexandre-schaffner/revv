@@ -23,7 +23,7 @@ export interface RunRecapAgentAcpParams {
   /** Bearer token the orchestrator issued for `ctx` on `/mcp/recap`. */
   readonly sessionToken: string;
   readonly launch: AgentLaunch;
-  /** Working dir the ACP connection is pooled under (repo clone path / server cwd). */
+  /** Working dir the ACP connection is pooled under: Revv's runner directory. */
   readonly workingDir: string;
   readonly abortController: AbortController;
   readonly activity: ActivityBeacon;

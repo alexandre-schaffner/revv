@@ -52,15 +52,17 @@ export const TOOL_GATED_FAILURES = {
 };
 
 /**
- * Launch the configured agent for `purpose` in the repository's clone and run
- * its one turn; the journal's completion check is the verdict. An agent that
- * can't be launched here ends the turn as `not_configured` at connect.
+ * Launch the configured agent for `purpose` and run its one turn; the
+ * journal's completion check is the verdict. An agent that can't be launched
+ * here ends the turn as `not_configured` at connect.
+ *
+ * The turn runs in Revv's runner directory, never the repository's clone: its
+ * evidence arrives over MCP, ACP permission requests are auto-allowed, and a
+ * linked repository's clone is the user's own checkout.
  */
 export function runToolGatedTurn<C extends ToolGate>(input: {
   readonly run: AgentRun<C>;
   readonly purpose: "recap" | "brief";
-  /** The repository's clone, if it has one. */
-  readonly clonePath: string | null;
   readonly turn: (agent: {
     readonly launch: AgentLaunch;
     readonly workingDir: string;
@@ -77,7 +79,7 @@ export function runToolGatedTurn<C extends ToolGate>(input: {
     const error = yield* Effect.promise(() =>
       input.turn({
         launch,
-        workingDir: input.clonePath ?? projectlessAgentCwd(),
+        workingDir: projectlessAgentCwd(),
         calledAnyTool: () => run.context.calledAnyTool,
         completion: run.context.completion,
       }),

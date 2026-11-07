@@ -308,7 +308,6 @@ export const ProjectRecapJobsLive = Layer.effect(
         const end = yield* runToolGatedTurn({
           run,
           purpose: "recap",
-          clonePath: repo.clonePath,
           turn: (agent) => {
             emit({
               type: "phase",

@@ -227,11 +227,9 @@ export const StackBriefJobsLive = Layer.effect(
           return { kind: "failed", failure: "The stack snapshot has no layers" };
         }
 
-        const repo = yield* prCtx.getRepo(row.repositoryId).pipe(Effect.orElseSucceed(() => null));
         return yield* runToolGatedTurn({
           run,
           purpose: "brief",
-          clonePath: repo?.clonePath ?? null,
           turn: (agent) =>
             runStackBriefAgentViaAcp({
               ctx: run.context.tools,
