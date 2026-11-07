@@ -31,6 +31,8 @@ export function getRepoOwner(repoId: string): string | null {
   return getRepoById(repoId)?.owner ?? null;
 }
 
+// A pushed list and a fetched one both wait on avatar decoding before they
+// show; the latest to arrive wins, whichever decodes first.
 let repositoryLoadSeq = 0;
 
 async function setRepositories(repos: Repository[]): Promise<void> {

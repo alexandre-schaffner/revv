@@ -178,6 +178,8 @@ function archivedAuthorsQuery(): { authors?: string } {
   return archiveAuthors.size === 0 ? {} : { authors: [...archiveAuthors].join(",") };
 }
 
+// A paged feed, not a per-key fetch: a filter reload discards pages still in
+// flight for the old filter.
 let archivedFetchToken = 0;
 
 async function fetchArchivedPrs(): Promise<void> {
