@@ -114,23 +114,16 @@ dist: ## Build the Revv.app bundle used by the source installer
 			exit 1; \
 		fi; \
 	fi
-	@# --bundles app skips the DMG: the installers copy the .app directly, and
-	@# tauri-bundler's bundle_dmg.sh is flaky where Finder/AppleEvents are
-	@# blocked (`make dmg` builds one).
-	@#
 	@# tauri.conf.json sets createUpdaterArtifacts for CI-signed releases. This
 	@# target runs on machines without TAURI_SIGNING_PRIVATE_KEY (install.sh,
 	@# `revv update`'s local-build fallback), where the bundler would hard-fail
 	@# with "public key has been found, but no private key".
-	@export PATH="$$HOME/.cargo/bin:$$PATH"; cd apps/desktop && bunx tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
+	@export PATH="$$HOME/.cargo/bin:$$PATH"; cd apps/desktop && bunx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
 	@printf "\n\033[1m\033[32m  Build complete!\033[0m\n"
 	@printf "  Bundle located in: apps/desktop/target/release/bundle/macos/\n\n"
 
-dmg: ## Build the full DMG installer (requires Finder/AppleEvents permission)
-	cd apps/desktop && bunx tauri build --bundles dmg
-
 dist-debug: ## Build a debug distribution (faster, larger binary)
-	cd apps/desktop && bunx tauri build --debug --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
+	cd apps/desktop && bunx tauri build --debug --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
 typecheck: ## Run TypeScript type checking across all packages
 	bun run typecheck

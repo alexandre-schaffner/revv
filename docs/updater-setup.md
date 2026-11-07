@@ -16,9 +16,8 @@ The publisher uses the official pinned Tauri signer and independently verifies e
 
 ## Published assets
 
-Each architecture produces a DMG and updater archive. Updater archives and signatures use architecture-qualified filenames so matrix legs cannot overwrite each other:
+Each architecture produces one updater archive, which is also what the installer (`install.sh`, `revv update`) installs from; there is no DMG. Archives and signatures use architecture-qualified filenames so matrix legs cannot overwrite each other:
 
-- `Revv_<version>_aarch64.dmg` and `Revv_<version>_x64.dmg`
 - `Revv_aarch64.app.tar.gz` and `Revv_x64.app.tar.gz`
 - A `.sig` for each updater archive
 - One `latest.json` with `darwin-aarch64` and `darwin-x86_64` entries

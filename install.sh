@@ -273,8 +273,6 @@ if ! install_release_app "$release_tag" "$REVV_APP_DIR"; then
   warn "Could not install a pre-built app bundle; falling back to a local build."
   ensure_rust
   step "Building Revv.app (first run can take several minutes)"
-  # Only the .app: create-dmg breaks on paths with spaces or parentheses,
-  # and the .app is copied to /Applications directly anyway.
   (
     cd "$PROJECT_ROOT/packages/shared" && bun run typecheck
   )
@@ -282,7 +280,7 @@ if ! install_release_app "$release_tag" "$REVV_APP_DIR"; then
     cd "$PROJECT_ROOT" && bun run build
   )
   (
-    cd "$PROJECT_ROOT/apps/desktop" && bunx tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
+    cd "$PROJECT_ROOT/apps/desktop" && bunx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
   )
 
   bundle_macos_dir="$PROJECT_ROOT/apps/desktop/target/release/bundle/macos"

@@ -31,7 +31,7 @@
     "dist": "cd apps/desktop && bunx tauri build",
     "dist:debug": "cd apps/desktop && bunx tauri build --debug",
     "clean": "rm -rf apps/web/build apps/web/.svelte-kit apps/server/dist apps/desktop/target .turbo",
-    "postinstall": "echo $'\\n  Run `bun run dev` to start developing, or `bun run dist` to build an installer.\\n'",
+    "postinstall": "echo $'\\n  Run `bun run dev` to start developing, or `bun run dist` to build Revv.app.\\n'",
     "perf:install": "bun --no-env-file scripts/performance/install-machine.ts",
     "perf:review": "bun --no-env-file scripts/performance/review.ts",
     "perf:bench": "bun --no-env-file scripts/performance/benchmark.ts",

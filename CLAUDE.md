@@ -26,7 +26,6 @@ bun run test             # Every package's tests, against a sandboxed DB and git
 # Build & Distribution
 make build               # Build all packages
 make dist                # Build Revv.app (what the source installer copies)
-make dmg                 # Build the DMG installer
 
 # Database
 cd apps/server && bunx drizzle-kit generate   # Generate migration from schema changes (needs a TTY)
