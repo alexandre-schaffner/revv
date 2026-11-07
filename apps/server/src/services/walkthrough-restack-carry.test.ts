@@ -40,8 +40,6 @@ const STACK: WalkthroughStackSnapshot = {
   capturedAt: NOW,
 };
 
-type Client = { session: { client: { run: (sql: string) => void } } };
-
 function insertRow(db: Db, row: Partial<typeof walkthroughs.$inferInsert> & { id: string }) {
   db.insert(walkthroughs)
     .values({
@@ -57,7 +55,7 @@ function insertRow(db: Db, row: Partial<typeof walkthroughs.$inferInsert> & { id
 }
 
 function seedSource(db: Db): void {
-  (db as unknown as Client).session.client.run("PRAGMA foreign_keys = OFF");
+  db.$client.run("PRAGMA foreign_keys = OFF");
   insertRow(db, {
     id: "wt-old",
     status: "superseded",

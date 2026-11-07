@@ -125,8 +125,8 @@ describe("listArchivedPrs author filter", () => {
     const db = createDb(":memory:");
     seed(db);
     const { prs } = await listArchived(db, { authorLogins: ["alice"] });
+    // Alice's open PR stays out: the filter narrows the archive, never widens it.
     expect(prs.map((p) => p.id)).toEqual(["pr-closed-alice"]);
-    expect(prs.every((p) => p.authorLogin === "alice")).toBe(true);
   });
 
   it("restricts to multiple authors, still ordered by closedAt desc", async () => {
@@ -134,13 +134,6 @@ describe("listArchivedPrs author filter", () => {
     seed(db);
     const { prs } = await listArchived(db, { authorLogins: ["alice", "bob"] });
     expect(prs.map((p) => p.id)).toEqual(["pr-merged-bob", "pr-closed-alice"]);
-  });
-
-  it("never surfaces an open PR, even when its author is in the filter", async () => {
-    const db = createDb(":memory:");
-    seed(db);
-    const { prs } = await listArchived(db, { authorLogins: ["alice"] });
-    expect(prs.some((p) => p.id === "pr-open-alice")).toBe(false);
   });
 
   it("returns nothing when the filtered author has no closed PRs", async () => {

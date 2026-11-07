@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   applySettingsUpdate,
   DEFAULT_USER_SETTINGS,
+  getAgentCapabilities,
   mergeSettingsUpdate,
   normalizeSettings,
   type SettingsUpdate,
@@ -124,9 +125,10 @@ describe("applySettingsUpdate", () => {
       { ...DEFAULT_USER_SETTINGS, aiThinkingEffort: "ultra" },
       { aiAgent: "claude-code" },
     );
+    const claude = getAgentCapabilities("claude-code");
     expect(next.aiAgent).toBe("claude-code");
-    expect(next.aiModel).toBe("claude-sonnet-5-5");
-    expect(next.aiSuggestionsModel).toBe("claude-haiku-4-5-20251001");
+    expect(next.aiModel).toBe(claude.defaultModel);
+    expect(next.aiSuggestionsModel).toBe(claude.suggestionsModel);
     expect(next.aiThinkingEffort).toBe("high");
   });
 
@@ -138,7 +140,7 @@ describe("applySettingsUpdate", () => {
     });
     expect(next.aiModel).toBe("gpt-6-astra");
     expect(next.aiThinkingEffort).toBe("ultra");
-    expect(next.aiSuggestionsModel).toBe("gpt-6-luna");
+    expect(next.aiSuggestionsModel).toBe(getAgentCapabilities("codex").suggestionsModel);
   });
 
   it("leaves the model alone when the agent doesn't change", () => {
@@ -218,7 +220,7 @@ describe("SettingsService", () => {
       Effect.flatMap(SettingsService, (s) => s.getSettings()),
     );
     expect(reloaded.aiAgent).toBe("codex");
-    expect(reloaded.aiModel).toBe("gpt-6.1-sol");
+    expect(reloaded.aiModel).toBe(getAgentCapabilities("codex").defaultModel);
     expect(reloaded.jev).toEqual({ enabled: true, hasApiKey: false });
   });
 

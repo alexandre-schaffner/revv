@@ -111,7 +111,7 @@ function ids(db: Db, params: ListForRepoParams): Promise<string[]> {
 }
 
 describe("listForRepo from/to range filter", () => {
-  it("is identical to today's behaviour when neither bound is given", async () => {
+  it("lists every live recap when neither bound is given", async () => {
     const db = createDb(":memory:");
     seed(db);
     expect(await ids(db, {})).toEqual([

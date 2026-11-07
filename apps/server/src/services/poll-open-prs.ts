@@ -63,7 +63,7 @@ function deltaCheaperThanFull(probed: OpenPrListSignature): boolean {
   return Math.ceil(probed.count / OPEN_PRS_PAGE_SIZE) > DELTA_MIN_REQUESTS;
 }
 
-export function decideListing(
+function decideListing(
   listed: ListedSignature | undefined,
   probed: OpenPrListSignature | undefined,
   now: number,

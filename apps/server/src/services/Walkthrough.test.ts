@@ -11,9 +11,7 @@ function insertWalkthroughs(
   db: Db,
   ...rows: readonly (Partial<typeof walkthroughs.$inferInsert> & { id: string })[]
 ): void {
-  const sqlite = (db as unknown as { session: { client: { run: (sql: string) => void } } }).session
-    .client;
-  sqlite.run("PRAGMA foreign_keys = OFF");
+  db.$client.run("PRAGMA foreign_keys = OFF");
   for (const row of rows) {
     db.insert(walkthroughs)
       .values({
@@ -27,6 +25,19 @@ function insertWalkthroughs(
       .run();
   }
 }
+
+const runWalkthrough = <A, E>(
+  db: Db,
+  f: (service: Context.Service.Shape<typeof WalkthroughService>) => Effect.Effect<A, E, DbService>,
+) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      return yield* f(yield* WalkthroughService);
+    }).pipe(
+      Effect.provide(WalkthroughServiceLive),
+      Effect.provide(Layer.succeed(DbService, { db })),
+    ),
+  );
 
 function seedWalkthroughRound(db: Db): void {
   insertWalkthroughs(db, { id: "wt-1" });
@@ -239,87 +250,52 @@ describe("resume incremental walkthrough", () => {
   });
 });
 
-// Regenerate sweeps without sparing the current head: a `generating` row left
-// there would be handed back to the new job by `createPartial`, content and all.
 describe("regenerate after a stopped generation", () => {
-  function seedStoppedDraft(db: Db): void {
+  // What Stop leaves behind: an `error` row the user cancelled, at the current head.
+  function seedStoppedRun(db: Db): void {
     insertWalkthroughs(db, {
       id: "wt-stopped",
-      status: "generating",
+      status: "error",
+      endReason: "cancelled",
       lastCompletedPhase: "B",
       mode: "author",
       generationMode: "full",
     });
   }
 
-  const freshRowParams = {
-    reviewSessionId: "session-1",
-    prId: "pr-1",
-    modelUsed: "test-model",
-    prHeadSha: "head-1",
-    mode: "author",
-    generationMode: "full",
-    forceNew: true,
-  } as const;
-
-  it("supersedes the stopped row at the current head so a new row is created", async () => {
+  it("starts a fresh row and retires the stopped one, even when the sweep spares the head", async () => {
     const db = createDb(":memory:");
-    seedStoppedDraft(db);
+    seedStoppedRun(db);
 
-    const newId = await Effect.runPromise(
+    const newId = await runWalkthrough(db, (service) =>
       Effect.gen(function* () {
-        const service = yield* WalkthroughService;
-        // As the regenerate route does: sweep everything.
-        yield* service.supersedeAllForPr("pr-1", undefined, "author");
-        return yield* service.createPartial(freshRowParams);
-      }).pipe(
-        Effect.provide(WalkthroughServiceLive),
-        Effect.provide(Layer.succeed(DbService, { db })),
-      ),
+        // As WalkthroughJobs does before a user-initiated run at a pinned head.
+        yield* service.supersedeAllForPr("pr-1", "head-1", "author");
+        return yield* service.createPartial({
+          reviewSessionId: "session-1",
+          prId: "pr-1",
+          modelUsed: "test-model",
+          prHeadSha: "head-1",
+          mode: "author",
+          generationMode: "full",
+          forceNew: true,
+        });
+      }),
     );
 
     expect(newId).not.toBe("wt-stopped");
-    const stopped = db
-      .select({ status: walkthroughs.status })
+    const rows = db
+      .select({ id: walkthroughs.id, status: walkthroughs.status })
       .from(walkthroughs)
-      .where(eq(walkthroughs.id, "wt-stopped"))
-      .get();
-    expect(stopped?.status).toBe("superseded");
-  });
-
-  it("would hand the stopped row back when the sweep spares the current head", async () => {
-    const db = createDb(":memory:");
-    seedStoppedDraft(db);
-
-    const reusedId = await Effect.runPromise(
-      Effect.gen(function* () {
-        const service = yield* WalkthroughService;
-        // A sweep that spares the current head.
-        yield* service.supersedeAllForPr("pr-1", "head-1", "author");
-        return yield* service.createPartial(freshRowParams);
-      }).pipe(
-        Effect.provide(WalkthroughServiceLive),
-        Effect.provide(Layer.succeed(DbService, { db })),
-      ),
+      .all();
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        { id: "wt-stopped", status: "superseded" },
+        { id: newId, status: "generating" },
+      ]),
     );
-
-    // `forceNew` does not help: createPartial returns any in-flight row first.
-    expect(reusedId).toBe("wt-stopped");
   });
 });
-
-const runWalkthrough = <A, E>(
-  db: Db,
-  f: (service: Context.Service.Shape<typeof WalkthroughService>) => Effect.Effect<A, E, DbService>,
-) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      return yield* f(yield* WalkthroughService);
-    }).pipe(
-      Effect.provide(WalkthroughServiceLive),
-      Effect.provide(Layer.succeed(DbService, { db })),
-    ),
-  );
 
 describe("getLatestMode", () => {
   const latestMode = (db: Db) => runWalkthrough(db, (s) => s.getLatestMode("pr-1"));

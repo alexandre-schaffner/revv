@@ -94,7 +94,7 @@ describe("assertSafeManagedClonePath", () => {
     expect(() => assertSafeManagedClonePath("/usr/local/src")).toThrow();
   });
 
-  it("rejects empty, root, and home paths", () => {
+  it("rejects empty and root paths", () => {
     expect(() => assertSafeManagedClonePath("")).toThrow();
     expect(() => assertSafeManagedClonePath("   ")).toThrow();
     expect(() => assertSafeManagedClonePath("/")).toThrow();

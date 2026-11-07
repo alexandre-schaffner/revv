@@ -7,31 +7,16 @@ import { prDiffFiles, pullRequests } from "../db/schema";
 import { GitHubAuthError, type GitHubError, GitHubRateLimitError } from "../domain/errors";
 import { DbService } from "./Db";
 import {
-  type CachedDiffFile,
   DiffCacheService,
   DiffCacheServiceLive,
   type FetchedFor,
-  hasCompleteCachedFiles,
   readCurrentHeadFiles,
   readCurrentHeadPatch,
-  shouldServeCachedFilesOnFetchError,
 } from "./DiffCache";
 import { GitHubGateway } from "./github/gateway";
 import { PR_FILES_MAX_COUNT, type PrFileMeta } from "./github/pulls";
 import { githubClient } from "./github/transport";
 import { Realtime } from "./Realtime";
-
-function cachedFile(path: string): CachedDiffFile {
-  return {
-    path,
-    oldPath: null,
-    status: "modified",
-    additions: 1,
-    deletions: 0,
-    patch: null,
-    fetchedAt: "2026-01-01T00:00:00.000Z",
-  };
-}
 
 function githubFile(path: string, overrides: Partial<PrFileMeta> = {}): PrFileMeta {
   return {
@@ -51,9 +36,7 @@ const CLIENT = githubClient("github.com", "token", "acc-1");
 
 function freshDb(): Db {
   const db = createDb(":memory:");
-  (db as unknown as { session: { client: { run: (sql: string) => void } } }).session.client.run(
-    "PRAGMA foreign_keys = OFF",
-  );
+  db.$client.run("PRAGMA foreign_keys = OFF");
   return db;
 }
 
@@ -120,64 +103,107 @@ function cachedPrIds(db: Db): Promise<string[]> {
   return diffCache(db, () => Effect.succeed([])).run((s) => s.getPrIdsWithCachedDiffs());
 }
 
-describe("hasCompleteCachedFiles", () => {
-  it("accepts cached files when no expected count is available", () => {
-    expect(hasCompleteCachedFiles([cachedFile("src/a.ts")])).toBe(true);
-  });
+/** What answers `getOrFetch` once the stored PR row says `columns`, and whether GitHub was asked. */
+async function answerAfter(
+  db: Db,
+  columns: Partial<typeof pullRequests.$inferInsert>,
+  refetch: () => Effect.Effect<PrFileMeta[], GitHubError> = () => Effect.succeed([]),
+) {
+  if (Object.keys(columns).length > 0) {
+    db.update(pullRequests).set(columns).where(eq(pullRequests.id, "pr-1")).run();
+  }
+  let fetches = 0;
+  const answer = await fetchFiles(
+    diffCache(db, () =>
+      Effect.suspend(() => {
+        fetches++;
+        return refetch();
+      }),
+    ),
+  ).catch((error: unknown) => ({ error }));
+  return { answer, fetches };
+}
 
-  it("rejects cached files below the PR changed-files count", () => {
-    expect(hasCompleteCachedFiles([cachedFile("src/a.ts")], 2)).toBe(false);
-  });
+const files = (count: number) => Array.from({ length: count }, (_, i) => githubFile(`src/${i}.ts`));
 
-  it("caps the expected count to the GitHub files endpoint range", () => {
-    const files = Array.from({ length: PR_FILES_MAX_COUNT }, (_, i) => cachedFile(`src/${i}.ts`));
-    expect(hasCompleteCachedFiles(files, PR_FILES_MAX_COUNT + 1)).toBe(true);
-  });
-
+describe("a cached diff's completeness", () => {
   // GitHub counts file *entries* in `changed_files`, and reports a path whose
   // file type changed twice (removed + added). `pr_diff_files` is keyed on
   // (prId, path), so the row count is permanently short of `changed_files` for
   // such a PR.
-  it("accepts a cache holding every row the last fetch produced", () => {
-    const files = Array.from({ length: 2998 }, (_, i) => cachedFile(`src/${i}.ts`));
-    expect(hasCompleteCachedFiles(files, 3000)).toBe(false);
-    expect(hasCompleteCachedFiles(files, 3000, 2998)).toBe(true);
+  it("is judged by the rows the last fetch stored, not by changed_files", async () => {
+    const db = freshDb();
+    seedPr(db);
+    await cacheFiles(db, files(2998));
+    const { answer, fetches } = await answerAfter(db, { changedFiles: 3000 });
+    expect(fetches).toBe(0);
+    expect(answer).toMatchObject({ source: "cache" });
   });
 
-  it("falls back to the changed-files count when no fetch size was recorded", () => {
-    expect(hasCompleteCachedFiles([cachedFile("src/a.ts")], 2, null)).toBe(false);
+  it("refetches a cache that lost rows since the fetch that stored them", async () => {
+    const db = freshDb();
+    seedPr(db);
+    await cacheFiles(db, files(2));
+    db.delete(prDiffFiles).where(eq(prDiffFiles.path, "src/1.ts")).run();
+    const { fetches } = await answerAfter(db, {});
+    expect(fetches).toBe(1);
   });
 
-  it("rejects a cache that lost rows since the recorded fetch", () => {
-    expect(hasCompleteCachedFiles([cachedFile("src/a.ts")], undefined, 2)).toBe(false);
+  it("falls back to changed_files for rows cached before the stored count", async () => {
+    const db = freshDb();
+    seedPr(db);
+    await cacheFiles(db, files(1));
+    const short = await answerAfter(db, { changedFiles: 2, diffFilesCachedCount: null });
+    expect(short.fetches).toBe(1);
+  });
+
+  it("caps changed_files at what the GitHub files endpoint can return", async () => {
+    const db = freshDb();
+    seedPr(db);
+    await cacheFiles(db, files(PR_FILES_MAX_COUNT));
+    const { fetches } = await answerAfter(db, {
+      changedFiles: PR_FILES_MAX_COUNT + 1,
+      diffFilesCachedCount: null,
+    });
+    expect(fetches).toBe(0);
   });
 });
 
-describe("shouldServeCachedFilesOnFetchError", () => {
-  it("serves existing cached files when GitHub rate-limits the refresh", () => {
-    const cached = [cachedFile("src/a.ts")];
-    const error = new GitHubRateLimitError({
-      resetAt: new Date("2026-01-01T00:01:00.000Z"),
-      kind: "primary",
-    });
+describe("a failed refresh of an incomplete cache", () => {
+  const rateLimit = () =>
+    Effect.fail(new GitHubRateLimitError({ resetAt: new Date(), kind: "primary" }));
 
-    expect(shouldServeCachedFilesOnFetchError(cached, error)).toBe(true);
+  it("serves the cache when GitHub rate-limits", async () => {
+    const db = freshDb();
+    seedPr(db);
+    await cacheFiles(db, [githubFile("src/a.ts"), githubFile("src/b.ts")]);
+    db.delete(prDiffFiles).where(eq(prDiffFiles.path, "src/b.ts")).run();
+
+    const { answer, fetches } = await answerAfter(db, {}, rateLimit);
+
+    expect(fetches).toBe(1);
+    expect(answer).toEqual({
+      source: "cache",
+      files: [expect.objectContaining({ path: "src/a.ts" })],
+    });
   });
 
-  it("does not mask rate limits when there is no cache to render", () => {
-    const error = new GitHubRateLimitError({
-      resetAt: new Date("2026-01-01T00:01:00.000Z"),
-      kind: "primary",
-    });
-
-    expect(shouldServeCachedFilesOnFetchError(null, error)).toBe(false);
+  it("fails on a rate limit when there is no cache to serve", async () => {
+    const db = freshDb();
+    seedPr(db);
+    const { answer } = await answerAfter(db, {}, rateLimit);
+    expect(answer).toMatchObject({ error: { _tag: "GitHubRateLimitError" } });
   });
 
-  it("does not serve cached files for non-rate-limit GitHub errors", () => {
-    const cached = [cachedFile("src/a.ts")];
-    const error = new GitHubAuthError({ message: "Invalid or expired GitHub token" });
-
-    expect(shouldServeCachedFilesOnFetchError(cached, error)).toBe(false);
+  it("fails on any other GitHub error, cache or not", async () => {
+    const db = freshDb();
+    seedPr(db);
+    await cacheFiles(db, [githubFile("src/a.ts"), githubFile("src/b.ts")]);
+    db.delete(prDiffFiles).where(eq(prDiffFiles.path, "src/b.ts")).run();
+    const { answer } = await answerAfter(db, {}, () =>
+      Effect.fail(new GitHubAuthError({ message: "Invalid or expired GitHub token" })),
+    );
+    expect(answer).toMatchObject({ error: { _tag: "GitHubAuthError" } });
   });
 });
 
@@ -269,21 +295,6 @@ describe("files cached for a PR's current head and base", () => {
     expect(fetches).toBe(1);
     expect(second).toEqual({ files: [], source: "cache" });
     expect(readCurrentHeadFiles(db, ["pr-1"]).get("pr-1")).toEqual([]);
-  });
-
-  it("are served when GitHub rate-limits the refresh of an incomplete cache", async () => {
-    const db = freshDb();
-    seedPr(db);
-    await cacheFiles(db, [githubFile("src/a.ts"), githubFile("src/b.ts")]);
-    db.delete(prDiffFiles).where(eq(prDiffFiles.path, "src/b.ts")).run();
-    const limited = diffCache(db, () =>
-      Effect.fail(new GitHubRateLimitError({ resetAt: new Date(), kind: "primary" })),
-    );
-
-    const answer = await fetchFiles(limited);
-
-    expect(answer.source).toBe("cache");
-    expect(answer.files.map((f) => f.path)).toEqual(["src/a.ts"]);
   });
 
   it("never include rows cached before files carried a head stamp", async () => {

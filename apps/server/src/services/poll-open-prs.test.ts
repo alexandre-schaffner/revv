@@ -10,7 +10,6 @@ import type { OpenPrList, OpenPrListSignature } from "./github/pulls";
 import type { GitHubClient } from "./github/transport";
 import { openGate } from "./poll-gate";
 import {
-  decideListing,
   movedRangePrIds,
   openListMoved,
   probeRepos,
@@ -412,11 +411,14 @@ describe("reading only what moved", () => {
 
   it("keeps the full-list clock running, so the safety net still comes round", async () => {
     const env = await setup({ listOpen: () => Effect.succeed([pr(2, { updatedAt: NEW })]) });
-    const before = listed(2).fullListedAt;
+    const previous = listed(2);
+    env.state.recordListing(REPO.id, previous);
+    const probed = { count: 2, latestUpdatedAt: NEW };
 
-    await run(env, { count: 2, latestUpdatedAt: NEW });
+    await syncRepo(env, context(stored, { probedSignatures: new Map([[REPO.id, probed]]) }));
 
-    expect(env.state.listed(REPO.id)?.fullListedAt).toBeLessThanOrEqual(before);
+    expect(env.log).toContain(`list:graphql:since=${OLD}`);
+    expect(env.state.listed(REPO.id)?.fullListedAt).toBe(previous.fullListedAt);
   });
 
   it("drops a PR that closed since, so the cycle archives it", async () => {
@@ -547,6 +549,33 @@ describe("probeRepos", () => {
     expect(unchanged.size).toBe(0);
     expect(env.log).toEqual([]);
   });
+
+  const moved = (count: number) => ({ count, latestUpdatedAt: "2026-01-09T00:00:00Z" });
+  const planFor = async (stored: Partial<ListedSignature>, probed: OpenPrListSignature | null) => {
+    const env = await setup({
+      probe: () => Effect.succeed(new Map(probed ? [["octo/repo", probed]] : [])),
+    });
+    env.state.recordListing(REPO.id, { ...listedAt(Date.now()), ...stored });
+    const { unchanged, signatures } = await probe(env);
+    if (unchanged.has(REPO.id)) return "reuse";
+    return signatures.has(REPO.id) ? "delta" : "full";
+  };
+
+  it("lists a small repo in full, and reads a big one by what moved", async () => {
+    const stored = (count: number) => ({ signature: { ...signature, count } });
+    expect(await planFor(stored(40), moved(41))).toBe("full");
+    expect(await planFor(stored(200), moved(200))).toBe("full");
+    expect(await planFor(stored(250), moved(250))).toBe("delta");
+  });
+
+  it("reads a big stacked repo by what moved, never reusing its list", async () => {
+    const big = { ...signature, count: 400 };
+    expect(await planFor({ signature: big, hasStacks: true }, big)).toBe("delta");
+  });
+
+  it("never skips a repo the probe didn't answer for", async () => {
+    expect(await planFor({}, null)).toBe("full");
+  });
 });
 
 describe("settleVanishedPrs", () => {
@@ -632,47 +661,6 @@ describe("settleVanishedPrs", () => {
     await settle(env, [stacked(1, 1), stacked(2, 2), pr(3)]);
 
     expect(env.harness.recorded.staleStacks).toEqual([`${REPO.id}:4`]);
-  });
-});
-
-describe("decideListing", () => {
-  const NOW = Date.parse("2026-01-10T00:00:00Z");
-  const OLD = "2026-01-01T00:00:00Z";
-  const listed = (count: number, overrides: Partial<ListedSignature> = {}): ListedSignature => ({
-    signature: { count, latestUpdatedAt: OLD },
-    listedAt: NOW - 60_000,
-    fullListedAt: NOW - 60_000,
-    hasStacks: false,
-    truncated: false,
-    ...overrides,
-  });
-  const moved = (count: number) => ({ count, latestUpdatedAt: "2026-01-09T00:00:00Z" });
-
-  it("reuses an unchanged list, except on a manual sync", () => {
-    expect(decideListing(listed(40), { count: 40, latestUpdatedAt: OLD }, NOW, true)).toBe("reuse");
-    expect(decideListing(listed(40), { count: 40, latestUpdatedAt: OLD }, NOW, false)).toBe("full");
-  });
-
-  it("lists a small repo in full, and reads a big one by what moved", () => {
-    expect(decideListing(listed(40), moved(41), NOW, true)).toBe("full");
-    expect(decideListing(listed(200), moved(200), NOW, true)).toBe("full");
-    expect(decideListing(listed(250), moved(250), NOW, true)).toBe("delta");
-  });
-
-  it("never trusts a probe over a stacked repo it can list every cycle", () => {
-    const stacked = listed(40, { hasStacks: true });
-    expect(decideListing(stacked, { count: 40, latestUpdatedAt: OLD }, NOW, true)).toBe("full");
-    const bigStacked = listed(400, { hasStacks: true });
-    expect(decideListing(bigStacked, { count: 400, latestUpdatedAt: OLD }, NOW, true)).toBe(
-      "delta",
-    );
-  });
-
-  it("lists in full once the safety net comes round, or with nothing to build on", () => {
-    const stale = listed(250, { fullListedAt: NOW - 31 * 60_000 });
-    expect(decideListing(stale, moved(250), NOW, true)).toBe("full");
-    expect(decideListing(undefined, moved(250), NOW, true)).toBe("full");
-    expect(decideListing(listed(250), undefined, NOW, true)).toBe("full");
   });
 });
 
