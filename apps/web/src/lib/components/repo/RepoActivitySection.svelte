@@ -1,10 +1,10 @@
 <script lang="ts">
-import { loginsMatch } from "@revv/shared";
 import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwise";
 import ArrowDownRight from "phosphor-svelte/lib/ArrowDownRight";
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import { untrack } from "svelte";
 import RepoActivityChart from "$lib/components/repo/RepoActivityChart.svelte";
+import { isReviewRequestedFrom } from "$lib/prs/tagged-prs";
 import type { OwnerPalette } from "$lib/repos/avatar-palette";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { getTaggedPrs } from "$lib/stores/prs.svelte";
@@ -39,9 +39,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const waiting = $derived.by(() => {
   const login = getCurrentUserLogin();
   if (!login) return null;
-  return getTaggedPrs(repoId).filter(
-    (pr) => !pr.isDraft && pr.requestedReviewers.some((r) => loginsMatch(r, login)),
-  );
+  return getTaggedPrs(repoId).filter((pr) => !pr.isDraft && isReviewRequestedFrom(pr, login));
 });
 
 const oldestWaitDays = $derived.by(() => {
