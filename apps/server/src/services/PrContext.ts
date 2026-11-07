@@ -48,7 +48,7 @@ export class PrContextService extends Context.Service<
   PrContextService,
   {
     /** A tracked repository, for work that may go on without GitHub. */
-    readonly getRepo: (repoId: string) => Effect.Effect<Repository, NotFoundError>;
+    readonly getRepo: (repoId: string) => Effect.Effect<Repository, NotFoundError | DbError>;
     readonly forRepo: (repoId: string) => Effect.Effect<RepoContext, PrContextError>;
     /**
      * A PR, its repository and the owning account's client. With `accountId`,

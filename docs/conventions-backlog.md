@@ -8,16 +8,36 @@ default sort.
 
 | Domain | Open | Severity mix |
 |---|---|---|
-| Server (Effect) | 0 | — |
+| Server (Effect) | 1 | medium |
 | Web stores | 0 | — |
 | UI / motion | 1 | low |
-| **Total** | **1** | |
+| **Total** | **2** | |
 
 ---
 
 ## Open
 
-None.
+<a id="e-006"></a>
+### E-006 — DB services leak `R = DbService`, so every caller wraps them in `withDb`
+
+**Rule violated:** [§2 — Effect services](./conventions.md#effect-services), in spirit: a
+service captures its dependencies when its layer is built (as `GitHubEtagCache` and `PrContext`
+do), so callers never provide them per call. Not yet written down as its own rule.
+
+**Where:** `PullRequestService` (`services/PullRequest.ts`), `RepositoryService`
+(`services/Repository.ts`), and outside the GitHub area `WalkthroughService`,
+`ProjectRecapService`, `WalkthroughSnapshotImporter`: each is a `Layer.succeed` whose methods
+declare `R = DbService`, so ~40 call sites across ~16 files bridge them with
+`effects/with-db.ts` (`PollScheduler`, `PrMirror`, `PrContext`, `poll-*`, stacks, recaps,
+walkthrough lifecycle). Their Drizzle calls are wrapped in `tryDb` and fail with `DbError`.
+
+**Fix shape.** Make each a `Layer.effect` that captures `DbService`, drop `DbService` from the
+method signatures, and delete `effects/with-db.ts` with its call sites. Mechanical, touches
+every caller; scheduled as one change.
+
+**Severity:** Medium (a convention callers must know; no runtime fault).
+
+---
 
 <a id="m-030"></a>
 ### M-030 — `weight="bold"` on an 18px dialog-title glyph
@@ -41,7 +61,7 @@ other dialog titles first.
 - E-002 — Refactored `WalkthroughJobs.ts` main loop from async/await with `Effect.runPromise` to pure `Effect.gen` with recursive `consumeGenerator` and `runWithAutoContinuation`; refactored `ChatChangesPush.ts` `resolveConflictsAndPush` from callback-shaped `runWithDeps` to `Queue.unbounded<ResolvePushFrame>` with `Effect.forkDaemon` producer and `ReadableStream` boundary. Both files pass `make typecheck` and `biome check`.
 - E-003 — Added `OpencodeNotSelectedError` / `OpencodeUnhealthyError` for two `AiGenerationError` misuses in `OpencodeSupervisor.ts` (all three since deleted with the opencode daemon transport)
 - E-004 — Wrapped all 7 raw Drizzle calls in Cache.ts with `Effect.try({ try, catch })`; added `DbError` to `domain/errors.ts`; updated service interface error channels from `never` to `DbError`
-- E-005 — Wrapped all raw Drizzle calls in Cache.ts (7 sites, E-004), Review.ts (12 sites), and PullRequest.ts (2 sites) using `tryDb` helper (which maps to `ReviewError` for backward compat); added `DbError` to `domain/errors.ts` for future use
+- E-005 — Wrapped all raw Drizzle calls in Cache.ts (7 sites, E-004), Review.ts (12 sites), and PullRequest.ts (2 sites) using the `tryDb` helper (failing with `DbError`); `Repository.ts` followed in round 2 (its `addRepo` no longer turns DB faults into `ValidationError`)
 - S-001 — Migrated `review.svelte.ts` per-PR view state from plain `Map` + `$state` mirrors to single reactive `$state` store (`store = $state({ entries: Map, activePrId })`); derived `getActiveTab`/`getActiveFilePath` from the active entry; all mutations follow reactive-Map idiom
 - S-002 — Audited chat.svelte.ts: all 42 Map/Set mutation sites consistently follow the reactive-Map idiom (§4.3); unifying to a single mutation surface is future refactoring, not a convention violation
 - S-003 — Created `RequestState<T>` tagged union in `stores/_types.ts`; migrated `review.svelte.ts` repo file state from enum + error string to `RequestState<RepoFileData>`; updated `ReviewLayout.svelte` consumer

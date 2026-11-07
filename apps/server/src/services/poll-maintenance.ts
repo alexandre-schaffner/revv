@@ -74,13 +74,22 @@ export const refreshRepoMetadata = (
           const fresh = yield* gate.guarded(github.repos.getFresh(client, repo.fullName));
           if (!fresh) return;
           const avatar = yield* avatars.ensure(repo.githubHost, repo.owner, fresh.ownerAvatarUrl);
+          // A repo removed mid-cycle has nothing left to update.
           const updated = yield* withDb(
             db,
             repoService.updateRepoMetadata(repo.id, {
               avatarUrl: fresh.ownerAvatarUrl,
               defaultBranch: fresh.defaultBranch,
             }),
-          ).pipe(Effect.orElseSucceed(() => null));
+          ).pipe(
+            Effect.catchTag("NotFoundError", () => Effect.succeed(null)),
+            Effect.catchTag("DbError", (err) =>
+              Effect.sync(() => {
+                logError("PollScheduler", `recording ${repo.fullName}'s metadata failed:`, err);
+                return null;
+              }),
+            ),
+          );
           if (avatar.changed || (updated && updated.defaultBranch !== repo.defaultBranch)) {
             anyRepoChanged = true;
           }
@@ -90,8 +99,14 @@ export const refreshRepoMetadata = (
 
     if (anyRepoChanged) {
       for (const accountId of gate.accountIds) {
-        const accountRepos = yield* withDb(db, repoService.listRepos(accountId));
-        yield* realtime.toAccount(accountId, { type: "repos:updated", data: accountRepos });
+        yield* withDb(db, repoService.listRepos(accountId)).pipe(
+          Effect.flatMap((accountRepos) =>
+            realtime.toAccount(accountId, { type: "repos:updated", data: accountRepos }),
+          ),
+          Effect.catchTag("DbError", (err) =>
+            Effect.sync(() => logError("PollScheduler", "announcing repo metadata failed:", err)),
+          ),
+        );
       }
     }
     return anyRepoChanged;
