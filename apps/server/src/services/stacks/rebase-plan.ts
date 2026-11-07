@@ -1,5 +1,5 @@
 import { isOpenLayer } from "@revv/shared";
-import type { GitHubStack } from "./map";
+import type { GitHubStack } from "../github/stacks";
 
 export interface RebaseStep {
   readonly number: number;

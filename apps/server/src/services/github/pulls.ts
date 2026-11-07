@@ -10,6 +10,7 @@ import {
 } from "../../domain/observed-pr";
 import { logError } from "../../logger";
 import { prsByNumber, reposByName, splitFullName } from "./graphql-batch";
+import { STACK_SCHEMA_TOKENS } from "./stack-queries";
 import {
   type GitHubClient,
   type GitHubHttp,
@@ -203,8 +204,6 @@ const OPEN_PRS_MAX_PAGES = 50;
 export const OPEN_PRS_PAGE_SIZE = 100;
 
 export const OPEN_PRS_LIST_CAP = OPEN_PRS_MAX_PAGES * OPEN_PRS_PAGE_SIZE;
-
-const STACK_TOKENS = ["PullRequestStack", "Field 'stack'", "Field 'stackEntry'"] as const;
 
 const openPrsQuery = (
   withStacks: boolean,
@@ -499,7 +498,7 @@ export const pullsApi = (http: GitHubHttp) => {
             modern
               ? list(true).pipe(retryTransientBeforeFallback)
               : list(false).pipe(retryTransient),
-          STACK_TOKENS,
+          STACK_SCHEMA_TOKENS,
           { anyGraphqlFailure: true },
         );
         return { prs: value, hostPredatesStacks: outdated };

@@ -14,15 +14,11 @@ import { CacheService } from "../Cache";
 import { DbService } from "../Db";
 import { readCurrentHeadFiles, toGitHubFileShape } from "../DiffCache";
 import { GitHubGateway } from "../github/gateway";
+import type { GitHubStack } from "../github/stacks";
 import { type PrContextBasic, type PrContextError, PrContextService } from "../PrContext";
 import { Realtime } from "../Realtime";
 import { fingerprintFiles, stackSignature } from "./fingerprint";
-import {
-  type GitHubStack,
-  type MirroredLayer,
-  membershipSupersededByPoll,
-  stackFromMirror,
-} from "./map";
+import { type MirroredLayer, membershipSupersededByPoll, stackFromMirror } from "./map";
 import {
   overlayStack,
   type RevvStackFacts,

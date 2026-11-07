@@ -1,18 +1,10 @@
 import type { CommentThread } from "@revv/shared";
 import type { CachedDiffFile } from "./DiffCache";
 import { fitAnchorToPatch } from "./diff-anchors";
-
-export interface GitHubReviewComment {
-  path: string;
-  body: string;
-  line: number;
-  side: "LEFT" | "RIGHT";
-  startLine?: number;
-  startSide?: "LEFT" | "RIGHT";
-}
+import type { GhCommentAnchor } from "./github/reviews";
 
 export type GitHubCommentFit =
-  | { readonly ok: true; readonly comment: GitHubReviewComment }
+  | { readonly ok: true; readonly comment: GhCommentAnchor }
   | { readonly ok: false; readonly reason: string };
 
 /** The cached diff's entry for `path`, a rename's old path included. */
@@ -42,10 +34,9 @@ export function toGitHubComment(
     side,
   });
   if (!fit.ok) return fit;
-  const comment: GitHubReviewComment = { path: thread.filePath, body, line: fit.endLine, side };
-  if (fit.startLine !== fit.endLine) {
-    comment.startLine = fit.startLine;
-    comment.startSide = side;
-  }
-  return { ok: true, comment };
+  const comment = { path: thread.filePath, body, line: fit.endLine, side } as const;
+  return {
+    ok: true,
+    comment: fit.startLine === fit.endLine ? comment : { ...comment, startLine: fit.startLine },
+  };
 }

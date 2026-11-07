@@ -92,7 +92,7 @@ describe("planReviewComments", () => {
     );
     expect(posted.map((p) => p.comment)).toEqual([
       { path: "src/a.ts", body: "Please rename this.", line: 10, side: "RIGHT" },
-      { path: "src/a.ts", body: "Range.", line: 7, side: "LEFT", startLine: 3, startSide: "LEFT" },
+      { path: "src/a.ts", body: "Range.", line: 7, side: "LEFT", startLine: 3 },
     ]);
   });
 

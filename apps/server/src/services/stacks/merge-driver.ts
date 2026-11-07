@@ -13,7 +13,7 @@ import {
   GitHubRateLimitError,
   isGitHubUnreachable,
 } from "../../domain/errors";
-import type { GitHubStack } from "./map";
+import type { GitHubStack } from "../github/stacks";
 import {
   layerStateFor,
   nextStep,

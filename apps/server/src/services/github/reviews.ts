@@ -30,14 +30,17 @@ export interface GhReviewThread {
   readonly commentDatabaseIds: ReadonlyArray<number>;
 }
 
-/** A line-anchored comment as GitHub's review and comment endpoints take it. */
+/**
+ * A line-anchored comment as GitHub's review and comment endpoints take it.
+ * `startLine` is set only for a range spanning more than one line: GitHub
+ * rejects a `start_line` that isn't before `line`.
+ */
 export interface GhCommentAnchor {
   readonly path: string;
   readonly body: string;
   readonly line: number;
   readonly side: "LEFT" | "RIGHT";
   readonly startLine?: number;
-  readonly startSide?: "LEFT" | "RIGHT";
 }
 
 function anchorPayload(c: GhCommentAnchor): Record<string, unknown> {
@@ -47,9 +50,9 @@ function anchorPayload(c: GhCommentAnchor): Record<string, unknown> {
     line: c.line,
     side: c.side,
   };
-  if (c.startLine !== undefined && c.startLine !== c.line) {
+  if (c.startLine !== undefined) {
     payload.start_line = c.startLine;
-    payload.start_side = c.startSide ?? c.side;
+    payload.start_side = c.side;
   }
   return payload;
 }

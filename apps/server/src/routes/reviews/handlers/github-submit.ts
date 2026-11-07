@@ -4,11 +4,8 @@ import { GitHubApiError, GitHubNetworkError, ValidationError } from "../../../do
 import { logError } from "../../../logger";
 import { type CachedDiffFile, DiffCacheService } from "../../../services/DiffCache";
 import { GitHubGateway } from "../../../services/github/gateway";
-import {
-  diffFileFor,
-  type GitHubReviewComment,
-  toGitHubComment,
-} from "../../../services/github-review-comment";
+import type { GhCommentAnchor } from "../../../services/github/reviews";
+import { diffFileFor, toGitHubComment } from "../../../services/github-review-comment";
 import { PollScheduler } from "../../../services/PollScheduler";
 import { PrContextService } from "../../../services/PrContext";
 import { PrConversationService } from "../../../services/PrConversation";
@@ -35,7 +32,7 @@ export interface SubmitReviewInput {
 export interface PostedThread {
   threadId: string;
   draftIds: string[];
-  comment: GitHubReviewComment;
+  comment: GhCommentAnchor;
 }
 
 export interface SkippedComment {
