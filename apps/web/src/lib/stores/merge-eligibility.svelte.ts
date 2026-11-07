@@ -42,29 +42,42 @@ function questionVersion(prId: string): string | null {
   return `${pr.headSha}|${conversation?.reviewDecision ?? null}|${conversation?.ci?.state ?? null}`;
 }
 
-/**
- * Ask GitHub whether the PR can merge, unless the same question is in flight,
- * retrying, or answered recently. Call from an effect: it follows the PR's
- * head, review decision and CI state.
- */
-export function askMergeEligibility(prId: string): void {
-  const version = questionVersion(prId);
-  if (version !== null) untrack(() => void answers.load(prId, undefined, version));
-}
-
-/** The PR's last answer; it stays up while a newer question is asked. */
-export function getMergeEligibility(prId: string): MergeEligibility | null {
-  return answers.data(prId);
+export interface MergeEligibilityView {
+  /** The PR's last answer; it stays up while a newer question is asked. */
+  readonly current: MergeEligibility | null;
+  /** The viewer may merge the PR, and GitHub says they can. The one gate for the PR and its stack. */
+  readonly viewerCanMerge: boolean;
 }
 
 /**
- * Revv offers merging to the PR's author and to a reviewer who approved it;
- * whether GitHub lets them is `getMergeEligibility(prId).canMerge`.
+ * The PR's mergeability, asked of GitHub while `shouldAsk` holds and again
+ * whenever the PR's head, review decision or CI state moves (unless the same
+ * question is in flight, retrying, or answered recently). Call during
+ * component init.
  */
-export function viewerMayMerge(prId: string): boolean {
-  const pr = getPrById(prId);
-  if (!pr) return false;
-  if (loginsMatch(pr.authorLogin, getCurrentUserLogin())) return true;
+export function useMergeEligibility(
+  getPrId: () => string,
+  shouldAsk: () => boolean,
+): MergeEligibilityView {
+  $effect(() => {
+    const prId = getPrId();
+    if (!shouldAsk()) return;
+    const version = questionVersion(prId);
+    if (version !== null) untrack(() => void answers.load(prId, undefined, version));
+  });
+  return {
+    get current() {
+      return answers.data(getPrId());
+    },
+    get viewerCanMerge() {
+      const prId = getPrId();
+      return viewerMayMerge(prId) && answers.data(prId)?.canMerge === true;
+    },
+  };
+}
+
+/** The viewer approved the PR in a GitHub review. */
+export function viewerApproved(prId: string): boolean {
   const request = getConversation(prId).request;
   if (request.status !== "ok") return false;
   const { reviewers, viewerLogin } = request.data;
@@ -73,9 +86,14 @@ export function viewerMayMerge(prId: string): boolean {
   );
 }
 
-/** The viewer may merge the PR, and GitHub says they can. The one gate for the PR and its stack. */
-export function canViewerMerge(prId: string): boolean {
-  return viewerMayMerge(prId) && getMergeEligibility(prId)?.canMerge === true;
+/**
+ * Revv offers merging to the PR's author and to a reviewer who approved it;
+ * whether GitHub lets them is the mergeability answer's `canMerge`.
+ */
+export function viewerMayMerge(prId: string): boolean {
+  const pr = getPrById(prId);
+  if (!pr) return false;
+  return loginsMatch(pr.authorLogin, getCurrentUserLogin()) || viewerApproved(prId);
 }
 
 export function onPrMergeEligibility(data: { prId: string; eligibility: MergeEligibility }): void {

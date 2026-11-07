@@ -19,7 +19,7 @@ import {
   getBaseConflicts,
   resolveBaseConflicts,
 } from "$lib/stores/base-conflicts.svelte";
-import { askMergeEligibility, getMergeEligibility } from "$lib/stores/merge-eligibility.svelte";
+import { useMergeEligibility } from "$lib/stores/merge-eligibility.svelte";
 import { getPrById } from "$lib/stores/prs.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
 import { openSettings } from "$lib/stores/settingsModal.svelte";
@@ -48,12 +48,11 @@ const sourceBranch = $derived(pr?.sourceBranch ?? "this branch");
 const applies = $derived(pr?.status === "open" && pr.stack === null);
 const strategy = $derived<BaseConflictStrategy>(getSettings().baseConflictStrategy);
 
-$effect(() => {
-  if (applies) askMergeEligibility(prId);
-});
-const githubDirty = $derived(
-  applies && hasMergeConflicts(getMergeEligibility(prId)?.mergeStateStatus),
+const eligibility = useMergeEligibility(
+  () => prId,
+  () => applies,
 );
+const githubDirty = $derived(applies && hasMergeConflicts(eligibility.current?.mergeStateStatus));
 
 const view = $derived(getBaseConflicts(prId, headSha));
 const local = $derived(view.check);

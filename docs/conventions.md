@@ -352,10 +352,14 @@ ends the signed-in session. No store imports the lifecycle back.
 
 **Rule.** A store is a module that declares its reactive state at module-scope (with `$state`)
 and exposes it through named `get<Field>()` getters and `set<Field>()` / verb-prefixed action
-exports. No factory functions, no classes, no `useFoo()` hooks, no `$effect` inside a store.
+exports. No factory functions, no classes, and no `useFoo()` hook or `$effect` in a store but
+the one exception below.
 Action exports are verb-first (`setSelectedPrId`, `requestSync`); read accessors are noun-first
 (`getThreads`, `getActiveTab`). A component that wants a fetch to follow reactive inputs runs
-the `$effect` itself and calls the store's action (`ensurePrSizing(prId)`).
+the `$effect` itself and calls the store's action (`ensurePrSizing(prId)`). The one exception:
+when a read means nothing without its ask, the store exports a single `useX(getKey, …)`,
+called during component init, that runs the ask's `$effect` and returns the reads as getters,
+and keeps the read private (`useMergeEligibility`, `useRecapsForRepo`).
 
 **Why.** Svelte 5 runes mean modules ARE the reactive boundary. Wrapping that in a factory
 imports a React mental model that the framework doesn't share. The getter/setter split keeps
@@ -365,7 +369,7 @@ in ways the store doesn't control.
 **Canonical example.** `apps/web/src/lib/stores/sync.svelte.ts` declares module-scope
 `$state` and exposes only `getLastSyncAt`, `getThreadsSyncing`, `requestSync`, etc.
 `apps/web/src/lib/walkthrough/store.svelte.ts` keeps its maps private and exposes getters that
-take the PR (`getBlocks(prId)`, `getWalkthroughUiState(prId)`); a store never reads an implicit
+take the PR (`getRatings(prId)`, `getWalkthroughUiState(prId)`); a store never reads an implicit
 "active" key, and its reconnect catch-up follows the PRs it watches, not the route. Its pure
 folding lives beside it in `reducer.ts` (unit-tested), its user verbs in `actions.ts`.
 

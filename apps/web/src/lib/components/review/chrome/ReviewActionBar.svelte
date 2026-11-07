@@ -12,7 +12,7 @@ import { Shimmer } from "$lib/components/ui/shimmer";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import type { ReviewAction } from "$lib/review/submit-review";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
-import { viewerMayMerge } from "$lib/stores/merge-eligibility.svelte";
+import { viewerApproved } from "$lib/stores/merge-eligibility.svelte";
 import { closePr, convertPrToDraft, getPrById, markPrReadyForReview } from "$lib/stores/prs.svelte";
 import MergeControl from "./MergeControl.svelte";
 
@@ -49,7 +49,7 @@ const isPrOwner = $derived(!!pr && loginsMatch(pr.authorLogin, getCurrentUserLog
 // Draft toggle, merge, and close only make sense on an open PR; a closed or
 // merged one keeps just the submit-review pill (GitHub has no reopen path here).
 const isPrOpen = $derived(pr?.status === "open");
-const viewerApproved = $derived(!isPrOwner && viewerMayMerge(prId));
+const approved = $derived(viewerApproved(prId));
 
 type OwnerAction = "convert-to-draft" | "ready-for-review" | "close";
 let ownerSubmitting = $state<OwnerAction | null>(null);
@@ -159,7 +159,7 @@ async function runOwnerAction(action: OwnerAction): Promise<void> {
       <ArrowUp size={16} />
       {submitting !== null ? "Submitting…" : "Submit review"}
     </GlassPill>
-    {#if viewerApproved}
+    {#if approved}
       <GlassPill variant="success" disabled title="You approved this pull request">
         <Check size={16} />
         Approved
