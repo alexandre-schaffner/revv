@@ -14,7 +14,6 @@ import {
   type CacheRepo,
   cacheObjectKey,
   legacyCacheObjectKey,
-  type WalkthroughSnapshotV2,
 } from "./cache-format";
 import { RemoteWalkthroughCache, RemoteWalkthroughCacheLive } from "./RemoteWalkthroughCache";
 
