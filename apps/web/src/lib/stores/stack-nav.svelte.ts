@@ -1,7 +1,6 @@
-import { isOpenLayer, type PrStackDetail, type StackLayer } from "@revv/shared";
+import { layerNeedsReview, type PrStackDetail, type StackLayer } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { openStackLayer } from "$lib/stacks/open-layer";
-import { needsReview } from "$lib/stacks/stack-layer-facts";
 import type { NavigationDirection } from "./navigation-intent.svelte";
 import { getSelectedPr } from "./route.svelte";
 import { openStackMergeSheet } from "./stack-merge.svelte";
@@ -20,10 +19,6 @@ export function getStackView(): StackView | null {
   if (!stack || stack.layers.length < 2) return null;
   const here = getLayer(pr.id);
   return here ? { prId: pr.id, stack, here } : null;
-}
-
-function layerNeedsReview(layer: StackLayer): boolean {
-  return isOpenLayer(layer) && needsReview(layer);
 }
 
 function openLayer(layer: StackLayer): void {

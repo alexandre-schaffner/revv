@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { Snippet } from "svelte";
+import type { WalkthroughStack } from "$lib/components/walkthrough/walkthrough-stack.svelte";
 import ChangedAboveNote from "../margin/ChangedAboveNote.svelte";
-import type { WalkthroughStack } from "./walkthrough-stack.svelte";
 
 interface Props {
   stack: WalkthroughStack;

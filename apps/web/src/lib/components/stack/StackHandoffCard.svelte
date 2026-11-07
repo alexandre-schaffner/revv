@@ -1,5 +1,5 @@
 <script lang="ts">
-import { isOpenLayer } from "@revv/shared";
+import { isOpenLayer, layerReviewState } from "@revv/shared";
 import ArrowUp from "phosphor-svelte/lib/ArrowUp";
 import Check from "phosphor-svelte/lib/Check";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
@@ -8,13 +8,7 @@ import { Shimmer } from "$lib/components/ui/shimmer";
 import { VIEWER_VERDICT_LABEL } from "$lib/conversation/verdict";
 import { gsapFadeY } from "$lib/motion";
 import { openStackLayer } from "$lib/stacks/open-layer";
-import {
-  layerFacts,
-  layerRole,
-  needsReview,
-  RISK_LABEL,
-  readableBrief,
-} from "$lib/stacks/stack-layer-facts";
+import { layerFacts, layerRole, RISK_LABEL, readableBrief } from "$lib/stacks/stack-layer-facts";
 import { shortcutLabel } from "$lib/stores/command-keys";
 import {
   askMergeEligibility,
@@ -46,8 +40,7 @@ const canMerge = $derived(canViewerMerge(prId));
 const nextKeys = shortcutLabel(STACK_NEXT_KEYS);
 const atTop = $derived(stack !== null && here !== null && next === null);
 const allReviewed = $derived(
-  stack?.layers.filter(isOpenLayer).every((l) => l.review.kind === "complete" && !needsReview(l)) ??
-    false,
+  stack?.layers.filter(isOpenLayer).every((l) => layerReviewState(l) === "reviewed") ?? false,
 );
 const anyOpen = $derived(stack?.layers.some(isOpenLayer) ?? false);
 </script>

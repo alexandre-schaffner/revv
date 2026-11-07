@@ -13,7 +13,6 @@ import { stackCitations } from "$lib/components/stack/margin/stack-citations.sve
 import StackHandoffCard from "$lib/components/stack/StackHandoffCard.svelte";
 import IssueStackNote from "$lib/components/stack/walkthrough/IssueStackNote.svelte";
 import StackOverviewRow from "$lib/components/stack/walkthrough/StackOverviewRow.svelte";
-import { WalkthroughStack } from "$lib/components/stack/walkthrough/walkthrough-stack.svelte";
 import { Button } from "$lib/components/ui/button";
 import { Shimmer } from "$lib/components/ui/shimmer";
 import { enterOnce } from "$lib/motion";
@@ -29,6 +28,7 @@ import IssueGroups from "./IssueGroups.svelte";
 import LowSignalDisclosure from "./LowSignalDisclosure.svelte";
 import MergedStamp from "./MergedStamp.svelte";
 import WalkthroughSection from "./WalkthroughSection.svelte";
+import { WalkthroughStack } from "./walkthrough-stack.svelte";
 import { FIRST_PASS_SPINNER, WalkthroughView } from "./walkthrough-view.svelte";
 
 interface Props {

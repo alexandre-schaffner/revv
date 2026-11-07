@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { StackLayer } from "@revv/shared";
+import { layerReviewState, type StackLayer } from "@revv/shared";
 import {
   Content as PopoverContent,
   Root as PopoverRoot,
@@ -7,10 +7,10 @@ import {
 } from "$lib/components/ui/popover/index.js";
 import { gsapHover } from "$lib/motion";
 import { openStackLayer } from "$lib/stacks/open-layer";
+import { layerHint, plainTitle, type StackPlace } from "$lib/stacks/stack-margin";
 import { getHoveredLayer } from "$lib/stores/stack-hover.svelte";
 import { remainingLayers } from "$lib/stores/stack-nav.svelte";
 import StackLayerGlyph from "../StackLayerGlyph.svelte";
-import { layerHint, plainTitle, type StackPlace } from "./stack-margin";
 
 interface Props {
   place: StackPlace;
@@ -36,8 +36,9 @@ type Tone = "current" | "merged" | "reviewed" | "reviewing" | "open";
 function toneOf(layer: StackLayer): Tone {
   if (layer.number === place.here.number) return "current";
   if (layer.status === "merged") return "merged";
-  if (layer.review.kind === "complete") return "reviewed";
-  if (layer.review.kind === "generating") return "reviewing";
+  const state = layerReviewState(layer);
+  if (state === "reviewed") return "reviewed";
+  if (state === "generating") return "reviewing";
   return "open";
 }
 

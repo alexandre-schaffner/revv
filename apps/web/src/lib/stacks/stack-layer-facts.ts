@@ -35,18 +35,6 @@ export type LayerFact =
     }
   | { readonly kind: "text"; readonly key: string; readonly tone: Tone; readonly label: string };
 
-export function needsReview(layer: StackLayer): boolean {
-  const { review } = layer;
-  if (review.kind === "generating") return false;
-  if (review.kind !== "complete") return true;
-  if (layer.restack.kind === "restacked") return false;
-  return (
-    review.reviewedHeadSha !== null &&
-    layer.headSha !== null &&
-    review.reviewedHeadSha !== layer.headSha
-  );
-}
-
 export function readableBrief(brief: StackBrief | null): StackBrief | null {
   if (!brief) return null;
   return brief.status === "complete" || brief.status === "superseded" ? brief : null;

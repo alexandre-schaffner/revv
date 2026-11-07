@@ -12,7 +12,7 @@ import ConversationTab from "$lib/components/conversation/ConversationTab.svelte
 import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import WalkthroughActionBar from "$lib/components/review/chrome/WalkthroughActionBar.svelte";
 import ReviewLayout from "$lib/components/review/ReviewLayout.svelte";
-import { readStackPlace } from "$lib/components/stack/margin/place";
+import { readStackPlace } from "$lib/stacks/place";
 import StackPlaceLine from "$lib/components/stack/margin/StackPlaceLine.svelte";
 import StackPlaceNote from "$lib/components/stack/margin/StackPlaceNote.svelte";
 import StackThumbIndex from "$lib/components/stack/margin/StackThumbIndex.svelte";

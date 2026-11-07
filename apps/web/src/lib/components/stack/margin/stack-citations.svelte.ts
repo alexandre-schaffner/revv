@@ -1,8 +1,8 @@
 import { STACK_CITATION_PATTERN, type StackLayer } from "@revv/shared";
 import { mount, unmount } from "svelte";
 import { decorationAction } from "$lib/markdown/decorate";
+import type { StackPlace } from "$lib/stacks/stack-margin";
 import LayerChip from "./LayerChip.svelte";
-import type { StackPlace } from "./stack-margin";
 
 const CITE_CLASS = "stack-cite";
 const NUMBER_ATTR = "data-stack-number";
@@ -69,6 +69,8 @@ export const stackCitations = decorationAction<StackPlace | null>((node) => {
       if (match.index > last) frag.append(value.slice(last, match.index));
       const host = document.createElement("span");
       host.className = CITE_CLASS;
+      // The chip's peek positions itself against its host.
+      host.style.position = "relative";
       host.setAttribute(NUMBER_ATTR, String(layer.number));
       host.setAttribute(SOURCE_ATTR, match[0]);
       frag.append(host);

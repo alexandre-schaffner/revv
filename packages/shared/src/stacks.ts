@@ -125,6 +125,37 @@ export interface StackLayer extends GitHubStackLayerFields {
   readonly restack: RestackVerdict;
 }
 
+/**
+ * Where a layer's review stands against the layer's head, for "Review the
+ * stack" (what it queues) and the web's "N to review" alike.
+ *
+ *   generating      — a review is running.
+ *   reviewed        — the latest review read this head.
+ *   restacked-carry — the head moved by a pure restack; queueing it carries
+ *                     the review over without an agent run.
+ *   needs-review    — no review of this head (none yet, failed, or stale).
+ */
+export type LayerReviewState = "generating" | "reviewed" | "restacked-carry" | "needs-review";
+
+export function layerReviewState(
+  layer: Pick<StackLayer, "review" | "restack" | "headSha">,
+): LayerReviewState {
+  const { review } = layer;
+  if (review.kind === "generating") return "generating";
+  if (review.kind !== "complete") return "needs-review";
+  if (review.reviewedHeadSha === layer.headSha) return "reviewed";
+  return layer.restack.kind === "restacked" ? "restacked-carry" : "needs-review";
+}
+
+/** An open layer "Review the stack" would queue. */
+export function layerNeedsReview(
+  layer: Pick<StackLayer, "status" | "review" | "restack" | "headSha">,
+): boolean {
+  if (!isOpenLayer(layer)) return false;
+  const state = layerReviewState(layer);
+  return state === "needs-review" || state === "restacked-carry";
+}
+
 export interface PrStackDetail {
   readonly repositoryId: string;
   readonly number: number;

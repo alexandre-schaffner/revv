@@ -5,8 +5,8 @@ import Warning from "phosphor-svelte/lib/Warning";
 import { VIEWER_VERDICT_LABEL } from "$lib/conversation/verdict";
 import { gsapFadeY, tokens } from "$lib/motion";
 import { LAYER_STATUS_LABEL, layerRole } from "$lib/stacks/stack-layer-facts";
+import { layerHint, plainTitle, richText, type StackPlace } from "$lib/stacks/stack-margin";
 import StackLayerGlyph from "../StackLayerGlyph.svelte";
-import { layerHint, plainTitle, richText, type StackPlace } from "./stack-margin";
 
 interface Props {
   layer: StackLayer;

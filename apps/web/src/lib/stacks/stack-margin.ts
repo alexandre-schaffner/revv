@@ -1,7 +1,6 @@
 import type { PrStackDetail, StackBrief, StackBriefLayer, StackLayer } from "@revv/shared";
 import { layerOf, neighbourOf } from "$lib/stacks/locate";
-import { RISK_LABEL, readableBrief } from "$lib/stacks/stack-layer-facts";
-import { plural } from "$lib/utils/plural";
+import { layerFacts, RISK_LABEL, readableBrief } from "$lib/stacks/stack-layer-facts";
 
 const ORDINALS = [
   "First",
@@ -259,15 +258,16 @@ export function marginNotes(
   return { issues: issueNotes, chapters: chapterNotes, reliedOn: place.usedBy };
 }
 
+/** One line for a layer in the stack sheet and peeks, in `layerFacts`' words. */
 export function layerHint(layer: StackLayer, here: StackLayer): string {
   if (layer.number === here.number) return "This layer";
   if (layer.status === "merged") return "Landed";
   if (layer.status === "closed") return "Closed";
   if (layer.restack.kind === "needs-rebase") return "Needs a rebase";
-  const { review } = layer;
-  if (review.kind === "generating") return "Reviewing";
-  if (review.kind !== "complete") return "";
-  const risk = review.riskLevel ? RISK_LABEL[review.riskLevel] : null;
-  const issues = review.openIssues > 0 ? plural(review.openIssues, "issue") : null;
-  return [risk, issues].filter(Boolean).join(" · ") || "Reviewed";
+  if (layer.review.kind === "generating") return "Reviewing";
+  const labels = layerFacts(layer).flatMap((fact) =>
+    fact.kind === "risk" ? [RISK_LABEL[fact.risk]] : fact.kind === "text" ? [fact.label] : [],
+  );
+  if (labels.length > 0) return labels.join(" · ");
+  return layer.review.kind === "complete" ? "Reviewed" : "";
 }
