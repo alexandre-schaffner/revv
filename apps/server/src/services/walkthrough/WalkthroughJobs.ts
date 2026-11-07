@@ -5,8 +5,8 @@
 //
 //   • Every decision about a PR's rows runs under the PR's lock: a request, a
 //     resume, a hydrate, a supersede. A request records GitHub's live head
-//     through the mirror before it takes the lock: the head move the mirror
-//     publishes supersedes under it.
+//     through the mirror under it; the head move the mirror publishes
+//     supersedes once the lock is free.
 //   • `startJob` decides what a request lands on: the run already live, the
 //     row already at the head, or a new row — which takes over a finished
 //     review (restack carry, team cache) when one exists, and is planned and
@@ -130,9 +130,8 @@ export interface StartJobParams {
    * Review exactly this head or nothing. Checked under the per-PR lock
    * against the head GitHub serves — a mismatch fails with
    * `HeadShaMismatchError` before anything is cancelled — and, once it
-   * matches, every other head's review in this mode is retired, as
-   * PollScheduler would on its next tick: the PR is at this head, so they
-   * are stale.
+   * matches, every other head's review in this mode is retired, as the
+   * head-move supersede would: the PR is at this head, so they are stale.
    */
   readonly expectedHeadSha?: string;
 }
@@ -221,8 +220,8 @@ export class WalkthroughJobs extends Context.Service<
     /**
      * Stop the PR's runs and supersede its rows (invariant #7): in `mode`, or
      * every perspective. `exceptHeadSha` spares rows already at that head —
-     * PollScheduler's "the head moved" sweep must not retire a run the user
-     * started at the new head before the poll saw it.
+     * a head-move supersede must not retire a run the user started at the
+     * new head before the move was recorded.
      */
     readonly supersedeForPr: (
       prId: string,
@@ -273,8 +272,7 @@ export const WalkthroughJobsLive = Layer.effect(
     const mirror = yield* PrMirror;
     const headMoves = yield* PrHeadMoves;
 
-    // Not re-entrant: what runs under it calls the `*Locked` variants, and
-    // never `mirror.apply`, whose head-move listener supersedes under it.
+    // Not re-entrant: what runs under it calls the `*Locked` variants.
     const prLocks = yield* makeStartJobMutex();
     const underPrLock = <A, E>(prId: string, effect: Effect.Effect<A, E>) =>
       Effect.flatMap(prLocks.acquire(prId), (lock) => lock.withPermits(1)(effect));
@@ -767,9 +765,6 @@ export const WalkthroughJobsLive = Layer.effect(
      * seen yet goes through the mirror (which supersedes runs at the old one),
      * so the whole run — the diff cache, the relevance judgments — reads the
      * head it reviews. Then that head's files and commits.
-     *
-     * Runs before the request takes the PR lock, never under it: the mirror
-     * publishes the head move, and the supersede it triggers takes that lock.
      */
     const liveContext = (prId: string) =>
       Effect.gen(function* () {
@@ -795,7 +790,7 @@ export const WalkthroughJobsLive = Layer.effect(
 
     type LivePr = Effect.Success<ReturnType<typeof liveContext>>;
 
-    /** What a request lands on, decided under the PR lock at the head `liveContext` recorded. */
+    /** What a request lands on, decided at the head `liveContext` recorded. Under the PR lock. */
     const request = (
       params: StartJobParams,
       resolved: LivePr,
@@ -1002,11 +997,21 @@ export const WalkthroughJobsLive = Layer.effect(
     const supersedeForPr = (prId: string, exceptHeadSha?: string, mode?: WalkthroughMode) =>
       underPrLock(prId, supersedeLocked(prId, exceptHeadSha, mode));
 
-    // A head move the mirror recorded makes the runs at the old head stale
-    // (invariant 7). Takes the PR lock, so no caller of `mirror.apply` may
-    // hold it (`liveContext` runs before `request` takes it).
-    yield* headMoves.listen((prId, headSha) =>
-      supersedeForPr(prId, headSha).pipe(
+    // A head move the mirror recorded makes the runs at older heads stale
+    // (invariant 7). The listener runs off the publisher, so it may land after
+    // a newer move, or after a request at the new head created its row: it
+    // spares the head the PR holds now, not the one published.
+    yield* headMoves.listen((prId, publishedHead) =>
+      underPrLock(
+        prId,
+        Effect.gen(function* () {
+          const current = yield* prContextService.readPr(prId).pipe(
+            Effect.map(({ pr }) => pr.headSha),
+            Effect.catchTag("NotFoundError", () => Effect.succeed(null)),
+          );
+          yield* supersedeLocked(prId, current ?? publishedHead);
+        }),
+      ).pipe(
         Effect.catch((err) =>
           Effect.sync(() => logError("walkthrough-jobs", `supersede on head move ${prId}:`, err)),
         ),
@@ -1015,8 +1020,9 @@ export const WalkthroughJobsLive = Layer.effect(
 
     return {
       startJob: (params) =>
-        Effect.flatMap(liveContext(params.prId), (resolved) =>
-          underPrLock(params.prId, request(params, resolved)),
+        underPrLock(
+          params.prId,
+          Effect.flatMap(liveContext(params.prId), (resolved) => request(params, resolved)),
         ),
       importFromTeamCache,
       resume,
