@@ -25,12 +25,16 @@ export function canUserModifyComment(
   return loginsMatch(message.authorLogin, currentUserLogin);
 }
 
-export function isPublishableDraftComment(message: DraftReviewMessage): boolean {
-  return (
-    message.externalId === null &&
-    (message.authorRole === "reviewer" || message.authorRole === "ai_agent") &&
-    message.body.trim().length > 0
-  );
+/**
+ * A draft the signed-in user publishes: one they may still change (theirs or
+ * Revv's, not yet on GitHub) with some text. An external coding agent's reply
+ * is not theirs; it goes up only when the agent asks.
+ */
+export function isPublishableDraftComment(
+  message: DraftReviewMessage,
+  viewerLogin: string | null,
+): boolean {
+  return canUserModifyComment(message, viewerLogin) && message.body.trim().length > 0;
 }
 
 export interface DraftThread {
@@ -46,12 +50,23 @@ export interface DraftThread {
 export function draftCommentBody(
   thread: DraftThread,
   messages: readonly DraftReviewMessage[],
+  viewerLogin: string | null,
 ): string | null {
   if (isThreadResolved(thread.status)) return null;
   if (thread.externalCommentId !== null) return null;
   const body = messages
-    .filter(isPublishableDraftComment)
+    .filter((m) => isPublishableDraftComment(m, viewerLogin))
     .map((m) => m.body)
     .join("\n\n");
   return body === "" ? null : body;
+}
+
+/** A thread already on GitHub posts its publishable drafts as replies, in order. */
+export function unpublishedReplies<M extends DraftReviewMessage>(
+  thread: DraftThread,
+  messages: readonly M[],
+  viewerLogin: string | null,
+): M[] {
+  if (thread.externalCommentId === null) return [];
+  return messages.filter((m) => isPublishableDraftComment(m, viewerLogin));
 }

@@ -14,7 +14,6 @@ import type {
 } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
-import { getUser } from "$lib/stores/auth.svelte";
 import { getSelectedPrId } from "$lib/stores/route.svelte";
 import { refreshPrHead, requestThreadSync } from "$lib/stores/sync.svelte";
 import { createResource } from "./resource";
@@ -87,17 +86,6 @@ export function getThreadMessages(threadId: string): ThreadMessage[] {
   return threadMessages[threadId] ?? [];
 }
 
-/** Comments written in Revv are the signed-in reviewer's. */
-function reviewerAuthor(): { authorRole: "reviewer"; authorName: string; authorLogin?: string } {
-  const user = getUser();
-  const login = user?.githubLogin ?? null;
-  return {
-    authorRole: "reviewer",
-    authorName: login ?? user?.name ?? "You",
-    ...(login ? { authorLogin: login } : {}),
-  };
-}
-
 export interface NewThread {
   filePath: string;
   startLine: number;
@@ -121,7 +109,7 @@ export async function addThread(params: NewThread): Promise<CommentThread | null
     startLine: params.startLine,
     endLine: params.endLine,
     diffSide: params.diffSide,
-    message: { ...reviewerAuthor(), body: params.body, messageType: "comment" },
+    message: { body: params.body, messageType: "comment" },
   });
 
   if (error) {
@@ -143,7 +131,7 @@ export async function addThread(params: NewThread): Promise<CommentThread | null
 export async function addThreadMessage(threadId: string, body: string): Promise<void> {
   const { data, error } = await api.api
     .threads({ id: threadId })
-    .messages.post({ ...reviewerAuthor(), body, messageType: "reply" });
+    .messages.post({ body, messageType: "reply" });
 
   if (error) {
     console.error("[review] Failed to add message:", error);

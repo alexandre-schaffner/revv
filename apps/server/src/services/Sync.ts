@@ -1,8 +1,13 @@
 import { createHash } from "node:crypto";
-import type { ThreadSummary } from "@revv/shared";
 import { isThreadResolved, loginsMatch } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
-import { SyncError } from "../domain/errors";
+import {
+  type DbError,
+  ForbiddenError,
+  type GitHubError,
+  type NotFoundError,
+  SyncError,
+} from "../domain/errors";
 import { keyedSingleFlight } from "../effects/keyed-single-flight";
 import { logError } from "../logger";
 import type { DbService } from "./Db";
@@ -12,13 +17,11 @@ import { AvatarCache } from "./github/avatars";
 import { GitHubGateway } from "./github/gateway";
 import type { GhReviewComment, GhReviewThread } from "./github/reviews";
 import type { GitHubClient } from "./github/transport";
-import { diffFileFor, toGitHubComment } from "./github-review-comment";
+import { planThreadComment } from "./github-review-comment";
 import { PrContextService } from "./PrContext";
-import { PullRequestService } from "./PullRequest";
+import { extractGitHubMentions, PullRequestService } from "./PullRequest";
 import { Realtime } from "./Realtime";
 import { ReviewService } from "./Review";
-import { extractGitHubMentions } from "./sync-engine/mentions";
-import { latestUpdatedAt } from "./sync-engine/watermark";
 
 export interface PullResult {
   readonly newThreads: number;
@@ -33,16 +36,26 @@ export interface PullResult {
   readonly changed: boolean;
 }
 
+type SyncFailure = SyncError | NotFoundError | GitHubError | DbError;
+
 export class SyncService extends Context.Service<
   SyncService,
   {
-    readonly pushThread: (threadId: string) => Effect.Effect<void, SyncError, DbService>;
-    readonly pushReply: (messageId: string) => Effect.Effect<void, SyncError, DbService>;
-    readonly pushThreadStatus: (threadId: string) => Effect.Effect<void, SyncError, DbService>;
-    /** One pull per PR at a time: a call while one is in flight for the same PR joins it. */
-    readonly pullComments: (prId: string) => Effect.Effect<PullResult, SyncError, DbService>;
     /**
-     * Reconcile one PR's threads against GitHub.
+     * Post a thread not yet on GitHub as one review comment carrying the
+     * drafts the PR's owning account publishes (see `planThreadComment`).
+     * Refuses a thread with none, and one GitHub can't take.
+     */
+    readonly pushThread: (
+      threadId: string,
+    ) => Effect.Effect<void, SyncFailure | ForbiddenError, DbService>;
+    /** Post one reply, its thread first when that isn't on GitHub yet. */
+    readonly pushReply: (messageId: string) => Effect.Effect<void, SyncFailure, DbService>;
+    /** Push a thread's status to GitHub, for a thread GitHub knows. */
+    readonly pushStatus: (threadId: string) => Effect.Effect<void, SyncFailure, DbService>;
+    /**
+     * Reconcile one PR's threads against GitHub. One pull per PR at a time: a
+     * call while one is in flight for the same PR joins it.
      *
      * Pass `force: true` for user-initiated syncs: the `threads:synced`
      * envelope is what clears the client's per-PR spinner, so it must go out
@@ -55,22 +68,9 @@ export class SyncService extends Context.Service<
     readonly syncThreads: (
       prId: string,
       opts?: { readonly force?: boolean },
-    ) => Effect.Effect<PullResult, SyncError, DbService>;
-    readonly getThreadSummary: (prId: string) => Effect.Effect<ThreadSummary, SyncError, DbService>;
+    ) => Effect.Effect<PullResult, SyncFailure, DbService>;
   }
 >()("SyncService") {}
-
-function toSyncError(threadId?: string): (e: unknown) => SyncError {
-  return (e: unknown) => {
-    if (e instanceof SyncError) return e;
-    const message = e instanceof Error ? e.message : String(e);
-    return new SyncError({
-      message,
-      cause: e,
-      ...(threadId !== undefined ? { threadId } : {}),
-    });
-  };
-}
 
 export const SyncServiceLive = Layer.effect(
   SyncService,
@@ -84,58 +84,50 @@ export const SyncServiceLive = Layer.effect(
     const diffCache = yield* DiffCacheService;
     const accounts = yield* GitHubAccounts;
 
-    const pushThread = (threadId: string): Effect.Effect<void, SyncError, DbService> =>
+    const pushThread = (threadId: string) =>
       Effect.gen(function* () {
         const { thread, prId } = yield* reviewService.getThread(threadId);
         if (thread.externalCommentId) return;
 
-        const { pr, repo, client } = yield* prContext.forPr(prId);
-
+        const { pr, repo, client, accountId } = yield* prContext.forPr(prId);
         if (!pr.headSha) {
           return yield* Effect.fail(
             new SyncError({ message: "PR headSha missing — cannot push comment", threadId }),
           );
         }
 
-        const messages = yield* reviewService.getMessages(threadId);
-        const first = messages[0];
-        if (!first) {
+        const plan = planThreadComment(
+          thread,
+          yield* reviewService.getMessages(threadId),
+          yield* accounts.viewerLogin(accountId),
+          yield* diffCache.getCachedFiles(pr.id),
+        );
+        if (plan === null) {
           return yield* Effect.fail(
-            new SyncError({ message: "Thread has no messages to push", threadId }),
+            new ForbiddenError({
+              message: "You can only publish your own comments or comments left by Revv",
+            }),
           );
         }
-
-        // A file the cached diff doesn't hold is sent as is: the cache trails
-        // the PR by a poll cycle, so its absence proves nothing.
-        const cachedFiles = yield* diffCache.getCachedFiles(pr.id);
-        const fit = toGitHubComment(
-          thread,
-          first.body,
-          diffFileFor(cachedFiles, thread.filePath)?.patch ?? null,
-        );
-        if (!fit.ok) {
+        if (plan.kind === "skip") {
           return yield* Effect.fail(
             new SyncError({
-              message: `Cannot post comment on ${thread.filePath}: ${fit.reason}`,
+              message: `Cannot post comment on ${thread.filePath}: ${plan.reason}`,
               threadId,
             }),
           );
         }
-        const commentPayload = { ...fit.comment, commitSha: pr.headSha };
 
-        const posted = yield* github.reviews.createComment(
-          client,
-          repo.fullName,
-          pr.externalId,
-          commentPayload,
-        );
-
-        const externalCommentId = String(posted.id);
-        yield* reviewService.linkThread(threadId, {
-          externalCommentId,
-          lastSyncedAt: new Date().toISOString(),
+        const posted = yield* github.reviews.createComment(client, repo.fullName, pr.externalId, {
+          ...plan.comment,
+          commitSha: pr.headSha,
         });
-        yield* reviewService.linkMessage(first.id, externalCommentId);
+        yield* reviewService.linkPostedDrafts(
+          threadId,
+          plan.draftIds,
+          String(posted.id),
+          plan.comment.body,
+        );
 
         const threadsOnGithub = yield* github.reviews.listThreads(
           client,
@@ -146,18 +138,25 @@ export const SyncServiceLive = Layer.effect(
         if (match) {
           yield* reviewService.linkThread(threadId, { externalThreadId: match.nodeId });
         }
-      }).pipe(Effect.mapError(toSyncError(threadId)));
+      });
 
-    const pushReply = (messageId: string): Effect.Effect<void, SyncError, DbService> =>
+    const pushReply = (messageId: string) =>
       Effect.gen(function* () {
         const message = yield* reviewService.getMessage(messageId);
         if (message.externalId) return;
 
         const { thread, prId } = yield* reviewService.getThread(message.threadId);
         if (!thread.externalCommentId) {
-          yield* pushThread(thread.id);
-          const refreshed = yield* reviewService.getMessage(messageId);
-          if (refreshed.externalId) return; // this WAS the first message
+          yield* pushThread(thread.id).pipe(
+            Effect.catchTag("ForbiddenError", (e) =>
+              Effect.fail(new SyncError({ message: e.message, threadId: thread.id })),
+            ),
+          );
+          // The reply was one of the drafts the thread's comment now carries.
+          const after = yield* reviewService
+            .getMessage(messageId)
+            .pipe(Effect.catchTag("NotFoundError", () => Effect.succeed(null)));
+          if (after === null || after.externalId) return;
         }
 
         const fresh = yield* reviewService.getThread(thread.id);
@@ -172,7 +171,6 @@ export const SyncServiceLive = Layer.effect(
         }
 
         const { pr, repo, client } = yield* prContext.forPr(prId);
-
         const posted = yield* github.reviews.replyToComment(
           client,
           repo.fullName,
@@ -181,7 +179,7 @@ export const SyncServiceLive = Layer.effect(
           message.body,
         );
         yield* reviewService.linkMessage(message.id, String(posted.id));
-      }).pipe(Effect.mapError(toSyncError()));
+      });
 
     const pushStatus = (threadId: string, client?: GitHubClient) =>
       Effect.gen(function* () {
@@ -192,22 +190,11 @@ export const SyncServiceLive = Layer.effect(
           ? github.reviews.resolveThread(via, thread.externalThreadId)
           : github.reviews.unresolveThread(via, thread.externalThreadId);
         yield* reviewService.statusPushed(threadId, thread.status);
-      }).pipe(Effect.mapError(toSyncError(threadId)));
-
-    const pushThreadStatus = (threadId: string): Effect.Effect<void, SyncError, DbService> =>
-      pushStatus(threadId);
-
-    const getThreadSummary = (prId: string): Effect.Effect<ThreadSummary, SyncError, DbService> =>
-      Effect.gen(function* () {
-        const threads = yield* reviewService.threadsForPr(prId);
-
-        const resolved = threads.filter((t) => isThreadResolved(t.status)).length;
-        return { total: threads.length, open: threads.length - resolved, resolved };
-      }).pipe(Effect.mapError(toSyncError()));
+      });
 
     const pullCommentsFromGitHub = (
       prId: string,
-    ): Effect.Effect<PullResult, SyncError, DbService> =>
+    ): Effect.Effect<PullResult, SyncFailure, DbService> =>
       Effect.gen(function* () {
         const { pr, repo, accountId } = yield* prContext.forPr(prId);
         const client = yield* accounts.backgroundClient(accountId, "core");
@@ -391,18 +378,16 @@ export const SyncServiceLive = Layer.effect(
         }
 
         return { newThreads, newMessages, statusChanges, edits, changed };
-      }).pipe(Effect.mapError(toSyncError()));
+      });
 
-    const pullOnce = keyedSingleFlight<string, PullResult, SyncError>();
-    const pullComments = (prId: string): Effect.Effect<PullResult, SyncError, DbService> =>
-      pullOnce(prId, pullCommentsFromGitHub(prId));
+    const pullOnce = keyedSingleFlight<string, PullResult, SyncFailure>();
 
     const syncThreads = (
       prId: string,
       opts?: { readonly force?: boolean },
-    ): Effect.Effect<PullResult, SyncError, DbService> =>
+    ): Effect.Effect<PullResult, SyncFailure, DbService> =>
       Effect.gen(function* () {
-        const pulled = yield* pullComments(prId);
+        const pulled = yield* pullOnce(prId, pullCommentsFromGitHub(prId));
         if (pulled.changed || opts?.force === true) {
           yield* realtime.toPr(prId, {
             type: "threads:synced",
@@ -410,18 +395,21 @@ export const SyncServiceLive = Layer.effect(
           });
         }
         return pulled;
-      }).pipe(Effect.mapError(toSyncError()));
+      });
 
     return {
       pushThread,
       pushReply,
-      pushThreadStatus,
-      pullComments,
+      pushStatus: (threadId) => pushStatus(threadId),
       syncThreads,
-      getThreadSummary,
     };
   }),
 );
+
+function latestUpdatedAt(comments: readonly GhReviewComment[]): string | null {
+  if (comments.length === 0) return null;
+  return comments.reduce((max, c) => (c.updatedAt > max ? c.updatedAt : max), "");
+}
 
 /** Order-independent: two pulls with the same fingerprint saw the same GitHub thread state. */
 function fingerprintThreads(threads: ReadonlyArray<GhReviewThread>): string {

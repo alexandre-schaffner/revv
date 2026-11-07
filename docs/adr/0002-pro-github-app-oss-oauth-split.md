@@ -13,7 +13,7 @@ all-or-nothing: full read **and write** to all code, settings, webhooks, and
 deploy keys across every repository the user can reach. It cannot be narrowed —
 there is no read-only or pull-requests-only private-repo scope in the classic
 model. Yet Revv only ever **reads** PRs/diffs/files and **writes** PR review
-comments (`apps/server/src/routes/reviews/handlers/github-submit.ts`).
+comments (`apps/server/src/services/review-submit.ts`).
 
 As Revv goes to market for professional/enterprise clients, that `repo` grant
 is a sales blocker: orgs that enforce OAuth App access restrictions route it to

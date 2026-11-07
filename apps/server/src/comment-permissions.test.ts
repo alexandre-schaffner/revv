@@ -27,24 +27,36 @@ describe("canUserModifyComment", () => {
 describe("isPublishableDraftComment", () => {
   it("includes Revv-authored drafts in GitHub reviews", () => {
     expect(
-      isPublishableDraftComment({
-        authorRole: "ai_agent",
-        authorLogin: null,
-        externalId: null,
-        body: "A concrete review concern",
-      }),
+      isPublishableDraftComment(
+        {
+          authorRole: "ai_agent",
+          authorLogin: null,
+          externalId: null,
+          body: "A concrete review concern",
+        },
+        "alex",
+      ),
     ).toBe(true);
   });
 
-  it("rejects empty, synced, and coder-authored messages", () => {
-    expect(isPublishableDraftComment({ ...draft, body: "  " })).toBe(false);
-    expect(isPublishableDraftComment({ ...draft, externalId: "42", body: "Concern" })).toBe(false);
+  it("includes the viewer's drafts whatever their role, the PR author's own included", () => {
+    expect(isPublishableDraftComment({ ...draft, body: "Concern" }, "alex")).toBe(true);
     expect(
-      isPublishableDraftComment({
-        ...draft,
-        authorRole: "coder",
-        body: "Concern",
-      }),
+      isPublishableDraftComment({ ...draft, authorRole: "coder", body: "Concern" }, "alex"),
+    ).toBe(true);
+  });
+
+  it("rejects empty, synced, another user's and an external agent's messages", () => {
+    expect(isPublishableDraftComment({ ...draft, body: "  " }, "alex")).toBe(false);
+    expect(isPublishableDraftComment({ ...draft, externalId: "42", body: "Concern" }, "alex")).toBe(
+      false,
+    );
+    expect(isPublishableDraftComment({ ...draft, body: "Concern" }, "marie")).toBe(false);
+    expect(
+      isPublishableDraftComment(
+        { authorRole: "coder", authorLogin: null, externalId: null, body: "Done" },
+        "alex",
+      ),
     ).toBe(false);
   });
 });

@@ -1,11 +1,12 @@
 import type { PullRequest, Repository, ServerEventMessage } from "@revv/shared";
-import { THREAD_SYNC_INTERVAL_SECONDS } from "@revv/shared";
+import { isThreadResolved, THREAD_SYNC_INTERVAL_SECONDS } from "@revv/shared";
 import { Cause, Context, Duration, Effect, Layer, Schedule, Stream } from "effect";
 import {
   type DbError,
   type GitHubAuthError,
   type GitHubError,
-  NotFoundError,
+  httpErrorOf,
+  type NotFoundError,
   SyncError,
 } from "../domain/errors";
 import { makeRestartableLoop } from "../effects/restartable-loop";
@@ -38,6 +39,7 @@ import {
 import { makePollState, type SyncTrigger } from "./poll-state";
 import { Realtime } from "./Realtime";
 import { RepositoryService } from "./Repository";
+import { ReviewService } from "./Review";
 import { SettingsService } from "./Settings";
 import { SyncService } from "./Sync";
 import { WalkthroughService } from "./Walkthrough";
@@ -93,6 +95,7 @@ export const PollSchedulerLive = Layer.effect(
     const repoService = yield* RepositoryService;
     const settingsService = yield* SettingsService;
     const syncService = yield* SyncService;
+    const reviewService = yield* ReviewService;
     const walkthroughJobs = yield* WalkthroughJobs;
     const walkthroughService = yield* WalkthroughService;
     const mirror = yield* PrMirror;
@@ -338,10 +341,10 @@ export const PollSchedulerLive = Layer.effect(
         const accountId = repoToAccountId.get(pr.repositoryId);
         if (accountId === undefined || callable.get(accountId) !== true) continue;
         if (recheck) {
-          const summary = yield* withDb(syncService.getThreadSummary(pr.id)).pipe(
+          const threads = yield* withDb(reviewService.threadsForPr(pr.id)).pipe(
             Effect.orElseSucceed(() => null),
           );
-          if (summary !== null && summary.total === summary.resolved) {
+          if (threads !== null && threads.every((t) => isThreadResolved(t.status))) {
             state.noteSwept(pr, now);
             continue;
           }
@@ -432,16 +435,15 @@ export const PollSchedulerLive = Layer.effect(
       syncThreadsNow: (prId: string) =>
         withDb(syncService.syncThreads(prId, { force: true })).pipe(
           Effect.asVoid,
+          Effect.catchTag("NotFoundError", () => Effect.void),
           Effect.catch((err) =>
-            err.cause instanceof NotFoundError
-              ? Effect.void
-              : Effect.gen(function* () {
-                  logError("PollScheduler", `Manual thread sync failed for PR ${prId}:`, err);
-                  yield* realtime.toPr(prId, {
-                    type: "threads:sync-error",
-                    data: { prId, message: err.message },
-                  });
-                }),
+            Effect.gen(function* () {
+              logError("PollScheduler", `Manual thread sync failed for PR ${prId}:`, err);
+              yield* realtime.toPr(prId, {
+                type: "threads:sync-error",
+                data: { prId, message: httpErrorOf(err).message },
+              });
+            }),
           ),
           Effect.catchCause((cause) =>
             Effect.gen(function* () {

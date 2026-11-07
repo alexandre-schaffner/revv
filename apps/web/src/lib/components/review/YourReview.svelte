@@ -5,6 +5,7 @@ import { sendChatMessage } from "$lib/chat/turn.svelte";
 import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import ReviewActionBar from "$lib/components/review/chrome/ReviewActionBar.svelte";
 import { type ReviewAction, submitReview } from "$lib/review/submit-review";
+import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { getActiveTab } from "$lib/stores/pr-view-state.svelte";
 import { deleteThread, getThreadMessages, getThreads } from "$lib/stores/review.svelte";
 import { jumpToDiffLine, jumpToWalkthroughBlock } from "$lib/stores/review-nav.svelte";
@@ -71,7 +72,9 @@ const selectedCount = $derived(selectedIssues.length);
 // Unresolved threads with a message `submitReview` would post, so the
 // Comment button's enabled state matches what gets sent.
 const pendingCommentCount = $derived(
-  unresolvedThreads.filter((t) => getThreadMessages(t.id).some(isPublishableDraftComment)).length,
+  unresolvedThreads.filter((t) =>
+    getThreadMessages(t.id).some((m) => isPublishableDraftComment(m, getCurrentUserLogin())),
+  ).length,
 );
 const canComment = $derived(selectedCount > 0 || pendingCommentCount > 0);
 

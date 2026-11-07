@@ -7,7 +7,6 @@ import { type DbError, NotFoundError } from "../domain/errors";
 import type { ObservedPr } from "../domain/observed-pr";
 import { dbTry, tryDb } from "../effects/db-try";
 import { DbService } from "./Db";
-import { extractGitHubMentions } from "./sync-engine/mentions";
 
 function rowToPr(
   row: typeof pullRequests.$inferSelect,
@@ -44,6 +43,13 @@ function rowToPr(
         ? { number: row.stackNumber, position: row.stackPosition }
         : null,
   };
+}
+
+/** The logins `@`-mentioned in a PR body or comment. */
+export function extractGitHubMentions(body: string): string[] {
+  const matches = body.match(/@([a-zA-Z0-9-]+)/g);
+  if (!matches) return [];
+  return [...new Set(matches.map((m) => m.slice(1)))];
 }
 
 export interface ListArchivedPrsParams {

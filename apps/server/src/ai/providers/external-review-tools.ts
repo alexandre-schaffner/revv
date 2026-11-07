@@ -37,7 +37,7 @@ export interface ExternalReviewToolContext extends ChatWalkthroughEditContext {
   readonly providerName: string;
   readonly prHeadSha: string | null;
   readonly pushReply: (messageId: string) => Promise<void>;
-  readonly pushThreadStatus: (threadId: string) => Promise<void>;
+  readonly pushStatus: (threadId: string) => Promise<void>;
   /** Start (or join) generation through the orchestrator; see `walkthrough-request.ts`. */
   readonly requestWalkthrough: (input: {
     readonly headSha: string;
@@ -271,7 +271,7 @@ const updateCommentStatusSpec: ExternalReviewToolSpec = {
         );
       }
       try {
-        await ctx.pushThreadStatus(parsed.thread_id);
+        await ctx.pushStatus(parsed.thread_id);
       } catch (error) {
         return fail(
           `Thread status saved in Revv, but GitHub synchronization failed: ${error instanceof Error ? error.message : String(error)}. Retry the same call.`,

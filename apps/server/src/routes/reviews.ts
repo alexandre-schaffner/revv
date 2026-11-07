@@ -1,9 +1,10 @@
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { ReviewService } from "../services/Review";
+import { humanAuthor, viewerOnPr } from "../services/review-mode";
+import { submitReview } from "../services/review-submit";
 import { runRoute, withAccount } from "./middleware";
 import { ownedBy } from "./ownership";
-import { submitGithubReviewHandler } from "./reviews/handlers/github-submit";
 import { threadMessageBody } from "./thread-message";
 
 /** Review routes: `:id` and `:prId` name the pull request. */
@@ -21,7 +22,11 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
         Effect.gen(function* () {
           const review = yield* ReviewService;
           const { message, ...anchor } = ctx.body;
-          const created = yield* review.startThread(ctx.params.id, anchor, message);
+          const author = humanAuthor(yield* viewerOnPr(ctx.params.id));
+          const created = yield* review.startThread(ctx.params.id, anchor, {
+            ...message,
+            ...author,
+          });
           ctx.set.status = 201;
           return created;
         }),
@@ -37,15 +42,11 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
     },
   )
 
-  .post(
-    "/:id/github-submit",
-    (ctx) => runRoute(submitGithubReviewHandler(ctx.params.id, ctx.body)),
-    {
-      body: t.Object({
-        action: t.Union([t.Literal("approve"), t.Literal("request_changes"), t.Literal("comment")]),
-        body: t.Optional(t.String()),
-        threadIds: t.Optional(t.Array(t.String())),
-        issueIds: t.Optional(t.Array(t.String())),
-      }),
-    },
-  );
+  .post("/:id/github-submit", (ctx) => runRoute(submitReview(ctx.params.id, ctx.body)), {
+    body: t.Object({
+      action: t.Union([t.Literal("approve"), t.Literal("request_changes"), t.Literal("comment")]),
+      body: t.Optional(t.String()),
+      threadIds: t.Optional(t.Array(t.String())),
+      issueIds: t.Optional(t.Array(t.String())),
+    }),
+  });

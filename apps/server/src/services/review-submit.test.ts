@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import type { CommentThread, ThreadMessage } from "@revv/shared";
-import { GitHubApiError, GitHubNetworkError } from "../../../domain/errors";
-import type { CachedDiffFile } from "../../../services/DiffCache";
-import { isExistingPendingReviewError, planReviewComments } from "./github-submit";
+import { GitHubApiError, GitHubNetworkError } from "../domain/errors";
+import type { CachedDiffFile } from "./DiffCache";
+import { isExistingPendingReviewError, planReviewComments } from "./review-submit";
 
 describe("isExistingPendingReviewError", () => {
   it("matches GitHub's pending-review refusal", () => {
@@ -81,7 +81,12 @@ function plan(
   messages: Record<string, ThreadMessage[]>,
   cachedFiles: CachedDiffFile[] | null = null,
 ) {
-  return planReviewComments({ threads, messages }, new Set(threads.map((t) => t.id)), cachedFiles);
+  return planReviewComments(
+    { threads, messages },
+    new Set(threads.map((t) => t.id)),
+    cachedFiles,
+    "me",
+  );
 }
 
 describe("planReviewComments", () => {
@@ -103,7 +108,12 @@ describe("planReviewComments", () => {
       thread({ id: "synced", externalCommentId: "123" }),
     ];
     const messages = Object.fromEntries(threads.map((t) => [t.id, [message(t.id)]]));
-    const result = planReviewComments({ threads, messages }, new Set(["resolved", "synced"]), null);
+    const result = planReviewComments(
+      { threads, messages },
+      new Set(["resolved", "synced"]),
+      null,
+      "me",
+    );
     expect(result).toEqual({ posted: [], skippedComments: [] });
   });
 
@@ -133,7 +143,7 @@ describe("planReviewComments", () => {
     const { posted } = plan([thread({ id: "t4" })], {
       t4: [
         message("t4", { id: "a", body: "First." }),
-        message("t4", { id: "b", authorRole: "coder", body: "Author note." }),
+        message("t4", { id: "b", authorRole: "coder", authorLogin: null, body: "Agent reply." }),
         message("t4", { id: "c", authorRole: "ai_agent", body: "Second." }),
         message("t4", { id: "d", body: "   " }),
       ],

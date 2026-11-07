@@ -111,7 +111,7 @@ function context(
     pushReply: async (messageId) => {
       pushedReplies.push(messageId);
     },
-    pushThreadStatus: async (threadId) => {
+    pushStatus: async (threadId) => {
       pushedStatuses.push(threadId);
     },
     requestWalkthrough: requestOutcome,

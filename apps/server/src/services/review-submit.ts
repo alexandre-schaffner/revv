@@ -1,17 +1,18 @@
-import { draftCommentBody, isPublishableDraftComment } from "@revv/shared";
+import { unpublishedReplies } from "@revv/shared";
 import { Effect } from "effect";
-import { GitHubApiError, GitHubNetworkError, ValidationError } from "../../../domain/errors";
-import { logError } from "../../../logger";
-import { type CachedDiffFile, DiffCacheService } from "../../../services/DiffCache";
-import { GitHubGateway } from "../../../services/github/gateway";
-import type { GhCommentAnchor } from "../../../services/github/reviews";
-import { diffFileFor, toGitHubComment } from "../../../services/github-review-comment";
-import { PollScheduler } from "../../../services/PollScheduler";
-import { PrContextService } from "../../../services/PrContext";
-import { PrConversationService } from "../../../services/PrConversation";
-import { type Conversation, ReviewService } from "../../../services/Review";
-import { SyncService } from "../../../services/Sync";
-import { WalkthroughService } from "../../../services/Walkthrough";
+import { GitHubApiError, GitHubNetworkError, ValidationError } from "../domain/errors";
+import { logError } from "../logger";
+import { type CachedDiffFile, DiffCacheService } from "./DiffCache";
+import { GitHubAccounts } from "./github/accounts";
+import { GitHubGateway } from "./github/gateway";
+import type { GhCommentAnchor } from "./github/reviews";
+import { planThreadComment } from "./github-review-comment";
+import { PollScheduler } from "./PollScheduler";
+import { PrContextService } from "./PrContext";
+import { PrConversationService } from "./PrConversation";
+import { type Conversation, ReviewService } from "./Review";
+import { SyncService } from "./Sync";
+import { WalkthroughService } from "./Walkthrough";
 
 export interface SubmitReviewInput {
   action: "approve" | "request_changes" | "comment";
@@ -31,7 +32,7 @@ export interface SubmitReviewInput {
 
 export interface PostedThread {
   threadId: string;
-  draftIds: string[];
+  draftIds: readonly string[];
   comment: GhCommentAnchor;
 }
 
@@ -43,47 +44,32 @@ export interface SkippedComment {
 }
 
 /**
- * The review comments the chosen threads post: one per thread still not on
- * GitHub, from its drafts. A comment on a file the cached diff no longer holds
- * would make GitHub reject the whole review, so it stays a local draft, as
- * does one whose lines left the diff; with no cached diff nothing is known to
- * be stale.
+ * The review comments the chosen threads post (see `planThreadComment`). One
+ * GitHub can't take would make it reject the whole review, so it stays a local
+ * draft, named in `skippedComments`.
  */
 export function planReviewComments(
   { threads, messages }: Conversation,
   chosen: ReadonlySet<string>,
   cachedFiles: readonly CachedDiffFile[] | null,
+  viewerLogin: string | null,
 ): { posted: PostedThread[]; skippedComments: SkippedComment[] } {
-  const knowsDiff = cachedFiles !== null && cachedFiles.length > 0;
   const posted: PostedThread[] = [];
   const skippedComments: SkippedComment[] = [];
   for (const thread of threads) {
     if (!chosen.has(thread.id)) continue;
-    const drafts = messages[thread.id] ?? [];
-    const text = draftCommentBody(thread, drafts);
-    if (text === null) continue;
-    const skip = (reason: string) =>
+    const plan = planThreadComment(thread, messages[thread.id] ?? [], viewerLogin, cachedFiles);
+    if (plan === null) continue;
+    if (plan.kind === "skip") {
       skippedComments.push({
         threadId: thread.id,
         path: thread.filePath,
         line: thread.endLine,
-        reason,
+        reason: plan.reason,
       });
-    const file = diffFileFor(cachedFiles, thread.filePath);
-    if (knowsDiff && !file) {
-      skip("the file is no longer part of the diff");
       continue;
     }
-    const fit = toGitHubComment(thread, text, file?.patch ?? null);
-    if (!fit.ok) {
-      skip(fit.reason);
-      continue;
-    }
-    posted.push({
-      threadId: thread.id,
-      draftIds: drafts.filter(isPublishableDraftComment).map((m) => m.id),
-      comment: fit.comment,
-    });
+    posted.push({ threadId: thread.id, draftIds: plan.draftIds, comment: plan.comment });
   }
   return { posted, skippedComments };
 }
@@ -100,17 +86,16 @@ export function isExistingPendingReviewError(error: unknown): boolean {
 const logged =
   (what: string) =>
   <E extends { readonly message?: string }>(e: E) =>
-    Effect.sync(() => logError("github-submit", `${what}:`, e.message ?? e));
+    Effect.sync(() => logError("review-submit", `${what}:`, e.message ?? e));
 
 /**
- * POST /api/reviews/:id/github-submit — post the review to GitHub, its line
- * comments built from the chosen draft threads, then bring the local review in
- * line with what GitHub now holds: each posted thread is linked to its GitHub
- * comment (so neither it nor its drafts is ever posted again), the reviewer's
- * pending replies on threads already on GitHub go up, and the PR's threads are
- * pulled back.
+ * Post the review to GitHub, its line comments built from the chosen draft
+ * threads, then bring the local review in line with what GitHub now holds:
+ * each posted thread is linked to its GitHub comment (so neither it nor its
+ * drafts is ever posted again), the signed-in user's pending replies on threads
+ * already on GitHub go up, and the PR's threads are pulled back.
  */
-export function submitGithubReviewHandler(prId: string, body: SubmitReviewInput) {
+export function submitReview(prId: string, body: SubmitReviewInput) {
   return Effect.gen(function* () {
     const prContext = yield* PrContextService;
     const github = yield* GitHubGateway;
@@ -123,6 +108,7 @@ export function submitGithubReviewHandler(prId: string, body: SubmitReviewInput)
 
     const ctx = yield* prContext.forPr(prId);
     const { pr, repo, client, accountId } = ctx;
+    const viewerLogin = yield* Effect.flatMap(GitHubAccounts, (a) => a.viewerLogin(accountId));
 
     const eventMap = {
       approve: "APPROVE",
@@ -135,6 +121,7 @@ export function submitGithubReviewHandler(prId: string, body: SubmitReviewInput)
       yield* review.getConversation(pr.id),
       new Set(body.threadIds ?? []),
       cachedFiles,
+      viewerLogin,
     );
 
     const reviewInput = {
@@ -222,16 +209,12 @@ export function submitGithubReviewHandler(prId: string, body: SubmitReviewInput)
       }
     }
 
-    // The reviewer's replies on threads GitHub already has, one at a time so
-    // each thread's replies land in the order they were written.
+    // Replies on threads GitHub already has, one at a time so each thread's
+    // replies land in the order they were written.
     const after = yield* review.getConversation(pr.id);
-    const pendingReplies = after.threads
-      .filter((t) => t.externalCommentId !== null)
-      .flatMap((t) =>
-        (after.messages[t.id] ?? []).filter(
-          (m) => m.externalId === null && m.authorRole === "reviewer",
-        ),
-      );
+    const pendingReplies = after.threads.flatMap((t) =>
+      unpublishedReplies(t, after.messages[t.id] ?? [], viewerLogin),
+    );
     let failedReplies = 0;
     for (const reply of pendingReplies) {
       yield* sync.pushReply(reply.id).pipe(
