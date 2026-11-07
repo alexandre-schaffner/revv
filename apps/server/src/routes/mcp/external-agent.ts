@@ -69,7 +69,6 @@ async function resolveContext(
       db,
       prId: resolved.prId,
       prHeadSha: resolved.prHeadSha,
-      userId: resolved.userId,
       actor: resolved.provider,
       provider: resolved.provider,
       providerName: EXTERNAL_AGENT_PROVIDER_NAMES[resolved.provider],

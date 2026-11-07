@@ -60,7 +60,6 @@ export class StackReviewService extends Context.Service<
      */
     readonly start: (
       prId: string,
-      userId: string,
       accountId: string,
       scope: StackReviewScope,
     ) => Effect.Effect<StackReviewStarted, StackError | NotFoundError | DbError>;
@@ -157,7 +156,7 @@ export const StackReviewServiceLive = Layer.effect(
             // Asked before the row is closed: a restart in between asks again,
             // and `ensure` answers with the brief already there.
             yield* briefJobs
-              .ensure(review.prId, review.userId, review.accountId)
+              .ensure(review.prId, review.accountId)
               .pipe(
                 Effect.catchCause((cause) =>
                   Effect.sync(() =>
@@ -186,12 +185,7 @@ export const StackReviewServiceLive = Layer.effect(
         ),
       );
 
-    const start = (
-      prId: string,
-      userId: string,
-      accountId: string,
-      reviewScope: StackReviewScope,
-    ) =>
+    const start = (prId: string, accountId: string, reviewScope: StackReviewScope) =>
       Effect.gen(function* () {
         const detail = yield* stacks.detail(prId, accountId);
         if (!detail) return yield* Effect.fail(new NotFoundError({ resource: "stack", id: prId }));
@@ -226,7 +220,6 @@ export const StackReviewServiceLive = Layer.effect(
                   repositoryId: detail.repositoryId,
                   stackNumber: detail.number,
                   prId,
-                  userId,
                   accountId,
                   status: "running",
                   layers: [...plan.queue],

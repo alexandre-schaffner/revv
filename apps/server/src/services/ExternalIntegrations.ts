@@ -55,7 +55,6 @@ export interface ExternalResolvedContext {
   readonly provider: ExternalAgentProvider;
   readonly integrationId: string;
   readonly accountId: string;
-  readonly userId: string;
   readonly prId: string;
   readonly prHeadSha: string | null;
   readonly scopes: readonly ExternalAgentScope[];
@@ -65,7 +64,6 @@ export interface ExternalAuthorizedContext {
   readonly provider: ExternalAgentProvider;
   readonly integrationId: string;
   readonly accountId: string;
-  readonly userId: string;
   readonly scopes: readonly ExternalAgentScope[];
 }
 
@@ -374,7 +372,6 @@ export const ExternalIntegrationsLive = Layer.effect(
         provider: integration.provider,
         integrationId: integration.id,
         accountId: integration.accountId,
-        userId: integration.userId,
         scopes: parseScopes(integration.scopes),
       };
     });

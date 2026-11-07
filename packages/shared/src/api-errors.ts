@@ -9,7 +9,6 @@ export type ApiErrorCode =
   | "NOT_FOUND"
   | "FORBIDDEN"
   | "NOT_CONFIGURED"
-  | "NOT_CONNECTED"
   | "GITHUB_AUTH_ERROR"
   | "GITHUB_RATE_LIMITED"
   | "GITHUB_ERROR"

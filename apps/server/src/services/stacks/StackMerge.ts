@@ -59,7 +59,6 @@ export class StackMergeService extends Context.Service<
      */
     readonly start: (
       prId: string,
-      userId: string,
       accountId: string,
       request: StartRequest,
     ) => Effect.Effect<StackMergeRun, StackMergeError>;
@@ -316,7 +315,7 @@ export const StackMergeServiceLive = Layer.effect(
         } satisfies StackMergePlan;
       });
 
-    const start = (prId: string, userId: string, accountId: string, request: StartRequest) =>
+    const start = (prId: string, accountId: string, request: StartRequest) =>
       Effect.gen(function* () {
         const { ctx, stack, layers } = yield* readPlan(prId, accountId);
         const refusal = startRefusal(stack, layers, request);
@@ -357,7 +356,6 @@ export const StackMergeServiceLive = Layer.effect(
                 layersBaseFirst: [...run.layers],
                 error: null,
                 accountId,
-                userId,
                 createdAt: now,
                 updatedAt: now,
               })

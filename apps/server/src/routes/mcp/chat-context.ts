@@ -19,7 +19,6 @@ function toContext(
     ctx: {
       db,
       prId: resolved.prId,
-      userId: resolved.userId,
       actor: "chat:acp",
       publishEdit: fireAndForgetWalkthroughEdit,
       broadcastThreadEvent: (msg) => fireAndForgetThreadEventBroadcast(resolved.prId, msg),

@@ -242,7 +242,10 @@ export function bindHttp<Ctx, Meta, Result extends McpToolResult>(
         fullResolution = await options.resolveContext(req);
         // A refused credential answers with its HTTP status here too, as on
         // the handshake: a bridge probing Revv's channels moves on to the next.
-        if (!fullResolution.ok && (fullResolution.status === 401 || fullResolution.status === 403)) {
+        if (
+          !fullResolution.ok &&
+          (fullResolution.status === 401 || fullResolution.status === 403)
+        ) {
           connectionResolution = fullResolution;
         }
       }

@@ -94,7 +94,6 @@ export class ExternalIntegrationError extends Data.TaggedError("ExternalIntegrat
     | "INVALID_PROJECT"
     | "PR_NOT_FOUND"
     | "INSTALL_FAILED"
-    | "NOT_CONNECTED"
     | "INTERNAL";
   readonly cause?: unknown;
 }> {}
@@ -478,7 +477,6 @@ const EXTERNAL_INTEGRATION_HTTP = {
   INVALID_CREDENTIAL: [403, "FORBIDDEN"],
   INVALID_PROJECT: [404, "NOT_FOUND"],
   PR_NOT_FOUND: [404, "NOT_FOUND"],
-  NOT_CONNECTED: [409, "NOT_CONNECTED"],
   INSTALL_FAILED: [400, "FAILED"],
   INTERNAL: [500, "INTERNAL_ERROR"],
 } as const satisfies Record<

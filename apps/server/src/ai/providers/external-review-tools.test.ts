@@ -101,7 +101,6 @@ function context(
     db,
     prId: "pr-1",
     prHeadSha,
-    userId: "user-1",
     actor: provider,
     provider,
     providerName: EXTERNAL_AGENT_PROVIDER_NAMES[provider],

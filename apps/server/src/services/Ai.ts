@@ -45,8 +45,6 @@ export interface ChatParams {
    */
   readonly onSessionId: (id: string) => Promise<void> | void;
   readonly prId: string;
-  /** Authenticated user id from the chat session, carried in the chat MCP token. */
-  readonly userId: string;
   readonly abortController?: AbortController;
   /** Session-level interaction toggle; `plan` switches the agent into its plan mode. Defaults to `'default'`. */
   readonly interactionMode?: InteractionMode;
@@ -119,7 +117,6 @@ export const AiServiceLive = Layer.effect(
             const interactionMode = params.interactionMode ?? "default";
             const token = yield* chatMcpTokens.issue({
               prId: params.prId,
-              userId: params.userId,
               interactionMode,
             });
 

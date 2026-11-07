@@ -40,7 +40,6 @@ export interface ChatWalkthroughEditContext {
   readonly db: Db;
   /** Edits target the PR's newest complete walkthrough, resolved per call. */
   readonly prId: string;
-  readonly userId: string;
   readonly actor: ChatEditActor;
   /** After the commit: `lifecycle:edited`, then `events`, then a team-cache push. */
   readonly publishEdit: (walkthroughId: string, events: readonly WalkthroughStreamEvent[]) => void;

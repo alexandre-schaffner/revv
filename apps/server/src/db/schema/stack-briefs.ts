@@ -63,7 +63,6 @@ export const stackBriefs = sqliteTable(
     }),
     errorMessage: text("error_message"),
     modelUsed: text("model_used"),
-    userId: text("user_id").notNull(),
     createdAt: text("created_at").notNull(),
     completedAt: text("completed_at"),
   },

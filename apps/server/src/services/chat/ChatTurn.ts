@@ -39,7 +39,6 @@ import { journalTurn } from "./turn-journal";
 
 export interface ChatTurnParams {
   readonly prId: string;
-  readonly userId: string;
   readonly message: string;
   readonly attachments: ReadonlyArray<ChatAttachment>;
   readonly attachmentMetadata: ReadonlyArray<ChatAttachmentMetadata>;
@@ -205,7 +204,6 @@ export const ChatTurnServiceLive = Layer.effect(
               }),
             ),
           prId: pr.id,
-          userId: params.userId,
           interactionMode: mode,
           abortController: abort,
         });

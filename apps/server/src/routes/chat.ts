@@ -111,7 +111,6 @@ export const chatRoute = new Elysia()
           const turns = yield* ChatTurnService;
           return yield* turns.start({
             prId: ctx.body.prId,
-            userId: ctx.session.user.id,
             message: ctx.body.message,
             attachments,
             attachmentMetadata,

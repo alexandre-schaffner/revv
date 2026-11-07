@@ -19,7 +19,6 @@ export const stackMergeRuns = sqliteTable(
     layersBaseFirst: text("layers", { mode: "json" }).$type<StackMergeRunLayer[]>().notNull(),
     error: text("error"),
     accountId: text("account_id").notNull(),
-    userId: text("user_id").notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },

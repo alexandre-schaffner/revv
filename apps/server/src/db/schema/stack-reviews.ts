@@ -22,7 +22,6 @@ export const stackReviews = sqliteTable(
     stackNumber: integer("stack_number").notNull(),
     /** The PR the review was asked from; the brief is asked for through it. */
     prId: text("pr_id").notNull(),
-    userId: text("user_id").notNull(),
     accountId: text("account_id").notNull(),
     status: text("status", { enum: ["running", "done", "abandoned"] }).notNull(),
     /** The layers to review, base first. */
