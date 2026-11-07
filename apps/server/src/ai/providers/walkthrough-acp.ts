@@ -22,9 +22,10 @@ import type { AgentLaunch } from "../acp/agent-launch";
 import { type AcpTurnOutcome, type ActivityBeacon, JOB_TURN, runAcpTurn } from "../acp/run-turn";
 import { decodeAcpSessionUpdate, makeAcpDecodeState } from "../agent-stream/acp-decoders";
 import type { NormalizedAgentEvent } from "../agent-stream/normalized-events";
+import { makeReasoningFeed } from "../agent-stream/reasoning-feed";
 import {
   buildActivity,
-  isAgentBuiltinTool,
+  isExplorationTool,
   relativizeToolInput,
 } from "../agent-stream/tool-activity";
 import {
@@ -98,7 +99,6 @@ export async function runWalkthroughTurn(
 
   let currentPhase: Extract<WalkthroughLifecyclePhase, "connecting" | "exploring"> = "connecting";
   let lastPhaseMessage = "Starting up...";
-  let lastReasoningPush = 0;
   const surfacedExplorationCallIds = new Set<string>();
   // Without these, the agent's reads and greps in the worktree are
   // indistinguishable from model inference in the timeline.
@@ -109,6 +109,16 @@ export async function runWalkthroughTurn(
     lastPhaseMessage = message;
     push({ type: "phase", data: { phase: currentPhase, message } });
   };
+  const reasoning = makeReasoningFeed({
+    thought: (text) => push({ type: "thought", data: { text } }),
+    heartbeat: () => {
+      if (currentPhase === "connecting") {
+        enterExploring("Model is thinking...");
+      } else {
+        push({ type: "phase", data: { phase: currentPhase, message: "Model is thinking..." } });
+      }
+    },
+  });
   const handleAgentEvent = (ev: NormalizedAgentEvent): void => {
     if (ev.kind === "reasoning-delta" || ev.kind === "text-delta") {
       recordWalkthroughToken(params.walkthroughId, ev.data);
@@ -126,16 +136,7 @@ export async function runWalkthroughTurn(
     }
 
     if (ev.kind === "reasoning-delta") {
-      if (ev.data.length > 0) push({ type: "thought", data: { text: ev.data } });
-      const now = Date.now();
-      if (now - lastReasoningPush >= 30_000) {
-        lastReasoningPush = now;
-        if (currentPhase === "connecting") {
-          enterExploring("Model is thinking...");
-        } else {
-          push({ type: "phase", data: { phase: currentPhase, message: "Model is thinking..." } });
-        }
-      }
+      reasoning(ev.data);
       return;
     }
 
@@ -145,7 +146,7 @@ export async function runWalkthroughTurn(
     }
 
     if (ev.kind === "tool-call") {
-      if (isAgentBuiltinTool(ev.toolName)) {
+      if (isExplorationTool(ev.toolName)) {
         enterExploring("Reading files and understanding changes...");
         if (ev.callId) {
           surfacedExplorationCallIds.add(ev.callId);

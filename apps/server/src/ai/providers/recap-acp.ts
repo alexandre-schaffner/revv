@@ -10,9 +10,10 @@ import type { AgentLaunch } from "../acp/agent-launch";
 import type { ActivityBeacon, TurnSettle } from "../acp/run-turn";
 import { decodeAcpSessionUpdate, makeAcpDecodeState } from "../agent-stream/acp-decoders";
 import type { NormalizedAgentEvent } from "../agent-stream/normalized-events";
+import { makeReasoningFeed } from "../agent-stream/reasoning-feed";
+import { buildActivity, isExplorationTool } from "../agent-stream/tool-activity";
 import { buildRecapUserMessage, RECAP_SYSTEM_PROMPT } from "../prompts/recap";
 import { type McpAgentRunError, runMcpAgentViaAcp } from "./mcp-agent-acp";
-import { createRecapDispatchState, dispatchRecapStreamEvent } from "./recap-event-dispatch";
 import type { RecapToolContext } from "./recap-tools";
 import { RECAP_MCP_SERVER } from "./recap-tools";
 
@@ -38,7 +39,6 @@ export async function runRecapAgentViaAcp(
     params.ctx.priorRecaps,
   )}`;
 
-  const dispatchState = createRecapDispatchState();
   const fanOut = (event: RecapStreamEvent): void => {
     if (params.completion.settled()) return;
     try {
@@ -51,8 +51,22 @@ export async function runRecapAgentViaAcp(
       );
     }
   };
-  const onAgentEvent = (ev: NormalizedAgentEvent): void =>
-    dispatchRecapStreamEvent(ev, dispatchState, fanOut);
+  const reasoning = makeReasoningFeed({
+    thought: (text) => fanOut({ type: "thought", data: { text } }),
+    heartbeat: () =>
+      fanOut({ type: "phase", data: { phase: "analyzing", message: "Model is thinking…" } }),
+  });
+  // Visible text is discarded: content flows through tool args. MCP tool calls
+  // are reported by the `/mcp/recap` route, which knows their names.
+  const onAgentEvent = (ev: NormalizedAgentEvent): void => {
+    if (ev.kind === "reasoning-delta") reasoning(ev.data);
+    else if (ev.kind === "tool-call" && isExplorationTool(ev.toolName)) {
+      fanOut({
+        type: "activity",
+        data: buildActivity(ev.toolName, ev.input, params.workingDir, ev.callId),
+      });
+    }
+  };
   const decodeState = makeAcpDecodeState();
 
   const error = await runMcpAgentViaAcp({

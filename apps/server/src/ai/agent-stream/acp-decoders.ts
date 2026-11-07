@@ -6,7 +6,6 @@ import type {
   SessionUpdate,
   ToolCallContent,
   ToolCallLocation,
-  ToolKind,
 } from "@agentclientprotocol/sdk";
 import { encodeToolDiffOutput } from "@revv/shared";
 import {
@@ -15,31 +14,7 @@ import {
   normalizeTaskPriority,
   normalizeTaskStatus,
 } from "./normalized-events";
-
-/**
- * ACP carries no machine tool name (only a human `title` + a `kind` enum), but
- * the `rawInput` of adapters that wrap a known SDK (e.g. claude-agent-acp)
- * uses that SDK's parameter names, so a canonical name yields correct activity
- * icons and summaries.
- */
-function acpKindToToolName(kind: ToolKind | undefined, title: string): string {
-  switch (kind) {
-    case "read":
-      return "Read";
-    case "edit":
-      return "Edit";
-    case "search":
-      return "Grep";
-    case "execute":
-    case "delete":
-    case "move":
-      return "Bash";
-    case "fetch":
-      return "WebFetch";
-    default:
-      return title || "Tool";
-  }
-}
+import { acpToolName } from "./tool-activity";
 
 export interface AcpDecodeState {
   /** Tool-call ids already surfaced, so re-sent updates don't double-emit. */
@@ -208,7 +183,7 @@ export function decodeAcpSessionUpdate(
     case "tool_call": {
       if (state.seenToolCallIds.has(update.toolCallId)) return [];
       state.seenToolCallIds.add(update.toolCallId);
-      const toolName = acpKindToToolName(update.kind, update.title);
+      const toolName = acpToolName(update.kind, update.title);
       const input = enrichToolInput(update.rawInput, update.locations);
       state.inputByToolCallId.set(update.toolCallId, input as Record<string, unknown>);
       return [

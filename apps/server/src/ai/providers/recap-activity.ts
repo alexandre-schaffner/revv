@@ -1,6 +1,6 @@
 import type { Activity, ActivityKind } from "@revv/shared";
 
-/** A recap tool call (by its MCP name) or a built-in agent tool, as a feed activity. */
+/** A recap tool call (by its MCP name), as a feed activity. */
 export function buildRecapActivity(toolName: string, input: unknown): Activity {
   return {
     activityKind: recapActivityKind(toolName),
@@ -22,8 +22,6 @@ function recapActivityKind(toolName: string): ActivityKind {
     case "add_pr_entry":
     case "set_theme_summary":
       return "tool.write";
-    case "Bash":
-      return "tool.bash";
     default:
       return "tool.mcp";
   }
@@ -58,13 +56,6 @@ function recapActivitySummary(toolName: string, input: unknown): string {
       return theme ? `Writing theme summary (${theme})` : "Writing theme summary";
     case "complete_recap":
       return "Finalizing recap";
-    case "Bash": {
-      const cmd = typeof obj.command === "string" ? obj.command : "";
-      if (!cmd) return "Running shell command";
-      const firstLine = cmd.split("\n")[0] ?? cmd;
-      const truncated = firstLine.length > 80 ? `${firstLine.slice(0, 77)}…` : firstLine;
-      return `$ ${truncated}`;
-    }
     default:
       return `Using ${toolName}`;
   }
