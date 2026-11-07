@@ -1,6 +1,6 @@
 <script lang="ts">
-// A syntax-highlighted Pierre code block for file-related tool output: FilePeek
-// (fetched file content) and ToolCallCard's captured file content.
+// A syntax-highlighted Pierre code block for FilePeek: the file read from the
+// clone, or the tool's captured output when the file can't be read.
 import { getFiletypeFromFileName } from "@pierre/diffs";
 import { pierreFile } from "$lib/pierre/mount";
 

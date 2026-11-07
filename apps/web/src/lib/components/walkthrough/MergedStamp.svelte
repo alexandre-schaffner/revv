@@ -36,8 +36,6 @@ const filterId = $derived(`merged-stamp-ink-${seedHash.toString(36)}`);
 
 const dateBand = $derived.by(() => {
   if (!mergedAt) return null;
-  // `new Date(...)`, not `Date.parse`: SSE hands us an ISO string while an
-  // Eden fetch revives the same field into a `Date`, and this accepts both.
   const ms = new Date(mergedAt).getTime();
   if (Number.isNaN(ms)) return null;
   return new Date(ms)

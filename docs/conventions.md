@@ -400,7 +400,7 @@ new entry, `hydrateFromCache` stores the merged snapshot as a new object. The ch
 
 **Anti-pattern.** `entry.blocks.push(b); entries.set(prId, entry)`.
 
-**Backlog.** `review`, `sync`, `stacks`, `hunk-scan` and `merge-eligibility` still hold a plain
+**Backlog.** `sync`, `stacks` and `hunk-scan` still hold a plain
 `Map` in `$state` and reassign it after each write (`m = new Map(m)`). It still works; move them
 when the store is next split.
 
@@ -438,7 +438,7 @@ possible combinations; only ~4 are legal.
 `<EventName>` is the event message `type` with the colon dropped and segments PascalCased
 (`thread:created` → `onThreadCreated`; `recap:status-changed` → `onRecapStatusChanged`).
 Each takes the envelope's `data` whole, and the store filters on its fields itself (the review
-store drops `thread:created` for a PR it isn't showing). Several stores may handle one
+store drops `thread:created` for a PR whose review isn't open). Several stores may handle one
 message, each with its own `on<EventName>`; the router lists them all in the message's arm.
 
 The router knows nothing else about a store. A store whose state comes from the stream also
@@ -765,7 +765,8 @@ unless the source is a shared component prop interface.
 Codifying it locks the canon so future contributors don't reach for Svelte-4 syntax.
 
 **Canonical example.** Any component under `apps/web/src/lib/components/walkthrough/`
-demonstrates the pattern. `GuidedWalkthrough.svelte:64–70` is representative.
+demonstrates the pattern. `GuidedWalkthrough.svelte`'s `interface Props { prId: string }` with
+`let { prId }: Props = $props();` is representative.
 
 **Backlog.** None — already-canon.
 
@@ -780,8 +781,9 @@ convention for inline arrows — bind a named function or inline an arrow direct
 Lowercase-property bindings interop with native DOM event names without a custom dispatcher
 layer.
 
-**Canonical example.** `GuidedWalkthrough.svelte` uses `onclick={handleRegenerate}` on its
-Button instances; `IssueCard.svelte` uses `onclick={selectIssue}` consistently.
+**Canonical example.** `GuidedWalkthrough.svelte` binds named functions (`onclick={handleResume}`
+on its Retry buttons), and `review/chrome/WalkthroughActionBar.svelte` hands
+`onRegenerate={handleRegenerate}` to its action pills.
 
 **Backlog.** None — already-canon.
 

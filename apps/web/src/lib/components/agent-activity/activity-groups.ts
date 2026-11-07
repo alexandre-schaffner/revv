@@ -156,7 +156,7 @@ export function activityCommand(
 
 /**
  * The dimmed text beside the tool name in a card header ("Read ·
- * PromptInputTextarea.svelte", "Bash · git status"); empty when the payload
+ * ChatComposer.svelte", "Bash · git status"); empty when the payload
  * carries no useful detail.
  */
 export function activityDetailText(
