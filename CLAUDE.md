@@ -209,14 +209,19 @@ agent tomorrow). Any change that violates them is wrong by construction — push
    review page retries a `failed` or `partial` one. A scan whose rows no longer match the
    diff it's handed (it was seeded from a stale diff) is re-seeded, keeping the answers that
    still match. A scan cut off while `running` resumes from the journal on the next ask.
-   - **Phase A — Overview.** One atomic write: `set_overview(summary)`.
-     `last_completed_phase` becomes `'A'`. The risk tier is **not** the agent's to set — it
-     is written by the orchestrator at job start (invariant 2's carve-out) and handed to the
-     agent as a given that governs its issue budget and depth.
-   - **Phase B — Diff Analysis.** Multi-step. Each step is exactly one atomic write:
-     `add_diff_step(step_index, markdown, code_snippet?, annotations?)`. Deterministically
-     keyed on `(walkthrough_id, step_index)`. Agent calls one step per call; batching is
-     forbidden at the tool-surface level.
+   - **Phase A — Overview.** One atomic write: `set_overview(summary, risk_level?)`.
+     `last_completed_phase` becomes `'A'`. When Jev answers at job start, the risk tier is
+     the orchestrator's (invariant 2's carve-out): written with its confidence before the
+     agent runs, handed to it as a given that governs its issue budget and depth, and a
+     `risk_level` the agent sends is ignored. Only when Jev is off or doesn't answer
+     (`risk_confidence` stays null) does `set_overview`'s `risk_level` set the tier.
+   - **Phase B — Diff Analysis.** Multi-step, in chapters. `add_semantic_step(
+     semantic_step_index, title, summary?, initial_block)` opens a chapter and writes its
+     block 0 in one transaction (the first call advances the pipeline to `'B'`);
+     `add_diff_step(semantic_step_index, step_index, block)` appends one block to an open
+     chapter. Blocks are keyed on `(walkthrough_id, phase, semantic_step_index,
+     step_index)`; each call is exactly one block, and batching is forbidden at the
+     tool-surface level.
 
      Two Phase-B tools defer to a Jev judgment, in opposite directions:
 
