@@ -1,3 +1,5 @@
+import type { Activity } from "./activity";
+
 /**
  * How Revv brings a PR up to date with its base branch when the agent
  * resolves conflicts: `merge` merges the base into the PR branch and pushes
@@ -45,13 +47,7 @@ export interface BaseConflictsCheck {
 /** Agent progress forwarded from a one-shot conflict-resolve run. */
 export type AgentProgressFrame =
   | { readonly kind: "agent-text"; readonly data: string }
-  | {
-      readonly kind: "agent-activity";
-      readonly activityKind: string;
-      readonly toolName: string | null;
-      readonly summary: string;
-      readonly payload?: unknown;
-    };
+  | ({ readonly kind: "agent-activity" } & Activity);
 
 /** Frames streamed by `POST /api/prs/:id/base-conflicts/resolve`; ends with one `result`. */
 export type BaseConflictFrame =
