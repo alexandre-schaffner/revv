@@ -4,6 +4,8 @@
 // Floors live here because both sides apply them: the server to pick prompt
 // leads, the web to decide what a chip shows.
 
+import type { HunkHeader } from "./diff-hunks";
+
 export const HUNK_SMELLS = [
   "vulnerability",
   "over_defensive",
@@ -96,21 +98,13 @@ export function isHunkScanFinished(status: HunkScanStatus | null): boolean {
   return status === "complete" || status === "partial";
 }
 
-/** A hunk's span in the unified diff, as its `@@` header gives it. */
-export interface HunkRange {
-  oldStart: number;
-  oldLines: number;
-  newStart: number;
-  newLines: number;
-}
-
 /** Last new-side line of a hunk; a pure deletion still names the line it sits at. */
-export function hunkNewEnd(range: Pick<HunkRange, "newStart" | "newLines">): number {
+export function hunkNewEnd(range: Pick<HunkHeader, "newStart" | "newLines">): number {
   return range.newStart + Math.max(range.newLines, 1) - 1;
 }
 
 /** One hunk of the first pass, as persisted in `hunk_scan_rows`. */
-export interface HunkScanRow extends HunkRange {
+export interface HunkScanRow extends HunkHeader {
   filePath: string;
   /** Position among the file's `@@` hunks — the same index `@pierre/diffs` assigns. */
   hunkIndex: number;
