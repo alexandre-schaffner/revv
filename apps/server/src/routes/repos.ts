@@ -14,7 +14,7 @@ import { getRepoActivityResponse } from "../services/RepoActivity";
 import { RepositoryService } from "../services/Repository";
 import { diagnoseRepoNotFound } from "../services/repo-access";
 import { errorResponse, runRoute, withAccount, withAuth } from "./middleware";
-import { asOwner } from "./ownership";
+import { ownedBy } from "./ownership";
 
 /** The repository list and adding to it: the active account's view. */
 const repoListRoutes = new Elysia({ prefix: "/api/repos" })
@@ -84,7 +84,7 @@ const repoListRoutes = new Elysia({ prefix: "/api/repos" })
             accountId,
           );
 
-          yield* Effect.forkDetach(scheduler.syncNow(accountId));
+          yield* Effect.forkDetach(scheduler.syncNow(ctx.userId));
 
           // The outcome is the repo's clone status, so the add never fails on it.
           if (isLink) {
@@ -139,7 +139,7 @@ const repoListRoutes = new Elysia({ prefix: "/api/repos" })
 /** One repository's routes, acting as the account that owns it. */
 const repoByIdRoutes = new Elysia({ prefix: "/api/repos" })
   .use(withAuth)
-  .resolve(asOwner({ id: "repository" }))
+  .onBeforeHandle(ownedBy({ id: "repository" }))
   .get("/:id/clone-status", (ctx) =>
     runRoute(
       Effect.gen(function* () {
@@ -163,7 +163,7 @@ const repoByIdRoutes = new Elysia({ prefix: "/api/repos" })
         const repoSvc = yield* RepositoryService;
         const cloneSvc = yield* RepoCloneService;
 
-        const repo = yield* repoSvc.getRepoById(ctx.params.id, ctx.owner);
+        const repo = yield* repoSvc.getRepoById(ctx.params.id);
         // A clone takes minutes; revalidating a linked checkout doesn't.
         const ensured = cloneSvc.ensureClone(repo.id).pipe(Effect.catch(() => Effect.void));
         yield* repo.managed ? Effect.forkDetach(ensured) : ensured;

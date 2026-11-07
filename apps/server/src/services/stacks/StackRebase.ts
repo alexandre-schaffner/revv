@@ -40,7 +40,6 @@ export class StackRebaseService extends Context.Service<
      */
     readonly rebase: (
       prId: string,
-      accountId: string,
       expectedHeads: Readonly<Record<string, string>>,
     ) => Effect.Effect<StackRebaseResult, StackRebaseError>;
     /**
@@ -222,13 +221,9 @@ export const StackRebaseServiceLive = Layer.effect(
     const mergeRunning = (repositoryId: string, stackNumber: number) =>
       dbTry("stack merge run read", () => liveRunFor(db, repositoryId, stackNumber) !== undefined);
 
-    const rebase = (
-      prId: string,
-      accountId: string,
-      expectedHeads: Readonly<Record<string, string>>,
-    ) =>
+    const rebase = (prId: string, expectedHeads: Readonly<Record<string, string>>) =>
       Effect.gen(function* () {
-        const ctx = yield* prContext.forPr(prId, accountId);
+        const ctx = yield* prContext.forPr(prId);
         const stack = yield* stacks.fetchFresh(ctx, ctx.pr.externalId);
         if (!stack) return yield* Effect.fail(new NotFoundError({ resource: "stack", id: prId }));
         if (!stack.viewerCanPush) {

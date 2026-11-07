@@ -239,7 +239,7 @@ export function submitReview(prId: string, body: SubmitReviewInput) {
     const issuesSubmittedAt =
       issueIds.length > 0 ? yield* walkthroughService.markIssuesSubmitted(issueIds) : null;
 
-    const { conversation } = yield* conversations.afterWrite(ctx, accountId);
+    const { conversation } = yield* conversations.afterWrite(ctx);
 
     return {
       id: submitted.id,

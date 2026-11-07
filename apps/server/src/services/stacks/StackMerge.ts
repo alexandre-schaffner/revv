@@ -47,28 +47,18 @@ export type StackMergeError = StackError | StackRejectedError | NotFoundError;
 export class StackMergeService extends Context.Service<
   StackMergeService,
   {
-    readonly plan: (
-      prId: string,
-      accountId: string,
-    ) => Effect.Effect<StackMergePlan, StackMergeError>;
+    readonly plan: (prId: string) => Effect.Effect<StackMergePlan, StackMergeError>;
     /**
      * Persist a run and start stepping it. Refuses while another run for the
      * stack is live, and when GitHub moved since the user confirmed.
      */
     readonly start: (
       prId: string,
-      accountId: string,
       request: StartRequest,
     ) => Effect.Effect<StackMergeRun, StackMergeError>;
     /** Stop a live run between steps. Anything already handed to auto-merge stays handed. */
-    readonly cancel: (
-      runId: string,
-      accountId: string,
-    ) => Effect.Effect<StackMergeRun, StackMergeError>;
-    readonly continueRun: (
-      runId: string,
-      accountId: string,
-    ) => Effect.Effect<StackMergeRun, StackMergeError>;
+    readonly cancel: (runId: string) => Effect.Effect<StackMergeRun, StackMergeError>;
+    readonly continueRun: (runId: string) => Effect.Effect<StackMergeRun, StackMergeError>;
     /** On boot: every run a previous process left live becomes `expired`. */
     readonly expireStale: () => Effect.Effect<number, DbError>;
   }
@@ -89,14 +79,10 @@ export const StackMergeServiceLive = Layer.effect(
     const driving = new Set<string>();
     const bootedAt = new Date().toISOString();
 
-    const loadRun = (runId: string, accountId: string) =>
+    const loadRun = (runId: string) =>
       Effect.flatMap(
         dbTry("stack merge run read", () =>
-          db
-            .select()
-            .from(stackMergeRuns)
-            .where(and(eq(stackMergeRuns.id, runId), eq(stackMergeRuns.accountId, accountId)))
-            .get(),
+          db.select().from(stackMergeRuns).where(eq(stackMergeRuns.id, runId)).get(),
         ),
         (row) =>
           row
@@ -163,7 +149,7 @@ export const StackMergeServiceLive = Layer.effect(
         return { stack, mergedUnlisted } satisfies StackRead;
       });
 
-    const portFor = (ctx: PrContextBasic, accountId: string): MergeDriverPort => {
+    const portFor = (ctx: PrContextBasic): MergeDriverPort => {
       // A run outlives a token refresh: every step asks for the current one.
       const current = accounts.clientFor(ctx.accountId).pipe(
         Effect.catchTag("DbError", Effect.die),
@@ -212,7 +198,7 @@ export const StackMergeServiceLive = Layer.effect(
               }),
             );
             if (!kept) return "ended";
-            yield* announce(accountId, run);
+            yield* announce(ctx.accountId, run);
             if (merged.length > 0) {
               yield* markMerged(run.repositoryId, merged).pipe(
                 Effect.catch((err) =>
@@ -237,12 +223,12 @@ export const StackMergeServiceLive = Layer.effect(
       };
     };
 
-    const launch = (ctx: PrContextBasic, run: StackMergeRun, accountId: string) =>
+    const launch = (ctx: PrContextBasic, run: StackMergeRun) =>
       Effect.gen(function* () {
         if (driving.has(run.id)) return;
         driving.add(run.id);
         yield* Effect.forkDetach(
-          driveRun(run, portFor(ctx, accountId)).pipe(
+          driveRun(run, portFor(ctx)).pipe(
             Effect.catchCause((cause) =>
               Effect.gen(function* () {
                 logError("stack-merge", `run ${run.id} stopped unexpectedly:`, Cause.pretty(cause));
@@ -254,7 +240,7 @@ export const StackMergeServiceLive = Layer.effect(
                     updatedAt: new Date().toISOString(),
                   }),
                 );
-                if (failed) yield* announce(accountId, toRun(failed));
+                if (failed) yield* announce(ctx.accountId, toRun(failed));
               }).pipe(Effect.catch(() => Effect.void)),
             ),
             Effect.ensuring(Effect.sync(() => driving.delete(run.id))),
@@ -276,7 +262,7 @@ export const StackMergeServiceLive = Layer.effect(
             }),
           );
         }
-        return yield* prContext.forPr(prId, row.accountId);
+        return yield* prContext.forPr(prId);
       });
 
     const freshStack = (ctx: PrContextBasic) =>
@@ -286,9 +272,9 @@ export const StackMergeServiceLive = Layer.effect(
           : Effect.fail(new NotFoundError({ resource: "stack", id: ctx.pr.id })),
       );
 
-    const readPlan = (prId: string, accountId: string) =>
+    const readPlan = (prId: string) =>
       Effect.gen(function* () {
-        const ctx = yield* prContext.forPr(prId, accountId);
+        const ctx = yield* prContext.forPr(prId);
         const stack = yield* freshStack(ctx);
         const prIds = yield* prIdsFor(
           ctx.repo.id,
@@ -297,9 +283,9 @@ export const StackMergeServiceLive = Layer.effect(
         return { ctx, stack, layers: planLayers(stack, prIds) };
       });
 
-    const plan = (prId: string, accountId: string) =>
+    const plan = (prId: string) =>
       Effect.gen(function* () {
-        const { ctx, stack, layers } = yield* readPlan(prId, accountId);
+        const { ctx, stack, layers } = yield* readPlan(prId);
         return {
           repositoryId: ctx.repo.id,
           stackNumber: stack.number,
@@ -312,9 +298,9 @@ export const StackMergeServiceLive = Layer.effect(
         } satisfies StackMergePlan;
       });
 
-    const start = (prId: string, accountId: string, request: StartRequest) =>
+    const start = (prId: string, request: StartRequest) =>
       Effect.gen(function* () {
-        const { ctx, stack, layers } = yield* readPlan(prId, accountId);
+        const { ctx, stack, layers } = yield* readPlan(prId);
         const refusal = startRefusal(stack, layers, request);
         if (refusal) {
           return yield* Effect.fail(
@@ -352,7 +338,7 @@ export const StackMergeServiceLive = Layer.effect(
                 status: run.status,
                 layersBaseFirst: [...run.layers],
                 error: null,
-                accountId,
+                accountId: ctx.accountId,
                 createdAt: now,
                 updatedAt: now,
               })
@@ -368,14 +354,14 @@ export const StackMergeServiceLive = Layer.effect(
             }),
           );
         }
-        yield* announce(accountId, run);
-        yield* launch(ctx, run, accountId);
+        yield* announce(ctx.accountId, run);
+        yield* launch(ctx, run);
         return run;
       });
 
-    const cancel = (runId: string, accountId: string) =>
+    const cancel = (runId: string) =>
       Effect.gen(function* () {
-        const row = yield* loadRun(runId, accountId);
+        const row = yield* loadRun(runId);
         if (!isLiveStackMergeRun(row.status)) return toRun(row);
         const handedOver = row.layersBaseFirst.filter((l) => l.state === "auto_merge");
         const error =
@@ -389,14 +375,14 @@ export const StackMergeServiceLive = Layer.effect(
             updatedAt: new Date().toISOString(),
           }),
         );
-        const run = toRun(updated ?? (yield* loadRun(runId, accountId)));
-        yield* announce(accountId, run);
+        const run = toRun(updated ?? (yield* loadRun(runId)));
+        yield* announce(row.accountId, run);
         return run;
       });
 
-    const continueRun = (runId: string, accountId: string) =>
+    const continueRun = (runId: string) =>
       Effect.gen(function* () {
-        const row = yield* loadRun(runId, accountId);
+        const row = yield* loadRun(runId);
         if (row.status !== "failed" && row.status !== "expired") {
           return yield* Effect.fail(
             new StackRejectedError({
@@ -432,8 +418,8 @@ export const StackMergeServiceLive = Layer.effect(
           );
         }
         const run = toRun(updated);
-        yield* announce(accountId, run);
-        yield* launch(ctx, run, accountId);
+        yield* announce(ctx.accountId, run);
+        yield* launch(ctx, run);
         return run;
       });
 

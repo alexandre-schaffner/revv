@@ -39,7 +39,6 @@ export class StackHeadlineService extends Context.Service<
      */
     readonly forRepo: (
       repositoryId: string,
-      accountId: string,
     ) => Effect.Effect<Record<number, StackHeadline>, DbError>;
   }
 >()("StackHeadlineService") {}
@@ -119,7 +118,7 @@ export const StackHeadlineServiceLive = Layer.effect(
         return row ? firstSentence(row.arc) : null;
       });
 
-    const name = (repositoryId: string, accountId: string, stack: StackMembers, key: string) =>
+    const name = (repositoryId: string, stack: StackMembers, key: string) =>
       Effect.gen(function* () {
         const launch = yield* resolveAgentLaunch("suggestions").pipe(
           Effect.provideService(SettingsService, settings),
@@ -133,7 +132,7 @@ export const StackHeadlineServiceLive = Layer.effect(
           return;
         }
         yield* cache.set<NamedStack>(CACHE_NS, key, named, { ttlMs: CACHE_TTL_MS });
-        yield* realtime.toAccount(accountId, {
+        yield* realtime.toRepo(repositoryId, {
           type: "stack:updated",
           data: { repositoryId, stackNumber: stack.stackNumber },
         });
@@ -145,7 +144,7 @@ export const StackHeadlineServiceLive = Layer.effect(
         ),
       );
 
-    const forRepo = (repositoryId: string, accountId: string) =>
+    const forRepo = (repositoryId: string) =>
       Effect.gen(function* () {
         const stacks = yield* readStacks(repositoryId);
         const out: Record<number, StackHeadline> = {};
@@ -169,7 +168,7 @@ export const StackHeadlineServiceLive = Layer.effect(
           if (!inflight.has(key) && (failedUntil.get(key) ?? 0) <= Date.now()) {
             failedUntil.delete(key);
             inflight.add(key);
-            yield* Effect.forkDetach(name(repositoryId, accountId, stack, key));
+            yield* Effect.forkDetach(name(repositoryId, stack, key));
           }
         }
         return out;

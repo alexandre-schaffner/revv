@@ -9,17 +9,17 @@ import { StackMergeService } from "../services/stacks/StackMerge";
 import { StackRebaseService } from "../services/stacks/StackRebase";
 import { StackService } from "../services/stacks/StackService";
 import { runRoute, withAuth } from "./middleware";
-import { asOwner } from "./ownership";
+import { ownedBy } from "./ownership";
 import { literalUnion } from "./schemas";
 
 const mergeMethod = literalUnion(MERGE_METHODS);
 
 export const stackRoutes = new Elysia({ prefix: "/api/prs" })
   .use(withAuth)
-  .resolve(asOwner({ id: "pull request" }))
+  .onBeforeHandle(ownedBy({ id: "pull request" }))
   .get("/:id/stack", (ctx) =>
     runRoute(
-      Effect.flatMap(StackService, (s) => s.detail(ctx.params.id, ctx.owner)).pipe(
+      Effect.flatMap(StackService, (s) => s.detail(ctx.params.id)).pipe(
         Effect.map((stack) => ({ stack })),
       ),
     ),
@@ -31,9 +31,8 @@ export const stackRoutes = new Elysia({ prefix: "/api/prs" })
         const stacks = yield* StackService;
         const prContext = yield* PrContextService;
         const diffCache = yield* DiffCacheService;
-        const accountId = ctx.owner;
 
-        const stack = yield* stacks.detail(ctx.params.id, accountId);
+        const stack = yield* stacks.detail(ctx.params.id);
         const here = stack?.layers.find((l) => l.prId === ctx.params.id);
         if (!stack || !here) return { warmed: 0 };
         const neighbours = stack.layers.flatMap((l) =>
@@ -44,7 +43,7 @@ export const stackRoutes = new Elysia({ prefix: "/api/prs" })
 
         const warmOne = (prId: string) =>
           Effect.gen(function* () {
-            const { pr, repo, client } = yield* prContext.forPr(prId, accountId);
+            const { pr, repo, client } = yield* prContext.forPr(prId);
             yield* diffCache.getOrFetch(pr, repo.fullName, client);
           }).pipe(
             Effect.catch((err) =>
@@ -61,14 +60,11 @@ export const stackRoutes = new Elysia({ prefix: "/api/prs" })
   )
 
   .get("/:id/stack/merge-plan", (ctx) =>
-    runRoute(Effect.flatMap(StackMergeService, (s) => s.plan(ctx.params.id, ctx.owner))),
+    runRoute(Effect.flatMap(StackMergeService, (s) => s.plan(ctx.params.id))),
   )
   .post(
     "/:id/stack/merge",
-    (ctx) =>
-      runRoute(
-        Effect.flatMap(StackMergeService, (s) => s.start(ctx.params.id, ctx.owner, ctx.body)),
-      ),
+    (ctx) => runRoute(Effect.flatMap(StackMergeService, (s) => s.start(ctx.params.id, ctx.body))),
     {
       body: t.Object({
         throughPosition: t.Integer({ minimum: 1 }),
@@ -81,19 +77,17 @@ export const stackRoutes = new Elysia({ prefix: "/api/prs" })
     "/:id/stack/rebase",
     (ctx) =>
       runRoute(
-        Effect.flatMap(StackRebaseService, (s) =>
-          s.rebase(ctx.params.id, ctx.owner, ctx.body.expectedHeads),
-        ),
+        Effect.flatMap(StackRebaseService, (s) => s.rebase(ctx.params.id, ctx.body.expectedHeads)),
       ),
     { body: t.Object({ expectedHeads: t.Record(t.String(), t.String()) }) },
   );
 
 export const repoStackRoutes = new Elysia({ prefix: "/api/repos" })
   .use(withAuth)
-  .resolve(asOwner({ id: "repository" }))
+  .onBeforeHandle(ownedBy({ id: "repository" }))
   .get("/:id/stack-headlines", (ctx) =>
     runRoute(
-      Effect.flatMap(StackHeadlineService, (s) => s.forRepo(ctx.params.id, ctx.owner)).pipe(
+      Effect.flatMap(StackHeadlineService, (s) => s.forRepo(ctx.params.id)).pipe(
         Effect.map((headlines) => ({ headlines })),
       ),
     ),
@@ -101,10 +95,10 @@ export const repoStackRoutes = new Elysia({ prefix: "/api/repos" })
 
 export const stackMergeRunRoutes = new Elysia({ prefix: "/api/stack-merges" })
   .use(withAuth)
-  .resolve(asOwner({ id: "stack merge" }))
+  .onBeforeHandle(ownedBy({ id: "stack merge" }))
   .post("/:id/cancel", (ctx) =>
-    runRoute(Effect.flatMap(StackMergeService, (s) => s.cancel(ctx.params.id, ctx.owner))),
+    runRoute(Effect.flatMap(StackMergeService, (s) => s.cancel(ctx.params.id))),
   )
   .post("/:id/continue", (ctx) =>
-    runRoute(Effect.flatMap(StackMergeService, (s) => s.continueRun(ctx.params.id, ctx.owner))),
+    runRoute(Effect.flatMap(StackMergeService, (s) => s.continueRun(ctx.params.id))),
   );

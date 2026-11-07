@@ -41,14 +41,8 @@ export class PrContextService extends Context.Service<
     readonly getRepo: (repoId: string) => Effect.Effect<Repository, NotFoundError | DbError>;
     readonly forRepo: (repoId: string) => Effect.Effect<RepoContext, PrContextError>;
     readonly readPr: (prId: string) => Effect.Effect<PrRecord, NotFoundError | DbError>;
-    /**
-     * A PR, its repository and the owning account's client. With `accountId`,
-     * a PR outside that account's repositories is not found.
-     */
-    readonly forPr: (
-      prId: string,
-      accountId?: string,
-    ) => Effect.Effect<PrContextBasic, PrContextError>;
+    /** A PR, its repository and the owning account's client. */
+    readonly forPr: (prId: string) => Effect.Effect<PrContextBasic, PrContextError>;
   }
 >()("PrContextService") {}
 
@@ -75,9 +69,9 @@ export const PrContextServiceLive = Layer.effect(
         return { pr, repo, accountId } satisfies PrRecord;
       });
 
-    const forPr = (prId: string, accountId?: string) =>
+    const forPr = (prId: string) =>
       Effect.gen(function* () {
-        const pr = yield* prService.getPr(prId, accountId);
+        const pr = yield* prService.getPr(prId);
         return { ...(yield* forRepo(pr.repositoryId)), pr } satisfies PrContextBasic;
       });
 

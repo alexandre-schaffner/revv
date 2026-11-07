@@ -217,6 +217,7 @@ const StackReviewServiceWithDeps = StackReviewServiceLive.pipe(
   Layer.provide(
     Layer.mergeAll(
       BaseLayers,
+      PrContextServiceWithDeps,
       StackServiceWithDeps,
       WalkthroughJobsWithDeps,
       StackBriefJobsWithDeps,

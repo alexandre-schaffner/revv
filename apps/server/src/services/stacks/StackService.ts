@@ -50,10 +50,7 @@ export class StackService extends Context.Service<
      * (or the host predates stacks). Serves a read under 30s old from the
      * cache, and the last good one (`stale: true`) when GitHub is unreachable.
      */
-    readonly detail: (
-      prId: string,
-      accountId: string,
-    ) => Effect.Effect<PrStackDetail | null, StackError>;
+    readonly detail: (prId: string) => Effect.Effect<PrStackDetail | null, StackError>;
     /** PR #`prNumber`'s stack as GitHub reports it now, cached for the next read. */
     readonly fetchFresh: (
       at: { readonly client: GitHubClient; readonly repo: RepoContext["repo"] },
@@ -345,11 +342,11 @@ export const StackServiceLive = Layer.effect(
         }
       });
 
-    const detail = (prId: string, accountId: string) =>
+    const detail = (prId: string) =>
       Effect.gen(function* () {
-        const ctx = yield* prContext.forPr(prId, accountId);
+        const ctx = yield* prContext.forPr(prId);
         if (!ctx.pr.stack) return null;
-        const { stack, stale } = yield* githubStack(ctx, ctx.pr.stack.number, accountId);
+        const { stack, stale } = yield* githubStack(ctx, ctx.pr.stack.number, ctx.accountId);
         if (!stack) return null;
         const facts = yield* readStackFacts(db, ctx.repo.id, stack);
         return overlayStack(stack, facts, ctx.pr.externalId, stale);

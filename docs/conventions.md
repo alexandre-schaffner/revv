@@ -205,10 +205,11 @@ the scheduler restarts.
 `status(code, ApiErrorBody)`, so Eden types every error status a route can answer. A stream
 opens through `routes/sse.ts` (`openSse`, `pipeToSse`, `runStream` for a refusal before the
 stream starts, which answers the same `ApiErrorBody`). Elysia's own schema and parse refusals
-answer it too, as `INVALID` (`requestRefusals`). A router whose paths carry resource ids registers `ownedBy({ id: "pull request" })`
-(`routes/ownership.ts`) right after its auth plugin, or `.resolve(asOwner(…))` when its routes
-act on GitHub or address an account: that derives `owner`, the account that owns the
-repository, which the route acts as whatever host the user has active.
+answer it too, as `INVALID` (`requestRefusals`). A router whose paths carry resource ids registers
+`.onBeforeHandle(ownedBy({ id: "pull request" }))` (`routes/ownership.ts`) right after its auth
+plugin. That guard is the only ownership check: past it, services take the id alone and read the
+account that owns the repository from it (`PrContextService.forPr` / `forRepo`), which is the
+account the work acts as, whatever host the user has active.
 
 **Why.** One table means a REST route, a stream refusal and the external agent's MCP route
 answer the same error the same way. A guard on the router, not each handler, is what keeps a

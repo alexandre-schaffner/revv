@@ -29,7 +29,7 @@ import { RepositoryService } from "../services/Repository";
 import { ReviewService } from "../services/Review";
 import { SyncService } from "../services/Sync";
 import { runRoute, withAccount, withAuth } from "./middleware";
-import { asOwner, ownedBy } from "./ownership";
+import { ownedBy } from "./ownership";
 import { literalUnion } from "./schemas";
 
 /**
@@ -92,8 +92,7 @@ const prListRoutes = new Elysia({ prefix: "/api/prs" })
             {
               findRepository: (fullName) =>
                 repositoryService.getRepoByFullName(fullName, accountId),
-              findCachedPullRequest: (id) =>
-                pullRequestService.getPr(id, accountId).pipe(Effect.option),
+              findCachedPullRequest: (id) => pullRequestService.getPr(id).pipe(Effect.option),
               fetchPullRequest: (repository, number) =>
                 github.prs.get(client, repository.fullName, repository.id, number),
               upsertPullRequest: (pullRequest) => mirror.apply([pullRequest]).pipe(Effect.asVoid),
@@ -219,15 +218,9 @@ const pinnedRoutes = new Elysia({ prefix: "/api/prs" })
 /** One PR's routes, acting as the account that owns its repository. */
 const prByIdRoutes = new Elysia({ prefix: "/api/prs" })
   .use(withAuth)
-  .resolve(asOwner({ id: "pull request" }))
+  .onBeforeHandle(ownedBy({ id: "pull request" }))
   .get("/:id", (ctx) =>
-    runRoute(
-      Effect.gen(function* () {
-        const prService = yield* PullRequestService;
-        const accountId = ctx.owner;
-        return yield* prService.getPr(ctx.params.id, accountId);
-      }),
-    ),
+    runRoute(Effect.flatMap(PullRequestService, (prs) => prs.getPr(ctx.params.id))),
   )
   .get(
     "/:id/files",
@@ -238,7 +231,7 @@ const prByIdRoutes = new Elysia({ prefix: "/api/prs" })
           const reviewService = yield* ReviewService;
           const github = yield* GitHubGateway;
           const diffCache = yield* DiffCacheService;
-          const { pr, repo, client } = yield* prContext.forPr(ctx.params.id, ctx.owner);
+          const { pr, repo, client } = yield* prContext.forPr(ctx.params.id);
 
           // Unscoped (or scoped to head) means the full PR diff (merge-base
           // 3-dot, matching GitHub's "Files changed" tab) served from the
@@ -277,10 +270,9 @@ const prByIdRoutes = new Elysia({ prefix: "/api/prs" })
         Effect.gen(function* () {
           const prService = yield* PullRequestService;
           const repoCloneService = yield* RepoCloneService;
-          const accountId = ctx.owner;
 
           // Every state is an answer the file peek shows, not a refusal.
-          const pr = yield* prService.getPr(ctx.params.id, accountId);
+          const pr = yield* prService.getPr(ctx.params.id);
           if (!pr.headSha) {
             return {
               status: "error" as const,
@@ -328,7 +320,7 @@ const prByIdRoutes = new Elysia({ prefix: "/api/prs" })
         Effect.gen(function* () {
           const prContext = yield* PrContextService;
           const github = yield* GitHubGateway;
-          const { pr, repo, client } = yield* prContext.forPr(ctx.params.id, ctx.owner);
+          const { pr, repo, client } = yield* prContext.forPr(ctx.params.id);
           const sha = ctx.query.side === "base" ? pr.baseSha : pr.headSha;
           if (!sha) {
             return new Response("PR is missing the requested SHA", { status: 404 });
@@ -360,11 +352,7 @@ const prByIdRoutes = new Elysia({ prefix: "/api/prs" })
     },
   )
   .get("/:id/suggestions", (ctx) =>
-    runRoute(
-      suggestionsForPr(ctx.params.id, ctx.owner).pipe(
-        Effect.map((suggestions) => ({ suggestions })),
-      ),
-    ),
+    runRoute(suggestionsForPr(ctx.params.id).pipe(Effect.map((suggestions) => ({ suggestions })))),
   )
 
   // Targeted refresh of a single PR. Bounded to a couple of GitHub requests, so
@@ -372,14 +360,9 @@ const prByIdRoutes = new Elysia({ prefix: "/api/prs" })
   // wherever the user is asking about one PR rather than the whole list.
   .post("/:id/refresh", (ctx) =>
     runRoute(
-      Effect.gen(function* () {
-        const prService = yield* PullRequestService;
-        const scheduler = yield* PollScheduler;
-        // Scoped to the account before it touches GitHub.
-        yield* prService.getPr(ctx.params.id, ctx.owner);
-        yield* scheduler.refreshPr(ctx.params.id);
-        return { success: true };
-      }),
+      Effect.flatMap(PollScheduler, (s) => s.refreshPr(ctx.params.id)).pipe(
+        Effect.as({ success: true }),
+      ),
     ),
   )
 
@@ -388,7 +371,7 @@ const prByIdRoutes = new Elysia({ prefix: "/api/prs" })
       Effect.gen(function* () {
         const prContext = yield* PrContextService;
         const github = yield* GitHubGateway;
-        const { pr, repo, client } = yield* prContext.forPr(ctx.params.id, ctx.owner);
+        const { pr, repo, client } = yield* prContext.forPr(ctx.params.id);
         return yield* github.prs.commits(client, repo.fullName, pr.externalId);
       }),
     ),
@@ -403,35 +386,20 @@ const prByIdRoutes = new Elysia({ prefix: "/api/prs" })
   )
 
   .post("/:id/convert-to-draft", (ctx) =>
-    runRoute(
-      Effect.gen(function* () {
-        const accountId = ctx.owner;
-        yield* mutatePr(ctx.params.id, accountId, "convert-to-draft");
-      }).pipe(Effect.as({ success: true })),
-    ),
+    runRoute(mutatePr(ctx.params.id, "convert-to-draft").pipe(Effect.as({ success: true }))),
   )
   .post("/:id/ready-for-review", (ctx) =>
-    runRoute(
-      Effect.gen(function* () {
-        const accountId = ctx.owner;
-        yield* mutatePr(ctx.params.id, accountId, "ready-for-review");
-      }).pipe(Effect.as({ success: true })),
-    ),
+    runRoute(mutatePr(ctx.params.id, "ready-for-review").pipe(Effect.as({ success: true }))),
   )
   .post("/:id/close", (ctx) =>
-    runRoute(
-      Effect.gen(function* () {
-        const accountId = ctx.owner;
-        yield* mutatePr(ctx.params.id, accountId, "close");
-      }).pipe(Effect.as({ success: true })),
-    ),
+    runRoute(mutatePr(ctx.params.id, "close").pipe(Effect.as({ success: true }))),
   )
 
   .get("/:id/merge-eligibility", (ctx) =>
     runRoute(
       Effect.gen(function* () {
         const prContext = yield* PrContextService;
-        const { pr, repo, client } = yield* prContext.forPr(ctx.params.id, ctx.owner);
+        const { pr, repo, client } = yield* prContext.forPr(ctx.params.id);
         return yield* checkMergeEligibility(
           { prId: pr.id, repoFullName: repo.fullName, prNumber: pr.externalId },
           client,
@@ -445,11 +413,10 @@ const prByIdRoutes = new Elysia({ prefix: "/api/prs" })
     (ctx) =>
       runRoute(
         Effect.gen(function* () {
-          const accountId = ctx.owner;
           const prContext = yield* PrContextService;
           const github = yield* GitHubGateway;
           const mirror = yield* PrMirror;
-          const { pr, repo, client } = yield* prContext.forPr(ctx.params.id, accountId);
+          const { pr, repo, client } = yield* prContext.forPr(ctx.params.id);
           yield* github.prs.merge(client, repo.fullName, pr.externalId, ctx.body.mergeMethod);
           yield* mirror.recordMutation(pr.id, {
             kind: "terminal",
@@ -470,12 +437,12 @@ export const prRoutes = new Elysia().use(prListRoutes).use(pinnedRoutes).use(prB
 type PrMutationAction = "convert-to-draft" | "ready-for-review" | "close";
 
 /** Run a PR mutation on GitHub as the repo's account, and record its outcome. */
-function mutatePr(prId: string, accountId: string, action: PrMutationAction) {
+function mutatePr(prId: string, action: PrMutationAction) {
   return Effect.gen(function* () {
     const prContext = yield* PrContextService;
     const github = yield* GitHubGateway;
     const mirror = yield* PrMirror;
-    const { pr, repo, client } = yield* prContext.forPr(prId, accountId);
+    const { pr, repo, client } = yield* prContext.forPr(prId);
 
     if (action === "close") {
       yield* github.prs.close(client, repo.fullName, pr.externalId);

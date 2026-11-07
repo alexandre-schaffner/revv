@@ -11,6 +11,7 @@ import { logError } from "../../logger";
 import { withGitHubOrigin } from "../../observability/github-ledger/origin";
 import { DbService } from "../Db";
 import { makeStartJobMutex } from "../job-mutex";
+import { PrContextService } from "../PrContext";
 import { WalkthroughJobs } from "../walkthrough/WalkthroughJobs";
 import { STACK_REVIEW_REQUEST } from "./overlay";
 import { StackBriefJobs } from "./StackBriefJobs";
@@ -60,7 +61,6 @@ export class StackReviewService extends Context.Service<
      */
     readonly start: (
       prId: string,
-      accountId: string,
       scope: StackReviewScope,
     ) => Effect.Effect<StackReviewStarted, StackError | NotFoundError | DbError>;
     /** Pick up the reviews a previous process left running. */
@@ -73,6 +73,7 @@ export const StackReviewServiceLive = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* DbService;
     const stacks = yield* StackService;
+    const prContext = yield* PrContextService;
     const walkthroughJobs = yield* WalkthroughJobs;
     const briefJobs = yield* StackBriefJobs;
     const scope = yield* Effect.scope;
@@ -161,7 +162,7 @@ export const StackReviewServiceLive = Layer.effect(
             // Asked before the row is closed: a restart in between asks again,
             // and `ensure` answers with the brief already there.
             yield* briefJobs
-              .ensure(review.prId, review.accountId)
+              .ensure(review.prId)
               .pipe(
                 Effect.catchCause((cause) =>
                   Effect.sync(() =>
@@ -190,9 +191,10 @@ export const StackReviewServiceLive = Layer.effect(
         ),
       );
 
-    const start = (prId: string, accountId: string, reviewScope: StackReviewScope) =>
+    const start = (prId: string, reviewScope: StackReviewScope) =>
       Effect.gen(function* () {
-        const detail = yield* stacks.detail(prId, accountId);
+        const detail = yield* stacks.detail(prId);
+        const { accountId } = yield* prContext.readPr(prId);
         if (!detail) return yield* Effect.fail(new NotFoundError({ resource: "stack", id: prId }));
 
         const plan = planStackReview(detail.layers, reviewScope);

@@ -62,10 +62,7 @@ export class RepositoryService extends Context.Service<
   {
     readonly listRepos: (accountId?: string) => Effect.Effect<Repository[], DbError>;
     readonly addRepo: (data: AddRepoData, accountId: string) => Effect.Effect<Repository, DbError>;
-    readonly getRepoById: (
-      id: string,
-      accountId?: string,
-    ) => Effect.Effect<Repository, NotFoundError | DbError>;
+    readonly getRepoById: (id: string) => Effect.Effect<Repository, NotFoundError | DbError>;
     readonly getRepoByFullName: (
       fullName: string,
       accountId: string,
@@ -147,12 +144,10 @@ export const RepositoryServiceLive = Layer.effect(
         );
       },
 
-      getRepoById: (id, accountId) =>
+      getRepoById: (id) =>
         dbTry("read repository", () => readRepo(db, id)).pipe(
           Effect.flatMap((found) =>
-            !found || (accountId && found.row.accountId !== accountId)
-              ? Effect.fail(notFound(id))
-              : Effect.succeed(rowToRepo(found)),
+            found ? Effect.succeed(rowToRepo(found)) : Effect.fail(notFound(id)),
           ),
         ),
 
