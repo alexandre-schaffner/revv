@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { API_PORT, DEV_API_PORT } from "@revv/shared";
 import {
   EXTERNAL_REVIEW_TOOL_SPECS,
   MAX_WAIT_SECONDS,
@@ -39,6 +40,14 @@ if (bridgeTimeout === undefined) {
 if (MAX_WAIT_SECONDS * 1000 >= Number(bridgeTimeout.replaceAll("_", ""))) {
   throw new Error(
     `wait_for_walkthrough may wait ${MAX_WAIT_SECONDS}s, at or past the bridge's ${bridgeTimeout}ms request timeout.`,
+  );
+}
+
+// Bridges installed before they carried `REVV_API_URL` probe Revv's two channels.
+const legacyPorts = /const LEGACY_PORTS = \[([\d_, ]+)\];/.exec(bridgeSource)?.[1];
+if (legacyPorts?.replaceAll(" ", "") !== `${API_PORT},${DEV_API_PORT}`) {
+  throw new Error(
+    `The external MCP bridge's LEGACY_PORTS must be [${API_PORT}, ${DEV_API_PORT}] (API_PORT, DEV_API_PORT).`,
   );
 }
 

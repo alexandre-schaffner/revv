@@ -41,6 +41,7 @@ async function askBridge(
   apiUrl: string,
   cwd: string = resolve(import.meta.dir, "../../../../.."),
   input: string = REQUEST,
+  env: Record<string, string> = {},
 ): Promise<string> {
   const child = Bun.spawn(["bun", "run", BRIDGE], {
     cwd,
@@ -48,6 +49,7 @@ async function askBridge(
       ...BRIDGE_ENV,
       REVV_INTEGRATION_TOKEN: "test-token",
       REVV_API_URL: apiUrl,
+      ...env,
     },
     stdin: new TextEncoder().encode(input),
     stdout: "pipe",
@@ -130,6 +132,29 @@ describe("external MCP bridge", () => {
 
     expect(JSON.parse(output)).toEqual(replies);
     expect(repositoryHeader).toBeNull();
+  });
+
+  it("reaches Revv on loopback past a proxy the environment names", async () => {
+    const url = stubRevv(
+      () => new Response(JSON.stringify({ jsonrpc: "2.0", id: 7, result: { tools: [] } })),
+    );
+
+    const output = await askBridge(url, undefined, REQUEST, {
+      HTTP_PROXY: "http://127.0.0.1:1",
+      http_proxy: "http://127.0.0.1:1",
+    });
+
+    expect(JSON.parse(output)).toEqual({ jsonrpc: "2.0", id: 7, result: { tools: [] } });
+  });
+
+  it("keeps Revv's refusal when the next endpoint can't be reached", async () => {
+    const url = stubRevv(() => new Response("credential revoked", { status: 403 }));
+
+    const output = await askBridge(`${url},http://127.0.0.1:1/mcp/external`);
+
+    const response = JSON.parse(output) as { id: number; error?: { message: string } };
+    expect(response.error?.message).toContain("403");
+    expect(response.error?.message).toContain("credential revoked");
   });
 
   it("reports an unreachable Revv instead of waiting on it", async () => {

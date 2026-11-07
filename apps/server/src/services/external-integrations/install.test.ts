@@ -60,6 +60,7 @@ function input(root: string, token: string): BridgeInstallInput {
     runtimeExecutable: "/test/bun",
     token,
     integrationsDirectory: assets(root),
+    apiUrl: "http://127.0.0.1:45678/mcp/external",
   };
 }
 
@@ -89,6 +90,23 @@ describe.each([...EXTERNAL_AGENT_PROVIDERS])("%s install", (provider: ExternalAg
     const written = integrationInstaller.locations.map(credentialText).join("\n");
     expect(written).toContain("second-token");
     expect(written).not.toContain("first-token");
+  });
+
+  it("brings an installed bridge copy up to the bundled one", () => {
+    const home = temporaryHome();
+    const target = installer(provider, home);
+    const given = input(home, "token");
+    target.install(given);
+    const copies = [
+      ...new Bun.Glob("**/server/revv-mcp.ts").scanSync({ cwd: home, dot: true }),
+    ].map((file) => join(home, file));
+    expect(copies).toHaveLength(1);
+    const copy = copies[0] ?? "";
+    writeFileSync(copy, "// an older bridge\n");
+
+    target.refreshBridge(given.integrationsDirectory);
+
+    expect(readFileSync(copy, "utf8")).toBe("#!/usr/bin/env bun\n");
   });
 
   it("removes everything it owns on disconnect", () => {
@@ -192,7 +210,13 @@ describe("install safety", () => {
     const entry = cursor.mcpServers[`revv-${ACCOUNT_KEY}`];
     expect(entry?.command).toBe("/test/bun");
     expect(entry?.args[0]).toBe("run");
-    expect(entry?.env).toEqual({ REVV_INTEGRATION_TOKEN: "token", BUN_BE_BUN: "1" });
+    expect(entry?.env).toEqual({
+      REVV_INTEGRATION_TOKEN: "token",
+      REVV_API_URL: "http://127.0.0.1:45678/mcp/external",
+      NO_PROXY: "127.0.0.1,localhost",
+      no_proxy: "127.0.0.1,localhost",
+      BUN_BE_BUN: "1",
+    });
     expect(readFileSync(codexPaths(ACCOUNT_KEY, home).configFile, "utf8")).toContain(
       'BUN_BE_BUN = "1"',
     );

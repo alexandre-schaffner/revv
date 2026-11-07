@@ -14,10 +14,12 @@ import {
 } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
+import { serverEnv } from "../config";
 import { externalIntegrations } from "../db/schema/external-integrations";
 import { pullRequests } from "../db/schema/pull-requests";
 import { repositories } from "../db/schema/repositories";
 import { ExternalIntegrationError } from "../domain/errors";
+import { logError } from "../logger";
 import { DbService } from "./Db";
 import {
   externalIntegrationError,
@@ -194,10 +196,20 @@ export const ExternalIntegrationsLive = Layer.effect(
       });
       const byProvider = new Map(rows.map((row) => [row.provider, row]));
       const now = Date.now();
+      const integrationsDirectory = yield* Effect.try(findIntegrationsDirectory).pipe(
+        Effect.orElseSucceed(() => null),
+      );
       return EXTERNAL_AGENT_PROVIDERS.map((provider): ExternalIntegrationStatus => {
         const row = byProvider.get(provider);
         const active = row ? isIntegrationCredentialActive(row, now) : false;
         const installer = externalIntegrationInstaller(provider, accountId);
+        if (integrationsDirectory !== null) {
+          try {
+            installer.refreshBridge(integrationsDirectory);
+          } catch (err) {
+            logError("external-integrations", `refreshing the ${provider} bridge failed:`, err);
+          }
+        }
         return {
           provider,
           connected: Boolean(row && active),
@@ -235,6 +247,7 @@ export const ExternalIntegrationsLive = Layer.effect(
             runtimeExecutable: process.execPath,
             token,
             integrationsDirectory,
+            apiUrl: `http://${serverEnv.host}:${serverEnv.port}/mcp/external`,
           }),
         catch: asIntegrationError("INSTALL_FAILED", "Could not install the Revv integration."),
       });
