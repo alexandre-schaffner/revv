@@ -143,13 +143,13 @@ const prListRoutes = new Elysia({ prefix: "/api/prs" })
   // the hourly metadata refresh and the archive backfill (up to 150 detail
   // fetches per repo), which is minutes of work — far too long to hold an HTTP
   // request open. Completion reaches the client over SSE (`prs:sync-complete`),
-  // which is what it already listens for. `syncNow` coalesces, so a double-click
-  // does not start a second pass.
-  .post("/sync", () =>
+  // which is what it already listens for. A click while a cycle runs queues one
+  // follow-up cycle that reuses its listings; more clicks join that one.
+  .post("/sync", (ctx) =>
     runRoute(
-      Effect.flatMap(PollScheduler, (s) => Effect.forkDetach(s.syncNow())).pipe(
-        Effect.as({ success: true }),
-      ),
+      Effect.flatMap(PollScheduler, (s) =>
+        Effect.forkDetach(s.syncNow(ctx.account.accountId)),
+      ).pipe(Effect.as({ success: true })),
     ),
   )
 

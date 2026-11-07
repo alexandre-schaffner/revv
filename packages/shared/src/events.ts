@@ -88,10 +88,13 @@ export type HunkScanEventMessage =
   | HunkScanHunkEnvelope
   | HunkScanCompleteEnvelope;
 
-/** Full state: every open PR the receiving account syncs. */
+/**
+ * Full state: every open PR the account on `host` syncs. The stream carries
+ * every account of the user, so a client showing another host's list ignores it.
+ */
 export interface PrsUpdatedEnvelope {
   type: "prs:updated";
-  data: PullRequest[];
+  data: { host: string; prs: PullRequest[] };
 }
 
 /** Delta: one PR closed or merged; it leaves the open list for the archive. */
@@ -197,10 +200,13 @@ export interface PrsSyncFailedEnvelope {
   data: { message: string };
 }
 
-/** Full state: every repository the receiving account has added. */
+/**
+ * Full state: every repository the account on `host` has added. A client
+ * showing another host's list ignores it.
+ */
 export interface ReposUpdatedEnvelope {
   type: "repos:updated";
-  data: Repository[];
+  data: { host: string; repos: Repository[] };
 }
 
 /** Full state of one repository's clone status. */

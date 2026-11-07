@@ -46,11 +46,14 @@ import { WalkthroughJobs } from "./walkthrough/WalkthroughJobs";
 type PollSchedulerService = {
   readonly start: () => Effect.Effect<void>;
   /**
-   * Full sync of every repo on every account. A request made while a cycle
-   * is in flight runs once that cycle ends, instead of starting a second one
-   * alongside it.
+   * Full sync of every repo on every account, asked for by `requester`'s
+   * user: the sync signals reach the repos' accounts and the requester, so
+   * an account with no repos still sees its sync finish. A request made
+   * while a cycle is in flight queues one follow-up cycle for when it ends
+   * (requests coalesce onto it), which may reuse the listings the cycle in
+   * flight just made.
    */
-  readonly syncNow: () => Effect.Effect<void>;
+  readonly syncNow: (requester: string) => Effect.Effect<void>;
   /**
    * Bring the PR list up to date because a client is looking at it.
    *
@@ -120,20 +123,20 @@ export const PollSchedulerLive = Layer.effect(
       });
 
     /**
-     * Bring every repo's open PRs in SQLite up to date with GitHub. Repos the
-     * signature probe proves unchanged reuse their DB rows (never on a manual
-     * sync). Returns the cycle's open PRs and the repos GitHub actually listed.
+     * Bring every repo's open PRs in SQLite up to date with GitHub. With
+     * `reuseListings`, repos the signature probe proves unchanged reuse their
+     * DB rows. Returns the cycle's open PRs and the repos GitHub actually listed.
      */
     const syncOpenPrLists = (
       gate: AccountGate,
       allRepos: readonly Repository[],
       existingPrs: readonly PullRequest[],
       existingMap: ReadonlyMap<string, PullRequest>,
-      trigger: SyncTrigger,
+      reuseListings: boolean,
     ) =>
       Effect.gen(function* () {
         state.keepListingsFor(new Set(allRepos.map((r) => r.id)));
-        const probed = yield* probeRepos(github, gate, state, allRepos, trigger !== "manual");
+        const probed = yield* probeRepos(github, gate, state, allRepos, reuseListings);
         const ctx = {
           existingMap,
           existingByRepo: Map.groupBy(existingPrs, (pr) => pr.repositoryId),
@@ -158,6 +161,7 @@ export const PollSchedulerLive = Layer.effect(
       trigger: SyncTrigger,
       repoToAccountId: ReadonlyMap<string, string>,
       accountIds: readonly string[],
+      reuseListings: boolean,
     ) =>
       Effect.gen(function* () {
         const allRepos = yield* repoService.listRepos();
@@ -179,7 +183,7 @@ export const PollSchedulerLive = Layer.effect(
           allRepos,
           existingPrs,
           existingMap,
-          trigger,
+          reuseListings,
         );
         // Only a repo GitHub listed this cycle can prove a PR left it.
         const fresh = new Set(allPrs.map((pr) => pr.id));
@@ -248,13 +252,22 @@ export const PollSchedulerLive = Layer.effect(
         state.markBaselineDone();
       });
 
-    const syncAllRepos = (trigger: SyncTrigger): Effect.Effect<void> =>
+    /**
+     * One cycle. `requesters` (accounts whose user asked for it) hear its
+     * sync signals with the accounts that own repos. A manual cycle re-lists
+     * every repo unless it follows one that just did (`reuseListings`).
+     */
+    const syncAllRepos = (
+      trigger: SyncTrigger,
+      requesters: ReadonlySet<string>,
+      reuseListings: boolean,
+    ): Effect.Effect<void> =>
       Effect.withSpan("PollScheduler.syncAllRepos")(
         Effect.gen(function* () {
           const repoToAccountId = yield* repoService.accountIdsByRepo();
-          const accountIds = [...new Set(repoToAccountId.values())];
+          const accountIds = [...new Set([...repoToAccountId.values(), ...requesters])];
           yield* broadcastPerAccount(accountIds, { type: "prs:sync-started" });
-          yield* syncCycle(trigger, repoToAccountId, accountIds).pipe(
+          yield* syncCycle(trigger, repoToAccountId, accountIds, reuseListings).pipe(
             Effect.andThen(broadcastPerAccount(accountIds, { type: "prs:sync-complete" })),
             Effect.catchCause((cause) =>
               Effect.gen(function* () {
@@ -275,25 +288,40 @@ export const PollSchedulerLive = Layer.effect(
         ),
       );
 
-    // One cycle at a time, process-wide: concurrent callers coalesce onto the
-    // one in flight, which broadcasts `prs:sync-complete` for them too.
-    const runSyncOnce = (trigger: SyncTrigger): Effect.Effect<void> =>
+    // Whose users asked for the follow-up cycle a manual request queued.
+    const queuedRequesters = new Set<string>();
+
+    // One cycle at a time, process-wide. A manual request made meanwhile
+    // queues one follow-up cycle; further ones coalesce onto it.
+    const runSyncOnce = (
+      trigger: SyncTrigger,
+      requesters: ReadonlySet<string> = new Set(),
+      reuseListings = trigger !== "manual",
+    ): Effect.Effect<void> =>
       Effect.suspend(() => {
         const claim = state.claimCycle(trigger, Date.now());
         if (claim === "in-flight") {
-          debug("PollScheduler", "sync already in flight — coalescing this request");
+          debug("PollScheduler", "sync already in flight — queueing one follow-up cycle");
+          if (trigger === "manual") for (const id of requesters) queuedRequesters.add(id);
           return Effect.void;
         }
         if (claim === "fresh-enough") return Effect.void;
         let rerun = false;
-        return syncAllRepos(trigger).pipe(
+        return syncAllRepos(trigger, requesters, reuseListings).pipe(
           withGitHubOrigin(`poll:sync:${trigger}`),
           Effect.ensuring(
             Effect.sync(() => {
               rerun = state.releaseCycle();
             }),
           ),
-          Effect.andThen(Effect.suspend(() => (rerun ? runSyncOnce("manual") : Effect.void))),
+          Effect.andThen(
+            Effect.suspend(() => {
+              if (!rerun) return Effect.void;
+              const followers = new Set(queuedRequesters);
+              queuedRequesters.clear();
+              return runSyncOnce("manual", followers, true);
+            }),
+          ),
         );
       });
 
@@ -421,7 +449,7 @@ export const PollSchedulerLive = Layer.effect(
           yield* threadLoop.start(threadSweepLoop);
         }),
 
-      syncNow: () => runSyncOnce("manual"),
+      syncNow: (requester) => runSyncOnce("manual", new Set([requester])),
 
       freshen: () => runSyncOnce("freshen"),
 

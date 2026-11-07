@@ -36,7 +36,7 @@ function seededDb(): Db {
   return db;
 }
 
-const MSG: ServerEventMessage = { type: "repos:updated", data: [] };
+const MSG: ServerEventMessage = { type: "repos:updated", data: { host: "github.com", repos: [] } };
 
 async function sent(db: Db, push: Effect.Effect<void, never, Realtime>) {
   const deliveries: string[] = [];

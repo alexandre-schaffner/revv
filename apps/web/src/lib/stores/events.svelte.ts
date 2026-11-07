@@ -151,7 +151,7 @@ function dispatch(msg: ServerEventMessage): void {
       break;
     case "prs:updated":
       prs.onPrsUpdated(msg.data);
-      walkthrough.onPrsUpdated(msg.data);
+      walkthrough.onPrsUpdated(msg.data.prs);
       break;
     case "pr:archived":
       prs.onPrArchived(msg.data);

@@ -84,7 +84,7 @@ const repoListRoutes = new Elysia({ prefix: "/api/repos" })
             accountId,
           );
 
-          yield* Effect.forkDetach(scheduler.syncNow());
+          yield* Effect.forkDetach(scheduler.syncNow(accountId));
 
           // The outcome is the repo's clone status, so the add never fails on it.
           if (isLink) {

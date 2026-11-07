@@ -462,8 +462,7 @@ export function onUserUpdated(data: UserUpdatedEnvelope["data"]): void {
   if (!user) return;
   // The account switchers show every account's login and avatar.
   void fetchLocalAccounts();
-  // Another host's account: the identity shown is the active host's.
-  if (user.host != null && !sameGithubHost(user.host, data.host)) return;
+  if (!isShownHost(data.host)) return;
   const next: User = {
     id: user.id,
     name: data.name,
@@ -606,6 +605,14 @@ export async function deleteAccount(): Promise<void> {
 
 export function getUser(): User | null {
   return user;
+}
+
+/**
+ * Whether a push about the account on `host` is about the lists on screen:
+ * those of the active host's account. The stream carries every account.
+ */
+export function isShownHost(host: string): boolean {
+  return user?.host == null || sameGithubHost(user.host, host);
 }
 
 export function getCurrentUserLogin(): string | null {

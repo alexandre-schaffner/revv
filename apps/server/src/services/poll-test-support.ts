@@ -151,18 +151,14 @@ export async function makeHarness(
     RepositoryServiceLive,
     fakes,
   );
-  const layer = Layer.mergeAll(
-    GitHubAccountsLive.pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          dbLayer,
-          realtime,
-          secretStore,
-          AvatarCacheLive.pipe(Layer.provide(dbLayer)),
-        ),
-      ),
+  const accountsLayer = GitHubAccountsLive.pipe(
+    Layer.provide(
+      Layer.mergeAll(dbLayer, realtime, secretStore, AvatarCacheLive.pipe(Layer.provide(dbLayer))),
     ),
-    PrMirrorLive.pipe(Layer.provide(deps)),
+  );
+  const layer = Layer.mergeAll(
+    accountsLayer,
+    PrMirrorLive.pipe(Layer.provide(Layer.merge(deps, accountsLayer))),
     PullRequestServiceLive,
   ).pipe(Layer.provide(dbLayer));
   return Effect.runPromise(

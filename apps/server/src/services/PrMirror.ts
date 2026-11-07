@@ -27,6 +27,7 @@ import { asStored, type ObservedPr, STACK_UNSEEN } from "../domain/observed-pr";
 import { dbTry } from "../effects/db-try";
 import { logError } from "../logger";
 import { DbService } from "./Db";
+import { GitHubAccounts } from "./github/accounts";
 import { GitHubGateway } from "./github/gateway";
 import type { GitHubClient } from "./github/transport";
 import { PullRequestService } from "./PullRequest";
@@ -118,6 +119,7 @@ export const PrMirrorLive = Layer.effect(
     const prService = yield* PullRequestService;
     const repoService = yield* RepositoryService;
     const headMoves = yield* PrHeadMoves;
+    const accounts = yield* GitHubAccounts;
     const agentWorktrees = yield* AgentWorktrees;
     const stackService = yield* StackService;
     const realtime = yield* Realtime;
@@ -138,9 +140,9 @@ export const PrMirrorLive = Layer.effect(
       Effect.forEach(
         new Set(accountIds),
         (accountId) =>
-          prService.listPrs(accountId).pipe(
-            Effect.flatMap((prs) =>
-              realtime.toAccount(accountId, { type: "prs:updated", data: prs }),
+          Effect.all([accounts.profile(accountId), prService.listPrs(accountId)]).pipe(
+            Effect.flatMap(([{ host }, prs]) =>
+              realtime.toAccount(accountId, { type: "prs:updated", data: { host, prs } }),
             ),
             Effect.catch((e) =>
               Effect.sync(() => logError("PrMirror", `prs:updated for ${accountId}:`, e)),
