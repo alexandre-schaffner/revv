@@ -1,25 +1,26 @@
 import { normalizeGithubHost } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { GitHubApiError, InvalidGitHubClientIdError, NotFoundError } from "../domain/errors";
+import { GitHubApiError, NotFoundError } from "../domain/errors";
 import { logError } from "../logger";
 import { forgetAccount } from "../services/clone/forget";
 import { GitHubAccounts } from "../services/github/accounts";
 import {
   exchangeDeviceCode,
   issuedTokens,
-  requestDeviceCode,
   resolveClientId,
+  startDeviceFlow,
 } from "../services/github/oauth";
 import { SettingsService } from "../services/Settings";
 import { runRoute, withAuth } from "./middleware";
 
 /**
- * The host and client_id a device-flow request targets: the request's own,
- * else the settings host. The client is the request's, else the one the
- * caller's account on that host was issued to (re-signing an account in is
- * keyed by the account, not by the machine's host), else the one saved for
- * the host.
+ * The host a device-flow request targets (the request's, else the settings
+ * host) and the client ids to try there, in order. A typed id is the only
+ * one. Otherwise the client the caller's account on that host was issued to
+ * comes first (re-signing an account in is keyed by the account, not by the
+ * machine's host), then the one saved for the host: an app replaced in
+ * settings takes over once GitHub refuses the old one.
  */
 const signInTarget = (body: {
   readonly host?: string;
@@ -31,33 +32,18 @@ const signInTarget = (body: {
     const accounts = yield* GitHubAccounts;
     const saved = yield* settings.getSettings();
     const host = normalizeGithubHost(body.host ?? "") || (yield* settings.githubHost());
+    const typed = body.client_id?.trim();
+    if (typed) return { host, clientIds: [yield* resolveClientId(host, saved, typed)] as const };
     const callerId = body.session_token ? yield* accounts.sessionUser(body.session_token) : null;
     const issued = callerId === null ? null : yield* accounts.issuedClientIdOn(callerId, host);
-    const clientId = yield* resolveClientId(
+    if (issued === null) return { host, clientIds: [yield* resolveClientId(host, saved)] as const };
+    const first = yield* resolveClientId(host, saved, issued);
+    const fallback = yield* Effect.orElseSucceed(resolveClientId(host, saved), () => first);
+    return {
       host,
-      saved,
-      body.client_id?.trim() || issued || undefined,
-    );
-    return { host, clientId };
+      clientIds: fallback === first ? ([first] as const) : ([first, fallback] as const),
+    };
   });
-
-function deviceFlowErrorMessage(
-  host: string,
-  res: { readonly status: number; readonly statusText: string; readonly text: string },
-): string {
-  let detail = res.text.trim();
-  try {
-    const parsed = JSON.parse(res.text) as { error?: string; error_description?: string };
-    detail = parsed.error_description ?? parsed.error ?? detail;
-  } catch {
-    // Keep the raw text.
-  }
-  const suffix = detail ? `: ${detail.slice(0, 300)}` : "";
-  return (
-    `GitHub device flow failed for ${host} (${res.status} ${res.statusText}${suffix}). ` +
-    "Check that the client ID belongs to this GitHub host and that Device Flow is enabled."
-  );
-}
 
 // Device-flow sign-in: no session yet.
 const deviceFlowRoutes = new Elysia()
@@ -67,32 +53,10 @@ const deviceFlowRoutes = new Elysia()
       runRoute(
         Effect.gen(function* () {
           const target = yield* signInTarget(body ?? {});
-          const answer = yield* requestDeviceCode(target.host, target.clientId);
-          if (!answer.ok) {
-            logError(
-              "device-auth",
-              `GitHub device code request failed: ${answer.status} ${answer.statusText}`,
-              answer.text,
-            );
-            if (answer.status === 400 || answer.status === 401) {
-              return yield* Effect.fail(
-                new InvalidGitHubClientIdError({
-                  host: target.host,
-                  message: `GitHub rejected the client ID for ${target.host}. Check that it was copied from the GitHub App or OAuth App registered on that host.`,
-                }),
-              );
-            }
-            return yield* Effect.fail(
-              new GitHubApiError({
-                status: answer.status,
-                cause: deviceFlowErrorMessage(target.host, answer),
-              }),
-            );
-          }
-          const { code } = answer;
+          const { clientId, code } = yield* startDeviceFlow(target.host, target.clientIds);
           return {
             host: target.host,
-            client_id: target.clientId,
+            client_id: clientId,
             device_code: code.device_code,
             user_code: code.user_code,
             verification_uri: code.verification_uri,
