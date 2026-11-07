@@ -11,6 +11,7 @@ import {
   monthKeyOf,
   openSpan,
   pickLatestByWindow,
+  recapSlotIndex,
   recapSlotKey,
   recapSpan,
   recapWindowIsStale,
@@ -144,6 +145,23 @@ describe("slot keys", () => {
       expect(slotKeyFor("weekly", day)).toBe("weekly:2026-06-01");
     }
     expect(slotKeyFor("daily", "2026-06-04")).toBe("daily:2026-06-04");
+  });
+
+  it("indexes the newest live recap per slot", () => {
+    const row = (id: string, status: string, generatedAt: string) => ({
+      id,
+      status,
+      generatedAt,
+      period: "daily" as const,
+      periodStart: "2026-06-03T00:00:00.000Z",
+      periodEnd: "2026-06-04T00:00:00.000Z",
+    });
+    const index = recapSlotIndex([
+      row("old", "complete", "2026-06-03T10:00:00.000Z"),
+      row("new", "complete", "2026-06-03T12:00:00.000Z"),
+      row("gone", "superseded", "2026-06-03T13:00:00.000Z"),
+    ]);
+    expect(index.get("daily:2026-06-03")?.id).toBe("new");
   });
 });
 

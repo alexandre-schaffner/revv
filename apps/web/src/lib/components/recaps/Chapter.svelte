@@ -9,7 +9,7 @@ import {
 } from "$lib/components/ui/collapsible";
 import InlineText from "./InlineText.svelte";
 import PrRow from "./PrRow.svelte";
-import { formatTheme, themeSlug } from "./themes";
+import { formatTheme, themeSlug } from "$lib/recaps/themes";
 
 interface Props {
   theme: string;

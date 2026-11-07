@@ -29,6 +29,7 @@ import Avatar from "$lib/components/shared/Avatar.svelte";
 import { REASON_LABEL, type TaggedReason, type TaggedRow } from "$lib/prs/tagged-prs";
 import type { VisitState } from "$lib/stores/pr-visits.svelte";
 import { openPr } from "$lib/stores/sidebar-nav.svelte";
+import { formatCount } from "$lib/utils/format-count";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 
 interface Props {
@@ -41,13 +42,7 @@ let { row, visit, showBranch }: Props = $props();
 
 const pr = $derived(row.pr);
 
-/**
- * `updatedAt` is typed `string` but is a `Date` after an Eden fetch and a
- * `string` after an SSE broadcast, in the same array — see `timeOf` in
- * `$lib/prs/tagged-prs`. `String()` gives `Date.parse` something it accepts
- * either way.
- */
-const updatedAt = $derived(String(pr.updatedAt));
+const updatedAt = $derived(pr.updatedAt);
 
 const updatedAtExact = $derived.by(() => {
   const ms = Date.parse(updatedAt);
@@ -61,17 +56,12 @@ const updatedAtExact = $derived.by(() => {
  */
 const hasSize = $derived(pr.changedFiles > 0 || pr.additions > 0 || pr.deletions > 0);
 
-/** Thousands separators: a five-figure diff is the one worth reading twice. */
-function fmt(n: number): string {
-  return n.toLocaleString("en-US");
-}
-
 /**
  * Spoken form for screen readers. States a zero side the visual column
  * omits — "0 deletions" spoken is information; a red `−0` on screen isn't.
  */
 const sizeLabel = $derived(
-  `${fmt(pr.changedFiles)} ${pr.changedFiles === 1 ? "file" : "files"} changed, ${fmt(pr.additions)} additions, ${fmt(pr.deletions)} deletions`,
+  `${formatCount(pr.changedFiles)} ${pr.changedFiles === 1 ? "file" : "files"} changed, ${formatCount(pr.additions)} additions, ${formatCount(pr.deletions)} deletions`,
 );
 
 /**
@@ -186,7 +176,7 @@ function onNav(event: MouseEvent): void {
 			<span class="sr-only">{sizeLabel}</span>
 			{#if pr.changedFiles > 0}
 				<span class="size-files" aria-hidden="true">
-					<span class="size-count">{fmt(pr.changedFiles)}</span>
+					<span class="size-count">{formatCount(pr.changedFiles)}</span>
 					<span class="size-unit">{pr.changedFiles === 1 ? "file" : "files"}</span>
 				</span>
 			{/if}
@@ -194,10 +184,10 @@ function onNav(event: MouseEvent): void {
 			{#if pr.additions > 0 || pr.deletions > 0}
 				<span class="size-lines" aria-hidden="true">
 					{#if pr.additions > 0}
-						<span class="add">+{fmt(pr.additions)}</span>
+						<span class="add">+{formatCount(pr.additions)}</span>
 					{/if}
 					{#if pr.deletions > 0}
-						<span class="del">&minus;{fmt(pr.deletions)}</span>
+						<span class="del">&minus;{formatCount(pr.deletions)}</span>
 					{/if}
 				</span>
 			{/if}

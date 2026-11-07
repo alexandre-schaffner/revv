@@ -2,7 +2,9 @@
 import type { RecapPeriod } from "@revv/shared";
 import { page } from "$app/state";
 import PillTabs from "$lib/components/layout/PillTabs.svelte";
+import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import RecapPeriodView from "$lib/components/recaps/RecapPeriodView.svelte";
+import { RECAP_PERIOD_COPY } from "$lib/recaps/copy";
 import { useCommands } from "$lib/stores/commands.svelte";
 import { getCmdHeld } from "$lib/stores/shortcuts.svelte";
 
@@ -11,10 +13,13 @@ const repoId = $derived(page.params.repoId ?? "");
 let activePeriod = $state<RecapPeriod>("daily");
 const cmdHeld = $derived(getCmdHeld());
 
-const tabs = [
-  { id: "daily" as RecapPeriod, label: "Daily", shortcut: "1" },
-  { id: "weekly" as RecapPeriod, label: "Weekly", shortcut: "2" },
-];
+const PERIODS: readonly RecapPeriod[] = ["daily", "weekly"];
+
+const tabs = PERIODS.map((id, index) => ({
+  id,
+  label: RECAP_PERIOD_COPY[id].label,
+  shortcut: String(index + 1),
+}));
 
 useCommands(
   tabs.map((tab) => ({
@@ -27,31 +32,26 @@ useCommands(
     },
   })),
 );
+
+useShellChrome(() => ({ tabs: periodTabs }));
 </script>
 
-<div class="period-page">
-	<div class="tabs-float">
-		<PillTabs
-			{tabs}
-			activeTab={activePeriod}
-			onTabChange={(tab) => (activePeriod = tab as RecapPeriod)}
-			{cmdHeld}
-		/>
-	</div>
-	<div class="page">
-		<div class="content">
-			<RecapPeriodView {repoId} period={activePeriod} />
-		</div>
+{#snippet periodTabs()}
+	<PillTabs
+		{tabs}
+		activeTab={activePeriod}
+		onTabChange={(tab) => (activePeriod = tab as RecapPeriod)}
+		{cmdHeld}
+	/>
+{/snippet}
+
+<div class="page">
+	<div class="content">
+		<RecapPeriodView {repoId} period={activePeriod} />
 	</div>
 </div>
 
 <style>
-	.period-page {
-		position: relative;
-		height: 100%;
-		overflow: hidden;
-	}
-
 	.page {
 		height: 100%;
 		overflow-y: auto;

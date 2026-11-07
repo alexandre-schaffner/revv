@@ -1,6 +1,6 @@
 import type { ProjectRecap, RecapPeriod } from "@revv/shared";
 import { untrack } from "svelte";
-import type { GenActionState } from "$lib/components/shared/GenActionBar.svelte";
+import type { GenActionState } from "$lib/components/shared/gen-action";
 import { recapWindowIsStale } from "$lib/recaps/period-window";
 import {
   generateRecap,
@@ -29,7 +29,6 @@ import {
 export class RecapController {
   readonly #getRepoId: () => string;
   readonly #getRecapId: () => string | null;
-  #generating = $state(false);
 
   constructor(getRepoId: () => string, getRecapId: () => string | null) {
     this.#getRepoId = getRepoId;
@@ -94,10 +93,6 @@ export class RecapController {
     return id ? getRecapPendingAction(id) : null;
   }
 
-  get generating(): boolean {
-    return this.#generating;
-  }
-
   /** The recap covers a window that is no longer the current day or week. */
   readonly isStale = $derived.by(() => {
     const stored = this.stored;
@@ -108,8 +103,8 @@ export class RecapController {
     switch (this.stored?.status) {
       case "generating":
         return { kind: "streaming" };
+      // A recap can't pick up where it stopped: both rerun it.
       case "stopped":
-        return { kind: "resumable" };
       case "error":
         return { kind: "error" };
       // Rerunning a past window is only offered here: a date click in the
@@ -131,14 +126,13 @@ export class RecapController {
     return stored !== null && this.isStale && stored.status !== "generating";
   });
 
-  async generate(period: RecapPeriod): Promise<{ recapId: string } | null> {
-    if (this.#generating) return null;
-    this.#generating = true;
-    try {
-      return await generateRecap(this.#getRepoId(), period);
-    } finally {
-      this.#generating = false;
-    }
+  get hasActions(): boolean {
+    return this.offersCurrentWindow || this.actionState !== null;
+  }
+
+  /** A recap of the current window. */
+  generate(period: RecapPeriod): Promise<{ recapId: string } | null> {
+    return generateRecap(this.#getRepoId(), period);
   }
 
   async regenerate(): Promise<void> {

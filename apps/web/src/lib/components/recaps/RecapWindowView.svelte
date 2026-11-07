@@ -1,24 +1,22 @@
 <script lang="ts">
 import type { RecapPeriod } from "@revv/shared";
 import ArrowLeft from "phosphor-svelte/lib/ArrowLeft";
-import PenNib from "phosphor-svelte/lib/PenNib";
-import Spinner from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
 import { goto } from "$app/navigation";
 import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import { Button } from "$lib/components/ui/button";
-import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
-import { Shimmer } from "$lib/components/ui/shimmer";
+import { RECAP_PERIOD_COPY } from "$lib/recaps/copy";
 import {
   formatRecapTitle,
   isCurrentPeriod,
-  recapSlotKey,
+  recapSlotIndex,
   selectionBoundaries,
   slotKeyFor,
   slotSpan,
 } from "$lib/recaps/period-window";
-import { fetchRecapsForRepo, generateRecap, getRecapsForRepo } from "$lib/recaps/store.svelte";
+import { generateRecap, useRecapsForRepo } from "$lib/recaps/store.svelte";
 import RecapArchivePopover from "./RecapArchivePopover.svelte";
+import RecapGeneratePill from "./RecapGeneratePill.svelte";
 
 /**
  * A recap window that holds nothing yet: where an empty calendar cell lands.
@@ -34,19 +32,9 @@ interface Props {
 
 let { repoId, period, dayKey }: Props = $props();
 
-let generating = $state(false);
-
-$effect(() => {
-  const id = repoId;
-  if (id) void untrack(() => fetchRecapsForRepo(id));
-});
-
-const recaps = $derived(getRecapsForRepo(repoId));
-const slotKey = $derived(slotKeyFor(period, dayKey));
-
-const existing = $derived(
-  recaps.find((r) => r.status !== "superseded" && recapSlotKey(r) === slotKey) ?? null,
-);
+const repoRecaps = useRecapsForRepo(() => repoId);
+const recaps = $derived(repoRecaps.list);
+const existing = $derived(recapSlotIndex(recaps).get(slotKeyFor(period, dayKey)) ?? null);
 
 // Hand off the moment the window stops being empty. `replaceState` rather than
 // a push: this page was a placeholder for a recap that now exists, and leaving
@@ -61,7 +49,7 @@ $effect(() => {
 // generating does not restyle the heading under the user.
 const title = $derived(formatRecapTitle(slotSpan(period, dayKey)));
 
-const unit = $derived(period === "daily" ? "day" : "week");
+const copy = $derived(RECAP_PERIOD_COPY[period]);
 
 /**
  * The window is still accumulating, so a recap generated now covers part of
@@ -71,40 +59,25 @@ const windowStillOpen = $derived(isCurrentPeriod(period, dayKey, new Date()));
 useShellChrome(() => ({ actions: recapActions }));
 
 async function onGenerate(): Promise<void> {
-  if (generating) return;
-  generating = true;
-  try {
-    // A closed window goes out pinned and idempotent; a live one omits its
-    // boundaries so the server rolls its own [00:00Z, now]. Passing
-    // `undefined` rather than `{}` is load-bearing under
-    // `exactOptionalPropertyTypes` — see `selectionBoundaries`.
-    const boundaries = selectionBoundaries(period, dayKey, new Date());
-    const res = await generateRecap(repoId, period, boundaries ?? undefined);
-    if (res?.recapId) void goto(`/repo/${repoId}/recaps/${res.recapId}`);
-  } finally {
-    generating = false;
-  }
+  // A closed window goes out pinned and idempotent; a live one omits its
+  // boundaries so the server rolls its own [00:00Z, now]. Passing
+  // `undefined` rather than `{}` is load-bearing under
+  // `exactOptionalPropertyTypes` — see `selectionBoundaries`.
+  const boundaries = selectionBoundaries(period, dayKey, new Date());
+  const res = await generateRecap(repoId, period, boundaries ?? undefined);
+  if (res?.recapId) void goto(`/repo/${repoId}/recaps/${res.recapId}`);
 }
 </script>
 
 {#snippet recapActions()}
 <div class="actions-float">
 	<div class="actions-row" role="toolbar" aria-label="Recap actions">
-		<GlassPill
-			variant="accent"
-			onclick={onGenerate}
-			disabled={generating}
+		<RecapGeneratePill
+			label="Generate recap"
+			busyLabel="Generating recap…"
 			title="Write the {period} recap for {title}"
-		>
-			{#if generating}
-				<Spinner size={14} class="motion-essential-spin" aria-hidden="true" />
-			{:else}
-				<PenNib size={16} aria-hidden="true" />
-			{/if}
-			<Shimmer active={!generating}>
-				{generating ? "Generating recap…" : "Generate recap"}
-			</Shimmer>
-		</GlassPill>
+			run={onGenerate}
+		/>
 	</div>
 </div>
 {/snippet}
@@ -122,7 +95,7 @@ async function onGenerate(): Promise<void> {
 			<header class="hero">
 				<span class="eyebrow">
 					<span class="ai-mark" aria-hidden="true"></span>
-					<span>{period === "daily" ? "Daily recap" : "Weekly recap"}</span>
+					<span>{copy.title}</span>
 				</span>
 				<div class="date-row">
 					<h1 class="date">{title}</h1>
@@ -134,7 +107,7 @@ async function onGenerate(): Promise<void> {
 			</header>
 
 			<div class="empty-card">
-				<p class="empty-title">No recap for this {unit} yet.</p>
+				<p class="empty-title">No recap for this {copy.unit} yet.</p>
 				<p class="empty-hint">
 					The agent reads every pull request that moved in the window and writes it
 					up. Takes about a minute.

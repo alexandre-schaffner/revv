@@ -5,15 +5,14 @@ import CaretRight from "phosphor-svelte/lib/CaretRight";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
 import RecapStats from "$lib/components/recaps/RecapStats.svelte";
-import { sanitizeLedeHtml } from "$lib/components/recaps/themes";
+import { sanitizeLedeHtml } from "$lib/recaps/themes";
+import { RECAP_PERIOD_COPY } from "$lib/recaps/copy";
 import { formatRecapRange, pickLatestByWindow, recapSpan } from "$lib/recaps/period-window";
 import {
-  fetchRecapsForRepo,
   getRecapDetail,
   getRecapDetailLoading,
-  getRecapLoading,
-  getRecapsForRepo,
   loadRecap,
+  useRecapsForRepo,
 } from "$lib/recaps/store.svelte";
 
 interface Props {
@@ -22,16 +21,9 @@ interface Props {
 
 let { repoId }: Props = $props();
 
-let fetched = false;
-$effect(() => {
-  if (!fetched && repoId) {
-    fetched = true;
-    void untrack(() => fetchRecapsForRepo(repoId));
-  }
-});
-
-const recaps = $derived(getRecapsForRepo(repoId));
-const listLoading = $derived(getRecapLoading(repoId));
+const repoRecaps = useRecapsForRepo(() => repoId);
+const recaps = $derived(repoRecaps.list);
+const listLoading = $derived(repoRecaps.loading);
 
 // Most recent non-superseded recap regardless of period — by *window*, not
 // by generation time, so a historical backfill doesn't take over this card.
@@ -47,10 +39,6 @@ $effect(() => {
 
 const latestDetail = $derived<ProjectRecap | null>(latestId ? getRecapDetail(latestId) : null);
 const detailLoading = $derived(latestId ? getRecapDetailLoading(latestId) : false);
-
-function periodLabel(r: ProjectRecapSummary): string {
-  return r.period === "daily" ? "Daily recap" : "Weekly recap";
-}
 
 const ledeHtml = $derived(sanitizeLedeHtml(latestDetail?.lede ?? ""));
 </script>
@@ -85,7 +73,7 @@ const ledeHtml = $derived(sanitizeLedeHtml(latestDetail?.lede ?? ""));
 	{:else if latestDetail && latestDetail.status === "generating"}
 		<div class="recap-card-paper">
 			<header class="recap-card-paper-header">
-				<span class="recap-card-eyebrow">{periodLabel(latest)}</span>
+				<span class="recap-card-eyebrow">{RECAP_PERIOD_COPY[latest.period].title}</span>
 				<span class="recap-card-window">{formatRecapRange(recapSpan(latest))}</span>
 			</header>
 			<div class="recap-card-generating">
@@ -97,7 +85,7 @@ const ledeHtml = $derived(sanitizeLedeHtml(latestDetail?.lede ?? ""));
 	{:else if latestDetail}
 		<div class="recap-card-paper">
 			<header class="recap-card-paper-header">
-				<span class="recap-card-eyebrow">{periodLabel(latest)}</span>
+				<span class="recap-card-eyebrow">{RECAP_PERIOD_COPY[latest.period].title}</span>
 				<span class="recap-card-window">{formatRecapRange(recapSpan(latest))}</span>
 			</header>
 
@@ -119,7 +107,7 @@ const ledeHtml = $derived(sanitizeLedeHtml(latestDetail?.lede ?? ""));
 	{:else}
 		<div class="recap-card-paper">
 			<header class="recap-card-paper-header">
-				<span class="recap-card-eyebrow">{periodLabel(latest)}</span>
+				<span class="recap-card-eyebrow">{RECAP_PERIOD_COPY[latest.period].title}</span>
 				<span class="recap-card-window">{formatRecapRange(recapSpan(latest))}</span>
 			</header>
 			<p class="recap-card-no-content">No overview content was written for this recap.</p>
