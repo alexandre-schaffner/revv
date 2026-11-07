@@ -4,29 +4,19 @@
 import { SvelteMap } from "svelte/reactivity";
 import { api } from "$lib/api/client";
 import { call } from "$lib/api/errors";
+import type { EdenData } from "$lib/api/wire";
 import { getActiveFilePath, setActiveFilePath } from "$lib/stores/pr-view-state.svelte";
 import { getPrById } from "$lib/stores/prs.svelte";
 import { RequestState } from "./_types";
 import { createResource } from "./resource";
 
-/** A file in the review, with the git patch for @pierre/diffs to render. */
-export interface ReviewFile {
-  path: string;
-  oldPath?: string;
-  /** Unified diff (patch) string from the GitHub API, or null for binary files. */
-  patch: string | null;
-  additions: number;
-  deletions: number;
-  isNew?: boolean;
-  isDeleted?: boolean;
-  /**
-   * Server-rendered HTML (`@pierre/diffs/ssr`) of the unified diff, sent only
-   * for the first visible file and never for oversized patches. Hydrated for
-   * an instant first paint in unified, unwrapped mode; otherwise the client
-   * renders from `patch`.
-   */
-  prerenderedHtml?: string;
-}
+const filesRoute = (prId: string) => api.api.prs({ id: prId }).files;
+
+/**
+ * A file in the review: its git patch for @pierre/diffs (null for a binary
+ * file), and `prerenderedHtml` for the one file the server pre-renders.
+ */
+export type ReviewFile = EdenData<ReturnType<typeof filesRoute>["get"]>[number];
 
 interface LoadedFiles {
   readonly files: readonly ReviewFile[];
@@ -74,22 +64,12 @@ export function getLoadedHeadSha(prId: string): string | null {
   return loadedHeadShas.get(prId) ?? null;
 }
 
-async function fetchFiles(prId: string): Promise<ReviewFile[]> {
+function fetchFiles(prId: string): Promise<ReviewFile[]> {
   const active = getActiveFilePath();
-  const data = await call(
-    api.api.prs({ id: prId }).files.get({ query: active === null ? {} : { active } }),
+  return call(
+    filesRoute(prId).get({ query: active === null ? {} : { active } }),
     "Failed to fetch PR files",
   );
-  return data.map((f) => ({
-    path: f.path,
-    patch: f.patch ?? null,
-    additions: f.additions,
-    deletions: f.deletions,
-    ...(f.oldPath ? { oldPath: f.oldPath } : {}),
-    ...(f.isNew ? { isNew: true as const } : {}),
-    ...(f.isDeleted ? { isDeleted: true as const } : {}),
-    ...(f.prerenderedHtml ? { prerenderedHtml: f.prerenderedHtml } : {}),
-  }));
 }
 
 function install(prId: string, request: RequestState<LoadedFiles>): boolean {

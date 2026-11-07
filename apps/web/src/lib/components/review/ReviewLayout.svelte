@@ -49,7 +49,7 @@ const activeFile = $derived(files.find((f) => f.path === activeFilePath) ?? null
 const activeFileIsImage = $derived(
   activeFile !== null &&
     (isImagePath(activeFile.path) ||
-      (activeFile.oldPath !== undefined && isImagePath(activeFile.oldPath))),
+      (activeFile.oldPath !== null && isImagePath(activeFile.oldPath))),
 );
 const activeFileName = $derived.by((): string => {
   if (activeFile) return activeFile.path.split("/").pop() ?? activeFile.path;
