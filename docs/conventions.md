@@ -95,7 +95,7 @@ plain callbacks (`emit`, `broadcastThreadEvent`, `runJudgment`) with `Effect.run
 are NOT violations — they are the interop boundary with Promise-based handlers. The rule is "no `runPromise` inside an Effect-returning
 method" — wrapping a callback that the caller will invoke later is fine.
 
-**Backlog.** [`E-001`](./conventions-backlog.md#e-001), [`E-002`](./conventions-backlog.md#e-002).
+**Backlog.** [`E-007`](./conventions-backlog.md#e-007). [`E-001`, `E-002`](./conventions-backlog.md#closed) are closed.
 
 <a id="effect-tagged-errors"></a>
 ### 2.3 Tagged errors live in `domain/errors.ts`
@@ -120,7 +120,7 @@ a service file, or returning `Effect.fail(new Error("..."))` (untagged — defea
 A free-string `code` field that routes match on (the old `ReviewError.code === "NOT_FOUND"`)
 is the same smell: use `NotFoundError` / `ForbiddenError`.
 
-**Backlog.** [`E-003`](./conventions-backlog.md#e-003).
+**Backlog.** None open; [`E-003`](./conventions-backlog.md#closed) is closed.
 
 <a id="effect-wrap-drizzle"></a>
 ### 2.4 Wrap Drizzle calls inside Effect.tryPromise
@@ -141,7 +141,7 @@ fails with `DbError` (HTTP 500). A best-effort write says so at the call site
 **Anti-pattern.** Calling `db.select(...).get()` directly inside an `Effect.gen` body, or
 mapping a Drizzle failure to some other tag (`ValidationError` turned DB faults into HTTP 400s).
 
-**Backlog.** [`E-004`](./conventions-backlog.md#e-004), [`E-005`](./conventions-backlog.md#e-005).
+**Backlog.** None open; [`E-004`, `E-005`](./conventions-backlog.md#closed) are closed.
 
 ---
 
@@ -180,7 +180,7 @@ context before starting a walkthrough job.
 they do not own fallback or validation rules.
 
 **Why.** Agent choice is a settings concern. Keeping it in one service prevents drift between
-walkthroughs, chat, recaps, model listing, session lookup, and daemon lifecycle.
+walkthroughs, chat, recaps, model listing, and session lookup.
 
 <a id="settings-shape"></a>
 ### 2.5.3 One settings spec; reactions subscribe
@@ -229,7 +229,7 @@ yet creates the folder and moves its siblings in.
 **Why.** A change to one feature should touch one folder. Half-moved features (a folder plus
 flat `Walkthrough*.ts` / `walkthrough-*.ts` siblings) make every reader check both places.
 
-**Backlog.** [`S-001`](./conventions-backlog.md#s-001).
+**Backlog.** [`S-006`](./conventions-backlog.md#s-006).
 
 ---
 
@@ -299,7 +299,8 @@ names.
 - **Signal** — no `data`. The receipt of the message is the entire signal. Example:
   `prs:sync-started`. Receivers re-fetch authoritative state from the DB.
 - **Full-state** — `data` carries the entire new state for some entity or list. Receivers
-  replace, they do not merge. Example: `prs:updated` carries the full `PullRequest[]`.
+  replace, they do not merge. Example: `prs:updated` carries `{ host, prs }`, the full
+  `PullRequest[]` of the account on `host`.
 - **Delta** — `data` carries an instruction the receiver applies to existing state. Example:
   `thread:message` carries `{ threadId, message }` to append. Receivers must be safe to drop
   during disconnect and reconcile via the broadcast contract (CLAUDE.md invariant #8).
@@ -420,7 +421,7 @@ trivially with existing dispatchers and don't reinvent the API surface.
 `let activeTab = $state(...)` mirror hand-synced in every setter: two sources of truth for the
 same state. (`pr-view-state.svelte.ts` keeps one reactive entry per PR instead.)
 
-**Backlog.** [`S-001`](./conventions-backlog.md#s-001), [`S-002`](./conventions-backlog.md#s-002).
+**Backlog.** None open; [`S-001`, `S-002`](./conventions-backlog.md#closed) are closed.
 
 <a id="stores-reactive-map"></a>
 ### 4.3 Reactive keyed state is a `SvelteMap` whose values are replaced, not mutated
@@ -467,7 +468,7 @@ inside its own entries.
 plus separate `summary: string | null; blocks: WalkthroughBlock[]`. The four fields form 16
 possible combinations; only ~4 are legal.
 
-**Backlog.** [`S-003`](./conventions-backlog.md#s-003).
+**Backlog.** None open; [`S-003`](./conventions-backlog.md#closed) is closed.
 
 <a id="stores-event-handlers"></a>
 ### 4.5 Event handlers in stores are named `on<EventName>`
@@ -502,7 +503,7 @@ reads as a flat list of these `on*` calls.
 **Anti-pattern.** The retired `*FromWs` suffix style — `updateThreadStatusFromWs`,
 `addThreadFromWs`, `resolveQuestionFromWs`. No occurrences remain in the codebase.
 
-**Backlog.** [`S-004`](./conventions-backlog.md#s-004) — closed; all handlers renamed.
+**Backlog.** None open; [`S-004`](./conventions-backlog.md#closed) is closed (all handlers renamed).
 
 <a id="stores-optimistic"></a>
 ### 4.6 Client-initiated mutations are optimistic with entity-scoped rollback
@@ -707,8 +708,7 @@ each step's title with `gsapEnter` at `tokens.ceremonialSlow`; in CSS,
 `animation: fin-in 1200ms cubic-bezier(...) 600ms backwards` in `StepDone.svelte` (since moved to
 `gsapEnter` with `tokens.ceremonialSlow`).
 
-**Backlog.** [`M-008`](./conventions-backlog.md#m-008) through
-[`M-014`](./conventions-backlog.md#m-014).
+**Backlog.** None open; [`M-008` through `M-014`](./conventions-backlog.md#closed) are closed.
 
 <a id="motion-icon-only"></a>
 ### 5.3 Iconography

@@ -247,10 +247,11 @@ if [[ "$MODE" == "dev" ]]; then
   printf '  └─────────────────────────────────────┘\n'
   printf '%s\n' "$REVV_RESET"
   printf '  %sStart developing:%s\n' "$REVV_BOLD" "$REVV_RESET"
-  printf '    %s$%s make dev             %s# all services (web, server, Tauri)%s\n' "$REVV_DIM" "$REVV_RESET" "$REVV_DIM" "$REVV_RESET"
+  printf '    %s$%s make dev             %s# web, server and collector (no desktop shell)%s\n' "$REVV_DIM" "$REVV_RESET" "$REVV_DIM" "$REVV_RESET"
+  printf '    %s$%s make dev-desktop     %s# the same plus the Tauri dev app%s\n' "$REVV_DIM" "$REVV_RESET" "$REVV_DIM" "$REVV_RESET"
   printf '    %s$%s make dev-server      %s# API only (port 45679)%s\n\n' "$REVV_DIM" "$REVV_RESET" "$REVV_DIM" "$REVV_RESET"
-  printf '  No .env file is required for normal use — see .env.example for\n'
-  printf '  optional overrides (custom GitHub client_id, DB path, etc.).\n\n'
+  printf '  No .env file is required. .env.example shows a few optional overrides;\n'
+  printf '  apps/server/src/config.ts reads them all.\n\n'
   exit 0
 fi
 

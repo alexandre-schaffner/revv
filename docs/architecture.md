@@ -35,7 +35,7 @@ Foundation                              Db / Drizzle
 
 Walkthrough, Chat, Recaps, and Merge-conflict own user-facing workflows and lifecycle policy.
 They should compose platform services through narrow interfaces rather than reaching through to
-GitHub, token, repository, or daemon details.
+GitHub, token, repository, or agent-process details.
 
 ### AI Providers
 

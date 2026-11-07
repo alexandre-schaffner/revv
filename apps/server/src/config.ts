@@ -25,7 +25,7 @@ const EnvConfig = Config.all({
   // with the coarse `repo` scope, bring-your-own-credentials, for self-hosting.
   // `pro` authenticates via the Revv GitHub App (fine-grained permissions,
   // user-to-server tokens) on github.com. Device flow either way — no secret.
-  // See docs/adr/0001-pro-github-app-oss-oauth-split.md.
+  // See docs/adr/0002-pro-github-app-oss-oauth-split.md.
   edition: Config.String("REVV_EDITION").pipe(Config.withDefault("oss")),
   // Generic GitHub Enterprise OAuth/App client_id override for dev or
   // self-hosting. No host is baked in — GHE users supply their own client_id

@@ -17,7 +17,7 @@ install-deps: ## Install project dependencies only (skip tool checks)
 # installed (production) Revv instance running in the background.
 DEV_ENV = REVV_CHANNEL=dev PORT=45679 REVV_DB_PATH=./revv-dev.db REVV_CLONE_DIR=$$HOME/.revv/repos-dev VITE_REVV_CHANNEL=dev VITE_API_PORT=45679 REVV_DEBUG=1
 
-dev: kill-server ## Start all services in development mode
+dev: kill-server ## Start web, server and collector in development mode (no desktop shell)
 	$(DEV_ENV) bun run dev
 
 dev-server: kill-server ## Start only the API server (port 45679)

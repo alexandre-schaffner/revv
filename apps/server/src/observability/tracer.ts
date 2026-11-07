@@ -261,7 +261,7 @@ trace.setGlobalTracerProvider(provider);
  * because `Effect.promise` is uninterruptible — a timeout wrapper around it
  * still waits for the underlying promise to settle. That matters here: the
  * common case is an OTLP endpoint configured but not running (the collector is
- * dev-only, and `.env.example` ships an endpoint), and `forceFlush` then sits
+ * dev-only, and `make dev-desktop` sets an endpoint), and `forceFlush` then sits
  * through the exporter's whole connect-and-retry schedule. Wrapped in an Effect
  * timeout that stall lands squarely on `AppRuntime.dispose()`; raced at the
  * promise level it cannot.
