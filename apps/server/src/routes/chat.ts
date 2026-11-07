@@ -150,7 +150,7 @@ export const chatRoute = new Elysia()
           const prCtx = yield* PrContextService;
           const workspace = yield* PrWorkspace;
           const chatSessions = yield* ChatSessionService;
-          const { pr } = yield* prCtx.forPr(ctx.params.prId);
+          const { pr } = yield* prCtx.readPr(ctx.params.prId);
           const row = yield* workspace.session(pr);
           if (!row) {
             return { chatSessionId: null, entries: [], interactionMode: "default" as const };

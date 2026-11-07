@@ -36,7 +36,12 @@ import { type ChatSessionRow, ChatSessionService } from "../chat/ChatSession";
 import { BranchPushLock } from "../git/branch-push-lock";
 import { assertNotFlagLike, fetch, gitTry, isValidSha, resolveRef } from "../git/ops";
 import { authedRemoteUrl } from "../git/remote";
-import { type PrContextBasic, type PrContextError, PrContextService } from "../PrContext";
+import {
+  type PrContextBasic,
+  type PrContextError,
+  PrContextService,
+  type PrRecord,
+} from "../PrContext";
 import { PrMirror } from "../PrMirror";
 import type { SettingsService } from "../Settings";
 import {
@@ -61,9 +66,10 @@ export interface ProposedChanges {
   readonly commits: readonly ProposedCommit[];
 }
 
-type ReadError = PrContextError | DbError | NoChatSessionError | GitOperationError;
+type ReadError = NotFoundError | DbError | NoChatSessionError | GitOperationError;
 type EditError =
   | ReadError
+  | PrContextError
   | WorkspaceBusyError
   | ValidationError
   | NotFoundError
@@ -103,15 +109,14 @@ export class PrWorkspace extends Context.Service<
       branch: AgentBranch,
     ) => Effect.Effect<{ readonly session: ChatSessionRow; readonly launch: AgentLaunch }, DbError>;
     /** The PR's agent worktree and branch, if the agent ever worked on it. */
-    readonly agentBranch: (ctx: PrContextBasic) => AgentBranch | null;
+    readonly agentBranch: (ctx: PrRecord) => AgentBranch | null;
     /** The PR's chat session: the current chat launch's, at `pr.headSha`. */
     readonly session: (pr: {
       readonly id: string;
       readonly headSha: string | null;
     }) => Effect.Effect<ChatSessionRow | null, DbError>;
-    readonly unpushedCount: (
-      ctx: PrContextBasic,
-    ) => Effect.Effect<number, DbError | GitOperationError>;
+    readonly unpushedCount: (ctx: PrRecord) => Effect.Effect<number, DbError | GitOperationError>;
+    /** Read from the mirror and the worktree alone: no GitHub call, no token. */
     readonly proposed: (prId: string) => Effect.Effect<ProposedChanges, ReadError>;
     readonly commitFiles: (
       prId: string,
@@ -158,17 +163,16 @@ export const PrWorkspaceLive = Layer.effect(
 
     const chatLaunch = resolveAgentLaunch("chat").pipe(Effect.provide(context));
 
-    const agentBranchOf = ({ pr, repo }: PrContextBasic) =>
-      worktrees.locate(repo.id, pr.externalId);
+    const agentBranchOf = ({ pr, repo }: PrRecord) => worktrees.locate(repo.id, pr.externalId);
 
-    const requireBranch = (ctx: PrContextBasic) => {
+    const requireBranch = (ctx: PrRecord) => {
       const branch = agentBranchOf(ctx);
       return branch
         ? Effect.succeed(branch)
         : Effect.fail(new NoChatSessionError({ prId: ctx.pr.id }));
     };
 
-    const baselineOf = (ctx: PrContextBasic, branch: AgentBranch) =>
+    const baselineOf = (ctx: PrRecord, branch: AgentBranch) =>
       Effect.gen(function* () {
         const pinned = yield* chatSessions.baselinesForPr(ctx.pr.id);
         const candidates = ctx.pr.headSha ? [...pinned, ctx.pr.headSha] : pinned;
@@ -300,7 +304,7 @@ export const PrWorkspaceLive = Layer.effect(
 
       proposed: (prId) =>
         Effect.gen(function* () {
-          const ctx = yield* prCtx.forPr(prId);
+          const ctx = yield* prCtx.readPr(prId);
           const branch = agentBranchOf(ctx);
           if (!branch) return { branchName: null, baseSha: null, commits: [] };
           const baseSha = yield* baselineOf(ctx, branch);
@@ -315,7 +319,7 @@ export const PrWorkspaceLive = Layer.effect(
       commitFiles: (prId, sha) =>
         Effect.gen(function* () {
           yield* validShas([sha]);
-          const branch = yield* requireBranch(yield* prCtx.forPr(prId));
+          const branch = yield* requireBranch(yield* prCtx.readPr(prId));
           return yield* gitTry(() => commitFiles(branch.worktreePath, sha));
         }),
 
