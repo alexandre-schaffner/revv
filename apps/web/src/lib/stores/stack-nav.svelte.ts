@@ -26,7 +26,7 @@ function layerNeedsReview(layer: StackLayer): boolean {
   return isOpenLayer(layer) && needsReview(layer);
 }
 
-export function openLayer(layer: StackLayer): void {
+function openLayer(layer: StackLayer): void {
   const view = getStackView();
   if (!view || layer.position === view.here.position) return;
   openStackLayer(view.prId, layer);

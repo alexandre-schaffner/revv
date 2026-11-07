@@ -2,11 +2,15 @@ import { onDestroy, untrack } from "svelte";
 import { ensureHunkScan } from "$lib/hunk-scan/store.svelte";
 import { getToken } from "$lib/session/token.svelte";
 import { loadConversation } from "$lib/stores/conversation.svelte";
-import { clearReviewFiles, getLoadedHeadSha, loadReviewFiles } from "$lib/stores/diff-files.svelte";
+import {
+  getLoadedHeadSha,
+  loadReviewFiles,
+  releaseReviewFiles,
+} from "$lib/stores/diff-files.svelte";
 import { getActiveTab, switchPrViewState } from "$lib/stores/pr-view-state.svelte";
 import { markVisited } from "$lib/stores/pr-visits.svelte";
 import { getPrById } from "$lib/stores/prs.svelte";
-import { clearSession, loadSession } from "$lib/stores/review.svelte";
+import { loadSession, releaseSession } from "$lib/stores/review.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
 import { ensureStackHeadlines } from "$lib/stores/stack-headlines.svelte";
 import { ensureStack, warmNeighbours } from "$lib/stores/stacks.svelte";
@@ -23,11 +27,21 @@ export function useOpenReview(getPrId: () => string | null): void {
   const pr = $derived(prId ? getPrById(prId) : null);
 
   // View state, then the review session, then the diff (installed with the
-  // session's threads, so comments are on it at first paint).
+  // session's threads, so comments are on it at first paint). Leaving the PR
+  // forgets both, so coming back starts from the loader.
+  let opened: string | null = null;
+  function release(): void {
+    if (opened === null) return;
+    releaseReviewFiles(opened);
+    releaseSession(opened);
+    opened = null;
+  }
   $effect(() => {
     const id = prId;
     if (!id || !signedIn) return;
     untrack(() => {
+      if (opened !== id) release();
+      opened = id;
       switchPrViewState(id);
       const session = loadSession(id).catch((e) =>
         console.error("[review] Session load failed (non-blocking):", e),
@@ -36,11 +50,7 @@ export function useOpenReview(getPrId: () => string | null): void {
       void loadConversation(id);
     });
   });
-  onDestroy(() => {
-    // Nothing still loading may write into the next page.
-    clearReviewFiles();
-    clearSession();
-  });
+  onDestroy(release);
 
   const threadSyncPrId = $derived(pr?.id ?? null);
   $effect(() => {

@@ -1,20 +1,19 @@
-// The comment threads of one diff file as Pierre annotations: the review
-// session's threads, the one open "new comment" input, and the thread being
+// The comment threads of one diff file as Pierre annotations: the PR's review
+// threads on it, the one open "new comment" input, and the thread being
 // replied to. A viewer creates one and hands it to its Pierre renderer.
 
 import type { DiffLineAnnotation } from "@pierre/diffs";
 import type { CommentThread, ThreadMessage } from "@revv/shared";
 import type { DiffLineRange, DiffSide } from "$lib/pierre/diff-rows";
+import { isPendingThread } from "$lib/review/threads";
 import {
   addThread,
   addThreadMessage,
-  applyCommentSuggestion,
   deleteThread,
   deleteThreadMessage,
   editThreadMessage,
   getThreadMessages,
   getThreadsForFile,
-  getThreadsVersion,
   pushThreadToGitHub,
   reopenThread,
   resolveThread,
@@ -22,6 +21,7 @@ import {
 import type { ThreadMeta } from "./pierre-diff-adapter";
 
 export class ThreadAnnotations {
+  readonly #prId: () => string;
   readonly #filePath: () => string;
   /**
    * The open new-comment input; it sits on `startLine` and covers through
@@ -32,15 +32,15 @@ export class ThreadAnnotations {
   /** The last comment trigger acted on, so a remounted viewer doesn't replay it. */
   #handledTriggerSeq = 0;
 
-  constructor(filePath: () => string) {
+  constructor(prId: () => string, filePath: () => string) {
+    this.#prId = prId;
     this.#filePath = filePath;
   }
 
+  // Every thread write replaces the PR's review entry, so these re-derive and
+  // hand Pierre fresh metadata objects; it caches annotations by reference.
   #threads(): CommentThread[] {
-    // The version signal makes every thread mutation hand Pierre fresh
-    // metadata objects; it caches annotations by metadata reference.
-    getThreadsVersion();
-    return getThreadsForFile(this.#filePath());
+    return getThreadsForFile(this.#prId(), this.#filePath());
   }
 
   readonly annotations: DiffLineAnnotation<ThreadMeta>[] = $derived.by(() => {
@@ -51,7 +51,7 @@ export class ThreadAnnotations {
         threadId: thread.id,
         isInputActive: false,
         isReplying: this.#replyingThreadId === thread.id,
-        isPending: thread.externalCommentId == null,
+        isPending: isPendingThread(thread),
       },
     }));
     const input = this.#currentInput();
@@ -69,8 +69,8 @@ export class ThreadAnnotations {
     Object.fromEntries(this.#threads().map((t) => [t.id, t])),
   );
 
-  readonly threadMessages: Record<string, ThreadMessage[]> = $derived.by(() =>
-    Object.fromEntries(this.#threads().map((t) => [t.id, getThreadMessages(t.id)])),
+  readonly threadMessages: Record<string, readonly ThreadMessage[]> = $derived.by(() =>
+    Object.fromEntries(this.#threads().map((t) => [t.id, getThreadMessages(this.#prId(), t.id)])),
   );
 
   #currentInput(): DiffLineRange | null {
@@ -104,7 +104,7 @@ export class ThreadAnnotations {
     const input = this.#currentInput();
     if (!input) return;
     this.#input = null;
-    await addThread({
+    await addThread(this.#prId(), {
       filePath: this.#filePath(),
       startLine: input.startLine,
       endLine: input.endLine,
@@ -126,7 +126,6 @@ export class ThreadAnnotations {
   readonly reopen = reopenThread;
   readonly discard = deleteThread;
   readonly discardReply = deleteThreadMessage;
-  readonly applySuggestion = applyCommentSuggestion;
   readonly editMessage = editThreadMessage;
   readonly push = pushThreadToGitHub;
 }

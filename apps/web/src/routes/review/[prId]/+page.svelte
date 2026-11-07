@@ -21,29 +21,28 @@ import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import GuidedWalkthrough from "$lib/components/walkthrough/GuidedWalkthrough.svelte";
 import { useOpenReview } from "$lib/review/open-review.svelte";
 import { useCommands } from "$lib/stores/commands.svelte";
-import { getFilesError, getIsLoadingFiles, getReviewFiles } from "$lib/stores/diff-files.svelte";
+import { getReviewFiles } from "$lib/stores/diff-files.svelte";
 import { getActiveTab, REVIEW_TABS, setActiveTab } from "$lib/stores/pr-view-state.svelte";
+import { getPrById } from "$lib/stores/prs.svelte";
 import { scrollPane } from "$lib/stores/review-nav.svelte";
-import { getSelectedPr } from "$lib/stores/route.svelte";
 import { getRiskLevel as getWalkthroughRiskLevel } from "$lib/walkthrough/store.svelte";
 import { getWalkthroughSizing } from "$lib/walkthrough/sizing.svelte";
 
-useOpenReview(() => page.params.prId ?? null);
+// The decoded route param: PR ids are `<repoId>:<number>`.
+const prId = $derived(page.params.prId ?? "");
+useOpenReview(() => prId || null);
 
-const pr = $derived(getSelectedPr());
-const files = $derived(getReviewFiles());
-const isLoading = $derived(getIsLoadingFiles());
-const loadError = $derived(getFilesError());
+const pr = $derived(prId ? getPrById(prId) : null);
+const files = $derived(getReviewFiles(prId));
 const activeTab = $derived(getActiveTab());
-const routePrIdOrEmpty = $derived(page.params.prId ?? "");
-const generatedRiskLevel = $derived(getWalkthroughRiskLevel(routePrIdOrEmpty));
+const generatedRiskLevel = $derived(getWalkthroughRiskLevel(prId));
 
 // The tier is resolved from the diff before generation, so opening a PR shows
 // the attention it needs without a review. Same cached answer either way, so
 // the badge value doesn't change when generation starts.
-const sizing = $derived(getWalkthroughSizing(pr?.id ?? null, pr?.headSha ?? null));
+const sizing = $derived(getWalkthroughSizing(pr ? prId : null, pr?.headSha ?? null));
 
-const stackPlace = $derived(activeTab === "walkthrough" && pr ? readStackPlace(pr.id) : null);
+const stackPlace = $derived(activeTab === "walkthrough" && pr ? readStackPlace(prId) : null);
 
 const walkthroughRiskLevel = $derived(
   generatedRiskLevel ?? (sizing?.status === "ready" ? sizing.riskLevel : null),
@@ -73,35 +72,33 @@ useCommands(
 );
 
 useShellChrome(() => ({
-  tabs: pr ? reviewTabs : undefined,
+  tabs: pr ? { snippet: reviewTabs, prId } : undefined,
   actions: pr && activeTab === "walkthrough" ? walkthroughActions : undefined,
 }));
 </script>
 
-{#snippet reviewTabs()}
-	<ReviewTabs />
+{#snippet reviewTabs(prId: string)}
+	<ReviewTabs {prId} />
 {/snippet}
 
 {#snippet walkthroughActions()}
-	{#if pr}
-		<WalkthroughActionBar prId={pr.id} />
-	{/if}
+	<WalkthroughActionBar {prId} />
 {/snippet}
 
-{#if isLoading}
+{#if files.status === 'loading'}
 <div class="loading">
 	<Dotmatrix variant="square-9" />
 	<p>Loading diff…</p>
 </div>
-{:else if loadError}
+{:else if files.status === 'error'}
 <div class="loading error">
-	<p>{loadError}</p>
+	<p>{files.error}</p>
 </div>
 {:else if pr !== null}
 <div class="review-page">
 	{#if activeTab === 'diff'}
-		{#if files.length > 0}
-			<ReviewLayout prId={page.params['prId'] ?? ''} {files} />
+		{#if files.status === 'ok' && files.data.length > 0}
+			<ReviewLayout {prId} files={files.data} />
 		{:else}
 			<div class="loading">
 				<p>No changed files in this PR</p>
@@ -113,7 +110,7 @@ useShellChrome(() => ({
 	<div
 		class="review-content"
 		class:review-content--hidden={activeTab === 'diff'}
-		use:scrollPane={{ prId: routePrIdOrEmpty, pane: scrollRootPane }}
+		use:scrollPane={{ prId, pane: scrollRootPane }}
 	>
 		<div class="page-title-section review-columns">
 			<h1 class="page-title">{pr.title}</h1>
@@ -139,14 +136,11 @@ useShellChrome(() => ({
 		<!-- Always mounted: re-rendering its heavy blocks (Pierre, markdown) froze
 		     tab switches. -->
 		<div class="tab-wrapper" class:tab-wrapper--hidden={activeTab !== 'walkthrough'}>
-			<GuidedWalkthrough prId={routePrIdOrEmpty} />
+			<GuidedWalkthrough {prId} />
 		</div>
 
 		<div class="tab-wrapper" class:tab-wrapper--hidden={activeTab !== 'conversation'}>
-			<ConversationTab
-				prId={page.params['prId'] ?? ''}
-				isActive={activeTab === 'conversation'}
-			/>
+			<ConversationTab {prId} isActive={activeTab === 'conversation'} />
 		</div>
 	</div>
 </div>

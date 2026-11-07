@@ -208,7 +208,7 @@ function onRightHandleDblClick(): void {
 	<main class="main-area" bind:this={mainEl} inert={chatOverlay}>
 		{#if chrome.current.tabs}
 			<div class="tabs-float">
-				{@render chrome.current.tabs()}
+				{@render chrome.current.tabs.snippet(chrome.current.tabs.prId)}
 			</div>
 		{/if}
 		<div class="main-content">

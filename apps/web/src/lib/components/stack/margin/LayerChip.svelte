@@ -1,8 +1,8 @@
 <script lang="ts">
 import type { StackLayer } from "@revv/shared";
 import { gsapHover } from "$lib/motion";
+import { openStackLayer } from "$lib/stacks/open-layer";
 import { setHoveredLayer } from "$lib/stores/stack-hover.svelte";
-import { openLayer } from "$lib/stores/stack-nav.svelte";
 import StackLayerGlyph from "../StackLayerGlyph.svelte";
 import LayerPeek from "./LayerPeek.svelte";
 import { plainTitle, type StackPlace } from "./stack-margin";
@@ -74,7 +74,7 @@ function hide(): void {
 	onblur={hide}
 	onclick={() => {
 		hide();
-		openLayer(layer);
+		if (!here) openStackLayer(place.prId, layer);
 	}}
 >
 	<StackLayerGlyph status={layer.status} size={11} />

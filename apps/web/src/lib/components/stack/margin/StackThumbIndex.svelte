@@ -6,8 +6,9 @@ import {
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
 import { gsapHover } from "$lib/motion";
+import { openStackLayer } from "$lib/stacks/open-layer";
 import { getHoveredLayer } from "$lib/stores/stack-hover.svelte";
-import { openLayer, remainingLayers } from "$lib/stores/stack-nav.svelte";
+import { remainingLayers } from "$lib/stores/stack-nav.svelte";
 import StackLayerGlyph from "../StackLayerGlyph.svelte";
 import { layerHint, plainTitle, type StackPlace } from "./stack-margin";
 
@@ -69,7 +70,7 @@ function rove(event: KeyboardEvent): void {
 
 function choose(layer: StackLayer): void {
   open = false;
-  if (layer.number !== place.here.number) openLayer(layer);
+  if (layer.number !== place.here.number) openStackLayer(place.prId, layer);
 }
 </script>
 
