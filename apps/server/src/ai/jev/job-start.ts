@@ -5,7 +5,7 @@
 // per file.
 
 import { createHash } from "node:crypto";
-import type { AcpAgentId, RiskLevel, ThinkingEffortSetting } from "@revv/shared";
+import type { AcpAgentId, ReviewDepth, RiskLevel, ThinkingEffortSetting } from "@revv/shared";
 import { Effect } from "effect";
 import type { JevUnavailable } from "../../domain/errors";
 import type { CacheService } from "../../services/Cache";
@@ -14,12 +14,7 @@ import { JevService } from "../../services/Jev";
 import { riskCriteria } from "../prompts/risk-tiers";
 import { cachedJev } from "./optional";
 import { numericAnswerAt } from "./questions";
-import {
-  type GenerationLaunchOverride,
-  type ReasoningEffort,
-  type ReviewDepth,
-  routeSizing,
-} from "./routing";
+import { type GenerationLaunchOverride, type ReasoningEffort, routeSizing } from "./routing";
 import type { JobStartStateInput } from "./state";
 import { buildJobStartState } from "./state";
 
