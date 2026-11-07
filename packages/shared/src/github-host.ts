@@ -3,12 +3,9 @@ export const DEFAULT_GITHUB_HOST = "github.com";
 
 /** A host as typed (any case, with or without scheme or trailing slash), as stored. */
 export function normalizeGithubHost(raw: string): string {
-  return raw
-    .trim()
-    .replace(/^https?:\/\//i, "")
-    .replace(/\/+$/, "")
-    .trim()
-    .toLowerCase();
+  let host = raw.trim().replace(/^https?:\/\//i, "");
+  while (host.endsWith("/")) host = host.slice(0, -1);
+  return host.trim().toLowerCase();
 }
 
 /** Whether two hosts, however typed, name the same server. */

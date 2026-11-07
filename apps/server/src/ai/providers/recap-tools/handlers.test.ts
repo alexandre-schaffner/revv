@@ -123,6 +123,19 @@ describe("recapCompletionBlocker", () => {
   });
 });
 
+describe("set_lede", () => {
+  it("keeps bare <strong>/<em> and strips every other tag, nested ones included", async () => {
+    const db = seed();
+    await setLedeHandler(ctxFor(db), {
+      lede: '<<script>script>x<</script>/script> <STRONG onclick="y">a</STRONG> <em>b</em>',
+    });
+    const lede = recap(db).lede ?? "";
+    expect(lede).not.toContain("<script");
+    expect(lede).not.toContain("onclick");
+    expect(lede).toContain("<em>b</em>");
+  });
+});
+
 describe("add_pr_entry", () => {
   it("keeps the recap's derived fields in step with its entries", async () => {
     const db = seed();

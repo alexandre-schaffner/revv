@@ -38,8 +38,12 @@ export function detectMentionTrigger(textBeforeCaret: string): MentionTrigger | 
   return null;
 }
 
+const TRAILING_PUNCTUATION = new Set([")", ",", ".", ";", ":"]);
+
 function stripTrailingPunctuation(token: string): string {
-  return token.replace(/[),.;:]+$/g, "");
+  let end = token.length;
+  while (end > 0 && TRAILING_PUNCTUATION.has(token[end - 1] as string)) end--;
+  return token.slice(0, end);
 }
 
 /**
