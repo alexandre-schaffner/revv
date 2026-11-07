@@ -19,7 +19,7 @@ Cover these dimensions when the data supports them:
 Required structure:
 
 - Use `semantic_step_index: 0`.
-- Title with one of: "How we got here", "The journey", "Commit history", "Evolution of …", or a more specific variant that obviously names the journey (e.g. "From callbacks to async", "Three attempts at the validator").
+- Title with one of: "How we got here", "The journey", "Commit history", "Evolution of …", or a more specific variant that obviously names the journey (e.g. "The path to async callbacks", "Three attempts at the validator").
 - The chapter title or summary MUST contain at least one of the keywords the completion gate looks for: {{JOURNEY_KEYWORDS}}.
 - Aim for 2–4 atomic blocks: an opening markdown block (the narrative), 1–2 follow-up markdown blocks for course corrections / tracks, and optionally one code/diff block illustrating a critical pivot.
 - Keep it tight — usually 3–6 sentences per block.

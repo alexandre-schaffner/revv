@@ -17,7 +17,7 @@ import { RepoCloneService } from "./RepoClone";
 import { RepositoryServiceLive } from "./Repository";
 import { SecretStore } from "./SecretStore";
 import { StackService } from "./stacks/StackService";
-import { WalkthroughJobs } from "./WalkthroughJobs";
+import { WalkthroughJobs } from "./walkthrough/WalkthroughJobs";
 
 export const ACCOUNT_ID = "acc-1";
 

@@ -162,7 +162,7 @@ regardless of which provider issued it.
   external MCP tool bundle and its idempotent issue/comment handlers.
 - `apps/server/src/routes/mcp/external-agent.ts` binds authenticated project
   context to the shared tool gateway at `POST /mcp/external`.
-- `apps/server/src/services/walkthrough-request.ts` turns a
+- `apps/server/src/services/walkthrough/request.ts` turns a
   `request_walkthrough` call into a `WalkthroughJobs.startJob` pinned to the
   pushed head (`expectedHeadSha`), behind the stopped-run and run-budget
   guards below.

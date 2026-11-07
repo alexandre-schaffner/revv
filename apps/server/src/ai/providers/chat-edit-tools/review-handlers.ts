@@ -1,6 +1,6 @@
 // A GitHub-submitted issue and its comments are immutable (invariant 7).
 
-import type { RatingCitation, ThreadEventMessage, WalkthroughRating } from "@revv/shared";
+import type { ThreadEventMessage, WalkthroughRating } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import type { Db } from "../../../db";
 import { commentThreads } from "../../../db/schema/comment-threads";
@@ -13,9 +13,12 @@ import {
   decodeCitations,
   decodeIssue,
   decodeStringArray,
+  deleteIssue,
   issueId as deriveIssueId,
   renderUnknownBlockRefs,
   resolveBlockRefs,
+  toCitations,
+  upsertIssue,
   upsertIssueComment,
 } from "../../../services/walkthrough/content";
 import { decodePlainText } from "../agent-text";
@@ -89,22 +92,6 @@ function editableIssueComment(
   return { message, thread };
 }
 
-function citationsFrom(
-  input: readonly {
-    file_path: string;
-    start_line: number;
-    end_line: number;
-    note: string | null;
-  }[],
-): RatingCitation[] {
-  return input.map((c) => ({
-    filePath: c.file_path,
-    startLine: c.start_line,
-    endLine: c.end_line,
-    ...(c.note !== null ? { note: c.note } : {}),
-  }));
-}
-
 export const updateRatingHandler: ChatEditToolHandler<UpdateRatingInput> = async (ctx, input) =>
   runChatEdit(ctx, (wt) => {
     const existing = ratingAt(ctx.db, wt.id, input.axis);
@@ -119,7 +106,7 @@ export const updateRatingHandler: ChatEditToolHandler<UpdateRatingInput> = async
     const rationale = input.rationale ?? existing.rationale;
     const details = input.details ?? existing.details;
     const citations = input.citations
-      ? citationsFrom(input.citations)
+      ? toCitations(input.citations)
       : decodeCitations(existing.citations);
     if (verdict !== "pass" && citations.length === 0) {
       return {
@@ -178,37 +165,24 @@ export const addIssueEditHandler: ChatEditToolHandler<AddIssueEditInput> = async
     if ("unknown" in refs) return { refused: renderUnknownBlockRefs(refs.unknown) };
 
     const id = deriveIssueId(wt.id, title, input.file_path, input.start_line);
-    const issues = ctx.db
-      .select({ id: walkthroughIssues.id })
-      .from(walkthroughIssues)
-      .where(eq(walkthroughIssues.walkthroughId, wt.id))
-      .all();
-    if (issues.some((issue) => issue.id === id)) {
+    if (issueIn(ctx.db, wt.id, id)) {
       return {
         refused: `Error: an issue with title '${input.title}' at ${input.file_path ?? "(no file)"}:${input.start_line ?? "?"} already exists (id=${id}). Use update_issue with that id to modify it.`,
       };
     }
 
-    ctx.db
-      .insert(walkthroughIssues)
-      .values({
-        id,
-        walkthroughId: wt.id,
-        order: issues.length,
-        severity: input.severity,
-        title,
-        description,
-        filePath: input.file_path,
-        startLine: input.start_line,
-        endLine: input.end_line,
-        blockIds: JSON.stringify(refs.blockIds),
-        createdAt: new Date().toISOString(),
-      })
-      .run();
-    const row = issueIn(ctx.db, wt.id, id);
+    const row = upsertIssue(ctx.db, wt.id, {
+      severity: input.severity,
+      title,
+      description,
+      filePath: input.file_path,
+      startLine: input.start_line,
+      endLine: input.end_line,
+      blockIds: refs.blockIds,
+    });
     return {
       message: `Issue added: [${input.severity}] ${input.title} (id=${id}).`,
-      events: row ? [{ type: "issue", data: decodeIssue(row) }] : [],
+      events: [{ type: "issue", data: decodeIssue(row) }],
     };
   });
 };
@@ -265,15 +239,7 @@ export const deleteIssueHandler: ChatEditToolHandler<DeleteIssueInput> = async (
       };
     }
 
-    // The FK cascade drops the linked threads with the issue; their ids are
-    // read first so the deletions can be broadcast.
-    const threadIds = ctx.db
-      .select({ id: commentThreads.id })
-      .from(commentThreads)
-      .where(eq(commentThreads.walkthroughIssueId, existing.id))
-      .all()
-      .map((t) => t.id);
-    ctx.db.delete(walkthroughIssues).where(eq(walkthroughIssues.id, existing.id)).run();
+    const threadIds = deleteIssue(ctx.db, existing.id);
     return {
       message: `Issue ${input.issue_id} deleted${threadIds.length > 0 ? ` (${threadIds.length} linked thread(s) cascaded)` : ""}.`,
       threadEvents: threadIds.map(

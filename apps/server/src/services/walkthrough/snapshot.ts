@@ -1,21 +1,13 @@
 // Translates a walkthrough row family into a `WalkthroughSnapshotV2`, for the
 // team-cache push and the restack carry. Local-only state stays behind (see
-// `walkthrough-cache-format.ts`); block links travel as ordinal indexes into
+// `cache-format.ts`); block links travel as ordinal indexes into
 // the exported `blocks[]`, since block ids are per-walkthrough.
 
 import type { RiskLevel } from "@revv/shared";
 import { RATING_AXES } from "@revv/shared";
 import { eq } from "drizzle-orm";
-import type { Db } from "../db/index";
-import { walkthroughs } from "../db/schema/walkthroughs";
-import {
-  decodeBlock,
-  decodeCitations,
-  decodeProviderConfig,
-  decodeStringArray,
-  decodeTokenUsage,
-  loadContentRows,
-} from "./walkthrough/content";
+import type { Db } from "../../db/index";
+import { walkthroughs } from "../../db/schema/walkthroughs";
 import {
   CACHE_SCHEMA_VERSION,
   type GeneratedBy,
@@ -23,7 +15,16 @@ import {
   type WalkthroughSnapshotIssue,
   type WalkthroughSnapshotRating,
   type WalkthroughSnapshotV2,
-} from "./walkthrough-cache-format";
+} from "./cache-format";
+import {
+  decodeBlock,
+  decodeCitations,
+  decodeProviderConfig,
+  decodeStringArray,
+  decodeTokenUsage,
+  loadContentRows,
+  normalizeProviderConfig,
+} from "./content";
 
 export class ExportError extends Error {
   readonly _tag = "ExportError" as const;
@@ -112,13 +113,9 @@ export function exportWalkthroughSnapshot(db: Db, params: ExportParams): Walkthr
     repoFullName: params.repoFullName,
     prHeadSha: row.prHeadSha,
     generatedBy,
-    providerConfig: decodeProviderConfig(row.providerConfig, row.modelUsed) ?? {
-      provider: "claude-code",
-      model: row.modelUsed,
-      thinkingEffort: null,
-      contextWindow: null,
-      maxTurns: 60,
-    },
+    providerConfig:
+      decodeProviderConfig(row.providerConfig, row.modelUsed) ??
+      normalizeProviderConfig({}, row.modelUsed),
     modelUsed: row.modelUsed,
     tokenUsage: decodeTokenUsage(row.tokenUsage),
     summary: row.summary,

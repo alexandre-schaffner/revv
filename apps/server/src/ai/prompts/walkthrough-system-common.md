@@ -152,7 +152,11 @@ Call `rate_axis` exactly once for each of the 9 canonical axes, all nine in a si
 
 ### Finish (one call: complete_walkthrough)
 
-After Phase D, call `complete_walkthrough`. It validates the full invariant set: summary non-empty, sentiment non-empty, ≥1 diff step, all 9 axes rated, AND every line-anchored concern has at least one matching `add_issue_comment` thread. If any of those checks fails, the call returns an error — fix what's missing (most often: an `add_issue_comment` you skipped) and call again. The orchestrator observes the generator end, re-runs the same comment-pairing check, and transitions status to `complete` only if it passes.
+After Phase D, call `complete_walkthrough`. It refuses until all of these hold:
+
+{{COMPLETION_GATE}}
+
+A refusal names what's missing (most often an `add_issue_comment` you skipped) — fix it and call again. When your turn ends, the orchestrator runs the same check, minus the first-pass-lead requirement, and marks the walkthrough `complete` only if it passes.
 
 ---
 

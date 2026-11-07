@@ -12,7 +12,7 @@ import { PrContextService } from "./PrContext";
 import { PrConversationService } from "./PrConversation";
 import { type Conversation, ReviewService } from "./Review";
 import { SyncService } from "./Sync";
-import { WalkthroughService } from "./Walkthrough";
+import { WalkthroughService } from "./walkthrough/Walkthrough";
 
 export interface SubmitReviewInput {
   action: "approve" | "request_changes" | "comment";

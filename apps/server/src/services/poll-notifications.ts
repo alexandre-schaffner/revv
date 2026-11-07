@@ -5,8 +5,8 @@ import type { Db } from "../db/index";
 import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
 import type { Realtime } from "./Realtime";
-import type { WalkthroughService } from "./Walkthrough";
-import type { WalkthroughJobs } from "./WalkthroughJobs";
+import type { WalkthroughService } from "./walkthrough/Walkthrough";
+import type { WalkthroughJobs } from "./walkthrough/WalkthroughJobs";
 
 export interface CycleOutcome {
   readonly allRepos: readonly Repository[];
@@ -131,17 +131,23 @@ export const announceSyncChanges = (
       );
       if (!uncached) continue;
       yield* Effect.forkDetach(
-        svc.walkthroughJobs.startJob({ prId: pr.id, trigger: "review_requested" }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.sync(() => {
-              logError(
-                "PollScheduler",
-                `Auto-walkthrough trigger failed for PR ${pr.id} (${change.repoFullName}#${change.prNumber}):`,
-                Cause.pretty(cause),
-              );
-            }),
+        svc.walkthroughJobs
+          .startJob({
+            prId: pr.id,
+            trigger: "review_requested",
+            replace: "none",
+          })
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.sync(() => {
+                logError(
+                  "PollScheduler",
+                  `Auto-walkthrough trigger failed for PR ${pr.id} (${change.repoFullName}#${change.prNumber}):`,
+                  Cause.pretty(cause),
+                );
+              }),
+            ),
           ),
-        ),
       );
     }
   });

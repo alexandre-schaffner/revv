@@ -47,14 +47,10 @@ every caller; scheduled as one change.
 
 **Where** (`apps/server/src/services/`):
 
-- walkthrough: `Walkthrough.ts`, `WalkthroughJobs.ts`, `WalkthroughSnapshotImporter.ts`,
-  `walkthrough-{cache-format,leads,prompt-files,request,snapshot}.ts`, `RemoteWalkthroughCache.ts`
 - chat: `ChatSession.ts`, `ChatMcpTokens.ts`
 - external integrations: `ExternalIntegrations.ts`
 - jobs: `job-mutex.ts`, `job-subscribers.ts`, `session-token-store.ts`
-- no folder yet: hunk scan (`HunkScan.ts`, `hunk-scan-{run,store}.ts`), poll (`PollScheduler.ts`,
-  `poll-{gate,maintenance,notifications,open-prs,state}.ts`), recap (`ProjectRecap.ts`,
-  `ProjectRecapJobs.ts`, `RecapScheduler.ts`, `recap-{request,source-bundle}.ts`)
+- no folder yet: poll (`PollScheduler.ts`, `poll-{gate,maintenance,notifications,open-prs,state}.ts`)
 
 **Fix shape.** Moves plus import rewrites, one feature per PR, with the feature roots in
 `scripts/check-import-boundaries.ts` following. Mechanical, but it touches every importer, so

@@ -12,7 +12,7 @@ import {
   walkthroughSemanticSteps,
   walkthroughs,
 } from "../../../db/schema";
-import { loadWalkthroughLeads, recordWalkthroughLeads } from "../../../services/walkthrough-leads";
+import { loadWalkthroughLeads, recordWalkthroughLeads } from "../../../services/walkthrough/leads";
 import { completeWalkthroughHandler, WALKTHROUGH_TOOL_BUNDLE } from "./index";
 import { resolveLeadHandler } from "./lead-handler";
 import { getWalkthroughStateHandler } from "./read-handler";

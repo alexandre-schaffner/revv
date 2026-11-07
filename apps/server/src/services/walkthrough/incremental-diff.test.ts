@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { parseNameStatusZ, parseNumstat } from "./git/parse";
+import { parseNameStatusZ, parseNumstat } from "../git/parse";
 import {
   capPatch,
   countPatchLines,

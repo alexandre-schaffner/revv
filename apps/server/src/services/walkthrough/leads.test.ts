@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { HunkScanRow } from "@revv/shared";
-import { rowsInPrompt } from "./walkthrough-leads";
+import { rowsInPrompt } from "./leads";
 
 const row = (filePath: string, newStart: number, newLines: number): HunkScanRow => ({
   filePath,

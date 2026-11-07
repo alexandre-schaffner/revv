@@ -18,12 +18,12 @@ import {
 } from "@revv/shared";
 import { and, asc, desc, eq, gte, isNull, lt } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import { projectRecaps, recapPrEntries, recapThemeSummaries } from "../db/schema/index";
-import type { RecapSourceBundle } from "../db/schema/project-recaps";
-import { avatarOfRepoLogin } from "../db/schema/remote-users";
-import { type DbError, RecapNotFoundError } from "../domain/errors";
-import { dbTry } from "../effects/db-try";
-import { DbService } from "./Db";
+import { projectRecaps, recapPrEntries, recapThemeSummaries } from "../../db/schema/index";
+import type { RecapSourceBundle } from "../../db/schema/project-recaps";
+import { avatarOfRepoLogin } from "../../db/schema/remote-users";
+import { type DbError, RecapNotFoundError } from "../../domain/errors";
+import { dbTry } from "../../effects/db-try";
+import { DbService } from "../Db";
 
 function parseStats(json: string): RecapSummaryStats {
   try {

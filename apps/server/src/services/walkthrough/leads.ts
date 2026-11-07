@@ -15,13 +15,13 @@ import {
 } from "@revv/shared";
 import { and, asc, eq } from "drizzle-orm";
 import { Effect } from "effect";
-import { type HunkLead, hunkScanLeads } from "../ai/jev/hunk-scan";
-import type { Db } from "../db";
-import { walkthroughLeads } from "../db/schema/walkthrough-leads";
-import { walkthroughs } from "../db/schema/walkthroughs";
-import { dbTry } from "../effects/db-try";
-import { logError } from "../logger";
-import type { PromptFilesResult } from "./walkthrough-prompt-files";
+import { type HunkLead, hunkScanLeads } from "../../ai/jev/hunk-scan";
+import type { Db } from "../../db";
+import { walkthroughLeads } from "../../db/schema/walkthrough-leads";
+import { walkthroughs } from "../../db/schema/walkthroughs";
+import { dbTry } from "../../effects/db-try";
+import { logError } from "../../logger";
+import type { PromptFilesResult } from "./prompt-files";
 
 type Row = typeof walkthroughLeads.$inferSelect;
 
@@ -77,6 +77,19 @@ export function readWalkthroughLeads(db: Db, walkthroughId: string): Walkthrough
     .orderBy(asc(walkthroughLeads.ordinal))
     .all()
     .map(rowToLead);
+}
+
+/** Leads this walkthrough's agent was handed and hasn't resolved, in prompt order. */
+export function findUnresolvedLeads(db: Db, walkthroughId: string): WalkthroughLead[] {
+  return readWalkthroughLeads(db, walkthroughId).filter((lead) => lead.verdict === null);
+}
+
+export function renderUnresolvedLeadsError(leads: readonly WalkthroughLead[]): string {
+  return `Error: ${leads.length} first-pass lead(s) have no verdict: ${leads
+    .map((lead) => `${lead.id} (${lead.filePath}:${lead.newStart})`)
+    .join(
+      ", ",
+    )}. Call resolve_lead for each — confirmed with the issue_id you raised for it, or rejected with a one-sentence reason — then call complete_walkthrough again.`;
 }
 
 export function readWalkthroughLead(

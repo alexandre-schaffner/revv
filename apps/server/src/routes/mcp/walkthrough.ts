@@ -2,7 +2,7 @@ import { SPAN_ATTR } from "@revv/shared/telemetry";
 import { Effect } from "effect";
 import { toolCallActivity } from "../../ai/providers/mcp-tool-gateway";
 import { WALKTHROUGH_TOOL_BUNDLE } from "../../ai/providers/walkthrough-tools";
-import { WalkthroughJobs } from "../../services/WalkthroughJobs";
+import { WalkthroughJobs } from "../../services/walkthrough/WalkthroughJobs";
 import { bindTokenMcpRoute } from "./utils";
 
 export const mcpWalkthroughRoute = bindTokenMcpRoute({

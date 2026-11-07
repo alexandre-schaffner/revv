@@ -4,8 +4,8 @@
 
 import type { WalkthroughStreamEvent } from "@revv/shared";
 import { Effect } from "effect";
-import { RemoteWalkthroughCache } from "../RemoteWalkthroughCache";
-import { WalkthroughJobs } from "../WalkthroughJobs";
+import { RemoteWalkthroughCache } from "./RemoteWalkthroughCache";
+import { WalkthroughJobs } from "./WalkthroughJobs";
 
 export const publishWalkthroughEdit = (
   walkthroughId: string,

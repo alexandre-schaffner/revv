@@ -22,7 +22,7 @@ import {
 import type {
   WalkthroughRequestOutcome,
   WalkthroughRequestRefusal,
-} from "../../services/walkthrough-request";
+} from "../../services/walkthrough/request";
 import {
   getWalkthroughForEditTool,
   updateBlockTool,

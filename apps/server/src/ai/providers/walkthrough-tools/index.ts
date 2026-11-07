@@ -1,14 +1,18 @@
-import type { RatingCitation, RiskLevel, WalkthroughRating } from "@revv/shared";
+import type { RiskLevel, WalkthroughRating } from "@revv/shared";
 import { RATING_AXES } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
-import { walkthroughCompletionBlockers } from "../../../services/walkthrough/completion";
+import {
+  completionRequirementsSentence,
+  walkthroughCompletionBlockers,
+} from "../../../services/walkthrough/completion";
 import {
   isRatedAxis,
   renderUnknownBlockRefs,
   resolveBlockRefs,
+  toCitations,
 } from "../../../services/walkthrough/content";
 import { defineTool, fail, ok, type ToolSpecBundle } from "../mcp-tool-gateway";
 import { withContentWriteMetrics } from "../walkthrough-metrics";
@@ -184,12 +188,7 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
       return;
     }
     const { blockIds } = refs;
-    const citations: RatingCitation[] = input.citations.map((c) => ({
-      filePath: c.file_path,
-      startLine: c.start_line,
-      endLine: c.end_line,
-      ...(c.note !== null ? { note: c.note } : {}),
-    }));
+    const citations = toCitations(input.citations);
 
     const now = new Date().toISOString();
     ctx.db
@@ -423,7 +422,7 @@ export const WALKTHROUGH_TOOL_BUNDLE: ToolSpecBundle<
       access: "write",
       description: phaseDescription(
         "complete_walkthrough",
-        `Signal that the walkthrough is complete. Fails unless Phase D is reached with all ${RATING_AXES.length} axes rated, summary + sentiment non-empty, ≥1 diff step, every line-anchored issue commented, and every first-pass lead resolved. The orchestrator performs the final status transition when your turn ends.`,
+        `Signal that the walkthrough is complete. Fails unless: ${completionRequirementsSentence()}. The orchestrator performs the final status transition when your turn ends.`,
       ),
       activity: { kind: "tool.mcp", summary: "Finalizing walkthrough..." },
       inputSchema: completeWalkthroughSchema,

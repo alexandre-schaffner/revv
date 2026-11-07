@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { JobStartAnswers } from "../../ai/jev/job-start";
-import { buildJobStartPlan, shouldResolveJobStart } from "./launch-plan";
+import { buildJobStartPlan } from "./launch-plan";
 
 const settings = { aiModel: "revv:auto", aiThinkingEffort: "revv:auto" } as const;
 
@@ -16,15 +16,6 @@ const answers: JobStartAnswers = {
 };
 
 describe("job-start plan", () => {
-  it("runs on a user trigger", () => {
-    expect(shouldResolveJobStart({ trigger: "user", cacheWillHit: false })).toBe(true);
-  });
-
-  it("skips on resume, or on a cache hit", () => {
-    expect(shouldResolveJobStart({ trigger: "resume", cacheWillHit: false })).toBe(false);
-    expect(shouldResolveJobStart({ trigger: "user", cacheWillHit: true })).toBe(false);
-  });
-
   it("projects one answer into risk, routing and file priority", () => {
     const plan = buildJobStartPlan({
       settings,

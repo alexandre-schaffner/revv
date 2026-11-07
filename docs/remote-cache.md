@@ -16,7 +16,7 @@ no service-account JSON to copy around.
 
 The cache key is content-addressable on `<owner>/<repo>/<headSha>.json.gz`. The
 local server gzips a `WalkthroughSnapshotV2` (see
-`apps/server/src/services/walkthrough-cache-format.ts`) and uploads it to the bucket on every
+`apps/server/src/services/walkthrough/cache-format.ts`) and uploads it to the bucket on every
 successful generation — but only after an eligibility check (the local user
 must currently hold `write` on the repo) and, unless signing is `off`, after
 SSHSIG-signing the payload with the user's GitHub SSH key. Before kicking off
@@ -116,7 +116,7 @@ target repo**, proven cryptographically.
    repo. Read-only contributors still get cache *hits*; they simply never push.
 2. **Sign** (when `mode != 'off'`) — the server signs the canonical message
    `revv-cache:v1\n<repoFullName>\n<headSha>\n<contentSha256>` (see
-   `cacheSigningMessage` in `apps/server/src/services/walkthrough-cache-format.ts`) with SSHSIG via
+   `cacheSigningMessage` in `apps/server/src/services/walkthrough/cache-format.ts`) with SSHSIG via
    `ssh-keygen -Y sign`, namespace `revv-cache@<host>`. The signing key is the
    user's local SSH private key — auto-detected by matching `~/.ssh/id_*`
    against the keys the user has published at `https://<host>/<login>.keys`, or
@@ -283,7 +283,7 @@ gcloud storage cat gs://my-team-revv-cache/owner/repo/abc1234.json.gz \
 ## Schema evolution
 
 The snapshot envelope is versioned via `CACHE_SCHEMA_VERSION` in
-`apps/server/src/services/walkthrough-cache-format.ts`. To make a breaking change:
+`apps/server/src/services/walkthrough/cache-format.ts`. To make a breaking change:
 
 1. Add a new `WalkthroughSnapshotV<N>` type alongside the existing one.
 2. Bump `CACHE_SCHEMA_VERSION` to `<N>`.

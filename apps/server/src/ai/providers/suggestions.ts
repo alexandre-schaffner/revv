@@ -13,7 +13,7 @@ import { Effect } from "effect";
 import { debug, logError } from "../../logger";
 import { DiffCacheService } from "../../services/DiffCache";
 import { PullRequestService } from "../../services/PullRequest";
-import { WalkthroughService } from "../../services/Walkthrough";
+import { WalkthroughService } from "../../services/walkthrough/Walkthrough";
 import { type AgentLaunch, resolveAgentLaunch } from "../acp/agent-launch";
 import { promptOnce } from "../acp/run-turn";
 
@@ -45,7 +45,7 @@ interface GenerateSuggestionsInput {
 
 const SYSTEM_PROMPT = `You are helping a code reviewer skim a pull request. \
 Given the PR metadata and (when present) the AI walkthrough below, generate \
-exactly 3 short prompts the reviewer would find most useful to ask an AI \
+exactly ${CHAT_SUGGESTION_COUNT} short prompts the reviewer would find most useful to ask an AI \
 assistant about THIS specific PR.
 
 Rules:

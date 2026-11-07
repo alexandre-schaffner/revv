@@ -8,20 +8,8 @@ import { AppRuntime } from "../../runtime";
 import { Realtime } from "../../services/Realtime";
 import { publishWalkthroughEdit } from "../../services/walkthrough/edits";
 
-/**
- * Push a thread event. Pass `accountId` when the caller already holds it;
- * otherwise it is resolved from the PR.
- */
-export function fireAndForgetThreadEventBroadcast(
-  prId: string,
-  msg: ThreadEventMessage,
-  accountId?: string,
-): void {
-  void AppRuntime.runPromise(
-    Effect.flatMap(Realtime, (realtime) =>
-      accountId !== undefined ? realtime.toAccount(accountId, msg) : realtime.toPr(prId, msg),
-    ),
-  );
+export function fireAndForgetThreadEventBroadcast(prId: string, msg: ThreadEventMessage): void {
+  void AppRuntime.runPromise(Effect.flatMap(Realtime, (realtime) => realtime.toPr(prId, msg)));
 }
 
 export function fireAndForgetWalkthroughEdit(

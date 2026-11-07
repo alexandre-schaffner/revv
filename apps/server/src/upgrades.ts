@@ -60,7 +60,7 @@ export const LEGACY_UPGRADES = {
   },
   walkthroughOnlyReviewRounds: {
     introducedIn: "0.17.0",
-    sites: ["apps/server/src/services/Walkthrough.ts"],
+    sites: ["apps/server/src/services/walkthrough/Walkthrough.ts"],
     carries:
       "PRs reviewed before `review_rounds` existed: their rounds are read off the walkthrough rows",
   },

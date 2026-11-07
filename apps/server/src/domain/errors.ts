@@ -162,10 +162,6 @@ export class CloneNotReadyError extends Data.TaggedError("CloneNotReadyError")<{
   readonly repoId: string;
 }> {}
 
-export class CloneInProgressError extends Data.TaggedError("CloneInProgressError")<{
-  readonly repoId: string;
-}> {}
-
 /**
  * Why Revv won't carry out a stack merge or rebase as asked; nothing was
  * merged or pushed.
@@ -414,7 +410,6 @@ type AppError =
   | SyncError
   | CloneError
   | CloneNotReadyError
-  | CloneInProgressError
   | StackRejectedError
   | ConcurrentPushError
   | WorkspaceBusyError
@@ -533,7 +528,6 @@ const HTTP_ERRORS: {
     return http(status, code, e.message);
   },
   CloneNotReadyError: () => http(409, "UNAVAILABLE", "Repository clone is not ready yet"),
-  CloneInProgressError: () => http(409, "BUSY", "Repository clone is already in progress"),
   CloneError: (e) => http(502, "FAILED", e.message),
   StackRejectedError: (e) => {
     const [status, code] = STACK_REJECTION_HTTP[e.rejection.reason];

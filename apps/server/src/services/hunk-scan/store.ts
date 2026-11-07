@@ -16,9 +16,9 @@ import {
 } from "@revv/shared";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { Effect } from "effect";
-import { hunkScanRows, hunkScans } from "../db/schema/hunk-scans";
-import { DbError } from "../domain/errors";
-import { DbService } from "./Db";
+import { hunkScanRows, hunkScans } from "../../db/schema/hunk-scans";
+import { DbError } from "../../domain/errors";
+import { DbService } from "../Db";
 
 export type HunkScanRowRecord = typeof hunkScanRows.$inferSelect;
 

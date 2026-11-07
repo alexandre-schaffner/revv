@@ -2,7 +2,8 @@
 // outside Revv pushes commits and asks for a fresh review of exactly the head
 // it pushed. That agent cannot name a walkthrough row or a lifecycle state —
 // it hands over a commit, and everything else goes through
-// `WalkthroughJobs.startJob`, pinned to that head (`expectedHeadSha`).
+// `WalkthroughJobs.startJob`, pinned to that head (`expectedHeadSha`), with
+// the user's do-over semantics: a finished review at the head is replaced.
 //
 // Idempotent on the head: a completed review at that head is returned as-is,
 // and a job already generating it is joined, so a retried (or recursive) call
@@ -17,13 +18,13 @@
 import type { WalkthroughGenerationMode, WalkthroughMode } from "@revv/shared";
 import { and, desc, eq, gt } from "drizzle-orm";
 import { Effect } from "effect";
-import { walkthroughs } from "../db/schema/walkthroughs";
-import type { DbError } from "../domain/errors";
-import { dbTry } from "../effects/db-try";
-import { DbService } from "./Db";
+import { walkthroughs } from "../../db/schema/walkthroughs";
+import type { DbError } from "../../domain/errors";
+import { dbTry } from "../../effects/db-try";
+import { DbService } from "../Db";
+import { walkthroughPerspective } from "./perspective";
 import type { WalkthroughService } from "./Walkthrough";
 import { type StartJobError, WalkthroughJobs } from "./WalkthroughJobs";
-import { walkthroughPerspective } from "./walkthrough/perspective";
 
 /** Runs (of any status) at one head before `request_walkthrough` stops starting more. */
 export const MAX_RUNS_PER_HEAD = 3;
@@ -134,6 +135,7 @@ export const requestWalkthroughAtHead = (params: {
       .startJob({
         prId: params.prId,
         trigger: "external_agent",
+        replace: "finished",
         mode,
         generationMode: params.generationMode,
         expectedHeadSha: headSha,
@@ -163,12 +165,6 @@ export const requestWalkthroughAtHead = (params: {
  */
 export function describeWalkthroughRequestError(error: WalkthroughRequestError): string {
   switch (error._tag) {
-    case "CloneInProgressError":
-      return "Revv is still cloning this repository. Retry in a minute.";
-    case "CloneNotReadyError":
-      return "Revv has not cloned this repository yet. Ask the user to check Revv's Settings.";
-    case "AiNotConfiguredError":
-      return "No AI agent is configured in Revv. Ask the user to pick one in Revv's Settings.";
     case "GitHubRateLimitError":
       return `GitHub rate-limited Revv until ${error.resetAt.toISOString()}. Retry after that.`;
     case "GitHubAuthError":
@@ -183,8 +179,6 @@ export function describeWalkthroughRequestError(error: WalkthroughRequestError):
     case "AiGenerationError":
       return error.message ?? "Walkthrough generation could not start.";
     case "GitHubAccessDeniedError":
-    case "CloneError":
-    case "ValidationError":
     case "DbError":
       return error.message;
   }

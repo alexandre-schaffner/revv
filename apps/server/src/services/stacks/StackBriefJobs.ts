@@ -1,9 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isOpenLayer, type StackBriefStatus } from "@revv/shared";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
-import { Cause, Context, Effect, Layer } from "effect";
-import { resolveAgentLaunch } from "../../ai/acp/agent-launch";
-import { makeTurnSettle, type TurnSettle } from "../../ai/acp/run-turn";
+import { Context, Effect, Layer } from "effect";
 import { runStackBriefAgentViaAcp } from "../../ai/providers/stack-brief-acp";
 import {
   type StackBriefToolContext,
@@ -21,11 +19,17 @@ import { makeStartJobMutex } from "../job-mutex";
 import {
   type AgentJobs,
   type AgentRun,
-  MAX_RESUME_ATTEMPTS,
   makeAgentJobs,
   type RunEnd,
   type RunOutcome,
 } from "../jobs/agent-jobs";
+import {
+  newToolGate,
+  runToolGatedTurn,
+  TOOL_GATED_FAILURES,
+  type ToolGate,
+  toolGateHooks,
+} from "../jobs/tool-gated-run";
 import { PrContextService } from "../PrContext";
 import { Realtime } from "../Realtime";
 import { SettingsService } from "../Settings";
@@ -90,11 +94,8 @@ export function buildStackBriefSnapshot(
   };
 }
 
-interface BriefRun {
+interface BriefRun extends ToolGate {
   readonly tools: StackBriefToolContext;
-  calledAnyTool: boolean;
-  readonly completion: TurnSettle;
-  modelUsed: string | null;
 }
 
 export const StackBriefJobsLive = Layer.effect(
@@ -179,8 +180,7 @@ export const StackBriefJobsLive = Layer.effect(
           dbTry("stack brief completion check", () => stackBriefCompletionBlocker(db, briefId)),
       },
       settle,
-      crashed: (cause) => `Generation failed unexpectedly: ${Cause.pretty(cause).slice(0, 200)}`,
-      resumeExhausted: `Exceeded max resume attempts (${MAX_RESUME_ATTEMPTS}) after repeated crashes`,
+      ...TOOL_GATED_FAILURES,
       relaunch: (briefId) => launch(briefId),
     });
 
@@ -195,33 +195,24 @@ export const StackBriefJobsLive = Layer.effect(
           return { kind: "failed", failure: "The stack snapshot has no layers" };
         }
 
-        const agentLaunch = yield* resolveAgentLaunch("brief").pipe(
-          Effect.provideService(SettingsService, settingsService),
-        );
-        run.context.modelUsed = agentLaunch.model;
         const repo = yield* withDb(db, prCtx.getRepo(row.repositoryId)).pipe(
           Effect.orElseSucceed(() => null),
         );
-
-        const error = yield* Effect.promise(() =>
-          runStackBriefAgentViaAcp({
-            ctx: run.context.tools,
-            snapshot,
-            sessionToken: run.token,
-            launch: agentLaunch,
-            workingDir: repo?.clonePath ?? process.cwd(),
-            abortController: run.abort,
-            activity: run.activity,
-            calledAnyTool: () => run.context.calledAnyTool,
-            completion: run.context.completion,
-          }),
-        );
-        return {
-          kind: "journal",
-          failure:
-            error?.message ??
-            "The agent stopped before complete_stack_brief; the brief is unfinished",
-        };
+        return yield* runToolGatedTurn({
+          run,
+          purpose: "brief",
+          clonePath: repo?.clonePath ?? null,
+          turn: (agent) =>
+            runStackBriefAgentViaAcp({
+              ctx: run.context.tools,
+              snapshot,
+              sessionToken: run.token,
+              abortController: run.abort,
+              activity: run.activity,
+              ...agent,
+            }),
+          unfinished: "The agent stopped before complete_stack_brief; the brief is unfinished",
+        }).pipe(Effect.provideService(SettingsService, settingsService));
       });
 
     const launch = (briefId: string): Effect.Effect<void> =>
@@ -229,21 +220,10 @@ export const StackBriefJobsLive = Layer.effect(
         .launch({
           id: briefId,
           context: (): BriefRun => {
-            const completion = makeTurnSettle();
-            const context: BriefRun = {
-              calledAnyTool: false,
-              completion,
-              modelUsed: null,
-              tools: {
-                db,
-                briefId,
-                onToolCall: () => {
-                  context.calledAnyTool = true;
-                },
-                onCompleted: completion.settle,
-              },
-            };
-            return context;
+            const gate = newToolGate();
+            return Object.assign(gate, {
+              tools: { db, briefId, ...toolGateHooks(gate) },
+            });
           },
           body: runBrief,
           instrument: (_run, effect) =>

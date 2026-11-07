@@ -3,7 +3,7 @@ import { Effect } from "effect";
 import type { DbError } from "../../domain/errors";
 import type { DbService } from "../Db";
 import { resolveReviewModeForPr } from "../review-mode";
-import { WalkthroughService } from "../Walkthrough";
+import { WalkthroughService } from "./Walkthrough";
 
 /**
  * The perspective a PR's walkthrough is shown and requested in when the

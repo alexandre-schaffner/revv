@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { type Context, Effect, Layer } from "effect";
-import { createDb, type Db } from "../db/index";
-import { account, projectRecaps, repositories, user } from "../db/schema";
-import { DbService } from "./Db";
+import { createDb, type Db } from "../../db/index";
+import { account, projectRecaps, repositories, user } from "../../db/schema";
+import { DbService } from "../Db";
 import {
   type ListForRepoParams,
   ProjectRecapService,

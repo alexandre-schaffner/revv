@@ -1,6 +1,5 @@
 import { describe, expect, it } from "bun:test";
 import {
-  DEFAULT_USER_SETTINGS,
   RATING_AXES,
   type WalkthroughStackSnapshot,
   type WalkthroughStreamEvent,
@@ -8,27 +7,25 @@ import {
 } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
-import { createDb, type Db } from "../db/index";
+import { createDb, type Db } from "../../db/index";
 import {
   walkthroughBlocks,
   walkthroughIssues,
   walkthroughRatings,
   walkthroughSemanticSteps,
   walkthroughs,
-} from "../db/schema";
-import { CacheService } from "./Cache";
-import { DbService } from "./Db";
-import { JevService } from "./Jev";
-import { fingerprintFiles } from "./stacks/fingerprint";
+} from "../../db/schema";
+import { DbService } from "../Db";
+import { fingerprintFiles } from "../stacks/fingerprint";
+import { blockId, issueId, semanticStepId } from "./content";
+import { planNewRow, planRestackCarry } from "./launch-plan";
+import { makeWalkthroughLifecycle } from "./lifecycle";
+import { exportWalkthroughSnapshot } from "./snapshot";
 import { WalkthroughService, WalkthroughServiceLive } from "./Walkthrough";
 import {
   WalkthroughSnapshotImporter,
   WalkthroughSnapshotImporterLive,
 } from "./WalkthroughSnapshotImporter";
-import { blockId, issueId, semanticStepId } from "./walkthrough/content";
-import { planRestackCarry, planWalkthroughLaunch } from "./walkthrough/launch-plan";
-import { makeWalkthroughLifecycle } from "./walkthrough/lifecycle";
-import { exportWalkthroughSnapshot } from "./walkthrough-snapshot";
 
 const NOW = "2026-10-16T00:00:00Z";
 const FILES = [{ filename: "src/a.ts", status: "modified", patch: "@@ -1 +1 @@\n+a" }];
@@ -183,11 +180,14 @@ describe("restack carry", () => {
       Effect.gen(function* () {
         const service = yield* WalkthroughService;
         const importer = yield* WalkthroughSnapshotImporter;
-        const id = yield* service.createPartial({
+        const id = yield* service.createRow({
           reviewSessionId: "session-1",
           prId: "pr-1",
-          modelUsed: "current-model",
           prHeadSha: "head-2",
+          mode: "reviewer",
+          generationMode: "full",
+          parentWalkthroughId: null,
+          baseHeadSha: null,
           stackContext: STACK,
           diffFingerprint: fingerprintFiles(FILES),
         });
@@ -287,91 +287,42 @@ describe("planRestackCarry", () => {
   });
 });
 
-describe("planWalkthroughLaunch: stack inputs", () => {
-  const plan = (
-    db: Db,
-    overrides: {
-      existing?: { id: string; parentWalkthroughId?: string; baseHeadSha?: string };
-      trigger?: "user" | "resume";
-    },
-  ) =>
+describe("planNewRow: stack inputs", () => {
+  const plan = (db: Db) =>
     run(
       db,
-      planWalkthroughLaunch({
-        db,
-        resolved: {
-          pr: { id: "pr-1" },
-          repo: { id: "repo-1" },
-          files: FILES.map((f) => ({ ...f, previousFilename: null, additions: 1, deletions: 0 })),
-          commits: [],
-          meta: { headSha: "head-2" },
-        } as never,
+      planNewRow({
+        prId: "pr-1",
+        headSha: "head-2",
+        files: FILES.map((f) => ({ ...f, previousFilename: null, additions: 1, deletions: 0 })),
         mode: "reviewer",
         requestedGenerationMode: "incremental",
-        existing: overrides.existing ?? null,
-        trigger: overrides.trigger ?? "user",
-        settings: DEFAULT_USER_SETTINGS,
-        agent: "claude-code",
         snapshotStack: Effect.succeed(STACK),
-        cacheProbe: Effect.succeed(true),
-      }).pipe(
-        Effect.provideService(JevService, {} as never),
-        Effect.provideService(CacheService, {} as never),
-      ),
+      }),
     );
 
   it("plans the carry an incremental request accepts from a full review", async () => {
     const db = createDb(":memory:");
     seedSource(db);
-    const result = await plan(db, {});
+    const result = await plan(db);
     expect(result.stack).toEqual(STACK);
     expect(result.restack).toEqual({ fromWalkthroughId: "wt-old", generationMode: "full" });
     expect(result.generationMode).toBe("full");
     expect(result.parentFingerprint).toBeNull();
   });
 
-  it("never carries on a resume, and reads the row's own stack", async () => {
+  it("reads the parent's fingerprint for an incremental stacked run", async () => {
     const db = createDb(":memory:");
     seedSource(db);
-    insertRow(db, {
-      id: "wt-resumed",
-      prHeadSha: "head-2",
-      status: "generating",
-      generationMode: "incremental",
-      parentWalkthroughId: "wt-old",
-      baseHeadSha: "head-1",
-      stackContext: STACK,
-    });
-    const result = await plan(db, {
-      existing: { id: "wt-resumed", parentWalkthroughId: "wt-old", baseHeadSha: "head-1" },
-      trigger: "resume",
-    });
+    // The source's own changes moved, so nothing carries and the run is incremental.
+    db.update(walkthroughs)
+      .set({ diffFingerprint: { "src/a.ts": "older" } })
+      .where(eq(walkthroughs.id, "wt-old"))
+      .run();
+    const result = await plan(db);
     expect(result.restack).toBeNull();
-    expect(result.stack).toEqual(STACK);
-    expect(result.parentFingerprint).toEqual(fingerprintFiles(FILES));
-  });
-
-  it("reuses the plan recorded on the row, so every run launches the same way", async () => {
-    const db = createDb(":memory:");
-    seedSource(db);
-    const recorded = {
-      agent: "codex" as const,
-      model: "recorded-model",
-      thinkingEffort: null,
-      sizing: null,
-      filePriorities: [{ filename: "src/a.ts", tier: 1 }],
-      splitRecommendation: null,
-      adjudicateContinuations: false,
-    };
-    insertRow(db, {
-      id: "wt-planned",
-      prHeadSha: "head-2",
-      status: "generating",
-      launchPlan: recorded,
-    });
-    const result = await plan(db, { existing: { id: "wt-planned" }, trigger: "resume" });
-    expect(result.plan).toEqual(recorded);
-    expect(result.planIsNew).toBe(false);
-    expect(result.providerConfig.model).toBe("recorded-model");
+    expect(result.generationMode).toBe("incremental");
+    expect(result.parentWalkthroughId).toBe("wt-old");
+    expect(result.parentFingerprint).toEqual({ "src/a.ts": "older" });
   });
 });

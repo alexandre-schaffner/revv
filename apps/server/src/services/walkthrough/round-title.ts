@@ -4,32 +4,16 @@
 
 import { decodePrCommits, type StoredPrCommit } from "./content";
 
+/** The commits a round covers, `fromSha` exclusive to `toSha` inclusive; `commits` oldest first. */
 export function commitsInRoundRange(
   commits: readonly StoredPrCommit[],
   fromSha: string | null,
   toSha: string,
 ): readonly StoredPrCommit[] {
+  if (fromSha !== null && fromSha === toSha) return [];
   const toIndex = commits.findIndex((commit) => commit.sha === toSha);
   const fromIndex = fromSha ? commits.findIndex((commit) => commit.sha === fromSha) : -1;
-  if (fromSha !== null && fromSha === toSha) return [];
-
-  if (toIndex !== -1 && fromIndex !== -1) {
-    if (fromIndex < toIndex) {
-      return commits.slice(fromIndex + 1, toIndex + 1);
-    }
-    return commits.slice(toIndex, fromIndex).reverse();
-  }
-
-  if (toIndex !== -1) {
-    const prefix = commits.slice(0, toIndex + 1);
-    return prefix.length > 1 && commits[0]?.sha === toSha ? prefix.reverse() : prefix;
-  }
-
-  if (fromIndex !== -1) {
-    return commits.slice(fromIndex + 1);
-  }
-
-  return commits;
+  return commits.slice(fromIndex + 1, toIndex === -1 ? commits.length : toIndex + 1);
 }
 
 function subjectFromCommitMessage(message: string): string {

@@ -4,9 +4,8 @@
 
 import type { WalkthroughPipelinePhase } from "@revv/shared";
 import type { Db } from "../../../db";
-import type { WalkthroughRow } from "../../../services/walkthrough/content";
+import { loadWalkthroughRow, type WalkthroughRow } from "../../../services/walkthrough/content";
 import { fail } from "../mcp-tool-gateway";
-import { loadWalkthroughRow } from "./helpers";
 import type { WalkthroughToolResult } from "./spec";
 
 interface PhaseWindow {

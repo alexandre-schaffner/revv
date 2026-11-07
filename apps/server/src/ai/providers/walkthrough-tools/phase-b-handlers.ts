@@ -13,11 +13,10 @@ import { walkthroughs } from "../../../db/schema/walkthroughs";
 import type { ThreadWrite } from "../../../services/Review";
 import {
   decodeIssue,
-  issueId as deriveIssueId,
-  isSameResolvedFinding,
   renderUnknownBlockRefs,
   resolveBlockRefs,
   semanticStepId,
+  upsertIssue,
   upsertIssueComment,
 } from "../../../services/walkthrough/content";
 import { renderArtifactRejection } from "../../jev/artifact-quality";
@@ -309,116 +308,34 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
   // afterwards would give the same concern two different ids across runs.
   const title = decodePlainText(input.title);
   const description = decodePlainText(input.description);
-  const issueId = deriveIssueId(
-    ctx.walkthroughId,
-    title,
-    input.file_path ?? null,
-    input.start_line ?? null,
-  );
-
-  let result: WalkthroughToolResult | null = null;
-  let issueEvent: WalkthroughIssue | null = null;
-  ctx.db.transaction(() => {
-    const guard = checkFlagIssuePreconditions(ctx.db, ctx.walkthroughId, input);
-    if (!guard.ok) {
-      result = guard.error;
-      return;
-    }
-    const blockIds = guard.blockIds;
-
-    const existing = ctx.db
-      .select({ id: walkthroughIssues.id, order: walkthroughIssues.order })
-      .from(walkthroughIssues)
-      .where(eq(walkthroughIssues.walkthroughId, ctx.walkthroughId))
-      .all();
-    const order = existing.find((e) => e.id === issueId)?.order ?? existing.length;
-
-    // A new head produces a new immutable walkthrough row. Preserve a local
-    // resolution only when the regenerated concern is byte-for-byte the same
-    // finding at the same location; changed findings deliberately reopen.
-    const { parentWalkthroughId } = guard;
-    const priorResolution = parentWalkthroughId
-      ? ctx.db
-          .select()
-          .from(walkthroughIssues)
-          .where(eq(walkthroughIssues.walkthroughId, parentWalkthroughId))
-          .all()
-          .find((issue) =>
-            isSameResolvedFinding(issue, {
-              severity: input.severity,
-              title,
-              description,
-              filePath: input.file_path ?? null,
-              startLine: input.start_line ?? null,
-              endLine: input.end_line ?? null,
-            }),
-          )
-      : undefined;
-
-    const now = new Date().toISOString();
-    ctx.db
-      .insert(walkthroughIssues)
-      .values({
-        id: issueId,
-        walkthroughId: ctx.walkthroughId,
-        order,
-        severity: input.severity,
-        title,
-        description,
-        filePath: input.file_path ?? null,
-        startLine: input.start_line ?? null,
-        endLine: input.end_line ?? null,
-        blockIds: JSON.stringify(blockIds),
-        createdAt: now,
-        ...(priorResolution
-          ? {
-              resolutionStatus: priorResolution.resolutionStatus,
-              resolutionExplanation: priorResolution.resolutionExplanation,
-              resolutionEvidence: priorResolution.resolutionEvidence,
-              resolvingCommitSha: priorResolution.resolvingCommitSha,
-              resolvedAt: priorResolution.resolvedAt,
-              resolvedBy: priorResolution.resolvedBy,
-            }
-          : {}),
-      })
-      .onConflictDoUpdate({
-        target: walkthroughIssues.id,
-        set: {
-          severity: input.severity,
-          title,
-          description,
-          filePath: input.file_path ?? null,
-          startLine: input.start_line ?? null,
-          endLine: input.end_line ?? null,
-          blockIds: JSON.stringify(blockIds),
-          // Clear the score on re-flag: a stale verdict shouldn't stick to
-          // revised wording.
-          advisoryScore: null,
-          advisoryScoredAt: null,
-        },
-      })
-      .run();
-
-    const persisted = ctx.db
-      .select()
-      .from(walkthroughIssues)
-      .where(eq(walkthroughIssues.id, issueId))
-      .get();
-    if (persisted) issueEvent = decodeIssue(persisted);
-  });
-  if (result) return result;
-  if (issueEvent) {
-    ctx.emit({ type: "issue", data: issueEvent });
-  }
-
-  ctx.jev.scheduleIssueJudgment(issueId, {
+  const finding = {
     severity: input.severity,
     title,
     description,
     filePath: input.file_path ?? null,
     startLine: input.start_line ?? null,
     endLine: input.end_line ?? null,
-  });
+  };
+
+  const written = ctx.db.transaction(
+    (): { readonly refusal: WalkthroughToolResult } | { readonly issue: WalkthroughIssue } => {
+      const guard = checkFlagIssuePreconditions(ctx.db, ctx.walkthroughId, input);
+      if (!guard.ok) return { refusal: guard.error };
+      // A new head produces a new walkthrough row; a concern it raises again
+      // byte-for-byte keeps the local resolution it had there.
+      const row = upsertIssue(
+        ctx.db,
+        ctx.walkthroughId,
+        { ...finding, blockIds: guard.blockIds },
+        { carryResolutionFrom: guard.parentWalkthroughId },
+      );
+      return { issue: decodeIssue(row) };
+    },
+  );
+  if ("refusal" in written) return written.refusal;
+  const issueId = written.issue.id;
+  ctx.emit({ type: "issue", data: written.issue });
+  ctx.jev.scheduleIssueJudgment(issueId, finding);
 
   // Can't branch on agent-sent severity — it's provisional until the
   // judgment lands — so every anchored concern gets a required inline

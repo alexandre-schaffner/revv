@@ -10,6 +10,7 @@ import {
   type AcpAgentId,
   type CommentThread,
   type Confidence,
+  type IssueSeverity,
   isAcpAgentId,
   isExternalAgentProvider,
   isLowSignalScore,
@@ -36,7 +37,7 @@ import { walkthroughRatings } from "../../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../db/schema/walkthroughs";
 import { type ThreadWrite, threadWrites } from "../Review";
-import type { GenerationProviderConfig } from "../walkthrough-cache-format";
+import type { GenerationProviderConfig } from "./cache-format";
 
 export type WalkthroughRow = typeof walkthroughs.$inferSelect;
 type SemanticStepRow = typeof walkthroughSemanticSteps.$inferSelect;
@@ -229,18 +230,19 @@ export function decodeProviderConfig(
 ): GenerationProviderConfig | null {
   if (!raw) return null;
   try {
-    return normalizeProviderConfig(JSON.parse(raw), modelUsed);
+    const value: unknown = JSON.parse(raw);
+    return isRecord(value) ? normalizeProviderConfig(value, modelUsed) : null;
   } catch {
     return null;
   }
 }
 
-/** A provider snapshot as any version of Revv wrote it, in today's vocabulary. */
-export function normalizeProviderConfig(
-  value: unknown,
-  modelUsed: string,
-): GenerationProviderConfig | null {
-  if (!isRecord(value)) return null;
+/**
+ * A provider snapshot as any version of Revv wrote it, in today's vocabulary;
+ * fields it lacks take the defaults of the oldest rows.
+ */
+export function normalizeProviderConfig(raw: unknown, modelUsed: string): GenerationProviderConfig {
+  const value = isRecord(raw) ? raw : {};
   return {
     provider: providerAgent(value.provider),
     model: typeof value.model === "string" ? value.model : modelUsed,
@@ -250,7 +252,11 @@ export function normalizeProviderConfig(
   };
 }
 
-/** One commit of `walkthroughs.pr_commits`, oldest first. */
+/**
+ * One commit of `walkthroughs.pr_commits`. The column holds them newest first,
+ * as `github.prs.commits` returns them; {@link decodePrCommits} is the one
+ * reader, and hands them out oldest first.
+ */
 export interface StoredPrCommit {
   readonly sha: string;
   readonly message: string;
@@ -272,8 +278,9 @@ function isStoredPrCommit(v: unknown): v is StoredPrCommit {
   );
 }
 
+/** The PR's commits, oldest → newest. */
 export function decodePrCommits(raw: string | null): StoredPrCommit[] {
-  return parseJsonArray(raw, isStoredPrCommit);
+  return parseJsonArray(raw, isStoredPrCommit).reverse();
 }
 
 /** A walkthrough's content rows, each in reading order. */
@@ -283,6 +290,10 @@ export interface WalkthroughContentRows {
   readonly issues: readonly IssueRow[];
   /** In arrival order; the UI re-orders by `RATING_AXES`. */
   readonly ratings: readonly RatingRow[];
+}
+
+export function loadWalkthroughRow(db: Db, walkthroughId: string): WalkthroughRow | null {
+  return db.select().from(walkthroughs).where(eq(walkthroughs.id, walkthroughId)).get() ?? null;
 }
 
 export function loadContentRows(db: Db, walkthroughId: string): WalkthroughContentRows {
@@ -509,6 +520,108 @@ export function renderMissingInlineCommentError(
 }
 
 // The writes below run inside the caller's transaction.
+
+/** A citation as the agent sends it. */
+export interface CitationInput {
+  readonly file_path: string;
+  readonly start_line: number;
+  readonly end_line: number;
+  readonly note: string | null;
+}
+
+export function toCitations(input: readonly CitationInput[]): RatingCitation[] {
+  return input.map((c) => ({
+    filePath: c.file_path,
+    startLine: c.start_line,
+    endLine: c.end_line,
+    ...(c.note !== null ? { note: c.note } : {}),
+  }));
+}
+
+/** A concern as written: its title and description already decoded to plain text. */
+export interface IssueFinding extends FindingIdentity {
+  readonly severity: IssueSeverity;
+  readonly blockIds: readonly string[];
+}
+
+/**
+ * Write a concern at its deterministic id and return the committed row. A new
+ * concern goes last; one already there keeps its place, and its advisory score
+ * is cleared, since a verdict on the old wording doesn't hold for the new.
+ * With `carryResolutionFrom`, a new concern takes the local resolution of
+ * that review's byte-identical finding.
+ */
+export function upsertIssue(
+  db: Db,
+  walkthroughId: string,
+  finding: IssueFinding,
+  options: { readonly carryResolutionFrom?: string | null } = {},
+): IssueRow {
+  const id = issueId(walkthroughId, finding.title, finding.filePath, finding.startLine);
+  const order = db
+    .select({ id: walkthroughIssues.id })
+    .from(walkthroughIssues)
+    .where(eq(walkthroughIssues.walkthroughId, walkthroughId))
+    .all().length;
+  const prior = options.carryResolutionFrom
+    ? db
+        .select()
+        .from(walkthroughIssues)
+        .where(eq(walkthroughIssues.walkthroughId, options.carryResolutionFrom))
+        .all()
+        .find((issue) => isSameResolvedFinding(issue, finding))
+    : undefined;
+  const content = {
+    severity: finding.severity,
+    title: finding.title,
+    description: finding.description,
+    filePath: finding.filePath,
+    startLine: finding.startLine,
+    endLine: finding.endLine,
+    blockIds: JSON.stringify(finding.blockIds),
+  };
+  db.insert(walkthroughIssues)
+    .values({
+      id,
+      walkthroughId,
+      order,
+      ...content,
+      createdAt: new Date().toISOString(),
+      ...(prior
+        ? {
+            resolutionStatus: prior.resolutionStatus,
+            resolutionExplanation: prior.resolutionExplanation,
+            resolutionEvidence: prior.resolutionEvidence,
+            resolvingCommitSha: prior.resolvingCommitSha,
+            resolvedAt: prior.resolvedAt,
+            resolvedBy: prior.resolvedBy,
+          }
+        : {}),
+    })
+    .onConflictDoUpdate({
+      target: walkthroughIssues.id,
+      set: { ...content, advisoryScore: null, advisoryScoredAt: null },
+    })
+    .run();
+  const row = db.select().from(walkthroughIssues).where(eq(walkthroughIssues.id, id)).get();
+  if (!row) throw new Error(`issue ${id} was written but cannot be read back`);
+  return row;
+}
+
+/**
+ * Delete a concern. Its inline-comment threads go with it by FK cascade; their
+ * ids are returned so the deletions can be announced.
+ */
+export function deleteIssue(db: Db, id: string): string[] {
+  const threadIds = db
+    .select({ id: commentThreads.id })
+    .from(commentThreads)
+    .where(eq(commentThreads.walkthroughIssueId, id))
+    .all()
+    .map((t) => t.id);
+  db.delete(walkthroughIssues).where(eq(walkthroughIssues.id, id)).run();
+  return threadIds;
+}
 
 /** A block named by its position, as the agent addresses it. */
 export interface BlockRef {

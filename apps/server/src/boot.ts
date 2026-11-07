@@ -10,14 +10,14 @@ import { withGitHubOrigin } from "./observability/github-ledger/origin";
 import { DbMaintenance } from "./services/DbMaintenance";
 import { GitHubAccounts } from "./services/github/accounts";
 import { PollScheduler } from "./services/PollScheduler";
-import { ProjectRecapJobs } from "./services/ProjectRecapJobs";
 import { ensureHighlighter } from "./services/pr-file-prerender";
-import { RecapScheduler } from "./services/RecapScheduler";
 import { RepoCloneService } from "./services/RepoClone";
+import { ProjectRecapJobs } from "./services/recaps/ProjectRecapJobs";
+import { RecapScheduler } from "./services/recaps/RecapScheduler";
 import { StackBriefJobs } from "./services/stacks/StackBriefJobs";
 import { StackMergeService } from "./services/stacks/StackMerge";
 import { StackReviewService } from "./services/stacks/StackReview";
-import { WalkthroughJobs } from "./services/WalkthroughJobs";
+import { WalkthroughJobs } from "./services/walkthrough/WalkthroughJobs";
 
 const step = <R>(
   scope: string,

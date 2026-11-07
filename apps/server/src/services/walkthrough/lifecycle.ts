@@ -13,8 +13,8 @@ import { Effect } from "effect";
 import type { Db } from "../../db";
 import type { DbError } from "../../domain/errors";
 import { withDb } from "../../effects/with-db";
-import type { RemoteWalkthroughCache } from "../RemoteWalkthroughCache";
-import type { WalkthroughService } from "../Walkthrough";
+import type { RemoteWalkthroughCache } from "./RemoteWalkthroughCache";
+import type { WalkthroughService } from "./Walkthrough";
 
 /** Why a run ended without completing, and what the user is told. */
 export interface WalkthroughFailure {
@@ -29,6 +29,25 @@ export const CANCELLED: WalkthroughFailure = {
   reason: "cancelled",
   message: WALKTHROUGH_CANCELLED_MESSAGE,
 };
+
+/** Why the repository clone a run needs can't be used. */
+export type CloneProblem =
+  /** The clone failed, or a worktree couldn't be checked out of it. */
+  | { readonly kind: "failed"; readonly error: string | null }
+  /** The repository was never cloned. */
+  | { readonly kind: "missing" }
+  /** A clone in progress outlasted the wait. */
+  | { readonly kind: "slow" };
+
+export function cloneFailure(problem: CloneProblem): WalkthroughFailure {
+  const message =
+    problem.kind === "failed"
+      ? `Repository clone failed: ${problem.error ?? "unknown error"} — check Settings`
+      : problem.kind === "missing"
+        ? "Repository has not been cloned yet — check Settings"
+        : "Repository clone is taking too long — check Settings";
+  return { reason: "clone_failed", message };
+}
 
 export interface WalkthroughLifecycle {
   /**

@@ -1,30 +1,18 @@
-import type {
-  RatingAxis,
-  RiskLevel,
-  WalkthroughBlock,
-  WalkthroughPipelinePhase,
-  WalkthroughState,
-} from "@revv/shared";
 import { STACK_CITATION_FORMAT } from "@revv/shared";
 import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import { projectRecaps } from "../../../db/schema/project-recaps";
 import { pullRequests } from "../../../db/schema/pull-requests";
-import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
-import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
-import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs as walkthroughsTable } from "../../../db/schema/walkthroughs";
 import { readCurrentHeadFiles } from "../../../services/DiffCache";
 import { takeawayOf } from "../../../services/stacks/overlay";
+import { readWalkthroughState } from "../../../services/walkthrough/agent-state";
 import {
   decodePrCommits,
-  findIssuesMissingInlineComment,
   finishedReview,
-  isRatedAxis,
+  loadWalkthroughRow,
 } from "../../../services/walkthrough/content";
-import { readWalkthroughLeads } from "../../../services/walkthrough-leads";
 import { fail } from "../mcp-tool-gateway";
-import { loadWalkthroughRow } from "./helpers";
 import type {
   GetCommitHistoryInput,
   GetRepoContextInput,
@@ -38,214 +26,13 @@ import type {
 export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughStateInput> = async (
   ctx,
 ) => {
-  const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
-  if (!row) {
+  const state = readWalkthroughState(ctx.db, ctx.walkthroughId);
+  if (!state) {
     return fail(
       `Walkthrough ${ctx.walkthroughId} not found. The orchestrator should have created it before the agent ran — check WalkthroughJobs.`,
     );
   }
-
-  const semanticRows = ctx.db
-    .select({
-      semanticStepIndex: walkthroughSemanticSteps.semanticStepIndex,
-      title: walkthroughSemanticSteps.title,
-      summary: walkthroughSemanticSteps.summary,
-    })
-    .from(walkthroughSemanticSteps)
-    .where(eq(walkthroughSemanticSteps.walkthroughId, ctx.walkthroughId))
-    .orderBy(asc(walkthroughSemanticSteps.semanticStepIndex))
-    .all();
-
-  const diffBlocks = ctx.db
-    .select({
-      semanticStepIndex: walkthroughBlocks.semanticStepIndex,
-      stepIndex: walkthroughBlocks.stepIndex,
-      type: walkthroughBlocks.type,
-    })
-    .from(walkthroughBlocks)
-    .where(
-      and(
-        eq(walkthroughBlocks.walkthroughId, ctx.walkthroughId),
-        eq(walkthroughBlocks.phase, "diff_analysis"),
-      ),
-    )
-    .all();
-
-  const ratingRows = ctx.db
-    .select({
-      axis: walkthroughRatings.axis,
-      rationale: walkthroughRatings.rationale,
-      verdict: walkthroughRatings.verdict,
-      confidence: walkthroughRatings.confidence,
-    })
-    .from(walkthroughRatings)
-    .where(eq(walkthroughRatings.walkthroughId, ctx.walkthroughId))
-    .all();
-
-  const issueRows = ctx.db
-    .select({
-      id: walkthroughIssues.id,
-      order: walkthroughIssues.order,
-      title: walkthroughIssues.title,
-      filePath: walkthroughIssues.filePath,
-      startLine: walkthroughIssues.startLine,
-      endLine: walkthroughIssues.endLine,
-    })
-    .from(walkthroughIssues)
-    .where(eq(walkthroughIssues.walkthroughId, ctx.walkthroughId))
-    .all();
-
-  const diffSteps = diffBlocks
-    .slice()
-    .sort((a, b) => a.semanticStepIndex - b.semanticStepIndex || a.stepIndex - b.stepIndex)
-    .map((b) => ({
-      semanticStepIndex: b.semanticStepIndex,
-      stepIndex: b.stepIndex,
-      blockType: b.type as WalkthroughBlock["type"],
-    }));
-
-  const stepIndicesBySection = new Map<number, number[]>();
-  for (const b of diffBlocks) {
-    const arr = stepIndicesBySection.get(b.semanticStepIndex) ?? [];
-    arr.push(b.stepIndex);
-    stepIndicesBySection.set(b.semanticStepIndex, arr);
-  }
-  const semanticSteps = semanticRows.map((s) => ({
-    semanticStepIndex: s.semanticStepIndex,
-    title: s.title,
-    summary: s.summary ?? null,
-    stepIndices: (stepIndicesBySection.get(s.semanticStepIndex) ?? [])
-      .slice()
-      .sort((a, b) => a - b),
-  }));
-
-  const issues = issueRows
-    .slice()
-    .sort((a, b) => a.order - b.order)
-    .map((r) => ({
-      id: r.id,
-      title: r.title,
-      filePath: r.filePath,
-      startLine: r.startLine,
-      endLine: r.endLine,
-    }));
-
-  // Surfaced so a resume doesn't have to deduce owed comments from the issues.
-  const issuesNeedingInlineComment = findIssuesMissingInlineComment(ctx.db, ctx.walkthroughId);
-  // Leads in prompt order with their verdicts, so a resume knows which ones
-  // it has already judged. Same query as complete_walkthrough's gate.
-  const leads = readWalkthroughLeads(ctx.db, ctx.walkthroughId).map((lead) => ({
-    id: lead.id,
-    filePath: lead.filePath,
-    newStart: lead.newStart,
-    newLines: lead.newLines,
-    smells: lead.smells.map((s) => s.smell),
-    verdict: lead.verdict,
-    issueId: lead.issueId,
-  }));
-  const leadsNeedingVerdict = leads.filter((lead) => lead.verdict === null).map((lead) => lead.id);
-  const priorReview = row.parentWalkthroughId
-    ? (() => {
-        const prior = ctx.db
-          .select()
-          .from(walkthroughsTable)
-          .where(eq(walkthroughsTable.id, row.parentWalkthroughId))
-          .get();
-        if (!prior) return null;
-        const priorSemanticSteps = ctx.db
-          .select({
-            semanticStepIndex: walkthroughSemanticSteps.semanticStepIndex,
-            title: walkthroughSemanticSteps.title,
-            summary: walkthroughSemanticSteps.summary,
-          })
-          .from(walkthroughSemanticSteps)
-          .where(eq(walkthroughSemanticSteps.walkthroughId, prior.id))
-          .orderBy(asc(walkthroughSemanticSteps.semanticStepIndex))
-          .all()
-          .map((s) => ({
-            semanticStepIndex: s.semanticStepIndex,
-            title: s.title,
-            summary: s.summary ?? null,
-          }));
-        const priorIssues = ctx.db
-          .select({
-            id: walkthroughIssues.id,
-            severity: walkthroughIssues.severity,
-            title: walkthroughIssues.title,
-            description: walkthroughIssues.description,
-            filePath: walkthroughIssues.filePath,
-            startLine: walkthroughIssues.startLine,
-            endLine: walkthroughIssues.endLine,
-            submittedAt: walkthroughIssues.submittedAt,
-            order: walkthroughIssues.order,
-          })
-          .from(walkthroughIssues)
-          .where(eq(walkthroughIssues.walkthroughId, prior.id))
-          .orderBy(asc(walkthroughIssues.order))
-          .all()
-          .map((i) => ({
-            id: i.id,
-            severity: i.severity as "info" | "warning" | "critical",
-            title: i.title,
-            description: i.description,
-            filePath: i.filePath,
-            startLine: i.startLine,
-            endLine: i.endLine,
-            submittedAt: i.submittedAt,
-          }));
-        const priorRatings = ctx.db
-          .select({
-            axis: walkthroughRatings.axis,
-            verdict: walkthroughRatings.verdict,
-            confidence: walkthroughRatings.confidence,
-            rationale: walkthroughRatings.rationale,
-            createdAt: walkthroughRatings.createdAt,
-          })
-          .from(walkthroughRatings)
-          .where(eq(walkthroughRatings.walkthroughId, prior.id))
-          .orderBy(asc(walkthroughRatings.createdAt))
-          .all()
-          .map((r) => ({
-            axis: r.axis as RatingAxis,
-            verdict: r.verdict as "pass" | "concern" | "blocker",
-            confidence: r.confidence as "low" | "medium" | "high",
-            rationale: r.rationale,
-          }));
-        return {
-          walkthroughId: prior.id,
-          prHeadSha: prior.prHeadSha,
-          summary: prior.summary,
-          riskLevel: prior.riskLevel as RiskLevel,
-          sentiment: prior.sentiment ?? null,
-          semanticSteps: priorSemanticSteps,
-          issues: priorIssues,
-          ratings: priorRatings,
-        };
-      })()
-    : null;
-
-  const state: WalkthroughState = {
-    walkthroughId: row.id,
-    prHeadSha: row.prHeadSha,
-    mode: row.mode as WalkthroughState["mode"],
-    generationMode: row.generationMode as WalkthroughState["generationMode"],
-    parentWalkthroughId: row.parentWalkthroughId ?? null,
-    baseHeadSha: row.baseHeadSha ?? null,
-    priorReview,
-    status: row.status as WalkthroughState["status"],
-    lastCompletedPhase: row.lastCompletedPhase as WalkthroughPipelinePhase,
-    summary: row.summary || null,
-    riskLevel: row.summary ? (row.riskLevel as RiskLevel) : null,
-    sentiment: row.sentiment ?? null,
-    semanticSteps,
-    diffSteps,
-    ratedAxes: ratingRows.filter(isRatedAxis).map((r) => r.axis as RatingAxis),
-    issues,
-    issueCount: issues.length,
-    issuesNeedingInlineComment,
-    leads,
-    leadsNeedingVerdict,
-  };
+  const { issuesNeedingInlineComment, leadsNeedingVerdict } = state;
 
   // Models skim past the lists inside the JSON; a plain-text prefix they
   // can't miss keeps a resume from walking back into the same
@@ -257,7 +44,7 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
           `WARNING: ${issuesNeedingInlineComment.length} line-anchored concern(s) have no inline comment yet — call add_issue_comment for each before complete_walkthrough.`,
         ]
       : []),
-    ...(leadsNeedingVerdict.length > 0 && row.lastCompletedPhase !== "none"
+    ...(leadsNeedingVerdict.length > 0 && state.lastCompletedPhase !== "none"
       ? [
           `WARNING: ${leadsNeedingVerdict.length} first-pass lead(s) have no verdict yet (${leadsNeedingVerdict.join(", ")}) — call resolve_lead for each before complete_walkthrough.`,
         ]
@@ -270,10 +57,9 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
   };
 };
 
-// The commit list `createPartial` captured at job start. A tool rather than
+// The commit list the orchestrator captured when it created the row. A tool rather than
 // the prompt, so long PRs (GitHub returns up to 250 commits) don't pay for it
-// on every run and resume. Stored head first, as `github.prs.commits` returns
-// them. A legacy row's NULL `pr_commits` reads as an empty list.
+// on every run and resume. A legacy row's NULL `pr_commits` reads as an empty list.
 
 export const getCommitHistoryHandler: WalkthroughToolHandler<GetCommitHistoryInput> = async (
   ctx,

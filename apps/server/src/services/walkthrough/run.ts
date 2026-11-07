@@ -29,19 +29,19 @@ import {
   type WalkthroughLaunchPlan,
   walkthroughs,
 } from "../../db/schema/walkthroughs";
-import { type AiError, AiGenerationError, type DbError } from "../../domain/errors";
+import type { AiGenerationError, DbError } from "../../domain/errors";
 import { dbTry } from "../../effects/db-try";
 import { debug } from "../../logger";
 import type { AiService } from "../Ai";
-import type { HunkScanService } from "../HunkScan";
+import type { HunkScanService } from "../hunk-scan/HunkScan";
 import { JevService } from "../Jev";
 import type { AgentRun, RunEnd } from "../jobs/agent-jobs";
 import type { RepoCloneService } from "../RepoClone";
-import { leadsRecorded, prepareFirstPassLeads } from "../walkthrough-leads";
-import { type PromptFile, resolveIncrementalPromptFiles } from "../walkthrough-prompt-files";
 import { orchestratorCompletionBlocker } from "./completion";
 import { findIssuesMissingInlineComment } from "./content";
-import type { WalkthroughFailure } from "./lifecycle";
+import { leadsRecorded, prepareFirstPassLeads } from "./leads";
+import { cloneFailure, type WalkthroughFailure } from "./lifecycle";
+import { type PromptFile, resolveIncrementalPromptFiles } from "./prompt-files";
 import type { WalkthroughRunContext } from "./run-context";
 
 /** Auto-continuations a run may take after its first turn (invariant 9). */
@@ -157,7 +157,7 @@ export function runWalkthrough(
   deps: WalkthroughRunDeps,
   run: AgentRun<WalkthroughRunContext>,
   inputs: WalkthroughRunInputs,
-): Effect.Effect<RunEnd<WalkthroughFailure>, AiError | DbError> {
+): Effect.Effect<RunEnd<WalkthroughFailure>, AiGenerationError | DbError> {
   // The review worktree lives for the run: its finalizer removes it on every
   // exit path (invariant 10).
   return Effect.scoped(
@@ -191,19 +191,19 @@ export function runWalkthrough(
           walkthroughId: run.id,
         })
         .pipe(
-          Effect.mapError((e) => {
-            const message =
-              e._tag === "CloneNotReadyError"
-                ? "Repository clone is not ready — check Settings to ensure the repo is cloned"
-                : e._tag === "CloneError"
-                  ? `Repository clone error: ${e.message}`
-                  : String(e);
-            return new AiGenerationError({ cause: e, message });
+          Effect.map((path) => ({ path })),
+          Effect.catchTags({
+            CloneError: (e) =>
+              Effect.succeed({ failure: cloneFailure({ kind: "failed", error: e.message }) }),
+            CloneNotReadyError: () =>
+              Effect.succeed({ failure: cloneFailure({ kind: "missing" }) }),
           }),
         );
-      const [worktreePath, hunkScanRows] = yield* Effect.all([worktree, hunkScan], {
+      const [checkout, hunkScanRows] = yield* Effect.all([worktree, hunkScan], {
         concurrency: 2,
       });
+      if ("failure" in checkout) return { kind: "failed", failure: checkout.failure };
+      const worktreePath = checkout.path;
 
       const promptInput = yield* resolveIncrementalPromptFiles(
         {
@@ -283,7 +283,20 @@ export function runWalkthrough(
       let resumed = inputs.resumed;
 
       while (true) {
-        const { end, tokenUsage } = yield* turn(resumed);
+        const result = yield* turn(resumed).pipe(
+          Effect.catchTag("AiNotConfiguredError", () => Effect.succeed(null)),
+        );
+        if (result === null) {
+          return {
+            kind: "failed",
+            failure: {
+              reason: "agent_error",
+              message:
+                "The selected AI agent can't be launched — install it or pick another in Settings",
+            },
+          };
+        }
+        const { end, tokenUsage } = result;
         ctx.tokenUsage = accumulateTokenUsage(ctx.tokenUsage, tokenUsage);
         deps.publish({ type: "usage", data: { tokenUsage: ctx.tokenUsage } });
         // A Stop or a supersede: the kernel settles it.
@@ -330,10 +343,9 @@ export function runWalkthrough(
         } else if (continuations >= 1) {
           // Not on the first: "progress since the last continuation" is
           // undefined, and the first continuation most often succeeds anyway.
-          const verdict = yield* adjudicateContinuation({
-            enabled: inputs.plan.adjudicateContinuations,
-            ...adjudication,
-          }).pipe(Effect.provideService(JevService, deps.jev));
+          const verdict = yield* adjudicateContinuation(adjudication).pipe(
+            Effect.provideService(JevService, deps.jev),
+          );
           if (verdict.kind === "stop-doomed") stoppedEarlyBecause = verdict.reason;
         }
         if (continuations >= MAX_AUTO_CONTINUATIONS || stoppedEarlyBecause !== null) {
@@ -345,10 +357,9 @@ export function runWalkthrough(
               : stoppedEarlyBecause !== null
                 ? `Generation stopped early: ${stoppedEarlyBecause}.`
                 : "Generation exhausted auto-continuation budget before reaching phase D.";
-          const hint = yield* classifyFailure({
-            enabled: inputs.plan.adjudicateContinuations,
-            state: adjudication,
-          }).pipe(Effect.provideService(JevService, deps.jev));
+          const hint = yield* classifyFailure(adjudication).pipe(
+            Effect.provideService(JevService, deps.jev),
+          );
           return {
             kind: "failed",
             failure: {

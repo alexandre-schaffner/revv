@@ -173,9 +173,7 @@ export const completeRecapSchema = z.object({});
 export const getPrDiffSchema = z.object({
   pr_id: z
     .string()
-    .describe(
-      "The `id` of the PR to fetch the diff for, as returned in the `prs` array by get_recap_state. Use this for archived PRs where `walkthrough` is null to get per-file status, +/- counts, and unified patch text before composing the recap.",
-    ),
+    .describe("The `id` of the PR, as returned in the `prs` array by get_recap_state."),
 });
 
 export type GetRecapStateInput = z.infer<typeof getRecapStateSchema>;

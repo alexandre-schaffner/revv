@@ -3,27 +3,13 @@
 
 import type { WalkthroughLead } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
-import type { Db } from "../../../db";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughLeads } from "../../../db/schema/walkthrough-leads";
-import { readWalkthroughLead, readWalkthroughLeads } from "../../../services/walkthrough-leads";
+import { findUnresolvedLeads, readWalkthroughLead } from "../../../services/walkthrough/leads";
 import { decodePlainText } from "../agent-text";
 import { fail, ok } from "../mcp-tool-gateway";
 import { openForWrite } from "./phases";
 import type { ResolveLeadInput, WalkthroughToolHandler, WalkthroughToolResult } from "./spec";
-
-/** Leads this walkthrough's agent was handed and hasn't resolved, in prompt order. */
-export function findUnresolvedLeads(db: Db, walkthroughId: string): WalkthroughLead[] {
-  return readWalkthroughLeads(db, walkthroughId).filter((lead) => lead.verdict === null);
-}
-
-export function renderUnresolvedLeadsError(leads: readonly WalkthroughLead[]): string {
-  return `Error: ${leads.length} first-pass lead(s) have no verdict: ${leads
-    .map((lead) => `${lead.id} (${lead.filePath}:${lead.newStart})`)
-    .join(
-      ", ",
-    )}. Call resolve_lead for each — confirmed with the issue_id you raised for it, or rejected with a one-sentence reason — then call complete_walkthrough again.`;
-}
 
 export const resolveLeadHandler: WalkthroughToolHandler<ResolveLeadInput> = async (ctx, input) => {
   const reason = input.reason ? decodePlainText(input.reason).trim() : "";

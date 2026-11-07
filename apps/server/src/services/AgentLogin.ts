@@ -7,7 +7,7 @@ import {
   invalidateAgentProbes,
 } from "../ai/acp/agents";
 import { debug, logError } from "../logger";
-import { EventJobRegistry, type Job, type JobSubscription } from "./jobs/EventJobRegistry";
+import { EventJobRegistry, type Job, type JobSubscription } from "./EventJobRegistry";
 
 // Runs the agent's official login command in a PTY so the user signs in inside
 // Revv: terminal bytes stream to the onboarding xterm over SSE and keystrokes

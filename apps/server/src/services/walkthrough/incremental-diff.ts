@@ -1,5 +1,5 @@
 // Turns a `base..head` git range into the per-file prompt input for an
-// incremental walkthrough (`walkthrough-prompt-files.ts`).
+// incremental walkthrough (`prompt-files.ts`).
 //
 // A generated, minified or lock file can produce a multi-MB patch, amplified by
 // `git diff --unified=80`. Scanning that synchronously stalls Bun's event loop
@@ -7,8 +7,8 @@
 // capped, and add/delete counts come from `git diff --numstat` rather than
 // from scanning patch bodies.
 
-import type { LineCounts } from "./git/parse";
-import { truncatePatchToChars } from "./patch-truncate";
+import type { LineCounts } from "../git/parse";
+import { truncatePatchToChars } from "../patch-truncate";
 
 /** Per-file patch cap, in UTF-16 code units (see `patch-truncate.ts`). */
 export const MAX_INCREMENTAL_PATCH_CHARS = 128 * 1024;

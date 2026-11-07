@@ -33,7 +33,7 @@ import { Realtime } from "./Realtime";
 import { RepoCloneService } from "./RepoClone";
 import { RepositoryService } from "./Repository";
 import { StackService } from "./stacks/StackService";
-import { WalkthroughJobs } from "./WalkthroughJobs";
+import { WalkthroughJobs } from "./walkthrough/WalkthroughJobs";
 
 export interface MirrorOptions {
   /**

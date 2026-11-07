@@ -10,7 +10,7 @@ import { Context, Effect, Layer } from "effect";
 import { detectAgentStatus } from "../ai/acp/agents";
 import { addInstalledBinDirs, isCommandOnPath } from "../ai/acp/host";
 import { debug, logError } from "../logger";
-import { EventJobRegistry, type Job, type JobSubscription } from "./jobs/EventJobRegistry";
+import { EventJobRegistry, type Job, type JobSubscription } from "./EventJobRegistry";
 
 // Installs run through the shared `EventJobRegistry`: its ephemeral replay
 // buffer lets a late SSE subscriber replay the full transcript and still react
