@@ -3,20 +3,7 @@
   "tasks": {
     "dev": {
       "persistent": true,
-      "cache": false,
-      "passThroughEnv": [
-        "PORT",
-        "REVV_CHANNEL",
-        "REVV_DB_PATH",
-        "REVV_CLONE_DIR",
-        "REVV_DEBUG",
-        "REVV_HOST",
-        "REVV_CACHE_API_ENDPOINT",
-        "OTEL_EXPORTER_OTLP_ENDPOINT",
-        "VITE_REVV_CHANNEL",
-        "VITE_API_PORT",
-        "REVV_PYROSCOPE_ENDPOINT"
-      ]
+      "cache": false
     },
     "build": {
       "dependsOn": ["^build"],

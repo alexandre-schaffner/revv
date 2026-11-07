@@ -8,9 +8,9 @@
   ],
   "scripts": {
     "prepare": "./scripts/prepare-effect.sh",
-    "dev": "bun run observability:up && turbo run dev",
+    "dev": "bun run observability:up && turbo run dev --env-mode=loose",
     "build": "bun scripts/turbo.mjs run build",
-    "typecheck": "bun scripts/turbo.mjs run typecheck && tsc -p scripts/performance/tsconfig.json",
+    "typecheck": "bun scripts/turbo.mjs run typecheck && tsc -p scripts/tsconfig.json",
     "lint": "biome ci . && bun run check:import-boundaries && bun run check:motion-tokens && bun run check:pr-deep-links && bun run check:desktop-contract && bun run check:external-agents && bun run check:migrations",
     "check:import-boundaries": "bun scripts/check-import-boundaries.ts",
     "check:motion-tokens": "bun scripts/motion-tokens.ts --check",
