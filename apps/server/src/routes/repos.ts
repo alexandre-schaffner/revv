@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { ValidationError } from "../domain/errors";
+import { forgetRepositories } from "../services/clone/forget";
 import { CLONE_BASE_DIR } from "../services/clone/layout";
 import { expandUserPath, pathIsUnder } from "../services/clone/policy";
 import { RepoCloneService } from "../services/clone/RepoClone";
@@ -171,19 +172,7 @@ const repoByIdRoutes = new Elysia({ prefix: "/api/repos" })
     ),
   )
   .delete("/:id", (ctx) =>
-    runRoute(
-      Effect.gen(function* () {
-        const cloneSvc = yield* RepoCloneService;
-        const repoSvc = yield* RepositoryService;
-        const accountId = ctx.owner;
-        // The account check comes first: it is what keeps the clone of a
-        // repository this account doesn't own on disk.
-        yield* repoSvc.getRepoById(ctx.params.id, accountId);
-        yield* cloneSvc.deleteClone(ctx.params.id);
-        yield* repoSvc.deleteRepo(ctx.params.id, accountId);
-        return { success: true };
-      }),
-    ),
+    runRoute(forgetRepositories([ctx.params.id]).pipe(Effect.as({ success: true }))),
   );
 
 export const repoRoutes = new Elysia().use(repoListRoutes).use(repoByIdRoutes);

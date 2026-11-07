@@ -1,7 +1,7 @@
 import { and, eq, gt, inArray, lt } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import type { RetentionPolicy } from "../../db/retention";
-import { account, repositories, session, user } from "../../db/schema";
+import { account, session, user } from "../../db/schema";
 import {
   type DbError,
   GitHubAuthError,
@@ -198,12 +198,18 @@ export class GitHubAccounts extends Context.Service<
     /** Local users with a live session, and their accounts per host. */
     readonly localUsers: Effect.Effect<LocalUser[], DbError>;
     readonly connectedHosts: (userId: string) => Effect.Effect<ConnectedHost[], DbError>;
+    /** The ids of the user's accounts, or of their account on `host`. */
+    readonly accountsOf: (userId: string, host?: string) => Effect.Effect<string[], DbError>;
     /**
      * Forget the user's account on `host`, locally: GitHub can't revoke a
-     * device-flow grant without the client secret Revv never has.
+     * device-flow grant without the client secret Revv never has. Its
+     * repositories go with it; `forgetAccount` removes their clones first.
      */
     readonly disconnect: (userId: string, host: string) => Effect.Effect<void, DbError>;
-    /** Delete the user, their accounts, sessions, tracked repositories and stored tokens. */
+    /**
+     * Delete the user, their accounts, sessions and stored tokens; repositories
+     * go with the accounts. `forgetUser` removes their clones first.
+     */
     readonly removeUser: (userId: string) => Effect.Effect<void, DbError>;
     readonly userProfile: (userId: string) => Effect.Effect<UserProfile | null, DbError>;
     /**
@@ -873,38 +879,32 @@ export const GitHubAccountsLive = Layer.effect(
         { discard: true },
       );
 
+    const accountsOf = (userId: string, host?: string): Effect.Effect<string[], DbError> =>
+      dbTry("read user accounts", () =>
+        db
+          .select({ id: account.id, providerId: account.providerId })
+          .from(account)
+          .where(eq(account.userId, userId))
+          .all()
+          .filter((r) => host === undefined || isAccountOnHost(r.providerId, host))
+          .map((r) => r.id),
+      );
+
     const disconnect = (userId: string, host: string): Effect.Effect<void, DbError> =>
       Effect.gen(function* () {
-        const ids = yield* dbTry("disconnect account", () => {
-          const ids = db
-            .select({ id: account.id, providerId: account.providerId })
-            .from(account)
-            .where(eq(account.userId, userId))
-            .all()
-            .filter((r) => isAccountOnHost(r.providerId, host))
-            .map((r) => r.id);
-          if (ids.length > 0) db.delete(account).where(inArray(account.id, ids)).run();
-          return ids;
-        });
+        const ids = yield* accountsOf(userId, host);
+        if (ids.length > 0) {
+          yield* dbTry("disconnect account", () =>
+            db.delete(account).where(inArray(account.id, ids)).run(),
+          );
+        }
         yield* forgetAccounts(ids);
       });
 
     const removeUser = (userId: string): Effect.Effect<void, DbError> =>
       Effect.gen(function* () {
-        const ids = yield* dbTry("remove user", () => {
-          const ids = db
-            .select({ id: account.id })
-            .from(account)
-            .where(eq(account.userId, userId))
-            .all()
-            .map((a) => a.id);
-          // Repositories cascade from their account and sessions/accounts from
-          // the user; pull requests and everything under them from the repository.
-          if (ids.length > 0)
-            db.delete(repositories).where(inArray(repositories.accountId, ids)).run();
-          db.delete(user).where(eq(user.id, userId)).run();
-          return ids;
-        });
+        const ids = yield* accountsOf(userId);
+        yield* dbTry("remove user", () => db.delete(user).where(eq(user.id, userId)).run());
         yield* forgetAccounts(ids);
       });
 
@@ -968,6 +968,7 @@ export const GitHubAccountsLive = Layer.effect(
       switchTo,
       localUsers,
       connectedHosts,
+      accountsOf,
       disconnect,
       removeUser,
       userProfile,

@@ -3,6 +3,7 @@ import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { InvalidGitHubClientIdError, NotFoundError } from "../domain/errors";
 import { logError } from "../logger";
+import { forgetAccount } from "../services/clone/forget";
 import { GitHubAccounts } from "../services/github/accounts";
 import {
   exchangeDeviceCode,
@@ -180,9 +181,7 @@ const sessionRoutes = new Elysia()
     "/api/auth/accounts/disconnect",
     (ctx) =>
       runRoute(
-        Effect.flatMap(GitHubAccounts, (accounts) =>
-          accounts.disconnect(ctx.userId, ctx.body.host),
-        ).pipe(Effect.as({ ok: true })),
+        forgetAccount(ctx.userId, ctx.body.host).pipe(Effect.as({ ok: true })),
       ),
     { body: t.Object({ host: t.String() }) },
   );

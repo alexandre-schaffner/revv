@@ -62,10 +62,6 @@ export class RepositoryService extends Context.Service<
   {
     readonly listRepos: (accountId?: string) => Effect.Effect<Repository[], DbError>;
     readonly addRepo: (data: AddRepoData, accountId: string) => Effect.Effect<Repository, DbError>;
-    readonly deleteRepo: (
-      id: string,
-      accountId: string,
-    ) => Effect.Effect<void, NotFoundError | DbError>;
     readonly getRepoById: (
       id: string,
       accountId?: string,
@@ -150,19 +146,6 @@ export const RepositoryServiceLive = Layer.effect(
           ),
         );
       },
-
-      deleteRepo: (id, accountId) =>
-        dbTry("delete repository", () =>
-          db
-            .delete(repositories)
-            .where(and(eq(repositories.id, id), eq(repositories.accountId, accountId)))
-            .returning({ id: repositories.id })
-            .all(),
-        ).pipe(
-          Effect.flatMap((deleted) =>
-            deleted.length > 0 ? Effect.void : Effect.fail(notFound(id)),
-          ),
-        ),
 
       getRepoById: (id, accountId) =>
         dbTry("read repository", () => readRepo(db, id)).pipe(

@@ -177,13 +177,4 @@ describe("RepositoryService failures", () => {
     );
     expect(result._tag === "Failure" && result.failure._tag).toBe("DbError");
   });
-
-  it("refuses to delete another account's repository", async () => {
-    const db = createDb(":memory:");
-    seedAccount(db);
-    const repo = await addRepo(db);
-    const result = await run(db, (svc) => svc.deleteRepo(repo.id, "acc-2"));
-    expect(result._tag === "Failure" && result.failure._tag).toBe("NotFoundError");
-    expect(db.select().from(repositories).all()).toHaveLength(1);
-  });
 });

@@ -2,6 +2,7 @@ import { isMaintainerLogin, type UserIdentity } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
 import { NotFoundError } from "../domain/errors";
+import { forgetUser } from "../services/clone/forget";
 import { GitHubAccounts } from "../services/github/accounts";
 import { AvatarCache } from "../services/github/avatars";
 import { activeAccount, runRoute, withAuth } from "./middleware";
@@ -45,8 +46,6 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
   )
   .delete("/account", (ctx) =>
     runRoute(
-      Effect.flatMap(GitHubAccounts, (accounts) => accounts.removeUser(ctx.userId)).pipe(
-        Effect.as({ deleted: true }),
-      ),
+      forgetUser(ctx.userId).pipe(Effect.as({ deleted: true })),
     ),
   );
