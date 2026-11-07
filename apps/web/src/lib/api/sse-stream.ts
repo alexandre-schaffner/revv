@@ -160,7 +160,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function sseError(err: unknown, fallback: string): StreamErrorBody | null {
   if (err instanceof SseHttpError) {
     const message = err.serverMessage ?? `${fallback} (HTTP ${err.status})`;
-    if (!isRecord(err.body) || typeof err.body.code !== "string") return { code: "UNKNOWN", message };
+    if (!isRecord(err.body) || typeof err.body.code !== "string")
+      return { code: "UNKNOWN", message };
     const { error: _error, ...details } = err.body;
     return { ...details, code: err.body.code as StreamErrorCode, message };
   }
