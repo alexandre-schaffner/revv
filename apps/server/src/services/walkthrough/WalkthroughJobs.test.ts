@@ -8,9 +8,12 @@ import { CacheService } from "../Cache";
 import { RepoCloneService } from "../clone/RepoClone";
 import { DbService } from "../Db";
 import { DiffCacheService } from "../DiffCache";
+import { GitHubGateway } from "../github/gateway";
 import { HunkScanService } from "../hunk-scan/HunkScan";
 import { JevService } from "../Jev";
 import { PrContextService } from "../PrContext";
+import { PrMirror } from "../PrMirror";
+import { PrHeadMovesLive } from "../pr-head-moves";
 import { Realtime } from "../Realtime";
 import { ReviewService } from "../Review";
 import { SettingsService } from "../Settings";
@@ -49,9 +52,13 @@ function seed(db: Db, row: { id: string; status: "generating" | "error"; head: s
     .run();
 }
 
-/** The orchestrator over a real journal, with GitHub reporting the PR at `head`. */
+/**
+ * The orchestrator over a real journal, with GitHub reporting the PR at `head`.
+ * `trace` records the mirror writes and diff-cache reads, in order.
+ */
 function jobsAt(db: Db, head: string) {
   const sent: ServerEventMessage[] = [];
+  const trace: string[] = [];
   const context = { pr: { ...PR, headSha: head }, repo: REPO, accountId: "account-1", client: {} };
   const unused = {} as never;
   const realtime = Layer.succeed(Realtime, {
@@ -67,12 +74,26 @@ function jobsAt(db: Db, head: string) {
         ),
         Layer.succeed(PrContextService, {
           forPr: () => Effect.succeed(context),
-          withDiff: () =>
-            Effect.succeed({
-              ...context,
-              meta: { headSha: head, baseSha: "base" },
-              files: [],
-              commits: [],
+        } as never),
+        Layer.succeed(GitHubGateway, {
+          prs: {
+            get: () => Effect.succeed({ ...PR, headSha: head, baseSha: "base" }),
+            commits: () => Effect.succeed([]),
+          },
+        } as never),
+        Layer.succeed(PrMirror, {
+          apply: (rows: ReadonlyArray<{ headSha: string }>) =>
+            Effect.sync(() => {
+              trace.push(`mirror ${rows[0]?.headSha}`);
+              return { rows, accountIds: new Set() };
+            }),
+        } as never),
+        PrHeadMovesLive,
+        Layer.succeed(DiffCacheService, {
+          getOrFetch: (pr: { headSha: string }) =>
+            Effect.sync(() => {
+              trace.push(`diff ${pr.headSha}`);
+              return { files: [] };
             }),
         } as never),
         Layer.succeed(RepoCloneService, {
@@ -86,7 +107,6 @@ function jobsAt(db: Db, head: string) {
         Layer.succeed(JevService, unused),
         Layer.succeed(HunkScanService, unused),
         Layer.succeed(CacheService, unused),
-        Layer.succeed(DiffCacheService, unused),
         Layer.succeed(WalkthroughSnapshotImporter, unused),
         Layer.succeed(StackService, unused),
       ),
@@ -94,7 +114,7 @@ function jobsAt(db: Db, head: string) {
   );
   const run = <A, E>(f: (jobs: WalkthroughJobs["Service"]) => Effect.Effect<A, E>) =>
     Effect.runPromise(Effect.flatMap(WalkthroughJobs, f).pipe(Effect.provide(layer)));
-  return { run, sent };
+  return { run, sent, trace };
 }
 
 const rowsOf = (db: Db) =>
@@ -120,6 +140,20 @@ describe("resuming a walkthrough", () => {
 
     expect(await run((jobs) => jobs.resume("wt-1"))).toBe("superseded");
     expect(rowsOf(db)).toEqual([{ id: "wt-1", status: "superseded" }]);
+  });
+});
+
+describe("a request", () => {
+  it("records a head the poll hasn't seen through the mirror before it reads the diff", async () => {
+    const db = createDb(":memory:");
+    seed(db, { id: "wt-err", status: "error", head: "head-2" });
+    const { run, trace } = jobsAt(db, "head-2");
+
+    await run((jobs) =>
+      jobs.startJob({ prId: PR.id, trigger: "review_requested", replace: "none" }),
+    );
+
+    expect(trace).toEqual(["mirror head-2", "diff head-2"]);
   });
 });
 

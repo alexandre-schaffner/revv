@@ -12,11 +12,11 @@ import { AvatarCacheLive } from "./github/avatars";
 import { GitHubGateway } from "./github/gateway";
 import { PrMirror, PrMirrorLive } from "./PrMirror";
 import { PullRequestService, PullRequestServiceLive } from "./PullRequest";
+import { PrHeadMoves, PrHeadMovesLive } from "./pr-head-moves";
 import { Realtime } from "./Realtime";
 import { RepositoryServiceLive } from "./Repository";
 import { SecretStore } from "./SecretStore";
 import { StackService } from "./stacks/StackService";
-import { WalkthroughJobs } from "./walkthrough/WalkthroughJobs";
 import { AgentWorktrees } from "./workspace/agent-worktrees";
 
 export const ACCOUNT_ID = "acc-1";
@@ -79,7 +79,7 @@ export function seedDb(repos: readonly Repository[] = [REPO]): Db {
 
 /** What the faked neighbours of PrMirror were asked to do. */
 export interface Recorded {
-  readonly superseded: Array<{ readonly prId: string; readonly exceptHeadSha?: string }>;
+  readonly superseded: Array<{ readonly prId: string; readonly exceptHeadSha: string }>;
   readonly pruned: Array<{ readonly repoId: string; readonly prNumber: number }>;
   readonly staleStacks: string[];
   readonly events: Array<{ readonly to: string; readonly msg: ServerEventMessage }>;
@@ -118,14 +118,17 @@ export async function makeHarness(
     deleteSecret: () => Effect.void,
   });
   const fakes = Layer.mergeAll(
-    Layer.succeed(WalkthroughJobs, {
-      supersedeForPr: (prId: string, exceptHeadSha?: string) =>
-        Effect.sync(() => {
-          recorded.superseded.push(
-            exceptHeadSha === undefined ? { prId } : { prId, exceptHeadSha },
-          );
-        }),
-    } as unknown as Context.Service.Shape<typeof WalkthroughJobs>),
+    // A head-move listener records what WalkthroughJobs would supersede.
+    Layer.effect(
+      PrHeadMoves,
+      Effect.gen(function* () {
+        const headMoves = yield* PrHeadMoves;
+        yield* headMoves.listen((prId, exceptHeadSha) =>
+          Effect.sync(() => void recorded.superseded.push({ prId, exceptHeadSha })),
+        );
+        return headMoves;
+      }),
+    ).pipe(Layer.provide(PrHeadMovesLive)),
     Layer.succeed(AgentWorktrees, {
       prune: (params: { repoId: string; prNumber: number }) =>
         Effect.sync(() => {

@@ -28,6 +28,7 @@ import { PrContextServiceLive } from "./PrContext";
 import { PrConversationServiceLive } from "./PrConversation";
 import { PrMirrorLive } from "./PrMirror";
 import { PullRequestServiceLive } from "./PullRequest";
+import { PrHeadMovesLive } from "./pr-head-moves";
 import { RealtimeLive } from "./Realtime";
 import { RepositoryServiceLive } from "./Repository";
 import { ReviewServiceLive } from "./Review";
@@ -160,6 +161,13 @@ const RemoteWalkthroughCacheWithDeps = RemoteWalkthroughCacheLive.pipe(
 // map so a head is scanned once.
 const HunkScanServiceWithDeps = HunkScanServiceLive.pipe(Layer.provide(BaseLayers));
 
+// One instance: the mirror publishes on it and WalkthroughJobs listens.
+const PrMirrorWithDeps = PrMirrorLive.pipe(
+  Layer.provide(
+    Layer.mergeAll(BaseLayers, PrHeadMovesLive, AgentWorktreesWithDeps, StackServiceWithDeps),
+  ),
+);
+
 const WalkthroughJobsWithDeps = WalkthroughJobsLive.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -170,17 +178,8 @@ const WalkthroughJobsWithDeps = WalkthroughJobsLive.pipe(
       RemoteWalkthroughCacheWithDeps,
       HunkScanServiceWithDeps,
       StackServiceWithDeps,
-    ),
-  ),
-);
-
-const PrMirrorWithDeps = PrMirrorLive.pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      BaseLayers,
-      WalkthroughJobsWithDeps,
-      AgentWorktreesWithDeps,
-      StackServiceWithDeps,
+      PrMirrorWithDeps,
+      PrHeadMovesLive,
     ),
   ),
 );

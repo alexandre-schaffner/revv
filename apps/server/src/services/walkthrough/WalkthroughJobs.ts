@@ -38,6 +38,7 @@ import {
   AiGenerationError,
   type DbError,
   type GitHubError,
+  GitHubNotFoundError,
   HeadShaMismatchError,
 } from "../../domain/errors";
 import { dbTry } from "../../effects/db-try";
@@ -49,11 +50,14 @@ import { CacheService } from "../Cache";
 import { RepoCloneService } from "../clone/RepoClone";
 import { DbService } from "../Db";
 import { DiffCacheService, toGitHubFileShape } from "../DiffCache";
+import { GitHubGateway } from "../github/gateway";
 import { HunkScanService } from "../hunk-scan/HunkScan";
 import { JevService } from "../Jev";
 import { makeStartJobMutex } from "../job-mutex";
 import { type AgentRun, makeAgentJobs, type RunOutcome } from "../jobs/agent-jobs";
 import { type PrContextBasic, type PrContextError, PrContextService } from "../PrContext";
+import { PrMirror } from "../PrMirror";
+import { PrHeadMoves } from "../pr-head-moves";
 import { Realtime } from "../Realtime";
 import { ReviewService } from "../Review";
 import { SettingsService } from "../Settings";
@@ -256,6 +260,9 @@ export const WalkthroughJobsLive = Layer.effect(
     const snapshotImporter = yield* WalkthroughSnapshotImporter;
     const realtime = yield* Realtime;
     const stackService = yield* StackService;
+    const github = yield* GitHubGateway;
+    const mirror = yield* PrMirror;
+    const headMoves = yield* PrHeadMoves;
 
     // Every decision about a PR's rows — a request, a resume, a hydrate —
     // runs under its PR's lock, so two of them can't both find the head free.
@@ -644,15 +651,43 @@ export const WalkthroughJobsLive = Layer.effect(
         return true;
       });
 
+    /**
+     * The PR as GitHub reports it now, recorded first: a head the poll hasn't
+     * seen yet goes through the mirror (which supersedes runs at the old one),
+     * so the whole run — the diff cache, the relevance judgments — reads the
+     * head it reviews. Then that head's files and commits.
+     */
+    const liveContext = (prId: string) =>
+      Effect.gen(function* () {
+        const stored = yield* prContextService.forPr(prId);
+        const { repo, client } = stored;
+        const live = yield* github.prs.get(client, repo.fullName, repo.id, stored.pr.externalId);
+        const { rows } = yield* mirror.apply([live]);
+        const pr = rows[0] ?? stored.pr;
+        if (pr.headSha === null || pr.baseSha === null) {
+          return yield* Effect.fail(
+            new GitHubNotFoundError({
+              resource: "pull_request",
+              id: `${repo.fullName}#${pr.externalId}`,
+            }),
+          );
+        }
+        const files = toGitHubFileShape(
+          (yield* diffCacheService.getOrFetch(pr, repo.fullName, client)).files,
+        );
+        const commits = yield* github.prs.commits(client, repo.fullName, pr.externalId);
+        return { ...stored, pr, headSha: pr.headSha, files, commits };
+      });
+
     const request = (params: StartJobParams): Effect.Effect<StartJobResult, StartJobError> =>
       Effect.gen(function* () {
         const mode = params.mode ?? "reviewer";
         const requestedGenerationMode = params.generationMode ?? "full";
         const live = yield* findActiveByPr(params.prId, mode);
 
-        const resolved = yield* prContextService.withDiff(params.prId);
-        const { pr, repo, meta, files, commits } = resolved;
-        const headSha = meta.headSha;
+        const resolved = yield* liveContext(params.prId);
+        const { pr, repo, files, commits } = resolved;
+        const headSha = resolved.headSha;
         const pinnedHead = params.expectedHeadSha?.toLowerCase();
         if (pinnedHead !== undefined && headSha.toLowerCase() !== pinnedHead) {
           return yield* Effect.fail(
@@ -875,6 +910,16 @@ export const WalkthroughJobsLive = Layer.effect(
           }),
         );
       });
+
+    // A head move the mirror recorded makes the runs at the old head stale
+    // (invariant 7).
+    yield* headMoves.listen((prId, headSha) =>
+      supersedeForPr(prId, headSha).pipe(
+        Effect.catch((err) =>
+          Effect.sync(() => logError("walkthrough-jobs", `supersede on head move ${prId}:`, err)),
+        ),
+      ),
+    );
 
     return {
       startJob: (params) => underPrLock(params.prId, request(params)),

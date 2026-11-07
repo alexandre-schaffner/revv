@@ -7,8 +7,8 @@
  * - a stale read never rewinds the stored head (`preserveHeadOnStaleRead`);
  * - the row, its diff size and the head that size describes are written in
  *   one statement;
- * - a trusted head move supersedes walkthroughs pinned to the old head
- *   (invariant 7), keeping one generating at the new head;
+ * - a trusted head move is published (`PrHeadMoves`): WalkthroughJobs
+ *   supersedes the walkthroughs pinned to the old head (invariant 7);
  * - a PR that went terminal is announced (`pr:archived`), its agent worktree
  *   reaped (unless someone works in it), and its stack marked stale;
  * - the account's clients hear `prs:updated`, after the commit (invariant 8).
@@ -31,10 +31,10 @@ import { GitHubGateway } from "./github/gateway";
 import type { GitHubClient } from "./github/transport";
 import { PullRequestService } from "./PullRequest";
 import { isTrustedHeadShaMove, preserveHeadOnStaleRead } from "./pr-head-move";
+import { PrHeadMoves } from "./pr-head-moves";
 import { Realtime } from "./Realtime";
 import { RepositoryService } from "./Repository";
 import { StackService } from "./stacks/StackService";
-import { WalkthroughJobs } from "./walkthrough/WalkthroughJobs";
 import { AgentWorktrees } from "./workspace/agent-worktrees";
 
 export interface MirrorOptions {
@@ -117,7 +117,7 @@ export const PrMirrorLive = Layer.effect(
     const { db } = yield* DbService;
     const prService = yield* PullRequestService;
     const repoService = yield* RepositoryService;
-    const walkthroughJobs = yield* WalkthroughJobs;
+    const headMoves = yield* PrHeadMoves;
     const agentWorktrees = yield* AgentWorktrees;
     const stackService = yield* StackService;
     const realtime = yield* Realtime;
@@ -148,15 +148,6 @@ export const PrMirrorLive = Layer.effect(
           ),
         { discard: true },
       );
-
-    const supersede = (prId: string, headSha: string) =>
-      walkthroughJobs
-        .supersedeForPr(prId, headSha)
-        .pipe(
-          Effect.catch((err) =>
-            Effect.sync(() => logError("PrMirror", `walkthrough supersede for ${prId}:`, err)),
-          ),
-        );
 
     const markStacksStale = (accountId: string, repositoryId: string, stacks: Iterable<number>) =>
       Effect.forEach(
@@ -195,7 +186,7 @@ export const PrMirrorLive = Layer.effect(
     const followThrough = (
       rows: readonly PullRequest[],
       prior: ReadonlyMap<string, PullRequest>,
-      headMoves: ReadonlyMap<string, string>,
+      moved: ReadonlyMap<string, string>,
     ) =>
       Effect.gen(function* () {
         const accountIds = new Set<string>();
@@ -212,7 +203,7 @@ export const PrMirrorLive = Layer.effect(
           }
           if (stacks.size > 0) yield* markStacksStale(accountId, repoId, stacks);
         }
-        yield* Effect.forEach(headMoves, ([prId, headSha]) => supersede(prId, headSha), {
+        yield* Effect.forEach(moved, ([prId, headSha]) => headMoves.publish(prId, headSha), {
           discard: true,
         });
         return accountIds;
@@ -245,14 +236,14 @@ export const PrMirrorLive = Layer.effect(
         const masked = observed.map((pr) => preserveHeadOnStaleRead(prior.get(pr.id), pr));
         yield* prService.upsertPrs(masked);
         const rows = masked.map((pr) => asStored(pr, prior.get(pr.id)));
-        const headMoves = new Map<string, string>();
+        const moved = new Map<string, string>();
         for (const row of rows) {
           const before = prior.get(row.id);
           if (before && row.headSha !== null && isTrustedHeadShaMove(before, row)) {
-            headMoves.set(row.id, row.headSha);
+            moved.set(row.id, row.headSha);
           }
         }
-        const accountIds = yield* followThrough(rows, prior, headMoves);
+        const accountIds = yield* followThrough(rows, prior, moved);
         if (options.announce !== false) yield* announce(accountIds);
         return { rows, accountIds };
       });
