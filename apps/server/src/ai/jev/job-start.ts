@@ -14,8 +14,7 @@ import { riskCriteria } from "../prompts/risk-tiers";
 import { cachedJev } from "./optional";
 import { numericAnswerAt } from "./questions";
 import { type GenerationLaunchOverride, type ReasoningEffort, routeSizing } from "./routing";
-import type { JobStartStateInput } from "./state";
-import { buildJobStartState } from "./state";
+import { buildJobStartState, commitSubjects, type JobStartStateInput } from "./state";
 
 /**
  * Ceiling for the job-start call. Sits on `startJobBody`'s critical path
@@ -124,21 +123,29 @@ export const SPLIT_RECOMMENDATION_FLOOR = 0.75;
 export const JOB_START_CACHE_NS = "jev:job-start:v2";
 
 /**
- * Fingerprint of the changed-file set (path/status/line counts, sorted);
- * excludes patch bodies, truncated inconsistently across callers.
+ * Pins everything the state carries about the change besides the patch
+ * bodies, which are truncated inconsistently across callers: the changed-file
+ * set (path/status/line counts, sorted) and the commit subjects.
  *
- * Combined with head SHA in the cache key: the poller updates
+ * The diff rides alongside the head SHA because the poller updates
  * `pull_requests.head_sha` before invalidating the diff cache, so a preview
  * mid-window could write an old diff's answer under the new SHA — entries
  * are immutable, so that never self-corrects. Worst case: one wasted call,
  * never a wrong answer.
  */
-export function diffFingerprint(files: JobStartStateInput["files"]): string {
-  const parts = files.map((f) => `${f.filename}:${f.status}:${f.additions}:${f.deletions}`).sort();
-  return createHash("sha1").update(parts.join("\n")).digest("hex").slice(0, 16);
-}
-
-export function jobStartCacheKey(prId: string, headSha: string, fingerprint: string): string {
+export function jobStartCacheKey(
+  prId: string,
+  headSha: string,
+  state: Pick<JobStartStateInput, "files" | "commits">,
+): string {
+  const files = state.files
+    .map((f) => `${f.filename}:${f.status}:${f.additions}:${f.deletions}`)
+    .sort();
+  const commits = [`commits:${state.commits.length}`, ...commitSubjects(state.commits)];
+  const fingerprint = createHash("sha1")
+    .update([...files, "", ...commits].join("\n"))
+    .digest("hex")
+    .slice(0, 16);
   return `${prId}:${headSha}:${fingerprint}`;
 }
 
@@ -294,7 +301,7 @@ export function resolveJobStartAnswers(
     `job-start for ${prId}@${headSha.slice(0, 7)}`,
     {
       ns: JOB_START_CACHE_NS,
-      key: jobStartCacheKey(prId, headSha, diffFingerprint(state.files)),
+      key: jobStartCacheKey(prId, headSha, state),
       options: { immutable: true },
     },
     () => askJobStart(state),

@@ -33,6 +33,7 @@ import { repositories } from "../../db/schema/repositories";
 import type { DiffFingerprint, WalkthroughLaunchPlan } from "../../db/schema/walkthroughs";
 import type { DbError } from "../../domain/errors";
 import type { CacheService } from "../Cache";
+import { type CachedDiff, toGitHubFileShape } from "../DiffCache";
 import type { JevService } from "../Jev";
 import type { GeneratedBy, GenerationProviderConfig } from "./cache-format";
 import { fingerprintFiles, type RestackCarry, restackCarry } from "./restack";
@@ -198,6 +199,15 @@ export function planNewRow(input: {
       restack,
     };
   });
+}
+
+/**
+ * A PR's cached diff as a run and its job-start judgment read it. The review
+ * page's preview and the launch both take it from `DiffCacheService`, so they
+ * ask Jev about one head with the same state and share one cached answer.
+ */
+export function launchDiff(diff: CachedDiff) {
+  return { files: toGitHubFileShape(diff.files), commits: diff.commits };
 }
 
 /** How a row's runs launch, and the risk tier the orchestrator assigns it (invariant 2's carve-out). */

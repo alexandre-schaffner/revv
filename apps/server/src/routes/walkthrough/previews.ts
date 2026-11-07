@@ -8,21 +8,21 @@
 import type { HunkScanEnsureResult, WalkthroughSizing } from "@revv/shared";
 import { Effect } from "effect";
 import type { AppServices } from "../../runtime";
-import { DiffCacheService, toGitHubFileShape } from "../../services/DiffCache";
+import { DiffCacheService } from "../../services/DiffCache";
 import { HunkScanService } from "../../services/hunk-scan/HunkScan";
 import { JevService } from "../../services/Jev";
 import { PrContextService } from "../../services/PrContext";
 import { SettingsService } from "../../services/Settings";
-import { planLaunch } from "../../services/walkthrough/launch-plan";
+import { launchDiff, planLaunch } from "../../services/walkthrough/launch-plan";
 
 /** The PR, its head, and its cached diff, or null until the diff lands. */
 function loadCachedPrDiff(prId: string) {
   return Effect.gen(function* () {
     const { pr } = yield* (yield* PrContextService).readPr(prId);
     if (!pr.headSha) return null;
-    const cached = yield* (yield* DiffCacheService).getCachedFiles(pr.id);
+    const cached = yield* (yield* DiffCacheService).getCachedDiff(pr.id);
     if (cached === null) return null;
-    return { pr, headSha: pr.headSha, files: toGitHubFileShape(cached) };
+    return { pr, headSha: pr.headSha, ...launchDiff(cached) };
   });
 }
 
@@ -33,7 +33,7 @@ function launchPlanFor(diff: NonNullable<Effect.Success<ReturnType<typeof loadCa
     return yield* planLaunch({
       prId: diff.pr.id,
       headSha: diff.headSha,
-      state: { pr: diff.pr, files: diff.files },
+      state: { pr: diff.pr, files: diff.files, commits: diff.commits },
       settings: yield* settingsService.getSettings(),
       agent: yield* settingsService.resolveAgent(),
     });

@@ -31,13 +31,19 @@ export const pullRequests = sqliteTable(
     /**
      * The `head_sha` and `base_sha` this row held when the fetch behind the
      * cached `pr_diff_files` rows started. Written only by
-     * `DiffCacheService.cacheFiles`, with the rows. The rows are this PR's
+     * `DiffCacheService.cacheDiff`, with the rows. The rows are this PR's
      * diff only while both still equal `head_sha` and `base_sha`; a null
      * `diff_files_head_sha` (never stamped, or fetched while the head was
      * unknown) never matches.
      */
     diffFilesHeadSha: text("diff_files_head_sha"),
     diffFilesBaseSha: text("diff_files_base_sha"),
+    /**
+     * The PR's commits for the same range as the cached `pr_diff_files`
+     * rows, as JSON `PrCommit[]` head first, written with them. Null on
+     * diffs cached before commits were, which read as not cached.
+     */
+    diffCommits: text("diff_commits"),
     headSha: text("head_sha"),
     baseSha: text("base_sha"),
     createdAt: text("created_at").notNull(),

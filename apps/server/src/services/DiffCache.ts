@@ -6,7 +6,7 @@ import type { DbError, GitHubError } from "../domain/errors";
 import { dbTry } from "../effects/db-try";
 import { DbService } from "./Db";
 import { GitHubGateway } from "./github/gateway";
-import type { PrFileMeta } from "./github/pulls";
+import type { PrCommit, PrFileMeta } from "./github/pulls";
 import type { GitHubClient } from "./github/transport";
 import { Realtime } from "./Realtime";
 
@@ -67,6 +67,29 @@ export function readCurrentHeadFiles(
   return byPr;
 }
 
+/** A PR's cached diff: its files and its commits (head first) for one range. */
+export interface CachedDiff {
+  readonly files: CachedDiffFile[];
+  readonly commits: PrCommit[];
+}
+
+/**
+ * The PR's cached diff for its current head and base, or null when its files
+ * or its commits aren't cached for them.
+ */
+export function readCurrentHeadDiff(db: Db, prId: string): CachedDiff | null {
+  const files = readCurrentHeadFiles(db, [prId]).get(prId);
+  if (files === undefined) return null;
+  const row = db
+    .select({ commits: pullRequests.diffCommits })
+    .from(pullRequests)
+    .where(eq(pullRequests.id, prId))
+    .get();
+  if (row?.commits == null) return null;
+  const commits: PrCommit[] = JSON.parse(row.commits);
+  return { files, commits };
+}
+
 /** One file's cached patch for the PR's current head and base, or null when none is cached. */
 export function readCurrentHeadPatch(db: Db, prId: string, path: string): string | null {
   const row = db
@@ -123,20 +146,19 @@ export class DiffCacheService extends Context.Service<
   DiffCacheService,
   {
     /**
-     * A PR's diff files: the cache when it holds the PR's current head and
-     * base, otherwise GitHub's list, written through (and announced
+     * A PR's diff: the cache when it holds the PR's current head and base,
+     * otherwise GitHub's files and commits, written through (and announced
      * as `diff:cached`). `source` says which answered.
      */
     readonly getOrFetch: (
       pr: { readonly id: string; readonly externalId: number },
       repoFullName: string,
       client: GitHubClient,
-    ) => Effect.Effect<
-      { readonly files: CachedDiffFile[]; readonly source: "cache" | "github" },
-      GitHubError | DbError
-    >;
+    ) => Effect.Effect<CachedDiff & { readonly source: "cache" | "github" }, GitHubError | DbError>;
     /** The files cached for the PR's current head and base (`[]` for an empty diff), or null. */
     readonly getCachedFiles: (prId: string) => Effect.Effect<CachedDiffFile[] | null, DbError>;
+    /** The diff cached for the PR's current head and base, or null. */
+    readonly getCachedDiff: (prId: string) => Effect.Effect<CachedDiff | null, DbError>;
     /** The PRs with files cached for their current head and base. */
     readonly getPrIdsWithCachedDiffs: () => Effect.Effect<string[], DbError>;
   }
@@ -150,17 +172,20 @@ export const DiffCacheServiceLive = Layer.effect(
     const realtime = yield* Realtime;
 
     const getCachedFiles = (prId: string) =>
-      dbTry("read cached diff", () => readCurrentHeadFiles(db, [prId]).get(prId) ?? null);
+      dbTry("read cached diff files", () => readCurrentHeadFiles(db, [prId]).get(prId) ?? null);
+
+    const getCachedDiff = (prId: string) =>
+      dbTry("read cached diff", () => readCurrentHeadDiff(db, prId));
 
     /**
-     * Replace a PR's cached files and record its diff size from the same list,
+     * Replace a PR's cached diff and record its size from the same file list,
      * in one transaction; then tell the PR's clients the diff is in.
      *
      * `fetchedFor` is the PR row as read before the fetch started. The files
      * read as the PR's diff only while its head and base are still that row's,
      * so a fetch that raced a head move is refetched, never served.
      */
-    const cacheFiles = (fetchedFor: FetchedFor, files: readonly CachedDiffFile[]) =>
+    const cacheDiff = (fetchedFor: FetchedFor, { files, commits }: CachedDiff) =>
       Effect.gen(function* () {
         const prId = fetchedFor.id;
         // GitHub lists a type-changed path twice; rows are keyed on
@@ -199,6 +224,7 @@ export const DiffCacheServiceLive = Layer.effect(
                 changedFiles: rows.length,
                 diffFilesHeadSha: fetchedFor.headSha,
                 diffFilesBaseSha: fetchedFor.baseSha,
+                diffCommits: JSON.stringify(commits),
               })
               .where(eq(pullRequests.id, prId))
               .run();
@@ -228,22 +254,24 @@ export const DiffCacheServiceLive = Layer.effect(
             .where(eq(pullRequests.id, pr.id))
             .get(),
         );
-        const cached = yield* getCachedFiles(pr.id);
-        if (cached !== null) return { files: cached, source: "cache" as const };
+        const cached = yield* getCachedDiff(pr.id);
+        if (cached !== null) return { ...cached, source: "cache" as const };
 
-        const files = toCachedDiffFiles(
-          yield* github.prs.files(client, repoFullName, pr.externalId),
-        );
-        yield* cacheFiles(
+        const diff: CachedDiff = {
+          files: toCachedDiffFiles(yield* github.prs.files(client, repoFullName, pr.externalId)),
+          commits: yield* github.prs.commits(client, repoFullName, pr.externalId),
+        };
+        yield* cacheDiff(
           { id: pr.id, headSha: stored?.headSha ?? null, baseSha: stored?.baseSha ?? null },
-          files,
+          diff,
         );
-        return { files, source: "github" as const };
+        return { ...diff, source: "github" as const };
       });
 
     return {
       getOrFetch,
       getCachedFiles,
+      getCachedDiff,
       getPrIdsWithCachedDiffs: () =>
         dbTry("list PRs with cached diffs", () =>
           prsWithCurrentFiles(db)
