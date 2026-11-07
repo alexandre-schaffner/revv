@@ -6,6 +6,8 @@
 //   • cache.uploadsEnabled   OFF → push short-circuits to no-op.
 //   • Only the reviewer perspective is shared: an author self-review is
 //     never pushed, and never looked up. The key carries no perspective.
+//   • A review is keyed on its repository's GitHub host too, and only
+//     served to a repository on the host it was signed on.
 //
 // On corrupt blob or schemaVersion mismatch the fetch path returns
 // `Option.none` and logs. From a behavior standpoint it's identical to a
@@ -13,7 +15,7 @@
 
 import { createHash } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
-import type { WalkthroughMode } from "@revv/shared";
+import { sameGithubHost, type WalkthroughMode } from "@revv/shared";
 import { Context, Effect, Layer, Option } from "effect";
 import { CacheSerialization, CacheUnavailable } from "../../domain/errors";
 import { dbTry } from "../../effects/db-try";
@@ -27,8 +29,10 @@ import { SettingsService } from "../Settings";
 import {
   CACHE_METADATA_KEYS,
   CACHE_SCHEMA_VERSION,
+  type CacheRepo,
   cacheObjectKey,
   cacheSigningMessage,
+  legacyCacheObjectKey,
   type WalkthroughSnapshotV2,
 } from "./cache-format";
 import { loadWalkthroughRow } from "./content";
@@ -43,7 +47,7 @@ export class RemoteWalkthroughCache extends Context.Service<
      * escape — the orchestrator falls back to running the agent.
      */
     readonly fetch: (
-      repoFullName: string,
+      repo: CacheRepo,
       headSha: string,
       mode: WalkthroughMode,
     ) => Effect.Effect<Option.Option<WalkthroughSnapshotV2>>;
@@ -83,148 +87,169 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
     const isUploadEnabled = (): Effect.Effect<boolean> =>
       settings.getSettings().pipe(Effect.map((s) => s.cache.enabled && s.cache.uploadsEnabled));
 
-    return RemoteWalkthroughCache.of({
-      fetch: (repoFullName, headSha, mode) =>
-        Effect.gen(function* () {
-          const ok = yield* isDownloadEnabled(mode);
-          if (!ok) return Option.none<WalkthroughSnapshotV2>();
+    /** The snapshot at `key`, once it passes every check, or none. */
+    const readSnapshot = (
+      key: string,
+      repo: CacheRepo,
+      headSha: string,
+    ): Effect.Effect<Option.Option<WalkthroughSnapshotV2>> =>
+      Effect.gen(function* () {
+        const repoFullName = repo.fullName;
+        const live = yield* settings.getSettings();
+        const signingMode = live.cache.signing.mode;
+        const trustedHosts = new Set(live.cache.signing.trustedSignerHosts);
 
-          const live = yield* settings.getSettings();
-          const signingMode = live.cache.signing.mode;
-          const trustedHosts = new Set(live.cache.signing.trustedSignerHosts);
+        const record = yield* blob.get(key).pipe(
+          Effect.catch((e) => {
+            debug("remote-cache", `fetch failed key=${key}: ${e.message}`);
+            return Effect.succeed(
+              Option.none<{ body: Buffer; metadata: Record<string, string> }>(),
+            );
+          }),
+        );
+        if (Option.isNone(record)) return Option.none<WalkthroughSnapshotV2>();
 
-          const key = cacheObjectKey(repoFullName, headSha);
-          const record = yield* blob.get(key).pipe(
-            Effect.catch((e) => {
-              debug("remote-cache", `fetch failed key=${key}: ${e.message}`);
-              return Effect.succeed(
-                Option.none<{ body: Buffer; metadata: Record<string, string> }>(),
-              );
-            }),
+        const { body, metadata } = record.value;
+
+        const advertisedVersion = metadata[CACHE_METADATA_KEYS.schemaVersion];
+        if (advertisedVersion && Number(advertisedVersion) !== CACHE_SCHEMA_VERSION) {
+          logError(
+            "remote-cache",
+            `schemaVersion mismatch key=${key} advertised=${advertisedVersion} expected=${CACHE_SCHEMA_VERSION}`,
           );
-          if (Option.isNone(record)) return Option.none<WalkthroughSnapshotV2>();
+          return Option.none<WalkthroughSnapshotV2>();
+        }
 
-          const { body, metadata } = record.value;
-
-          const advertisedVersion = metadata[CACHE_METADATA_KEYS.schemaVersion];
-          if (advertisedVersion && Number(advertisedVersion) !== CACHE_SCHEMA_VERSION) {
+        const advertisedSha = metadata[CACHE_METADATA_KEYS.contentSha256];
+        if (advertisedSha) {
+          const actualSha = createHash("sha256").update(body).digest("hex");
+          if (actualSha !== advertisedSha) {
             logError(
               "remote-cache",
-              `schemaVersion mismatch key=${key} advertised=${advertisedVersion} expected=${CACHE_SCHEMA_VERSION}`,
+              `contentSha256 mismatch key=${key} advertised=${advertisedSha} actual=${actualSha}`,
             );
             return Option.none<WalkthroughSnapshotV2>();
           }
+        }
 
-          const advertisedSha = metadata[CACHE_METADATA_KEYS.contentSha256];
-          if (advertisedSha) {
-            const actualSha = createHash("sha256").update(body).digest("hex");
-            if (actualSha !== advertisedSha) {
+        const signerHost = metadata[CACHE_METADATA_KEYS.signerHost];
+        // A pusher signs as the account that owns the repository, so a
+        // review signed on another host is of another repository.
+        if (signerHost && !sameGithubHost(signerHost, repo.githubHost)) {
+          logError(
+            "remote-cache",
+            `signerHost=${signerHost} is not the repository's host ${repo.githubHost} — treating as miss key=${key}`,
+          );
+          return Option.none<WalkthroughSnapshotV2>();
+        }
+
+        if (signingMode !== "off") {
+          const signerLogin = metadata[CACHE_METADATA_KEYS.signerLogin];
+          const signature = metadata[CACHE_METADATA_KEYS.signature];
+
+          if (!signature || !signerHost || !signerLogin) {
+            // Legacy unsigned blob.
+            if (signingMode === "strict") {
               logError(
                 "remote-cache",
-                `contentSha256 mismatch key=${key} advertised=${advertisedSha} actual=${actualSha}`,
+                `unsigned blob in strict mode — treating as miss key=${key}`,
               );
               return Option.none<WalkthroughSnapshotV2>();
             }
-          }
+            logError("remote-cache", `unsigned blob accepted in permissive mode key=${key}`);
+          } else {
+            // Before verify fetches the signer's public keys from `signerHost`.
+            if (!trustedHosts.has(signerHost)) {
+              logError(
+                "remote-cache",
+                `signerHost=${signerHost} not in trusted hosts — treating as miss key=${key}`,
+              );
+              return Option.none<WalkthroughSnapshotV2>();
+            }
 
-          if (signingMode !== "off") {
-            const signerHost = metadata[CACHE_METADATA_KEYS.signerHost];
-            const signerLogin = metadata[CACHE_METADATA_KEYS.signerLogin];
-            const signature = metadata[CACHE_METADATA_KEYS.signature];
+            const contentSha = advertisedSha ?? createHash("sha256").update(body).digest("hex");
+            const sigMsg = cacheSigningMessage(repoFullName, headSha, contentSha);
 
-            if (!signature || !signerHost || !signerLogin) {
-              // Legacy unsigned blob.
+            const verified = yield* Effect.result(
+              signer.verify(sigMsg, signature, signerHost, signerLogin),
+            );
+
+            if (verified._tag === "Failure") {
+              const e = verified.failure;
+              const detail = `${e._tag}: ${e._tag === "SshKeysFetchFailed" ? `couldn't fetch ${e.login}'s keys from ${e.host}` : e.message}`;
               if (signingMode === "strict") {
                 logError(
                   "remote-cache",
-                  `unsigned blob in strict mode — treating as miss key=${key}`,
+                  `signature verification failed in strict mode key=${key}: ${detail}`,
                 );
                 return Option.none<WalkthroughSnapshotV2>();
               }
-              logError("remote-cache", `unsigned blob accepted in permissive mode key=${key}`);
+              logError(
+                "remote-cache",
+                `signature verification failed in permissive mode key=${key}: ${detail} — accepting anyway`,
+              );
             } else {
-              // Before verify fetches the signer's public keys from `signerHost`.
-              if (!trustedHosts.has(signerHost)) {
-                logError(
-                  "remote-cache",
-                  `signerHost=${signerHost} not in trusted hosts — treating as miss key=${key}`,
-                );
-                return Option.none<WalkthroughSnapshotV2>();
-              }
-
-              const contentSha = advertisedSha ?? createHash("sha256").update(body).digest("hex");
-              const sigMsg = cacheSigningMessage(repoFullName, headSha, contentSha);
-
-              const verified = yield* Effect.result(
-                signer.verify(sigMsg, signature, signerHost, signerLogin),
+              const eligible = yield* eligibility.isSignerEligible(
+                repoFullName,
+                signerHost,
+                signerLogin,
               );
 
-              if (verified._tag === "Failure") {
-                const e = verified.failure;
-                const detail = `${e._tag}: ${e._tag === "SshKeysFetchFailed" ? `couldn't fetch ${e.login}'s keys from ${e.host}` : e.message}`;
+              if (!eligible) {
                 if (signingMode === "strict") {
                   logError(
                     "remote-cache",
-                    `signature verification failed in strict mode key=${key}: ${detail}`,
+                    `signer ${signerLogin}@${signerHost} lacks write permission on ${repoFullName} — treating as miss key=${key}`,
                   );
                   return Option.none<WalkthroughSnapshotV2>();
                 }
                 logError(
                   "remote-cache",
-                  `signature verification failed in permissive mode key=${key}: ${detail} — accepting anyway`,
+                  `signer ${signerLogin}@${signerHost} lacks write permission on ${repoFullName} — accepting in permissive mode key=${key}`,
                 );
               } else {
-                const eligible = yield* eligibility.isSignerEligible(
-                  repoFullName,
-                  signerHost,
-                  signerLogin,
+                debug(
+                  "remote-cache",
+                  `signature OK signer=${signerLogin}@${signerHost} key=${key}`,
                 );
-
-                if (!eligible) {
-                  if (signingMode === "strict") {
-                    logError(
-                      "remote-cache",
-                      `signer ${signerLogin}@${signerHost} lacks write permission on ${repoFullName} — treating as miss key=${key}`,
-                    );
-                    return Option.none<WalkthroughSnapshotV2>();
-                  }
-                  logError(
-                    "remote-cache",
-                    `signer ${signerLogin}@${signerHost} lacks write permission on ${repoFullName} — accepting in permissive mode key=${key}`,
-                  );
-                } else {
-                  debug(
-                    "remote-cache",
-                    `signature OK signer=${signerLogin}@${signerHost} key=${key}`,
-                  );
-                }
               }
             }
           }
+        }
 
-          let parsed: WalkthroughSnapshotV2;
-          try {
-            const decompressed = gunzipSync(body);
-            parsed = JSON.parse(decompressed.toString("utf8")) as WalkthroughSnapshotV2;
-          } catch (cause) {
-            logError(
-              "remote-cache",
-              `gunzip/parse failed key=${key}: ${cause instanceof Error ? cause.message : String(cause)}`,
-            );
-            return Option.none<WalkthroughSnapshotV2>();
-          }
-
-          const v = validateSnapshot(parsed);
-          if (!v.ok) {
-            logError("remote-cache", `validation failed key=${key}: ${v.reason}`);
-            return Option.none<WalkthroughSnapshotV2>();
-          }
-
-          debug(
+        let parsed: WalkthroughSnapshotV2;
+        try {
+          const decompressed = gunzipSync(body);
+          parsed = JSON.parse(decompressed.toString("utf8")) as WalkthroughSnapshotV2;
+        } catch (cause) {
+          logError(
             "remote-cache",
-            `fetch hit key=${key} bytes=${body.length} sha=${advertisedSha ?? "n/a"}`,
+            `gunzip/parse failed key=${key}: ${cause instanceof Error ? cause.message : String(cause)}`,
           );
-          return Option.some(parsed);
+          return Option.none<WalkthroughSnapshotV2>();
+        }
+
+        const v = validateSnapshot(parsed);
+        if (!v.ok) {
+          logError("remote-cache", `validation failed key=${key}: ${v.reason}`);
+          return Option.none<WalkthroughSnapshotV2>();
+        }
+
+        debug(
+          "remote-cache",
+          `fetch hit key=${key} bytes=${body.length} sha=${advertisedSha ?? "n/a"}`,
+        );
+        return Option.some(parsed);
+      });
+
+    return RemoteWalkthroughCache.of({
+      fetch: (repo, headSha, mode) =>
+        Effect.gen(function* () {
+          if (!(yield* isDownloadEnabled(mode))) return Option.none<WalkthroughSnapshotV2>();
+          const hit = yield* readSnapshot(cacheObjectKey(repo, headSha), repo, headSha);
+          if (Option.isSome(hit)) return hit;
+          const legacyKey = legacyCacheObjectKey(repo, headSha);
+          return legacyKey === null ? hit : yield* readSnapshot(legacyKey, repo, headSha);
         }),
 
       push: (walkthroughId) =>
@@ -327,7 +352,7 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
             );
           }
 
-          const key = cacheObjectKey(repoFullName, snapshot.prHeadSha);
+          const key = cacheObjectKey(repo, snapshot.prHeadSha);
           yield* blob
             .put(key, gz, {
               [CACHE_METADATA_KEYS.schemaVersion]: String(CACHE_SCHEMA_VERSION),

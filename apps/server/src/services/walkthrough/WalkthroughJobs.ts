@@ -69,7 +69,7 @@ import { Realtime } from "../Realtime";
 import { ReviewService } from "../Review";
 import { SettingsService } from "../Settings";
 import { StackService } from "../stacks/StackService";
-import type { WalkthroughSnapshotV2 } from "./cache-format";
+import type { CacheRepo, WalkthroughSnapshotV2 } from "./cache-format";
 import { orchestratorCompletionBlocker } from "./completion";
 import { loadWalkthroughRow, type WalkthroughRow } from "./content";
 import {
@@ -617,7 +617,7 @@ export const WalkthroughJobsLive = Layer.effect(
     /** The finished review a new row at `headSha` can take over, if any. */
     const findCarry = (input: {
       readonly restack: RestackCarry | null;
-      readonly repoFullName: string;
+      readonly repo: CacheRepo;
       readonly headSha: string;
       readonly mode: WalkthroughMode;
     }): Effect.Effect<Carry | null> =>
@@ -628,7 +628,7 @@ export const WalkthroughJobsLive = Layer.effect(
             try: () =>
               exportWalkthroughSnapshot(db, {
                 walkthroughId: restack.fromWalkthroughId,
-                repoFullName: input.repoFullName,
+                repoFullName: input.repo.fullName,
               }),
             catch: (cause) => cause,
           }).pipe(
@@ -652,7 +652,7 @@ export const WalkthroughJobsLive = Layer.effect(
             };
           }
         }
-        const snapshot = yield* remoteCache.fetch(input.repoFullName, input.headSha, input.mode);
+        const snapshot = yield* remoteCache.fetch(input.repo, input.headSha, input.mode);
         return Option.isSome(snapshot) ? { snapshot: snapshot.value, source: "remote" } : null;
       });
 
@@ -873,7 +873,7 @@ export const WalkthroughJobsLive = Layer.effect(
         }).pipe(Effect.provideService(WalkthroughService, walkthroughService));
         const carry = yield* findCarry({
           restack: newRow.restack,
-          repoFullName: repo.fullName,
+          repo,
           headSha,
           mode,
         });
@@ -925,7 +925,7 @@ export const WalkthroughJobsLive = Layer.effect(
           }
           const carry = yield* findCarry({
             restack: null,
-            repoFullName: repo.fullName,
+            repo,
             headSha,
             mode,
           });

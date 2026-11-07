@@ -1,7 +1,7 @@
 // Wire format for the team-shared walkthrough cache. The local server
 // gzip-encodes a `WalkthroughSnapshotV2` and uploads it to:
 //
-//   gs://<bucket>/<owner>/<repo>/<headSha>.json.gz
+//   gs://<bucket>/<githubHost>/<owner>/<repo>/<headSha>.json.gz
 //
 // On a teammate's machine, the same key is probed before kicking off the
 // agent fiber. A hit imports the snapshot in a single transaction and
@@ -12,15 +12,17 @@
 // alongside). A fetch treats a mismatched version as a miss, so the
 // teammate falls back to local generation.
 
-import type {
-  AcpAgentId,
-  Confidence,
-  RatingAxis,
-  RatingCitation,
-  RiskLevel,
-  Verdict,
-  WalkthroughBlock,
-  WalkthroughTokenUsage,
+import {
+  type AcpAgentId,
+  type Confidence,
+  isPublicGitHub,
+  normalizeGithubHost,
+  type RatingAxis,
+  type RatingCitation,
+  type RiskLevel,
+  type Verdict,
+  type WalkthroughBlock,
+  type WalkthroughTokenUsage,
 } from "@revv/shared";
 
 export const CACHE_SCHEMA_VERSION = 2 as const;
@@ -143,12 +145,29 @@ export interface WalkthroughSnapshotV2 {
   generatedAt: string;
 }
 
+/** A repository as the team cache addresses it: owner/name on its GitHub host. */
+export interface CacheRepo {
+  readonly githubHost: string;
+  readonly fullName: string;
+}
+
 /**
- * Build the canonical object key for the bucket. Mirrors GitHub's
- * natural addressing — same key on every teammate's machine.
+ * The object key a review of `repo` at `prHeadSha` is pushed to, the same on
+ * every teammate's machine. One more path segment than a legacy key, so the
+ * two never collide.
  */
-export function cacheObjectKey(repoFullName: string, prHeadSha: string): string {
-  return `${repoFullName}/${prHeadSha}.json.gz`;
+export function cacheObjectKey(repo: CacheRepo, prHeadSha: string): string {
+  return `${normalizeGithubHost(repo.githubHost)}/${repo.fullName}/${prHeadSha}.json.gz`;
+}
+
+/**
+ * The key clients before the host-scoped one pushed to, which named no host.
+ * Read only for github.com repos, the host nearly every such entry came from,
+ * so an Enterprise repo never takes a review of a github.com repo that shares
+ * its owner/name. Null for an Enterprise repo.
+ */
+export function legacyCacheObjectKey(repo: CacheRepo, prHeadSha: string): string | null {
+  return isPublicGitHub(repo.githubHost) ? `${repo.fullName}/${prHeadSha}.json.gz` : null;
 }
 
 /**
