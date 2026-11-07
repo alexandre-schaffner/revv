@@ -16,6 +16,17 @@ import { PullRequestService } from "./PullRequest";
 import { RepositoryService } from "./Repository";
 
 /**
+ * A PR, its repository and the account that owns it, read from the local
+ * mirror alone: for work that must not depend on GitHub (or on a stored,
+ * fresh token) being there.
+ */
+export interface PrRecord {
+  readonly pr: PullRequest;
+  readonly repo: Repository;
+  readonly accountId: string;
+}
+
+/**
  * A tracked repository and the client of the account that owns it. Every
  * GitHub call about the repository or its PRs goes through `client`, so it
  * reaches the repository's own host as its own account.
@@ -49,6 +60,7 @@ export class PrContextService extends Context.Service<
     /** A tracked repository, for work that may go on without GitHub. */
     readonly getRepo: (repoId: string) => Effect.Effect<Repository, NotFoundError | DbError>;
     readonly forRepo: (repoId: string) => Effect.Effect<RepoContext, PrContextError>;
+    readonly readPr: (prId: string) => Effect.Effect<PrRecord, NotFoundError | DbError>;
     /**
      * A PR, its repository and the owning account's client. With `accountId`,
      * a PR outside that account's repositories is not found.
@@ -77,6 +89,14 @@ export const PrContextServiceLive = Layer.effect(
         const accountId = yield* repoService.getAccountIdForRepo(repo.id);
         const client = yield* accounts.clientFor(accountId);
         return { repo, accountId, client } satisfies RepoContext;
+      });
+
+    const readPr = (prId: string) =>
+      Effect.gen(function* () {
+        const pr = yield* prService.getPr(prId);
+        const repo = yield* repoService.getRepoById(pr.repositoryId);
+        const accountId = yield* repoService.getAccountIdForRepo(repo.id);
+        return { pr, repo, accountId } satisfies PrRecord;
       });
 
     const forPr = (prId: string, accountId?: string) =>
@@ -123,6 +143,7 @@ export const PrContextServiceLive = Layer.effect(
     return {
       getRepo: (repoId: string) => repoService.getRepoById(repoId),
       forRepo,
+      readPr,
       forPr,
       withDiff,
     };

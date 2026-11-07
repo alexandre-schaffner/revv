@@ -3,13 +3,9 @@
 // agent's own surface is `/mcp/walkthrough` (routes/mcp/walkthrough.ts).
 
 import { REVIEW_MODES, WALKTHROUGH_GENERATION_MODES } from "@revv/shared";
-import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { pullRequests, repositories } from "../../db/schema";
 import { NotFoundError } from "../../domain/errors";
-import { dbTry } from "../../effects/db-try";
-import { DbService } from "../../services/Db";
 import { PrContextService } from "../../services/PrContext";
 import { WalkthroughService } from "../../services/walkthrough/Walkthrough";
 import { WalkthroughJobs } from "../../services/walkthrough/WalkthroughJobs";
@@ -72,26 +68,7 @@ const prWalkthroughRoutes = new Elysia({ prefix: "/api/reviews" })
     runRoute(
       Effect.gen(function* () {
         const walkthroughService = yield* WalkthroughService;
-        const pr = yield* Effect.flatMap(DbService, ({ db }) =>
-          dbTry("walkthrough rounds: pull request", () =>
-            db
-              .select({ id: pullRequests.id, headSha: pullRequests.headSha })
-              .from(pullRequests)
-              .innerJoin(repositories, eq(repositories.id, pullRequests.repositoryId))
-              .where(
-                and(
-                  eq(pullRequests.id, ctx.params.id),
-                  eq(repositories.accountId, ctx.account.accountId),
-                ),
-              )
-              .get(),
-          ),
-        );
-        if (!pr) {
-          return yield* Effect.fail(
-            new NotFoundError({ resource: "pull_request", id: ctx.params.id }),
-          );
-        }
+        const { pr } = yield* (yield* PrContextService).readPr(ctx.params.id);
         // DB-only: the client refreshes this for every active PR on each
         // `prs:updated`, so a GitHub call here would be rate-limit pressure.
         return yield* walkthroughService.listReviewRounds(pr.id, pr.headSha);
@@ -102,9 +79,8 @@ const prWalkthroughRoutes = new Elysia({ prefix: "/api/reviews" })
   .get("/:id/walkthrough/report/:walkthroughId", (ctx) =>
     runRoute(
       Effect.gen(function* () {
-        const prContext = yield* PrContextService;
         const walkthroughService = yield* WalkthroughService;
-        const { pr } = yield* prContext.forPr(ctx.params.id);
+        const { pr } = yield* (yield* PrContextService).readPr(ctx.params.id);
         const report = yield* walkthroughService.getReport(pr.id, ctx.params.walkthroughId);
         if (!report) return { status: "not_found" as const };
         const seqAt = yield* walkthroughService.getSeqAt(report.walkthrough.id);

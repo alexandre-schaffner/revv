@@ -2,7 +2,7 @@
 //
 // The service is the only gate on sharing; callers don't re-check it:
 //   • cache.enabled         OFF → every op short-circuits (no-op / Option.none).
-//   • cache.downloadsEnabled OFF → fetch/probe short-circuit to miss.
+//   • cache.downloadsEnabled OFF → fetch short-circuits to a miss.
 //   • cache.uploadsEnabled   OFF → push short-circuits to no-op.
 //   • Only the reviewer perspective is shared: an author self-review is
 //     never pushed, and never looked up. The key carries no perspective.
@@ -14,18 +14,15 @@
 import { createHash } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
 import type { WalkthroughMode } from "@revv/shared";
-import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Option } from "effect";
-import type { Db } from "../../db/index";
-import { pullRequests } from "../../db/schema/pull-requests";
-import { repositories } from "../../db/schema/repositories";
-import { walkthroughs as walkthroughsTable } from "../../db/schema/walkthroughs";
 import { CacheSerialization, CacheUnavailable } from "../../domain/errors";
+import { dbTry } from "../../effects/db-try";
 import { debug, logError } from "../../logger";
 import { BlobStore } from "../blob/BlobStore";
 import { CacheEligibility } from "../cache-eligibility";
 import { SshSigner } from "../cache-signing/index";
 import { DbService } from "../Db";
+import { PrContextService } from "../PrContext";
 import { SettingsService } from "../Settings";
 import {
   CACHE_METADATA_KEYS,
@@ -34,30 +31,8 @@ import {
   cacheSigningMessage,
   type WalkthroughSnapshotV2,
 } from "./cache-format";
+import { loadWalkthroughRow } from "./content";
 import { exportWalkthroughSnapshot, validateSnapshot } from "./snapshot";
-
-function resolveRepo(
-  db: Db,
-  prId: string,
-): { readonly id: string; readonly fullName: string; readonly accountId: string } | null {
-  const pr = db
-    .select({ repositoryId: pullRequests.repositoryId })
-    .from(pullRequests)
-    .where(eq(pullRequests.id, prId))
-    .get();
-  if (!pr) return null;
-  return (
-    db
-      .select({
-        id: repositories.id,
-        fullName: repositories.fullName,
-        accountId: repositories.accountId,
-      })
-      .from(repositories)
-      .where(eq(repositories.id, pr.repositoryId))
-      .get() ?? null
-  );
-}
 
 export class RemoteWalkthroughCache extends Context.Service<
   RemoteWalkthroughCache,
@@ -96,6 +71,7 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
     const { db } = yield* DbService;
     const signer = yield* SshSigner;
     const eligibility = yield* CacheEligibility;
+    const prContext = yield* PrContextService;
 
     const isDownloadEnabled = (mode: WalkthroughMode): Effect.Effect<boolean> =>
       settings
@@ -256,16 +232,11 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
           const ok = yield* isUploadEnabled();
           if (!ok) return;
 
-          const wtRow = db
-            .select({
-              id: walkthroughsTable.id,
-              status: walkthroughsTable.status,
-              mode: walkthroughsTable.mode,
-              pullRequestId: walkthroughsTable.pullRequestId,
-            })
-            .from(walkthroughsTable)
-            .where(eq(walkthroughsTable.id, walkthroughId))
-            .get();
+          const unavailable = (cause: { readonly message: string }) =>
+            new CacheUnavailable({ message: cause.message, cause });
+          const wtRow = yield* dbTry("cache push: walkthrough", () =>
+            loadWalkthroughRow(db, walkthroughId),
+          ).pipe(Effect.mapError(unavailable));
           if (!wtRow) {
             return yield* Effect.fail(
               new CacheUnavailable({ message: `walkthrough ${walkthroughId} not found` }),
@@ -279,15 +250,9 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
             return;
           }
 
-          const repo = resolveRepo(db, wtRow.pullRequestId);
-          if (!repo) {
-            return yield* Effect.fail(
-              new CacheUnavailable({
-                message: `repoFullName unresolvable for walkthrough ${walkthroughId}`,
-              }),
-            );
-          }
-
+          const { repo, accountId } = yield* prContext
+            .readPr(wtRow.pullRequestId)
+            .pipe(Effect.mapError(unavailable));
           const repoFullName = repo.fullName;
 
           const canPush = yield* eligibility.canPush(repo.id).pipe(
@@ -340,7 +305,7 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
 
           if (signingMode !== "off") {
             const sigMsg = cacheSigningMessage(repoFullName, snapshot.prHeadSha, contentSha256);
-            const signResult = yield* signer.sign(sigMsg, repo.accountId).pipe(
+            const signResult = yield* signer.sign(sigMsg, accountId).pipe(
               Effect.mapError(
                 (e) =>
                   new CacheSerialization({

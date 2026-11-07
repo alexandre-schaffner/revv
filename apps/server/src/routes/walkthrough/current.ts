@@ -36,7 +36,7 @@ export function currentWalkthrough(prId: string, requestedMode?: WalkthroughMode
     const walkthroughService = yield* WalkthroughService;
     const jobs = yield* WalkthroughJobs;
 
-    const { pr } = yield* prContext.forPr(prId);
+    const { pr } = yield* prContext.readPr(prId);
     const mode = requestedMode ?? (yield* walkthroughPerspective(pr.id));
     const headSha = pr.headSha;
     // No synced head SHA → nothing to match a walkthrough against. The PR
