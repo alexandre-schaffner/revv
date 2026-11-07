@@ -165,7 +165,8 @@ function sanitizePrompts(values: unknown[]): string[] {
   return out;
 }
 
-async function generateSuggestions(input: GenerateSuggestionsInput): Promise<string[]> {
+/** The agent's prompts, or null when it gave none (logged). */
+async function generateSuggestions(input: GenerateSuggestionsInput): Promise<string[] | null> {
   const answer = await promptOnce({
     label: "suggestions-acp",
     launch: input.launch,
@@ -181,7 +182,7 @@ async function generateSuggestions(input: GenerateSuggestionsInput): Promise<str
         ? `acp agent returned unparseable output (len=${answer.text.length})`
         : answer.error,
     );
-    return [...CHAT_SUGGESTION_FALLBACKS];
+    return null;
   }
   debug(
     "suggestions",
@@ -190,10 +191,12 @@ async function generateSuggestions(input: GenerateSuggestionsInput): Promise<str
   return parsed;
 }
 
-// Keyed on `${prId}:${headSha}:${agent}:${model}`, so any of those changing
-// means a fresh model call; entries expire lazily on read. A reconstructible
-// cache (invariant 1): it only saves re-spending tokens when the user reopens
-// a PR within one server session.
+// Keyed on every input of the prompt (the PR's head, the walkthrough and diff
+// it was built from, the agent and model), so any of them changing means a
+// fresh model call; entries expire lazily on read. Only the agent's own
+// prompts are kept: the fallbacks after a failure are not, so the next ask
+// tries again. A reconstructible cache (invariant 1): it only saves
+// re-spending tokens when the user reopens a PR within one server session.
 
 interface SuggestionsCacheEntry {
   readonly suggestions: string[];
@@ -235,14 +238,20 @@ export function suggestionsForPr(prId: string, accountId: string) {
     if (!launch) return [...CHAT_SUGGESTION_FALLBACKS];
 
     const pr = yield* (yield* PullRequestService).getPr(prId, accountId);
-    const key = `${prId}:${pr.headSha ?? "no-head"}:${launch.agent}:${launch.model}`;
-    const cached = readSuggestionsCache(key);
-    if (cached !== null) return cached;
-
     const walkthrough = pr.headSha
       ? yield* (yield* WalkthroughService).getCached(prId, pr.headSha)
       : null;
     const cachedFiles = yield* (yield* DiffCacheService).getCachedFiles(prId);
+    const key = [
+      prId,
+      pr.headSha ?? "no-head",
+      walkthrough?.id ?? "no-walkthrough",
+      cachedFiles === null ? "no-diff" : "diff",
+      launch.agent,
+      launch.model,
+    ].join(":");
+    const cached = readSuggestionsCache(key);
+    if (cached !== null) return cached;
 
     const suggestions = yield* Effect.promise(() =>
       generateSuggestions({
@@ -268,6 +277,7 @@ export function suggestionsForPr(prId: string, accountId: string) {
       }),
     );
 
+    if (suggestions === null) return [...CHAT_SUGGESTION_FALLBACKS];
     writeSuggestionsCache(key, suggestions);
     return suggestions;
   });
