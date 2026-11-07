@@ -181,19 +181,19 @@ export interface StackBriefStatusChangedEnvelope {
   data: { repositoryId: string; stackNumber: number; briefId: string; status: StackBriefStatus };
 }
 
-/** Signal: a PR-list sync cycle started for the account. */
+/** Signal: a PR-list sync cycle started; sent once to each user it syncs or who asked for it. */
 export interface PrsSyncStartedEnvelope {
   type: "prs:sync-started";
 }
 
-/** Signal: the account's PR-list sync cycle finished; `prs:updated` carried any change. */
+/** Signal: the PR-list sync cycle finished; `prs:updated` carried any change. */
 export interface PrsSyncCompleteEnvelope {
   type: "prs:sync-complete";
 }
 
 /**
- * Signal: the account's PR-list sync cycle failed; no `prs:sync-complete`
- * follows. `message` is user-facing, never a raw cause.
+ * Signal: the PR-list sync cycle failed; no `prs:sync-complete` follows.
+ * `message` is user-facing, never a raw cause.
  */
 export interface PrsSyncFailedEnvelope {
   type: "prs:sync-failed";
@@ -219,7 +219,7 @@ export interface ReposCloneStatusEnvelope {
  * Full state of the signed-in user's GitHub identity on `host`, after GitHub
  * reported a new login or avatar for that account. The stream carries every
  * account of the user, so a client applies it to the account on `host`.
- * `avatarContent` is the cached data URL, as on `UserIdentity`: GitHub
+ * `avatarContent` is the cached data URL, as on `/api/auth/accounts`: GitHub
  * Enterprise avatar URLs are signed and expire.
  */
 export interface UserUpdatedEnvelope {
@@ -269,6 +269,16 @@ export interface ThreadMessageEnvelope {
 export interface ThreadsSyncedEnvelope {
   type: "threads:synced";
   data: { prId: string; timestamp: string };
+}
+
+/**
+ * Signal: a push posted `prId`'s comments to GitHub and linked them, so a
+ * posted draft is no longer editable; re-read the session. Not a pull: the
+ * PR's last sync and sync error stand.
+ */
+export interface ThreadsLinkedEnvelope {
+  type: "threads:linked";
+  data: { prId: string };
 }
 
 /** Delta: what changed in the last sync, for notifications; not state. */
@@ -325,6 +335,7 @@ export type ThreadEventMessage =
   | ThreadUpdatedEnvelope
   | ThreadMessageEnvelope
   | ThreadsSyncedEnvelope
+  | ThreadsLinkedEnvelope
   | ThreadDeletedEnvelope
   | ThreadMessageEditedEnvelope
   | ThreadMessageDeletedEnvelope

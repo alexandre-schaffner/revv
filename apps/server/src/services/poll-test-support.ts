@@ -107,6 +107,7 @@ export async function makeHarness(
   const realtime = Layer.succeed(Realtime, {
     toAccount: push,
     toRepo: push,
+    toUsers: () => Effect.void,
     toPr: push,
   });
   const secretStore = Layer.succeed(SecretStore, {

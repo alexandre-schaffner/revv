@@ -3,8 +3,8 @@ import type { CommentThread } from "@revv/shared";
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import Trash from "phosphor-svelte/lib/Trash";
 import Markdown from "$lib/components/markdown/Markdown.svelte";
+import { viewerLoginOnPr } from "$lib/prs/viewer";
 import { canDiscardThread, lineRangeLabel } from "$lib/review/threads";
-import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { getThreadMessages } from "$lib/stores/review.svelte";
 import { openInDiff } from "$lib/stores/review-nav.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
@@ -18,7 +18,7 @@ interface Props {
 }
 
 let { prId, threads, onDiscard }: Props = $props();
-const currentUserLogin = $derived(getCurrentUserLogin());
+const viewerLogin = $derived(viewerLoginOnPr(prId));
 
 const threadEntries = $derived(
   threads.map((thread) => ({ thread, messages: getThreadMessages(prId, thread.id) })),
@@ -41,7 +41,7 @@ const threadEntries = $derived(
                     <span class="thread-jump-label">jump</span>
                     <ArrowUpRight size={11} aria-hidden="true" />
                 </button>
-                {#if onDiscard && canDiscardThread(entry.thread, entry.messages, currentUserLogin)}
+                {#if onDiscard && canDiscardThread(entry.thread, entry.messages, viewerLogin)}
                     <button
                         type="button"
                         class="thread-discard"

@@ -43,6 +43,7 @@ function makeFakeHub() {
   const layer = Layer.succeed(Realtime, {
     toAccount: push,
     toRepo: push,
+    toUsers: () => Effect.void,
     toPr: push,
   });
   return { layer, events };

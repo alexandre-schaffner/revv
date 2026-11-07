@@ -143,11 +143,14 @@ export class ReviewService extends Context.Service<
       messageId: string,
       actorLogin: string | null,
     ) => Effect.Effect<void, Refusal | DbError>;
-    /** Drop a thread GitHub doesn't have after all (submit couldn't link it). Announces `thread:deleted`. */
+    /**
+     * Drop a thread GitHub doesn't have after all (submit couldn't link it).
+     * One a concurrent push linked meanwhile stays. Announces `thread:deleted`.
+     */
     readonly dropThread: (threadId: string) => Effect.Effect<void, DbError>;
 
     // GitHub bookkeeping. Announces nothing itself: the push that posted the
-    // comments announces `threads:synced` once it has linked them all
+    // comments announces `threads:linked` once it has linked them all
     // (`SyncService`), and clients re-read the PR's threads.
 
     readonly linkThread: (
@@ -327,8 +330,7 @@ export interface ThreadWrite<T> {
 
 /**
  * Who made a change: someone in Revv, or GitHub (the pull applying a remote
- * edit, submit dropping a comment it couldn't link). What is on GitHub is
- * GitHub's: only a change GitHub made may alter it.
+ * edit). What is on GitHub is GitHub's: only a change GitHub made may alter it.
  */
 type ChangeOrigin = "revv" | "github";
 
@@ -549,14 +551,10 @@ export const threadWrites = {
     };
   },
 
-  removeThread(
-    tx: Db | Tx,
-    threadId: string,
-    origin: ChangeOrigin = "revv",
-  ): ThreadWrite<void> | NotFoundError | ForbiddenError {
+  removeThread(tx: Db | Tx, threadId: string): ThreadWrite<void> | NotFoundError | ForbiddenError {
     const found = readThreadOnPr(tx, threadId);
     if (!found) return threadNotFound(threadId);
-    if (found.row.externalCommentId !== null && origin !== "github") return onGitHub("a thread");
+    if (found.row.externalCommentId !== null) return onGitHub("a thread");
     tx.delete(commentThreads).where(eq(commentThreads.id, threadId)).run();
     return {
       prId: found.prId,
@@ -819,7 +817,7 @@ export const ReviewServiceLive = Layer.effect(
         }),
 
       dropThread: (threadId) =>
-        commit("drop a thread", (tx) => threadWrites.removeThread(tx, threadId, "github")).pipe(
+        commit("drop a thread", (tx) => threadWrites.removeThread(tx, threadId)).pipe(
           Effect.catchTag("NotFoundError", () => Effect.void),
           Effect.catchTag("ForbiddenError", () => Effect.void),
         ),

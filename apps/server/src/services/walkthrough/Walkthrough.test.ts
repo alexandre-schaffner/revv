@@ -40,6 +40,7 @@ const recordingRealtime = (sent: Sent) =>
   Layer.succeed(Realtime, {
     toAccount: () => Effect.void,
     toRepo: () => Effect.void,
+    toUsers: () => Effect.void,
     toPr: (prId, msg) =>
       Effect.sync(
         () => void sent.push({ prId, type: msg.type, data: "data" in msg ? msg.data : null }),
@@ -326,6 +327,7 @@ describe("supersede", () => {
     const watching = Layer.succeed(Realtime, {
       toAccount: () => Effect.void,
       toRepo: () => Effect.void,
+      toUsers: () => Effect.void,
       toPr: (prId, msg) =>
         Effect.sync(() => {
           threadsWhenAnnounced.push(db.select().from(commentThreads).all().length);

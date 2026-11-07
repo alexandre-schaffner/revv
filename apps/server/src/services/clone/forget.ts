@@ -1,15 +1,18 @@
 // Forgetting a repository, an account or a whole local user: one operation.
-// The rows cascade (repository → pull requests → threads, walkthroughs, …),
-// but nothing on disk does, so every path removes the clones first: a clone,
-// its worktrees, holder folder and `revv/*` branches left behind have no row
-// any later cleanup could find them by. A job working in a removed worktree
-// fails as it would after any repository delete.
+// The rows cascade (repository → pull requests → threads, walkthroughs, …;
+// account → external-agent credentials), but nothing on disk does, so every
+// path removes what Revv wrote there first: a clone, its worktrees, holder
+// folder and `revv/*` branches, or an agent's Revv install holding the
+// account's token, left behind have no row any later cleanup could find them
+// by. A job working in a removed worktree fails as it would after any
+// repository delete.
 
 import { inArray } from "drizzle-orm";
 import { Effect } from "effect";
 import { repositories } from "../../db/schema";
 import { dbTry } from "../../effects/db-try";
 import { DbService } from "../Db";
+import { ExternalIntegrations } from "../ExternalIntegrations";
 import { GitHubAccounts } from "../github/accounts";
 import { RepoCloneService } from "./RepoClone";
 
@@ -43,18 +46,26 @@ const forgetRepositoriesOf = (accountIds: readonly string[]) =>
     yield* forgetRepositories(repoIds);
   });
 
-/** Forget the user's account on `host`, and every repository it tracks. */
+/** Remove the accounts' agent installs, then their repositories. */
+const forgetOnDisk = (accountIds: readonly string[]) =>
+  Effect.gen(function* () {
+    const integrations = yield* ExternalIntegrations;
+    for (const id of accountIds) yield* integrations.uninstallAccount(id);
+    yield* forgetRepositoriesOf(accountIds);
+  });
+
+/** Forget the user's account on `host`, its agent installs and every repository it tracks. */
 export const forgetAccount = (userId: string, host: string) =>
   Effect.gen(function* () {
     const accounts = yield* GitHubAccounts;
-    yield* forgetRepositoriesOf(yield* accounts.accountsOf(userId, host));
+    yield* forgetOnDisk(yield* accounts.accountsOf(userId, host));
     yield* accounts.disconnect(userId, host);
   });
 
-/** Forget the local user, their accounts and every repository those track. */
+/** Forget the local user, their accounts, those accounts' agent installs and repositories. */
 export const forgetUser = (userId: string) =>
   Effect.gen(function* () {
     const accounts = yield* GitHubAccounts;
-    yield* forgetRepositoriesOf(yield* accounts.accountsOf(userId));
+    yield* forgetOnDisk(yield* accounts.accountsOf(userId));
     yield* accounts.removeUser(userId);
   });

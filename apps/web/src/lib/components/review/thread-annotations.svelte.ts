@@ -32,6 +32,10 @@ export class ThreadAnnotations {
   /** The last comment trigger acted on, so a remounted viewer doesn't replay it. */
   #handledTriggerSeq = 0;
 
+  get prId(): string {
+    return this.#prId();
+  }
+
   constructor(prId: () => string, filePath: () => string) {
     this.#prId = prId;
     this.#filePath = filePath;

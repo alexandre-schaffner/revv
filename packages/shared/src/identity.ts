@@ -7,26 +7,16 @@ export function loginsMatch(a: string | null | undefined, b: string | null | und
   return a.toLowerCase() === b.toLowerCase();
 }
 
-/** The signed-in local user and the GitHub account the request acts as (the active host's). */
+/**
+ * The signed-in local user, and the host of the account a request that names
+ * no repository acts as (the active host's, else another of theirs; null with
+ * none usable). Each account's login, avatar and re-auth state come from
+ * `/api/auth/accounts`.
+ */
 export interface UserIdentity {
   id: string;
   name: string;
   email: string;
-  /** The active account's own GitHub login: who "me" is on that host. */
-  login: string | null;
-  /**
-   * Base64 data URL resolved from `remote_users`: GitHub Enterprise avatar
-   * URLs are signed and expire, so the raw URL is never sent.
-   */
-  avatarContent: string | null;
-  /**
-   * `true` when the active account's GitHub token is invalid and could not be
-   * silently refreshed — the client gates the app behind a re-sign-in modal.
-   * Authoritative reconcile source for `auth:reauth-required` SSE signals on
-   * boot / SSE reconnect. `host` is the account's GitHub host, used to drive
-   * the re-auth device flow against the right instance.
-   */
-  reauthRequired: boolean;
   host: string | null;
   /** ISO time the user finished onboarding, or null. */
   onboardedAt: string | null;

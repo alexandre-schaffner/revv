@@ -56,7 +56,6 @@ export class BaseConflictsService extends Context.Service<
   {
     readonly check: (params: {
       readonly prId: string;
-      readonly accountId: string;
       readonly force?: boolean;
     }) => Effect.Effect<BaseConflictsCheck, BaseConflictsError>;
     /**
@@ -66,7 +65,6 @@ export class BaseConflictsService extends Context.Service<
      */
     readonly resolve: (params: {
       readonly prId: string;
-      readonly accountId: string;
       readonly expectedHeadSha: string;
     }) => Effect.Effect<ReadableStream<BaseConflictFrame>, BaseConflictsError>;
   }
@@ -186,7 +184,7 @@ export const BaseConflictsServiceLive = Layer.effect(
 
     const check: Context.Service.Shape<typeof BaseConflictsService>["check"] = (params) =>
       Effect.gen(function* () {
-        const ctx = yield* prCtx.forPr(params.prId, params.accountId);
+        const ctx = yield* prCtx.forPr(params.prId);
         const cached = checks.get(ctx.pr.id);
         const resolving = isResolving(ctx);
         // A running sync owns the fetched refs; answer from memory meanwhile.
@@ -326,7 +324,7 @@ export const BaseConflictsServiceLive = Layer.effect(
         );
 
         const { ctx, repo, op, remoteHead, started } = yield* Effect.gen(function* () {
-          const ctx = yield* prCtx.forPr(params.prId, params.accountId);
+          const ctx = yield* prCtx.forPr(params.prId);
           yield* pushLock.hold([pushTarget(ctx)], "base-sync").pipe(
             Scope.provide(scope),
             Effect.catchTag("ConcurrentPushError", () =>

@@ -198,6 +198,22 @@ describe("SettingsService", () => {
     expect(db.select().from(userSettings).all()).toHaveLength(1);
   });
 
+  it("points a first boot's row at the install's host, and leaves an existing row's be", async () => {
+    const db = createDb(":memory:");
+    const atHost = (host: string) =>
+      Effect.runPromise(
+        Effect.flatMap(SettingsService, (s) => s.githubHost()).pipe(
+          Effect.provide(
+            settingsServiceLayer(legacyPath, host).pipe(
+              Layer.provide(Layer.succeed(DbService, { db })),
+            ),
+          ),
+        ),
+      );
+    expect(await atHost("ghe.example.com")).toBe("ghe.example.com");
+    expect(await atHost("github.com")).toBe("ghe.example.com");
+  });
+
   it("imports the legacy JSON file, including its separate chat agent", async () => {
     writeFileSync(
       legacyPath,

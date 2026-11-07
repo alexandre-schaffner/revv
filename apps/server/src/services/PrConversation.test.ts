@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { Effect, Layer } from "effect";
 import { createDb } from "../db/index";
 import { account, pullRequests, repositories, user } from "../db/schema";
-import { NotFoundError } from "../domain/errors";
 import { Broadcaster, BroadcasterLive } from "./Broadcaster";
 import { CacheServiceLive } from "./Cache";
 import { DbService } from "./Db";
@@ -120,53 +119,11 @@ function fixture() {
   return { db, tokenReads, run };
 }
 
-describe("conversation account isolation", () => {
-  it("rejects every read and write for another account before accessing credentials or GitHub", async () => {
-    const { db, tokenReads, run } = fixture();
-    let githubCalls = 0;
-    globalThis.fetch = Object.assign(
-      async () => {
-        githubCalls++;
-        throw new Error("Unexpected GitHub call");
-      },
-      { preconnect: realFetch.preconnect },
-    );
-    try {
-      const results = await run(
-        Effect.gen(function* () {
-          const s = yield* PrConversationService;
-          return yield* Effect.all([
-            s.cached("b-pr", "a-account").pipe(Effect.result),
-            s.load("b-pr", "a-account").pipe(Effect.result),
-            s.checks("b-pr", "a-account").pipe(Effect.result),
-            s.checkDetails("b-pr", "a-account", 123).pipe(Effect.result),
-            s.labelOptions("b-pr", "a-account").pipe(Effect.result),
-            s.assigneeOptions("b-pr", "a-account", "").pipe(Effect.result),
-            s.reviewerOptions("b-pr", "a-account", "").pipe(Effect.result),
-            s
-              .write("b-pr", "a-account", { kind: "post_comment", body: "unauthorized" })
-              .pipe(Effect.result),
-          ]);
-        }),
-      );
-      expect(results).toHaveLength(8);
-      for (const result of results) {
-        expect(result._tag).toBe("Failure");
-        if (result._tag === "Failure") expect(result.failure).toBeInstanceOf(NotFoundError);
-      }
-      expect(tokenReads).toEqual([]);
-      expect(githubCalls).toBe(0);
-    } finally {
-      db.$client.close();
-    }
-  });
-
-  it("still allows the owning account to read its snapshot", async () => {
+describe("PrConversationService", () => {
+  it("reads the snapshot with the token of the account that owns the PR", async () => {
     const { db, tokenReads, run } = fixture();
     try {
-      const snapshot = await run(
-        Effect.flatMap(PrConversationService, (s) => s.cached("b-pr", "b-account")),
-      );
+      const snapshot = await run(Effect.flatMap(PrConversationService, (s) => s.cached("b-pr")));
       expect(snapshot).toBeNull();
       expect(tokenReads).toEqual(["b-account"]);
     } finally {
@@ -194,13 +151,13 @@ describe("conversation account isolation", () => {
       await run(
         Effect.gen(function* () {
           const s = yield* PrConversationService;
-          const running = yield* s.checkDetails("b-pr", "b-account", 123);
+          const running = yield* s.checkDetails("b-pr", 123);
           expect(running.completed).toBe(false);
           completed = true;
-          const final = yield* s.checkDetails("b-pr", "b-account", 123);
+          const final = yield* s.checkDetails("b-pr", 123);
           expect(final.completed).toBe(true);
           expect(final.summary).toBe("Final output");
-          yield* s.checkDetails("b-pr", "b-account", 123);
+          yield* s.checkDetails("b-pr", 123);
           expect(checkReads).toBe(2);
         }),
       );
@@ -229,10 +186,8 @@ describe("conversation account isolation", () => {
           const broadcaster = yield* Broadcaster;
           yield* broadcaster.register("b", writer(owner));
           yield* broadcaster.register("a", writer(other));
-          const ctx = yield* Effect.flatMap(PrContextService, (c) => c.forPr("b-pr", "b-account"));
-          return yield* Effect.flatMap(PrConversationService, (s) =>
-            s.afterWrite(ctx, "b-account"),
-          );
+          const ctx = yield* Effect.flatMap(PrContextService, (c) => c.forPr("b-pr"));
+          return yield* Effect.flatMap(PrConversationService, (s) => s.afterWrite(ctx));
         }),
       );
       expect(result).toEqual({ conversation: null });

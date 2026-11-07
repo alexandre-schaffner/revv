@@ -9,7 +9,7 @@
 // reconcile from the REST snapshots.
 
 import type { ServerEventMessage } from "@revv/shared";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { account, pullRequests, repositories } from "../db/schema";
 import { dbTry } from "../effects/db-try";
@@ -23,6 +23,15 @@ export class Realtime extends Context.Service<
     readonly toAccount: (accountId: string, msg: ServerEventMessage) => Effect.Effect<void>;
     readonly toRepo: (repoId: string, msg: ServerEventMessage) => Effect.Effect<void>;
     readonly toPr: (prId: string, msg: ServerEventMessage) => Effect.Effect<void>;
+    /**
+     * Once to each local user among `userIds` and the owners of `accountIds`,
+     * however many of their accounts are named: for a signal about the user,
+     * not about one account's data.
+     */
+    readonly toUsers: (
+      who: { readonly userIds?: Iterable<string>; readonly ownersOf?: readonly string[] },
+      msg: ServerEventMessage,
+    ) => Effect.Effect<void>;
   }
 >()("Realtime") {}
 
@@ -82,6 +91,26 @@ export const RealtimeLive = Layer.effect(
               .where(eq(pullRequests.id, prId))
               .get(),
           msg,
+        ),
+      toUsers: ({ userIds = [], ownersOf = [] }, msg) =>
+        dbTry("resolve the owners of accounts", () =>
+          ownersOf.length === 0
+            ? []
+            : db
+                .selectDistinct({ userId: account.userId })
+                .from(account)
+                .where(inArray(account.id, [...ownersOf]))
+                .all()
+                .map((r) => r.userId),
+        ).pipe(
+          Effect.flatMap((owners) =>
+            Effect.forEach(
+              new Set([...userIds, ...owners]),
+              (userId) => broadcaster.broadcastToUser(userId, msg),
+              { discard: true },
+            ),
+          ),
+          Effect.catch((e) => Effect.sync(() => logError("realtime", `${msg.type}:`, e.message))),
         ),
     };
   }),

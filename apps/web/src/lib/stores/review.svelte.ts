@@ -8,6 +8,7 @@ import type {
   ThreadMessageDeletedEnvelope,
   ThreadMessageEditedEnvelope,
   ThreadMessageEnvelope,
+  ThreadsLinkedEnvelope,
   ThreadsSyncedEnvelope,
   ThreadUpdatedEnvelope,
 } from "@revv/shared";
@@ -86,10 +87,10 @@ function withMessages(
 }
 
 /**
- * Load a PR's review: every comment thread with its messages. Callers that
- * just mutated server state (e.g. submitting a review) pass `force`,
- * otherwise stale local rows (missing the externalId stamped on just-pushed
- * comments) would survive and get re-submitted as duplicates.
+ * Load a PR's review: every comment thread with its messages. Callers told the
+ * server state moved (a pull or a push announced it) pass `force`, otherwise
+ * stale local rows (missing the externalId stamped on just-pushed comments)
+ * would survive the freshness window and get re-submitted as duplicates.
  */
 export async function loadSession(prId: string, force = false): Promise<void> {
   followed.add(prId);
@@ -284,7 +285,7 @@ export async function deleteThread(threadId: string): Promise<boolean> {
   return true;
 }
 
-/** Push one local draft comment to GitHub under the active account's identity. */
+/** Push one local draft comment to GitHub as the account that owns the PR's repository. */
 export async function pushThreadToGitHub(threadId: string): Promise<boolean> {
   try {
     await call(api.api.threads({ id: threadId }).push.post(), "Failed to send comment to GitHub");
@@ -292,7 +293,7 @@ export async function pushThreadToGitHub(threadId: string): Promise<boolean> {
     toast.error(thrownMessage(e));
     return false;
   }
-  // The server announces `threads:synced` once the thread is linked; the
+  // The server announces `threads:linked` once the thread is linked; the
   // re-read it triggers makes the posted draft read-only.
   toast.success("Comment sent to GitHub");
   return true;
@@ -395,6 +396,10 @@ export async function editThreadMessage(
  * inside the freshness window.
  */
 export function onThreadsSynced({ prId }: ThreadsSyncedEnvelope["data"]): void {
+  if (followed.has(prId)) void loadSession(prId, true);
+}
+
+export function onThreadsLinked({ prId }: ThreadsLinkedEnvelope["data"]): void {
   if (followed.has(prId)) void loadSession(prId, true);
 }
 

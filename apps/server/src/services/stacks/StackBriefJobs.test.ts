@@ -69,6 +69,7 @@ function resume(db: Db) {
     Layer.succeed(Realtime, {
       toAccount: (_accountId, msg) => record(msg),
       toRepo: (_repoId, msg) => record(msg),
+      toUsers: () => Effect.void,
       toPr: (_prId, msg) => record(msg),
     }),
     Layer.succeed(PrContextService, {

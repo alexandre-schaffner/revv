@@ -29,6 +29,7 @@ export function renderThreadAnnotation(
   const thread = controller.threadById[id];
   if (!thread) return host;
   mounts.mount(host, AnnotationThread, {
+    prId: controller.prId,
     thread,
     messages: controller.threadMessages[id] ?? [],
     isReplying: meta.isReplying,

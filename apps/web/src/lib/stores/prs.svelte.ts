@@ -2,7 +2,6 @@
 // pins, and the owner-only PR mutations.
 
 import type { MergeMethod, PrsUpdatedEnvelope, PullRequest } from "@revv/shared";
-import { type ReviewMode, reviewModeFor } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { call } from "$lib/api/errors";
@@ -56,17 +55,6 @@ export function getPrById(prId: string): PullRequest | null {
     linkedPrs.get(prId) ??
     null
   );
-}
-
-/**
- * The review lens for a PR, derived purely from identity: `"author"` when the
- * signed-in user is the PR author, otherwise `"reviewer"`. It is the default
- * walkthrough perspective, which the user can change per generation
- * (`getSelectedMode` in the walkthrough store).
- */
-export function getReviewModeForPr(prId: string): ReviewMode {
-  const pr = getPrById(prId);
-  return reviewModeFor(pr?.authorLogin, getCurrentUserLogin());
 }
 
 /**

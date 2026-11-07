@@ -79,6 +79,7 @@ const CATCH_UP: Record<ServerEventMessage["type"], readonly CatchUp[] | NoCatchU
   "thread:message:edited": [review.onEventsReconnected],
   "thread:message:deleted": [review.onEventsReconnected],
   "threads:synced": [review.onEventsReconnected],
+  "threads:linked": [review.onEventsReconnected],
   "threads:sync-error": [review.onEventsReconnected],
   "recap:status-changed": [recaps.onEventsReconnected],
   "recap:added": [recaps.onEventsReconnected],
@@ -199,7 +200,7 @@ function dispatch(msg: ServerEventMessage): void {
       auth.onAuthReauthRequired(msg.data);
       break;
     case "auth:reauth-cleared":
-      auth.onAuthReauthCleared();
+      auth.onAuthReauthCleared(msg.data);
       break;
     case "thread:created":
       review.onThreadCreated(msg.data);
@@ -222,6 +223,9 @@ function dispatch(msg: ServerEventMessage): void {
     case "threads:synced":
       sync.onThreadsSynced(msg.data);
       review.onThreadsSynced(msg.data);
+      break;
+    case "threads:linked":
+      review.onThreadsLinked(msg.data);
       break;
     case "threads:sync-error":
       sync.onThreadsSyncError(msg.data);

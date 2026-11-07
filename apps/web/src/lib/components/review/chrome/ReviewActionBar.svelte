@@ -1,5 +1,5 @@
 <script lang="ts">
-import { loginsMatch, type ReviewAction } from "@revv/shared";
+import type { ReviewAction } from "@revv/shared";
 import ArrowUp from "phosphor-svelte/lib/ArrowUp";
 import Check from "phosphor-svelte/lib/Check";
 import PaperPlaneRight from "phosphor-svelte/lib/PaperPlaneRight";
@@ -10,7 +10,7 @@ import { isChatStreaming } from "$lib/chat/timeline.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { Shimmer } from "$lib/components/ui/shimmer";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
-import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
+import { viewerIsAuthor } from "$lib/prs/viewer";
 import { viewerApproved } from "$lib/stores/merge-eligibility.svelte";
 import { closePr, convertPrToDraft, getPrById, markPrReadyForReview } from "$lib/stores/prs.svelte";
 import MergeControl from "./MergeControl.svelte";
@@ -44,7 +44,7 @@ const pr = $derived(getPrById(prId));
 // The agent is on a chat turn, the one Generate changes asked for or another.
 const agentWorking = $derived(isChatStreaming(prId));
 
-const isPrOwner = $derived(!!pr && loginsMatch(pr.authorLogin, getCurrentUserLogin()));
+const isPrOwner = $derived(viewerIsAuthor(prId));
 // Draft toggle, merge, and close only make sense on an open PR; a closed or
 // merged one keeps just the submit-review pill (GitHub has no reopen path here).
 const isPrOpen = $derived(pr?.status === "open");

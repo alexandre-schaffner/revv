@@ -25,7 +25,7 @@ afterEach(() => {
 });
 
 function session(userId: string, token: string): HeldSession {
-  return { userId, token, name: userId, email: `${userId}@example.com`, image: null };
+  return { userId, token, name: userId, email: `${userId}@example.com` };
 }
 
 describe("held sessions", () => {
@@ -65,5 +65,13 @@ describe("held sessions", () => {
       JSON.stringify([session("ada", "t1"), { userId: "bob" }, "junk"]),
     );
     expect(getHeldSessions().map((s) => s.userId)).toEqual(["ada"]);
+  });
+
+  test("reads a row an older version wrote with its avatar, and drops the avatar", () => {
+    store.set(
+      STORAGE_KEYS.heldSessions,
+      JSON.stringify([{ ...session("ada", "t1"), image: "data:image/png;base64,AAAA" }]),
+    );
+    expect(getHeldSessions()).toEqual([session("ada", "t1")]);
   });
 });

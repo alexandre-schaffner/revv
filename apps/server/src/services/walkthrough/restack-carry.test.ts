@@ -131,6 +131,7 @@ function run<A, E>(
       Effect.provideService(Realtime, {
         toAccount: () => Effect.void,
         toRepo: () => Effect.void,
+        toUsers: () => Effect.void,
         toPr: () => Effect.void,
       }),
     ),

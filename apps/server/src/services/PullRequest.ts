@@ -1,7 +1,6 @@
 import type { PullRequest } from "@revv/shared";
 import { and, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import type { Db } from "../db/index";
 import { pullRequests, repositories, walkthroughs } from "../db/schema/index";
 import { avatarOfRepoLogin } from "../db/schema/remote-users";
 import { type DbError, NotFoundError } from "../domain/errors";
@@ -172,18 +171,6 @@ function withLatestWalkthrough(
   }));
 }
 
-/** False when `accountId` is given and doesn't own the repository. */
-function ownsRepo(db: Db, repoId: string, accountId: string | undefined) {
-  if (!accountId) return Effect.succeed(true);
-  return dbTry("read repository owner", () =>
-    db
-      .select({ accountId: repositories.accountId })
-      .from(repositories)
-      .where(eq(repositories.id, repoId))
-      .get(),
-  ).pipe(Effect.map((repo) => repo?.accountId === accountId));
-}
-
 export class PullRequestService extends Context.Service<
   PullRequestService,
   {
@@ -191,10 +178,7 @@ export class PullRequestService extends Context.Service<
       accountId?: string,
       repoId?: string,
     ) => Effect.Effect<PullRequest[], DbError>;
-    readonly getPr: (
-      id: string,
-      accountId?: string,
-    ) => Effect.Effect<PullRequest, NotFoundError | DbError>;
+    readonly getPr: (id: string) => Effect.Effect<PullRequest, NotFoundError | DbError>;
     /**
      * Upsert PR rows from GitHub.
      *
@@ -234,7 +218,6 @@ export class PullRequestService extends Context.Service<
       repoId: string,
       since: string,
       until: string,
-      accountId?: string,
     ) => Effect.Effect<ReadonlyArray<ArchivedPrWithWalkthrough>, DbError>;
     /**
      * PRs in flight *as of* `until`: created before the window closed and not
@@ -255,7 +238,6 @@ export class PullRequestService extends Context.Service<
     readonly listOpenPrsAsOfWindow: (
       repoId: string,
       until: string,
-      accountId?: string,
     ) => Effect.Effect<ReadonlyArray<ArchivedPrWithWalkthrough>, DbError>;
     readonly markPrsClosed: (
       updates: Array<{ id: string; status: "closed" | "merged"; closedAt: string }>,
@@ -327,7 +309,7 @@ export const PullRequestServiceLive = Layer.effect(
           return rows.map((r) => rowToPr(r.pr, r.avatarContent));
         }),
 
-      getPr: (id, accountId) =>
+      getPr: (id) =>
         Effect.gen(function* () {
           const row = yield* dbTry("getPr", () =>
             db
@@ -344,14 +326,6 @@ export const PullRequestServiceLive = Layer.effect(
           );
           if (!row) {
             return yield* Effect.fail(new NotFoundError({ resource: "pull_request", id }));
-          }
-          if (accountId) {
-            const repo = yield* dbTry("getPr owner", () =>
-              db.select().from(repositories).where(eq(repositories.id, row.pr.repositoryId)).get(),
-            );
-            if (!repo || repo.accountId !== accountId) {
-              return yield* Effect.fail(new NotFoundError({ resource: "pull_request", id }));
-            }
           }
           return rowToPr(row.pr, row.avatarContent);
         }),
@@ -545,68 +519,62 @@ export const PullRequestServiceLive = Layer.effect(
           });
         }),
 
-      listArchivedPrsForWindow: (repoId, since, until, accountId) =>
-        Effect.gen(function* () {
-          if (!(yield* ownsRepo(db, repoId, accountId))) return [];
-          return yield* dbTry("listArchivedPrsForWindow", () =>
-            withLatestWalkthrough(
-              db,
-              db
-                .select({
-                  pr: pullRequests,
-                  avatarContent: avatarOfRepoLogin(
-                    pullRequests.authorLogin,
-                    pullRequests.repositoryId,
-                  ),
-                })
-                .from(pullRequests)
-                .where(
-                  and(
-                    eq(pullRequests.repositoryId, repoId),
-                    ne(pullRequests.status, "open"),
-                    gte(pullRequests.closedAt, since),
-                    lt(pullRequests.closedAt, until),
-                  ),
-                )
-                .orderBy(desc(pullRequests.closedAt))
-                .all(),
-            ),
-          );
-        }),
+      listArchivedPrsForWindow: (repoId, since, until) =>
+        dbTry("listArchivedPrsForWindow", () =>
+          withLatestWalkthrough(
+            db,
+            db
+              .select({
+                pr: pullRequests,
+                avatarContent: avatarOfRepoLogin(
+                  pullRequests.authorLogin,
+                  pullRequests.repositoryId,
+                ),
+              })
+              .from(pullRequests)
+              .where(
+                and(
+                  eq(pullRequests.repositoryId, repoId),
+                  ne(pullRequests.status, "open"),
+                  gte(pullRequests.closedAt, since),
+                  lt(pullRequests.closedAt, until),
+                ),
+              )
+              .orderBy(desc(pullRequests.closedAt))
+              .all(),
+          ),
+        ),
 
-      listOpenPrsAsOfWindow: (repoId, until, accountId) =>
-        Effect.gen(function* () {
-          if (!(yield* ownsRepo(db, repoId, accountId))) return [];
-          return yield* dbTry("listOpenPrsAsOfWindow", () => {
-            const rows = withLatestWalkthrough(
-              db,
-              db
-                .select({
-                  pr: pullRequests,
-                  avatarContent: avatarOfRepoLogin(
-                    pullRequests.authorLogin,
-                    pullRequests.repositoryId,
-                  ),
-                })
-                .from(pullRequests)
-                .where(
-                  and(
-                    eq(pullRequests.repositoryId, repoId),
-                    // "Open at `until`" reconstructed from timestamps rather than
-                    // the mutable `status` column, which only ever describes now.
-                    lt(pullRequests.createdAt, until),
-                    or(isNull(pullRequests.closedAt), gte(pullRequests.closedAt, until)),
-                  ),
-                )
-                .orderBy(desc(pullRequests.updatedAt))
-                .limit(20)
-                .all(),
-            );
-            return [
-              ...rows.filter((r) => r.walkthrough !== null),
-              ...rows.filter((r) => r.walkthrough === null),
-            ];
-          });
+      listOpenPrsAsOfWindow: (repoId, until) =>
+        dbTry("listOpenPrsAsOfWindow", () => {
+          const rows = withLatestWalkthrough(
+            db,
+            db
+              .select({
+                pr: pullRequests,
+                avatarContent: avatarOfRepoLogin(
+                  pullRequests.authorLogin,
+                  pullRequests.repositoryId,
+                ),
+              })
+              .from(pullRequests)
+              .where(
+                and(
+                  eq(pullRequests.repositoryId, repoId),
+                  // "Open at `until`" reconstructed from timestamps rather than
+                  // the mutable `status` column, which only ever describes now.
+                  lt(pullRequests.createdAt, until),
+                  or(isNull(pullRequests.closedAt), gte(pullRequests.closedAt, until)),
+                ),
+              )
+              .orderBy(desc(pullRequests.updatedAt))
+              .limit(20)
+              .all(),
+          );
+          return [
+            ...rows.filter((r) => r.walkthrough !== null),
+            ...rows.filter((r) => r.walkthrough === null),
+          ];
         }),
 
       setPrDraft: (id, isDraft) =>

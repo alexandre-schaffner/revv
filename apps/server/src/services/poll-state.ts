@@ -89,14 +89,19 @@ export interface PollState {
    * Claim the one cycle that may run. Concurrent callers coalesce onto the
    * one in flight; `freshen` also skips when a cycle started recently. A
    * `manual` request that coalesces asks for one more cycle after the one in
-   * flight: it may be about a repo that cycle already listed past.
+   * flight (it may be about a repo that cycle already listed past), and its
+   * `requesters` (local users) are recorded for that follow-up.
    */
   readonly claimCycle: (
     trigger: SyncTrigger,
     now: number,
+    requesters?: ReadonlySet<string>,
   ) => "claimed" | "in-flight" | "fresh-enough";
-  /** Release the cycle; true when a `manual` request coalesced onto it. */
-  readonly releaseCycle: () => boolean;
+  /**
+   * Release the cycle. Resolves the requesters of the follow-up a `manual`
+   * request asked for, or null when none did.
+   */
+  readonly releaseCycle: () => ReadonlySet<string> | null;
 
   /**
    * Whether a cycle has completed since boot. The first is a baseline: it
@@ -113,7 +118,7 @@ export function makePollState(): PollState {
   const sweepMarks = new Map<string, ThreadSweepMark>();
   const lastPassAt = new Map<string, number>();
   let inFlight = false;
-  let rerunRequested = false;
+  let followUp: Set<string> | null = null;
   let lastCycleStartedAt = 0;
   let baseline = false;
 
@@ -155,9 +160,9 @@ export function makePollState(): PollState {
       return true;
     },
 
-    claimCycle: (trigger, now) => {
+    claimCycle: (trigger, now, requesters = new Set()) => {
       if (inFlight) {
-        if (trigger === "manual") rerunRequested = true;
+        if (trigger === "manual") followUp = new Set([...(followUp ?? []), ...requesters]);
         return "in-flight";
       }
       if (trigger === "freshen" && now - lastCycleStartedAt < FRESHEN_MIN_INTERVAL_MS) {
@@ -169,9 +174,9 @@ export function makePollState(): PollState {
     },
     releaseCycle: () => {
       inFlight = false;
-      const rerun = rerunRequested;
-      rerunRequested = false;
-      return rerun;
+      const requesters = followUp;
+      followUp = null;
+      return requesters;
     },
 
     baselineDone: () => baseline,

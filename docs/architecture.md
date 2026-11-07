@@ -95,8 +95,9 @@ sending; a missed push is reconstructible from the DB on reconnect via the snaps
 endpoints. The interface carries no sequence cursor: the walkthrough emitter bumps the durable
 `seq` and stamps it onto the envelope before sending.
 Every feature-level event is addressed this way, including the PR sync's `prs:sync-started` /
-`prs:sync-complete` / `prs:sync-failed` (to the repo-owning accounts and whoever asked for the
-sync); there is no send to every client.
+`prs:sync-complete` / `prs:sync-failed` (`Realtime.toUsers`: once to each user owning a synced
+repo and to whoever asked for the sync, however many accounts they hold); there is no send to
+every client.
 
 PR / repo / auth / thread / chat / recap envelopes all flow through this same SSE channel.
 Client-initiated sync requests are REST commands.

@@ -45,12 +45,12 @@ import { WalkthroughJobs } from "./walkthrough/WalkthroughJobs";
 type PollSchedulerService = {
   readonly start: () => Effect.Effect<void>;
   /**
-   * Full sync of every repo on every account, asked for by `requester`'s
-   * user: the sync signals reach the repos' accounts and the requester, so
-   * an account with no repos still sees its sync finish. A request made
-   * while a cycle is in flight queues one follow-up cycle for when it ends
-   * (requests coalesce onto it), which may reuse the listings the cycle in
-   * flight just made.
+   * Full sync of every repo on every account, asked for by the local user
+   * `requester`: the sync signals reach the users owning the repos and the
+   * requester, so a user with no repos still sees their sync finish. A
+   * request made while a cycle is in flight queues one follow-up cycle for
+   * when it ends (requests coalesce onto it), which may reuse the listings
+   * the cycle in flight just made.
    */
   readonly syncNow: (requester: string) => Effect.Effect<void>;
   /**
@@ -101,13 +101,6 @@ export const PollSchedulerLive = Layer.effect(
     const avatars = yield* AvatarCache;
 
     const state = makePollState();
-
-    /** The sync-lifecycle signals go only to the accounts the cycle syncs. */
-    const broadcastPerAccount = (
-      accountIds: readonly string[],
-      msg: ServerEventMessage,
-    ): Effect.Effect<void> =>
-      Effect.forEach(accountIds, (id) => realtime.toAccount(id, msg), { discard: true });
 
     const viewersOf = (gate: AccountGate): Effect.Effect<CycleViewers> =>
       Effect.gen(function* () {
@@ -252,9 +245,10 @@ export const PollSchedulerLive = Layer.effect(
       });
 
     /**
-     * One cycle. `requesters` (accounts whose user asked for it) hear its
-     * sync signals with the accounts that own repos. A manual cycle re-lists
-     * every repo unless it follows one that just did (`reuseListings`).
+     * One cycle. Its sync signals reach each user once: the users owning the
+     * repos, and `requesters` (the users who asked for it). A manual cycle
+     * re-lists every repo unless it follows one that just did
+     * (`reuseListings`).
      */
     const syncAllRepos = (
       trigger: SyncTrigger,
@@ -264,14 +258,16 @@ export const PollSchedulerLive = Layer.effect(
       Effect.withSpan("PollScheduler.syncAllRepos")(
         Effect.gen(function* () {
           const repoToAccountId = yield* repoService.accountIdsByRepo();
-          const accountIds = [...new Set([...repoToAccountId.values(), ...requesters])];
-          yield* broadcastPerAccount(accountIds, { type: "prs:sync-started" });
+          const accountIds = [...new Set(repoToAccountId.values())];
+          const signal = (msg: ServerEventMessage) =>
+            realtime.toUsers({ userIds: requesters, ownersOf: accountIds }, msg);
+          yield* signal({ type: "prs:sync-started" });
           yield* syncCycle(trigger, repoToAccountId, accountIds, reuseListings).pipe(
-            Effect.andThen(broadcastPerAccount(accountIds, { type: "prs:sync-complete" })),
+            Effect.andThen(signal({ type: "prs:sync-complete" })),
             Effect.catchCause((cause) =>
               Effect.gen(function* () {
                 logError("PollScheduler", "sync cycle failed:", Cause.pretty(cause));
-                yield* broadcastPerAccount(accountIds, {
+                yield* signal({
                   type: "prs:sync-failed",
                   data: { message: "Syncing pull requests from GitHub failed" },
                 });
@@ -287,9 +283,6 @@ export const PollSchedulerLive = Layer.effect(
         ),
       );
 
-    // Whose users asked for the follow-up cycle a manual request queued.
-    const queuedRequesters = new Set<string>();
-
     // One cycle at a time, process-wide. A manual request made meanwhile
     // queues one follow-up cycle; further ones coalesce onto it.
     const runSyncOnce = (
@@ -298,28 +291,24 @@ export const PollSchedulerLive = Layer.effect(
       reuseListings = trigger !== "manual",
     ): Effect.Effect<void> =>
       Effect.suspend(() => {
-        const claim = state.claimCycle(trigger, Date.now());
+        const claim = state.claimCycle(trigger, Date.now(), requesters);
         if (claim === "in-flight") {
           debug("PollScheduler", "sync already in flight — queueing one follow-up cycle");
-          if (trigger === "manual") for (const id of requesters) queuedRequesters.add(id);
           return Effect.void;
         }
         if (claim === "fresh-enough") return Effect.void;
-        let rerun = false;
+        let followUp: ReadonlySet<string> | null = null;
         return syncAllRepos(trigger, requesters, reuseListings).pipe(
           withGitHubOrigin(`poll:sync:${trigger}`),
           Effect.ensuring(
             Effect.sync(() => {
-              rerun = state.releaseCycle();
+              followUp = state.releaseCycle();
             }),
           ),
           Effect.andThen(
-            Effect.suspend(() => {
-              if (!rerun) return Effect.void;
-              const followers = new Set(queuedRequesters);
-              queuedRequesters.clear();
-              return runSyncOnce("manual", followers, true);
-            }),
+            Effect.suspend(() =>
+              followUp === null ? Effect.void : runSyncOnce("manual", followUp, true),
+            ),
           ),
         );
       });

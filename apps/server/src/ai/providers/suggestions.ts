@@ -232,12 +232,12 @@ function writeSuggestionsCache(key: string, suggestions: string[]): void {
  * Starter prompts for a PR, from its metadata, its cached diff (never fetched
  * here) and its complete walkthrough for the current head when there is one.
  */
-export function suggestionsForPr(prId: string, accountId: string) {
+export function suggestionsForPr(prId: string) {
   return Effect.gen(function* () {
     const launch = yield* resolveAgentLaunch("suggestions");
     if (!launch) return [...CHAT_SUGGESTION_FALLBACKS];
 
-    const pr = yield* (yield* PullRequestService).getPr(prId, accountId);
+    const pr = yield* (yield* PullRequestService).getPr(prId);
     const walkthrough = pr.headSha
       ? yield* (yield* WalkthroughService).getCached(prId, pr.headSha)
       : null;

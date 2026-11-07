@@ -10,13 +10,14 @@ import Clock from "phosphor-svelte/lib/Clock";
 import PaperPlaneTilt from "phosphor-svelte/lib/PaperPlaneTilt";
 import type { Attachment } from "svelte/attachments";
 import Markdown from "$lib/components/markdown/Markdown.svelte";
+import { viewerLoginOnPr } from "$lib/prs/viewer";
 import { canDiscardThread } from "$lib/review/threads";
-import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import AnnotationCommentInput from "./AnnotationCommentInput.svelte";
 import MessageAvatar from "./MessageAvatar.svelte";
 
 interface Props {
+  prId: string;
   thread: CommentThread;
   messages: readonly ThreadMessage[];
   onReply?: () => void;
@@ -33,6 +34,7 @@ interface Props {
 }
 
 let {
+  prId,
   thread,
   messages,
   onReply,
@@ -49,12 +51,12 @@ let {
 }: Props = $props();
 
 const isResolved = $derived(isThreadResolved(thread.status));
-const currentUserLogin = $derived(getCurrentUserLogin());
-const canDiscard = $derived(canDiscardThread(thread, messages, currentUserLogin));
+const viewerLogin = $derived(viewerLoginOnPr(prId));
+const canDiscard = $derived(canDiscardThread(thread, messages, viewerLogin));
 const canPushThread = $derived(canDiscard && onPush !== undefined);
 
 function canModifyMessage(message: ThreadMessage): boolean {
-  return canUserModifyComment(message, currentUserLogin);
+  return canUserModifyComment(message, viewerLogin);
 }
 
 // A reply is pending until the sync loop pushes it to GitHub (externalId still

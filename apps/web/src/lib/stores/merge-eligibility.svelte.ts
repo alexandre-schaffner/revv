@@ -3,7 +3,7 @@ import { isMergeStateSettling, loginsMatch } from "@revv/shared";
 import { untrack } from "svelte";
 import { api } from "$lib/api/client";
 import { call } from "$lib/api/errors";
-import { getCurrentUserLogin } from "./auth.svelte";
+import { viewerIsAuthor, viewerLoginOnPr } from "$lib/prs/viewer";
 import { getConversation } from "./conversation.svelte";
 import { getPrById } from "./prs.svelte";
 import { createResource } from "./resource";
@@ -80,9 +80,9 @@ export function useMergeEligibility(
 export function viewerApproved(prId: string): boolean {
   const request = getConversation(prId).request;
   if (request.status !== "ok") return false;
-  const { reviewers, viewerLogin } = request.data;
-  return reviewers.some(
-    (r) => r.kind === "user" && loginsMatch(r.actor.login, viewerLogin) && r.verdict === "approved",
+  const viewer = viewerLoginOnPr(prId);
+  return request.data.reviewers.some(
+    (r) => r.kind === "user" && loginsMatch(r.actor.login, viewer) && r.verdict === "approved",
   );
 }
 
@@ -91,9 +91,7 @@ export function viewerApproved(prId: string): boolean {
  * whether GitHub lets them is the mergeability answer's `canMerge`.
  */
 export function viewerMayMerge(prId: string): boolean {
-  const pr = getPrById(prId);
-  if (!pr) return false;
-  return loginsMatch(pr.authorLogin, getCurrentUserLogin()) || viewerApproved(prId);
+  return viewerIsAuthor(prId) || viewerApproved(prId);
 }
 
 export function onPrMergeEligibility(data: { prId: string; eligibility: MergeEligibility }): void {

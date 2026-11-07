@@ -117,6 +117,7 @@ export interface OAuthTokenResponse {
   readonly expires_in?: number;
   readonly refresh_token_expires_in?: number;
   readonly error?: string;
+  readonly error_description?: string;
   readonly interval?: number;
 }
 

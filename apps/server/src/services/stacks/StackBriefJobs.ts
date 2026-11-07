@@ -49,7 +49,7 @@ export class StackBriefJobs extends Context.Service<
      * supersedes the stack's older briefs). An errored brief for this version
      * is retried. Null when the PR isn't stacked or nothing in it is open.
      */
-    readonly ensure: (prId: string, accountId: string) => Effect.Effect<string | null, StackError>;
+    readonly ensure: (prId: string) => Effect.Effect<string | null, StackError>;
     readonly resumePending: () => Effect.Effect<void>;
     readonly resolveSessionToken: (token: string) => Effect.Effect<StackBriefToolContext | null>;
   }
@@ -264,9 +264,9 @@ export const StackBriefJobsLive = Layer.effect(
         })
         .pipe(Effect.asVoid);
 
-    const ensure = (prId: string, accountId: string) =>
+    const ensure = (prId: string) =>
       Effect.gen(function* () {
-        const ctx = yield* prCtx.forPr(prId, accountId);
+        const ctx = yield* prCtx.forPr(prId);
         const stack = yield* stacks.fetchFresh(ctx, ctx.pr.externalId);
         if (!stack) return null;
         const open = stack.layers.filter(isOpenLayer);
