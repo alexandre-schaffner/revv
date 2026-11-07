@@ -214,6 +214,21 @@ describe("SettingsService", () => {
     expect(await atHost("github.com")).toBe("ghe.example.com");
   });
 
+  it("seeds the default host from a set-but-empty GITHUB_HOST, and a normalized one otherwise", async () => {
+    const firstBoot = (host: string) =>
+      Effect.runPromise(
+        Effect.flatMap(SettingsService, (s) => s.githubHost()).pipe(
+          Effect.provide(
+            settingsServiceLayer(legacyPath, host).pipe(
+              Layer.provide(Layer.succeed(DbService, { db: createDb(":memory:") })),
+            ),
+          ),
+        ),
+      );
+    expect(await firstBoot("")).toBe(DEFAULT_USER_SETTINGS.githubHost);
+    expect(await firstBoot("https://GHE.example.com/")).toBe("ghe.example.com");
+  });
+
   it("imports the legacy JSON file, including its separate chat agent", async () => {
     writeFileSync(
       legacyPath,

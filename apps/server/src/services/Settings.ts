@@ -120,7 +120,8 @@ async function loadOrSeed(db: Db, settingsPath: string, firstHost: string): Prom
 
   const { existsSync, readFileSync, unlinkSync } = await import("node:fs");
 
-  const seed = { ...DEFAULT_USER_SETTINGS, githubHost: firstHost };
+  // Normalized like any stored value, so a set-but-empty `GITHUB_HOST=` seeds the default host.
+  const seed = normalizeSettings({ ...DEFAULT_USER_SETTINGS, githubHost: firstHost });
   let settings = seed;
   if (existsSync(settingsPath)) {
     try {
