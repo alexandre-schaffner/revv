@@ -17,7 +17,7 @@ import {
   rebaseProposedCommits,
   resolveConflictsAndPush,
 } from "./api";
-import { appendItem, writeTurn } from "./timeline.svelte";
+import { appendItem, isChatStreaming, writeTurn } from "./timeline.svelte";
 
 /**
  * Feedback on a line of a proposed commit, bound for the chat agent. Not a PR
@@ -38,6 +38,12 @@ export interface WorktreeBlockedState {
   commits: readonly ProposedCommit[];
 }
 
+/** A push the PR branch refused because the agent's commits conflict with it. */
+export interface PushConflict {
+  files: readonly string[];
+  branch: string;
+}
+
 type BranchOp = "push" | "resolve" | "rebase" | "batch";
 type CommitOp = "discard" | "cherry-pick";
 
@@ -48,6 +54,7 @@ interface ProposedEntry {
   readonly comments: ReadonlyMap<string, readonly ProposedComment[]>;
   readonly busy: ReadonlySet<BranchOp>;
   readonly commitOps: ReadonlyMap<string, CommitOp>;
+  readonly conflict: PushConflict | null;
 }
 
 const EMPTY: ProposedEntry = {
@@ -56,6 +63,7 @@ const EMPTY: ProposedEntry = {
   comments: new Map(),
   busy: new Set(),
   commitOps: new Map(),
+  conflict: null,
 };
 const NO_COMMENTS: readonly ProposedComment[] = [];
 
@@ -143,6 +151,30 @@ export function isBatchOpInFlight(prId: string): boolean {
   return entry(prId).busy.has("batch");
 }
 
+/** A push, resolve, rebase, batch or single-commit operation holds the PR's worktree. */
+export function isWorktreeOpRunning(prId: string): boolean {
+  const e = entry(prId);
+  return e.busy.size > 0 || e.commitOps.size > 0;
+}
+
+/**
+ * Whether something holds the PR's worktree: an operation above or an agent
+ * turn. The server's workspace claim refuses a second one; this only keeps
+ * the UI from offering it.
+ */
+export function isWorktreeBusy(prId: string): boolean {
+  return isWorktreeOpRunning(prId) || isChatStreaming(prId);
+}
+
+/** The PR's last push that conflicted with its branch, until resolved or dismissed. */
+export function getPushConflict(prId: string): PushConflict | null {
+  return entry(prId).conflict;
+}
+
+export function dismissPushConflict(prId: string): void {
+  if (entry(prId).conflict) updateEntry(prId, (e) => ({ ...e, conflict: null }));
+}
+
 export function isDiscardingCommit(prId: string, sha: string): boolean {
   return entry(prId).commitOps.get(sha) === "discard";
 }
@@ -214,8 +246,8 @@ export function clearProposed(prId: string): void {
 /**
  * Merge the agent's commits into the PR branch and push, or with
  * `newBranchName` push them to a new branch instead. Toasts success and hard
- * failures; returns the result (null on a hard failure) so the caller can
- * handle `conflict` and `ref-exists`.
+ * failures and records a `conflict` for the PR; returns the result (null on a
+ * hard failure) so the caller can handle `ref-exists`.
  */
 export async function pushProposed(
   prId: string,
@@ -232,6 +264,9 @@ export async function pushProposed(
       toast.error(
         `The PR branch (${result.branch}) was updated remotely. Sync the latest changes and try again.`,
       );
+    } else if (result.status === "conflict") {
+      const conflict = { files: result.files, branch: result.branch };
+      updateEntry(prId, (e) => ({ ...e, conflict }));
     }
     return result;
   } catch (e) {
@@ -249,6 +284,7 @@ export async function pushProposed(
  */
 export function resolveAndPushProposed(prId: string): Promise<void> {
   if (isResolvingPush(prId)) return Promise.resolve();
+  dismissPushConflict(prId);
   setBusy(prId, "resolve", true);
 
   const turnId = crypto.randomUUID();

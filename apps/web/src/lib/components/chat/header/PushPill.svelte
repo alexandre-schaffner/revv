@@ -5,7 +5,7 @@ import CaretDown from "phosphor-svelte/lib/CaretDown";
 import GitBranch from "phosphor-svelte/lib/GitBranch";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import UploadSimple from "phosphor-svelte/lib/UploadSimple";
-import { isPushingProposed, pushProposed } from "$lib/chat/proposed.svelte";
+import { isPushingProposed, isWorktreeBusy, pushProposed } from "$lib/chat/proposed.svelte";
 import {
   Content as PopoverContent,
   Root as PopoverRoot,
@@ -18,19 +18,16 @@ interface Props {
   prId: string;
   commitCount: number;
   sourceBranch: string | undefined;
-  /** Another chat operation holds the worktree. */
-  blocked: boolean;
-  onConflict: (conflict: { files: readonly string[]; branch: string }) => void;
 }
 
-let { prId, commitCount, sourceBranch, blocked, onConflict }: Props = $props();
+let { prId, commitCount, sourceBranch }: Props = $props();
 
 let pillEl: HTMLDivElement;
 let menuOpen = $state(false);
 let newBranchDialog: NewBranchDialog;
 
 const isPushing = $derived(isPushingProposed(prId));
-const disabled = $derived(isPushing || blocked);
+const disabled = $derived(isWorktreeBusy(prId));
 const commits = $derived(`${commitCount} commit${commitCount === 1 ? "" : "s"}`);
 
 function pulse(): void {
@@ -45,8 +42,6 @@ async function push(): Promise<void> {
   if (disabled) return;
   const result = await pushProposed(prId);
   if (result?.status === "pushed") pulse();
-  else if (result?.status === "conflict")
-    onConflict({ files: result.files, branch: result.branch });
 }
 </script>
 

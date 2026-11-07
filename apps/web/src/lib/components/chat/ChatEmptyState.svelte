@@ -13,7 +13,7 @@ import { Button } from "$lib/components/ui/button/index.js";
 import { cn } from "$lib/utils.js";
 
 interface Props {
-  prId: string | null;
+  prId: string;
   stacked: boolean;
   /** Room left under the content for the floating composer. */
   bottomInset: number;
@@ -22,12 +22,12 @@ interface Props {
 
 let { prId, stacked, bottomInset, onSelect }: Props = $props();
 
-const suggestions = $derived(prId ? getSuggestions(prId) : null);
+const suggestions = $derived(getSuggestions(prId));
 const prompts = $derived<readonly string[]>(suggestions ?? CHAT_SUGGESTION_FALLBACKS);
-const loading = $derived(prId ? isSuggestionsLoading(prId) && suggestions === null : false);
+const loading = $derived(isSuggestionsLoading(prId) && suggestions === null);
 
 $effect(() => {
-  if (prId) fetchSuggestions(prId);
+  fetchSuggestions(prId);
 });
 </script>
 
@@ -59,7 +59,7 @@ $effect(() => {
 				variant="outline"
 				size="sm"
 				class="h-auto max-w-full cursor-pointer whitespace-normal rounded-full px-4 py-1.5 text-center"
-				disabled={!prId || loading}
+				disabled={loading}
 				onclick={() => onSelect(prompt)}
 			>
 				{prompt}

@@ -1,6 +1,6 @@
 <script lang="ts">
 import { getActiveTurnId, getChatItems, isChatStreaming } from "$lib/chat/timeline.svelte";
-import { approvePlanAction, rejectPlanAction, sendChatMessage } from "$lib/chat/turn.svelte";
+import { approvePlanAction, rejectPlanAction, submitChatMessage } from "$lib/chat/turn.svelte";
 import ToolCallCard from "$lib/components/agent-activity/ToolCallCard.svelte";
 import ToolCallTicker from "$lib/components/agent-activity/ToolCallTicker.svelte";
 import { Dotmatrix, squareVariantForId } from "$lib/components/ui/dotmatrix/index.js";
@@ -12,7 +12,7 @@ import PlanCard from "./PlanCard.svelte";
 import StreamingVerb from "./StreamingVerb.svelte";
 
 interface Props {
-  prId: string | null;
+  prId: string;
   /** The panel covers the main pane: cap the conversation to a readable column. */
   stacked: boolean;
   /** Room left under the content for the floating composer. */
@@ -21,11 +21,11 @@ interface Props {
 
 let { prId, stacked, bottomInset }: Props = $props();
 
-const items = $derived(prId ? getChatItems(prId) : []);
-const isStreaming = $derived(prId ? isChatStreaming(prId) : false);
+const items = $derived(getChatItems(prId));
+const isStreaming = $derived(isChatStreaming(prId));
 // The live turn's tool calls fold into the dot-matrix ticker; they take their
 // place in the timeline once the turn ends.
-const activeTurnId = $derived(prId ? getActiveTurnId(prId) : null);
+const activeTurnId = $derived(getActiveTurnId(prId));
 const recentToolCalls = $derived(
   activeTurnId
     ? items
@@ -45,9 +45,7 @@ const recentToolCalls = $derived(
 			{prId}
 			{stacked}
 			{bottomInset}
-			onSelect={(message) => {
-				if (prId && !isStreaming) sendChatMessage({ prId, message });
-			}}
+			onSelect={(message) => submitChatMessage(prId, message, [])}
 		/>
 	{:else}
 		<div
@@ -77,11 +75,11 @@ const recentToolCalls = $derived(
 						markdown={item.markdown}
 						status={item.status}
 						disabled={isStreaming}
-						onApprove={() => prId && approvePlanAction(prId, item.id)}
-						onReject={() => prId && rejectPlanAction(prId, item.id)}
+						onApprove={() => approvePlanAction(prId, item.id)}
+						onReject={() => rejectPlanAction(prId, item.id)}
 					/>
 				{:else if item.kind === "message"}
-					<ChatMessage from={item.role} content={item.content} attachments={item.attachments} />
+					<ChatMessage {prId} from={item.role} content={item.content} attachments={item.attachments} />
 				{/if}
 			{/each}
 

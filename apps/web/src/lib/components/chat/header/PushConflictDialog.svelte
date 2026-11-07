@@ -3,10 +3,11 @@
 // offer to let the agent resolve the conflicts and push.
 import GitMerge from "phosphor-svelte/lib/GitMerge";
 import Warning from "phosphor-svelte/lib/Warning";
+import type { PushConflict } from "$lib/chat/proposed.svelte";
 import ConfirmDialog from "$lib/components/ui/confirm-dialog/ConfirmDialog.svelte";
 
 interface Props {
-  conflict: { files: readonly string[]; branch: string } | null;
+  conflict: PushConflict | null;
   onClose: () => void;
   onResolve: () => void;
 }
@@ -14,7 +15,7 @@ interface Props {
 let { conflict, onClose, onResolve }: Props = $props();
 
 // Kept while the dialog animates out after `conflict` clears.
-let shown = $state<{ files: readonly string[]; branch: string }>({ files: [], branch: "" });
+let shown = $state<PushConflict>({ files: [], branch: "" });
 $effect(() => {
   if (conflict) shown = conflict;
 });

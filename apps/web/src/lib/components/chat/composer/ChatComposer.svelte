@@ -17,14 +17,14 @@ import { getInteractionMode, isChatStreaming } from "$lib/chat/timeline.svelte";
 import { abortChatTurn, setInteractionMode, submitChatMessage } from "$lib/chat/turn.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { gsapFadeY, tokens } from "$lib/motion";
-import { getReviewFiles } from "$lib/stores/diff-files.svelte";
+import { getChangedPaths } from "$lib/stores/diff-files.svelte";
 import { cn } from "$lib/utils.js";
 import AttachmentChip from "../AttachmentChip.svelte";
 import ComposerButton from "./ComposerButton.svelte";
 import ComposerEditor from "./ComposerEditor.svelte";
 
 interface Props {
-  prId: string | null;
+  prId: string;
   /** The queue dock sits on top: square the top edge to join it. */
   attached: boolean;
 }
@@ -37,16 +37,11 @@ let dragActive = $state(false);
 let editor: ComposerEditor | undefined = $state();
 let fileInput: HTMLInputElement | undefined = $state();
 
-const isStreaming = $derived(prId ? isChatStreaming(prId) : false);
-const interactionMode = $derived(prId ? getInteractionMode(prId) : "default");
+const isStreaming = $derived(isChatStreaming(prId));
+const interactionMode = $derived(getInteractionMode(prId));
 const planModeAvailable = $derived(isPlanModeAvailable());
-const commands = $derived((prId ? getChatSessionContext(prId)?.commands : undefined) ?? []);
-const mentionPaths = $derived(
-  getChatMentionPaths(
-    prId,
-    getReviewFiles().map((file) => file.path),
-  ),
-);
+const commands = $derived(getChatSessionContext(prId)?.commands ?? []);
+const mentionPaths = $derived(getChatMentionPaths(prId, getChangedPaths(prId)));
 const isEmpty = $derived(value.trim().length === 0 && attachments.length === 0);
 
 export function focus(): void {
@@ -61,14 +56,28 @@ function addFiles(files: readonly File[]): number {
   return admitted.length;
 }
 
+let encoding = false;
+
+/** The text and attachments leave the box only once the attachments are read. */
 async function submit(): Promise<void> {
-  if (!prId) return;
   const text = value.trim();
   const picked = attachments;
-  if (!text && picked.length === 0) return;
-  value = "";
-  attachments = [];
-  submitChatMessage(prId, text, await encodeAttachments(picked));
+  if ((!text && picked.length === 0) || encoding) return;
+  encoding = true;
+  try {
+    const encoded = await encodeAttachments(picked);
+    if (value.trim() === text) value = "";
+    attachments = attachments.filter((a) => !picked.includes(a));
+    submitChatMessage(prId, text, encoded);
+  } catch (e) {
+    toast.error(
+      e instanceof Error
+        ? `Couldn't read an attachment: ${e.message}`
+        : "Couldn't read an attachment",
+    );
+  } finally {
+    encoding = false;
+  }
 }
 
 // The button stops a running turn; Enter in the editor always sends (queued
@@ -76,7 +85,7 @@ async function submit(): Promise<void> {
 function handleFormSubmit(e: SubmitEvent): void {
   e.preventDefault();
   if (isStreaming) {
-    if (prId) abortChatTurn(prId);
+    abortChatTurn(prId);
   } else {
     void submit();
   }
@@ -100,7 +109,7 @@ function handleDrop(e: DragEvent): void {
 }
 
 function togglePlanMode(): void {
-  if (!prId || !planModeAvailable) return;
+  if (!planModeAvailable) return;
   void setInteractionMode(prId, interactionMode === "plan" ? "default" : "plan");
 }
 </script>
@@ -112,8 +121,7 @@ function togglePlanMode(): void {
 		"relative flex flex-col rounded-xl border border-border bg-background shadow-xs",
 		dragActive && "border-accent shadow-sm shadow-accent/20",
 		"composer-glass composer-glass-input transition-[border-color,box-shadow] duration-quick ease-out-expo" +
-			(attached ? " composer-glass--attached rounded-t-none border-t-0" : "") +
-			(!prId ? " opacity-60" : ""),
+			(attached ? " composer-glass--attached rounded-t-none border-t-0" : ""),
 	)}
 	onsubmit={handleFormSubmit}
 	onpaste={(e) => addFiles(Array.from(e.clipboardData?.files ?? []))}
@@ -145,11 +153,10 @@ function togglePlanMode(): void {
 			bind:this={editor}
 			bind:value
 			placeholder="Ask anything…"
-			disabled={!prId}
 			{commands}
 			{mentionPaths}
 			onsubmit={() => void submit()}
-			onfocus={() => prId && warmChatSessionContext(prId)}
+			onfocus={() => warmChatSessionContext(prId)}
 		/>
 	</div>
 	<div data-slot="prompt-input-footer" class="flex items-center justify-between gap-2 px-3 pb-2">
@@ -173,9 +180,9 @@ function togglePlanMode(): void {
 					? interactionMode === "plan"
 						? "Plan mode is on. The agent will propose a plan instead of editing. Click to disable."
 						: "Enable plan mode: ask the agent to propose a plan first."
-					: "Plan mode requires an opencode install with a `plan` agent."}
+					: "The selected agent doesn't offer plan mode."}
 				onclick={togglePlanMode}
-				disabled={!prId || !planModeAvailable}
+				disabled={!planModeAvailable}
 				aria-pressed={interactionMode === "plan"}
 				class={interactionMode === "plan" ? "bg-accent/15 text-accent hover:bg-accent/25 hover:text-accent" : ""}
 			>
@@ -191,7 +198,7 @@ function togglePlanMode(): void {
 			size="icon-sm"
 			variant={isStreaming ? "outline" : "default"}
 			class="shrink-0"
-			disabled={!isStreaming && (isEmpty || !prId)}
+			disabled={!isStreaming && isEmpty}
 			aria-label={isStreaming ? "Stop" : "Send"}
 		>
 			{#if isStreaming}

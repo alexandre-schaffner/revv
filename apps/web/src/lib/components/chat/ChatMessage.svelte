@@ -5,12 +5,13 @@ import AttachmentChip from "./AttachmentChip.svelte";
 import MessageResponse from "./MessageResponse.svelte";
 
 interface Props {
+  prId: string;
   from: "user" | "assistant";
   content: string;
   attachments?: ReadonlyArray<ChatAttachmentMetadata> | undefined;
 }
 
-let { from, content, attachments = [] }: Props = $props();
+let { prId, from, content, attachments = [] }: Props = $props();
 </script>
 
 <div
@@ -29,6 +30,7 @@ let { from, content, attachments = [] }: Props = $props();
 			<div class="flex max-w-full flex-col items-end gap-1.5">
 				{#if content}
 					<MessageResponse
+						{prId}
 						{from}
 						{content}
 						class="prose-user-bubble rounded-[14px] rounded-br-[4px] border border-user-bubble-border bg-user-bubble px-3 py-2"
@@ -48,7 +50,7 @@ let { from, content, attachments = [] }: Props = $props();
 				{/if}
 			</div>
 		{:else if content}
-			<MessageResponse {from} {content} class="w-full" />
+			<MessageResponse {prId} {from} {content} class="w-full" />
 		{/if}
 	</div>
 </div>

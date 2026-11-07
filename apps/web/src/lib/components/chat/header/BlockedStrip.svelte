@@ -9,6 +9,7 @@ import {
   discardProposedCommitAction,
   isDiscardingCommit,
   isRebasingProposed,
+  isWorktreeBusy,
   rebaseAllProposedAction,
   type WorktreeBlockedState,
 } from "$lib/chat/proposed.svelte";
@@ -21,6 +22,7 @@ interface Props {
 let { prId, blocked }: Props = $props();
 
 const isRebasing = $derived(isRebasingProposed(prId));
+const busy = $derived(isWorktreeBusy(prId));
 </script>
 
 <div class="blocked-strip">
@@ -33,7 +35,7 @@ const isRebasing = $derived(isRebasingProposed(prId));
 			class="blocked-rebase-btn"
 			type="button"
 			onclick={() => rebaseAllProposedAction(prId)}
-			disabled={isRebasing}
+			disabled={busy}
 			title="Rebase all commits onto new PR head"
 		>
 			{#if isRebasing}
@@ -55,7 +57,7 @@ const isRebasing = $derived(isRebasingProposed(prId));
 					class="blocked-discard-btn"
 					type="button"
 					onclick={() => discardProposedCommitAction(prId, commit.sha)}
-					disabled={discarding || isRebasing}
+					disabled={busy}
 					title="Discard this commit"
 					aria-label="Discard commit {commit.shortSha}"
 				>
