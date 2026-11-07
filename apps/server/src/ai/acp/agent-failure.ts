@@ -89,10 +89,7 @@ export interface AgentTurnFailure {
   readonly cause: unknown;
 }
 
-export async function agentTurnFailure(
-  agent: AcpAgentId,
-  err: unknown,
-): Promise<AgentTurnFailure> {
+export async function agentTurnFailure(agent: AcpAgentId, err: unknown): Promise<AgentTurnFailure> {
   const raw = err instanceof Error ? err.message : String(err);
   const auth =
     (err instanceof RequestError && err.code === ACP_AUTH_REQUIRED) || looksLikeAuthFailure(raw);

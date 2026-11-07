@@ -240,14 +240,14 @@ export const CacheServiceLive = Layer.effect(
 
         // One flight hosts every namespace's fetches, keyed on (ns, key): the
         // key fixes the value and failure types.
-        return yield* (flight(
+        return yield* flight(
           cacheKey(ns, key),
           fetcher().pipe(
             Effect.tap((value) =>
               set(ns, key, value, opts).pipe(Effect.orElseSucceed(() => undefined)),
             ),
           ),
-        ) as Effect.Effect<T, E, R>);
+        ) as Effect.Effect<T, E, R>;
       });
 
     const stats = () =>
