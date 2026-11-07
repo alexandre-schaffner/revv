@@ -86,7 +86,7 @@ export async function runRecapAgentViaAcp(
     },
   });
   if (error?.kind === "no_tool_calls") {
-    params.ctx.emit({ type: "error", data: { code: "NoToolCalls", message: error.message } });
+    params.ctx.emit({ type: "error", data: { code: "GENERATION_ERROR", message: error.message } });
   }
   return error;
 }

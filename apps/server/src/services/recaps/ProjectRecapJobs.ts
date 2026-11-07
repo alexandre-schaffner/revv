@@ -14,6 +14,7 @@
 // writes go through the recap MCP tool handlers in `ai/providers/recap-tools/`.
 
 import type {
+  ProjectRecap,
   ProjectRecapStatus,
   RecapPeriod,
   RecapStreamEvent,
@@ -83,6 +84,31 @@ export type SubscribeResult =
       readonly flush: () => void;
     }
   | { readonly found: false };
+
+/**
+ * The event a recap's stream ends with once the row is in `row.status`, or
+ * null while it is still generating. The live run's end and a reconnect to a
+ * finished row both answer with it.
+ */
+export function recapTerminalEvent(
+  row: Pick<ProjectRecap, "id" | "status" | "errorMessage">,
+): RecapStreamEvent | null {
+  switch (row.status) {
+    case "generating":
+      return null;
+    case "complete":
+      return { type: "done", data: { recapId: row.id } };
+    case "stopped":
+      return { type: "stopped", data: { recapId: row.id } };
+    case "error":
+      return {
+        type: "error",
+        data: { code: "GENERATION_ERROR", message: row.errorMessage ?? "Recap generation failed" },
+      };
+    case "superseded":
+      return { type: "error", data: { code: "STALE", message: "This recap has been superseded." } };
+  }
+}
 
 export class ProjectRecapJobs extends Context.Service<
   ProjectRecapJobs,
@@ -157,13 +183,6 @@ export const ProjectRecapJobsLive = Layer.effect(
       handleIdPrefix: "",
     });
 
-    const terminalEvent = (recapId: string, outcome: RunOutcome<string>): RecapStreamEvent =>
-      outcome.kind === "complete"
-        ? { type: "done", data: { recapId } }
-        : outcome.kind === "stopped"
-          ? { type: "stopped", data: { recapId } }
-          : { type: "error", data: { code: "RecapGenerationError", message: outcome.failure } };
-
     const settle = (
       recapId: string,
       outcome: RunOutcome<string>,
@@ -176,7 +195,12 @@ export const ProjectRecapJobsLive = Layer.effect(
           ...(run?.context.modelUsed ? { modelUsed: run.context.modelUsed } : {}),
           ...(outcome.kind === "failed" ? { errorMessage: outcome.failure } : {}),
         });
-        if (run) subscribers.fanOut(recapId, run.context, terminalEvent(recapId, outcome));
+        const end = recapTerminalEvent({
+          id: recapId,
+          status,
+          errorMessage: outcome.kind === "failed" ? outcome.failure : null,
+        });
+        if (run && end) subscribers.fanOut(recapId, run.context, end);
         if (!moved) return;
         const fresh = yield* recapService
           .getById(recapId)

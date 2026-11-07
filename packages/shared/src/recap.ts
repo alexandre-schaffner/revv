@@ -1,4 +1,5 @@
 import type { Activity } from "./activity";
+import type { StreamErrorCode } from "./stream-frames";
 
 export const RECAP_PERIODS = ["daily", "weekly"] as const;
 export type RecapPeriod = (typeof RECAP_PERIODS)[number];
@@ -182,4 +183,5 @@ export type RecapStreamEvent =
   | { type: "stopped"; data: { recapId: string } }
   /** A rerun replaced this run, under the same id: the stream ends; attach again for the new one. */
   | { type: "restarted"; data: { recapId: string } }
-  | { type: "error"; data: { code: string; message: string } };
+  /** The recap failed (`GENERATION_ERROR`), or a newer one replaced it (`STALE`). */
+  | { type: "error"; data: { code: StreamErrorCode; message: string } };
