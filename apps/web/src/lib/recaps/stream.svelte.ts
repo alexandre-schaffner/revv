@@ -84,7 +84,7 @@ function deleteEntry(recapId: string): void {
 
 function applyEvents(recapId: string, evs: RecapStreamEvent[]): void {
   const current = entries.get(recapId);
-  const entry: RecapStreamEntry = current
+  let entry: RecapStreamEntry = current
     ? {
         ...current,
         entries: new Map(current.entries),
@@ -125,6 +125,10 @@ function applyEvents(recapId: string, evs: RecapStreamEvent[]): void {
         entry.streamError = event.data.message;
         entry.isStreaming = false;
         break;
+      // The server reset the row for a rerun: what this run streamed is gone.
+      case "restarted":
+        entry = freshEntry();
+        break;
     }
   }
 
@@ -144,12 +148,16 @@ export async function streamRecap(recapId: string): Promise<void> {
 
   const abortCtrl = new AbortController();
   controllers.set(recapId, abortCtrl);
+  let restarted = false;
 
   try {
     await streamSse<RecapStreamEvent>({
       path: `/api/recaps/${recapId}/stream`,
       signal: abortCtrl.signal,
-      onEvent: (event) => applyEvents(recapId, [event]),
+      onEvent: (event) => {
+        if (event.type === "restarted") restarted = true;
+        applyEvents(recapId, [event]);
+      },
     });
   } catch (e) {
     const current = entries.get(recapId);
@@ -164,6 +172,8 @@ export async function streamRecap(recapId: string): Promise<void> {
     }
     controllers.delete(recapId);
   }
+  // The rerun runs under the same id: follow it on a new stream.
+  if (restarted && !abortCtrl.signal.aborted) void streamRecap(recapId);
 }
 
 export function abortRecapStream(recapId: string): void {

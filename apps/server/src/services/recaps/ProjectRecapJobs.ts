@@ -360,8 +360,15 @@ export const ProjectRecapJobsLive = Layer.effect(
             }
 
             if (existing && plan === "rerun") {
-              yield* jobs.stop(existing.id, "user");
+              const replaced = yield* jobs.running(existing.id);
+              yield* jobs.stop(existing.id, "superseded");
               yield* recapService.resetForRerun(existing.id, window);
+              if (replaced) {
+                subscribers.fanOut(existing.id, replaced.context, {
+                  type: "restarted",
+                  data: { recapId: existing.id },
+                });
+              }
               const refreshed = yield* recapService
                 .getById(existing.id)
                 .pipe(Effect.catch(() => Effect.succeed(null)));

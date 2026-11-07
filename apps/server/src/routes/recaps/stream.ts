@@ -74,7 +74,12 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
         Effect.flatMap(ProjectRecapJobs, (jobs) =>
           jobs.subscribe(row.id, (event) => {
             channel.send(event);
-            if (event.type === "done" || event.type === "stopped" || event.type === "error") {
+            if (
+              event.type === "done" ||
+              event.type === "stopped" ||
+              event.type === "error" ||
+              event.type === "restarted"
+            ) {
               channel.close();
             }
           }),
