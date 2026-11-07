@@ -1,16 +1,6 @@
 // Vim-like PR-list navigation. The cursor walks the PR rows the list renders
 // for the selected repo, in order: open PRs, then closed ones while that
-// section is open.
-//
-// Bindings:
-//   j / ArrowDown    Move down
-//   k / ArrowUp      Move up
-//   l / ArrowRight   Open the PR
-//   h / ArrowLeft    Drop the cursor
-//   Enter            Open the PR
-//   gg               Jump to first row
-//   G                Jump to last row
-//   Escape           Drop the cursor
+// section is open. The sidebar binds the keys (`layout/Sidebar.svelte`).
 
 import { getOpenPrsByRepoOrdered } from "./pr-filters.svelte";
 import { getArchivedByRepo } from "./prs.svelte";
@@ -18,8 +8,6 @@ import { getSelectedPrId, getSelectedRepo, selectPr } from "./route.svelte";
 import { isArchiveOpen, setSidebarView } from "./sidebar.svelte";
 
 let focusedId = $state<string | null>(null);
-let pendingG = false;
-let gTimer: ReturnType<typeof setTimeout> | undefined;
 
 const rows = $derived.by((): string[] => {
   const repo = getSelectedRepo();
@@ -39,7 +27,6 @@ export function setFocusedId(id: string | null): void {
 
 export function clearFocus(): void {
   focusedId = null;
-  pendingG = false;
 }
 
 export function isFocusedVisible(): boolean {
@@ -59,7 +46,7 @@ export function focusFirst(): boolean {
   return true;
 }
 
-function focusLast(): void {
+export function focusLast(): void {
   const last = rows.at(-1);
   if (last !== undefined) focusedId = last;
 }
@@ -92,62 +79,4 @@ export function openFocused(): void {
 export function focusPr(prId: string | null): void {
   if (prId !== null && rows.includes(prId)) focusedId = prId;
   else clearFocus();
-}
-
-/** Returns true if the key was consumed (caller should preventDefault). */
-export function handleKey(e: KeyboardEvent): boolean {
-  if (e.key === "g" && !e.shiftKey) {
-    if (pendingG) {
-      pendingG = false;
-      if (gTimer !== undefined) clearTimeout(gTimer);
-      focusFirst();
-      return true;
-    }
-    pendingG = true;
-    gTimer = setTimeout(() => {
-      pendingG = false;
-    }, 300);
-    return true;
-  }
-
-  if (pendingG) {
-    pendingG = false;
-    if (gTimer !== undefined) clearTimeout(gTimer);
-  }
-
-  switch (e.key) {
-    case "j":
-    case "ArrowDown":
-      moveDown();
-      return true;
-    case "k":
-    case "ArrowUp":
-      moveUp();
-      return true;
-    case "l":
-    case "ArrowRight":
-      openFocused();
-      return true;
-    case "h":
-    case "ArrowLeft":
-      clearFocus();
-      return true;
-    case "Enter":
-      if (focusedId) {
-        openFocused();
-        return true;
-      }
-      return false;
-    case "G":
-      focusLast();
-      return true;
-    case "Escape":
-      if (focusedId) {
-        clearFocus();
-        return true;
-      }
-      return false;
-    default:
-      return false;
-  }
 }

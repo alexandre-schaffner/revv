@@ -2,6 +2,8 @@
 import { isImagePath } from "@revv/shared";
 import { onDestroy } from "svelte";
 import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
+import type { BareBinding, Command } from "$lib/stores/command-keys";
+import { useCommands } from "$lib/stores/commands.svelte";
 import type { ReviewFile } from "$lib/stores/diff-files.svelte";
 import {
   enterLineMode,
@@ -9,6 +11,7 @@ import {
   enterSidebarMode,
   enterVisualMode,
   exitVisualMode,
+  type FocusPanel,
   getActivePanel,
   getAnchorLineIndex,
   getCursorLineIndex,
@@ -23,7 +26,6 @@ import {
   setActiveFilePath,
 } from "$lib/stores/pr-view-state.svelte";
 import { scrollPane } from "$lib/stores/review-nav.svelte";
-import { isTextEditingKeyTarget } from "$lib/utils";
 import DiffViewer from "./DiffViewer.svelte";
 import FileFirstPass from "./FileFirstPass.svelte";
 import FileIssues from "./FileIssues.svelte";
@@ -85,37 +87,7 @@ useShellChrome(() => ({ subtitle: fileTitleVisible ? null : activeFilePath || nu
 /** Scroll amount per j/k press (in pixels). */
 const SCROLL_STEP = 80;
 
-class PendingGState {
-  flag = false;
-  timer: ReturnType<typeof setTimeout> | undefined;
-
-  arm(onExpire?: () => void) {
-    this.flag = true;
-    this.timer = setTimeout(() => {
-      this.flag = false;
-      onExpire?.();
-    }, 300);
-  }
-
-  disarm() {
-    this.flag = false;
-    if (this.timer !== undefined) clearTimeout(this.timer);
-    this.timer = undefined;
-  }
-
-  reset() {
-    this.disarm();
-  }
-
-  destroy() {
-    this.disarm();
-  }
-}
-
-const pendingG = new PendingGState();
-
 onDestroy(() => {
-  pendingG.destroy();
   // Leaving the Diff tab hands the keyboard back to the sidebar, so the next
   // diff doesn't open in a stale line or visual mode.
   if (getActiveTab() !== "diff") enterSidebarMode();
@@ -132,226 +104,83 @@ function navigateFile(direction: 1 | -1) {
   }
 }
 
-function handleGlobalKeydown(e: KeyboardEvent) {
-  if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (isTextEditingKeyTarget(e)) return;
-
-  const panel = getActivePanel();
-
-  if (e.key === " ") {
-    e.preventDefault();
-    if (isInDiffMode()) {
-      enterSidebarMode();
-    } else {
-      enterScrollMode();
-    }
-    return;
-  }
-
-  if ((e.key === "h" || e.key === "t") && panel !== "sidebar") {
-    e.preventDefault();
-    enterSidebarMode();
-    return;
-  }
-
-  const handled = dispatchKey(panel, e.key, e);
-  if (handled) return;
-
-  if (e.key === "n") {
-    e.preventDefault();
-    navigateFile(1);
-  } else if (e.key === "p") {
-    e.preventDefault();
-    navigateFile(-1);
-  }
+function scrollDiff(top: number): void {
+  diffScrollEl?.scrollBy({ top, behavior: "instant" });
 }
 
-type KeyHandler = (e: KeyboardEvent) => boolean;
+function halfPage(): number {
+  return (diffScrollEl?.clientHeight ?? 0) / 2;
+}
 
-const DIFF_VISUAL_KEYS: Record<string, KeyHandler> = {
-  Escape: (e) => {
-    e.preventDefault();
-    enterSidebarMode();
-    return true;
-  },
-  v: (e) => {
-    e.preventDefault();
-    exitVisualMode();
-    return true;
-  },
-  j: (e) => {
-    e.preventDefault();
-    moveCursor(1);
-    return true;
-  },
-  ArrowDown: (e) => {
-    e.preventDefault();
-    moveCursor(1);
-    return true;
-  },
-  k: (e) => {
-    e.preventDefault();
-    moveCursor(-1);
-    return true;
-  },
-  ArrowUp: (e) => {
-    e.preventDefault();
-    moveCursor(-1);
-    return true;
-  },
-  c: (e) => {
-    e.preventDefault();
+function scrollDiffTo(edge: "top" | "bottom"): void {
+  const el = diffScrollEl;
+  if (el) el.scrollTo({ top: edge === "top" ? 0 : el.scrollHeight, behavior: "instant" });
+}
+
+const inPanel =
+  (...panels: FocusPanel[]) =>
+  (): boolean =>
+    panels.includes(getActivePanel());
+const inDiff = inPanel("diff-scroll", "diff-line", "diff-visual");
+const scrollingOrLine = inPanel("diff-scroll", "diff-line");
+
+function diffKey(
+  id: string,
+  label: string,
+  keys: BareBinding,
+  when: (() => boolean) | undefined,
+  run: () => void,
+): Command {
+  return { id: `diff:${id}`, label, keys, ...(when ? { when } : {}), hidden: true, run };
+}
+
+useCommands([
+  diffKey("toggle", "Enter or leave the diff", { bare: [" "] }, undefined, () => {
+    if (isInDiffMode()) enterSidebarMode();
+    else enterScrollMode();
+  }),
+  diffKey("leave", "Back to the sidebar", { bare: ["Escape", "h", "t"] }, inDiff, enterSidebarMode),
+  diffKey("next-file", "Next file", { bare: ["n"] }, undefined, () => navigateFile(1)),
+  diffKey("previous-file", "Previous file", { bare: ["p"] }, undefined, () => navigateFile(-1)),
+  diffKey("visual", "Line or visual mode", { bare: ["v"] }, inDiff, () => {
+    const panel = getActivePanel();
+    if (panel === "diff-visual") exitVisualMode();
+    else if (panel === "diff-line") enterVisualMode();
+    else enterLineMode(getTotalLineCount());
+  }),
+  diffKey("down", "Down", { bare: ["j", "ArrowDown"] }, inDiff, () => {
+    if (getActivePanel() === "diff-scroll") scrollDiff(SCROLL_STEP);
+    else moveCursor(1);
+  }),
+  diffKey("up", "Up", { bare: ["k", "ArrowUp"] }, inDiff, () => {
+    if (getActivePanel() === "diff-scroll") scrollDiff(-SCROLL_STEP);
+    else moveCursor(-1);
+  }),
+  diffKey("half-down", "Half a page down", { bare: ["d"] }, scrollingOrLine, () => {
+    if (getActivePanel() === "diff-line") jumpCursor("half-down");
+    else scrollDiff(halfPage());
+  }),
+  diffKey("half-up", "Half a page up", { bare: ["u"] }, scrollingOrLine, () => {
+    if (getActivePanel() === "diff-line") jumpCursor("half-up");
+    else scrollDiff(-halfPage());
+  }),
+  diffKey("bottom", "Bottom", { bare: ["G"] }, scrollingOrLine, () => {
+    if (getActivePanel() === "diff-line") jumpCursor("bottom");
+    else scrollDiffTo("bottom");
+  }),
+  diffKey("top", "Top", { bare: ["g"], after: "g" }, scrollingOrLine, () => {
+    if (getActivePanel() === "diff-line") jumpCursor("top");
+    else scrollDiffTo("top");
+  }),
+  diffKey("comment", "Comment", { bare: ["c"] }, inPanel("diff-line", "diff-visual"), () => {
     const cursor = getCursorLineIndex();
-    openComment(getAnchorLineIndex() ?? cursor, cursor);
-    return true;
-  },
-};
-
-const DIFF_LINE_KEYS: Record<string, KeyHandler> = {
-  Escape: (e) => {
-    e.preventDefault();
-    enterSidebarMode();
-    return true;
-  },
-  v: (e) => {
-    e.preventDefault();
-    enterVisualMode();
-    return true;
-  },
-  j: (e) => {
-    e.preventDefault();
-    moveCursor(1);
-    return true;
-  },
-  ArrowDown: (e) => {
-    e.preventDefault();
-    moveCursor(1);
-    return true;
-  },
-  k: (e) => {
-    e.preventDefault();
-    moveCursor(-1);
-    return true;
-  },
-  ArrowUp: (e) => {
-    e.preventDefault();
-    moveCursor(-1);
-    return true;
-  },
-  d: (e) => {
-    e.preventDefault();
-    jumpCursor("half-down");
-    return true;
-  },
-  u: (e) => {
-    e.preventDefault();
-    jumpCursor("half-up");
-    return true;
-  },
-  G: (e) => {
-    e.preventDefault();
-    pendingG.disarm();
-    jumpCursor("bottom");
-    return true;
-  },
-  c: (e) => {
-    e.preventDefault();
-    const lineIdx = getCursorLineIndex();
-    openComment(lineIdx, lineIdx);
-    return true;
-  },
-};
-
-const DIFF_SCROLL_KEYS: Record<string, KeyHandler> = {
-  Escape: (e) => {
-    e.preventDefault();
-    enterSidebarMode();
-    return true;
-  },
-  v: (e) => {
-    e.preventDefault();
-    enterLineMode(getTotalLineCount());
-    return true;
-  },
-  j: (e) => {
-    e.preventDefault();
-    diffScrollEl?.scrollBy({ top: SCROLL_STEP, behavior: "instant" });
-    return true;
-  },
-  ArrowDown: (e) => {
-    e.preventDefault();
-    diffScrollEl?.scrollBy({ top: SCROLL_STEP, behavior: "instant" });
-    return true;
-  },
-  k: (e) => {
-    e.preventDefault();
-    diffScrollEl?.scrollBy({ top: -SCROLL_STEP, behavior: "instant" });
-    return true;
-  },
-  ArrowUp: (e) => {
-    e.preventDefault();
-    diffScrollEl?.scrollBy({ top: -SCROLL_STEP, behavior: "instant" });
-    return true;
-  },
-  d: (e) => {
-    e.preventDefault();
-    const el = diffScrollEl;
-    if (el) el.scrollBy({ top: el.clientHeight / 2, behavior: "instant" });
-    return true;
-  },
-  u: (e) => {
-    e.preventDefault();
-    const el = diffScrollEl;
-    if (el) el.scrollBy({ top: -el.clientHeight / 2, behavior: "instant" });
-    return true;
-  },
-  G: (e) => {
-    e.preventDefault();
-    pendingG.disarm();
-    const el = diffScrollEl;
-    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "instant" });
-    return true;
-  },
-};
-
-const PANEL_KEY_MAP: Record<string, Record<string, KeyHandler>> = {
-  "diff-visual": DIFF_VISUAL_KEYS,
-  "diff-line": DIFF_LINE_KEYS,
-  "diff-scroll": DIFF_SCROLL_KEYS,
-};
-
-function dispatchKey(panel: string, key: string, e: KeyboardEvent): boolean {
-  const keyMap = PANEL_KEY_MAP[panel];
-  if (!keyMap) return false;
-
-  if (panel === "diff-line" || panel === "diff-scroll") {
-    if (key === "g" && !e.shiftKey) {
-      e.preventDefault();
-      if (pendingG.flag) {
-        pendingG.disarm();
-        if (panel === "diff-line") {
-          jumpCursor("top");
-        } else {
-          const el = diffScrollEl;
-          if (el) el.scrollTo({ top: 0, behavior: "instant" });
-        }
-        return true;
-      }
-      pendingG.arm();
-      return true;
-    }
-    if (pendingG.flag) pendingG.reset();
-  }
-
-  const handler = keyMap[key];
-  if (handler) return handler(e);
-  return false;
-}
+    const from = getActivePanel() === "diff-visual" ? (getAnchorLineIndex() ?? cursor) : cursor;
+    openComment(from, cursor);
+  }),
+]);
 
 const panel = $derived(getActivePanel());
 </script>
-
-<svelte:window onkeydown={handleGlobalKeydown} />
 
 <div class="relative flex h-full flex-col overflow-hidden bg-bg-primary">
 	<div

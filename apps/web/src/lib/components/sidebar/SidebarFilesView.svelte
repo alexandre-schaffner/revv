@@ -46,26 +46,17 @@ export function focusSearch(): void {
   search?.focus();
 }
 
-/**
- * The sidebar's vim keys while the file tree is showing. `exit` means "h" had
- * nowhere left to go in the tree: back out to the PR list.
- */
-export function navigate(key: string): "handled" | "exit" | "ignored" {
-  switch (key) {
-    case "j":
-      tree?.moveFocus(1);
-      return "handled";
-    case "k":
-      tree?.moveFocus(-1);
-      return "handled";
-    case "l":
-      tree?.openFocused();
-      return "handled";
-    case "h":
-      return tree?.collapseOrParent() ? "handled" : "exit";
-    default:
-      return "ignored";
-  }
+export function moveFocus(delta: 1 | -1): void {
+  tree?.moveFocus(delta);
+}
+
+export function openFocused(): void {
+  tree?.openFocused();
+}
+
+/** False when there is nowhere left to go up in the tree. */
+export function collapseOrParent(): boolean {
+  return tree?.collapseOrParent() ?? false;
 }
 
 function handleSelect(path: string): void {
