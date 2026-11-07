@@ -16,7 +16,7 @@ import {
   SHA_PATTERN,
 } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Option } from "effect";
 import { serverEnv } from "../config";
 import { externalIntegrations } from "../db/schema/external-integrations";
 import { pullRequests } from "../db/schema/pull-requests";
@@ -132,6 +132,13 @@ export class ExternalIntegrations extends Context.Service<
       accountId: string,
       provider: ExternalAgentProvider,
     ) => Effect.Effect<void, ExternalIntegrationError>;
+    /**
+     * Remove every agent install Revv wrote for the account's credentials,
+     * before the account goes: its rows cascade away with it, and nothing
+     * could find the installs (and the tokens they hold) after. Tries every
+     * agent; fails with the first error.
+     */
+    readonly uninstallAccount: (accountId: string) => Effect.Effect<void, ExternalIntegrationError>;
     /**
      * Rewrite every file Revv owns in the agents' configs (bridge copy,
      * guide, and the entry's command, URL and proxy bypass) for each active
@@ -307,6 +314,28 @@ export const ExternalIntegrationsLive = Layer.effect(
       });
     });
 
+    const uninstallAccount = Effect.fn("ExternalIntegrations.uninstallAccount")(function* (
+      accountId: string,
+    ) {
+      const providers = yield* Effect.try({
+        try: () =>
+          db
+            .select({ provider: externalIntegrations.provider })
+            .from(externalIntegrations)
+            .where(eq(externalIntegrations.accountId, accountId))
+            .all()
+            .map((r) => r.provider)
+            .filter(isExternalAgentProvider),
+        catch: (cause) =>
+          externalIntegrationError("INTERNAL", "Could not read integration credentials.", cause),
+      });
+      const failures = yield* Effect.forEach(providers, (provider) =>
+        disconnect(accountId, provider).pipe(Effect.flip, Effect.option),
+      );
+      const first = failures.find(Option.isSome);
+      if (first) return yield* Effect.fail(first.value);
+    });
+
     const refreshInstalls = Effect.fn("ExternalIntegrations.refreshInstalls")(
       function* () {
         const integrationsDirectory = yield* Effect.try({
@@ -469,6 +498,14 @@ export const ExternalIntegrationsLive = Layer.effect(
       };
     });
 
-    return { status, connect, disconnect, refreshInstalls, authenticate, resolve: resolveProject };
+    return {
+      status,
+      connect,
+      disconnect,
+      uninstallAccount,
+      refreshInstalls,
+      authenticate,
+      resolve: resolveProject,
+    };
   }),
 );

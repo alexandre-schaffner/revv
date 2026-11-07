@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect";
 import { createDb, type Db } from "../../db/index";
 import { account, repositories } from "../../db/schema";
 import { DbService } from "../Db";
+import { ExternalIntegrations } from "../ExternalIntegrations";
 import { GitHubAccounts } from "../github/accounts";
 import { forgetAccount, forgetRepositories, forgetUser } from "./forget";
 import { RepoCloneService } from "./RepoClone";
@@ -39,7 +40,11 @@ function seededDb(): Db {
 
 function run(
   db: Db,
-  work: Effect.Effect<void, unknown, DbService | RepoCloneService | GitHubAccounts>,
+  work: Effect.Effect<
+    void,
+    unknown,
+    DbService | RepoCloneService | GitHubAccounts | ExternalIntegrations
+  >,
 ) {
   const log: string[] = [];
   const clones = Layer.succeed(RepoCloneService, {
@@ -70,9 +75,15 @@ function run(
       }),
     removeUser: (userId: string) => Effect.sync(() => void log.push(`remove ${userId}`)),
   } as unknown as GitHubAccounts["Service"]);
+  const integrations = Layer.succeed(ExternalIntegrations, {
+    uninstallAccount: (accountId: string) =>
+      Effect.sync(() => void log.push(`uninstall ${accountId}`)),
+  } as unknown as ExternalIntegrations["Service"]);
   return Effect.runPromise(
     work.pipe(
-      Effect.provide(Layer.mergeAll(Layer.succeed(DbService, { db }), clones, accounts)),
+      Effect.provide(
+        Layer.mergeAll(Layer.succeed(DbService, { db }), clones, accounts, integrations),
+      ),
     ) as Effect.Effect<void>,
   ).then(() => log);
 }
@@ -91,17 +102,20 @@ describe("forget", () => {
     expect(repoIds(db)).toEqual(["repo-acc-dotcom"]);
   });
 
-  it("removes the clones of a disconnected account's repositories, and only those", async () => {
+  it("removes a disconnected account's agent installs and clones, and only those", async () => {
     const db = seededDb();
     expect(await run(db, forgetAccount("user-1", "ghe.example.com"))).toEqual([
+      "uninstall acc-ghe",
       "clone repo-acc-ghe",
       "disconnect ghe.example.com",
     ]);
   });
 
-  it("removes every account's clones before removing the user", async () => {
+  it("removes every account's agent installs and clones before removing the user", async () => {
     const db = seededDb();
     expect(await run(db, forgetUser("user-1"))).toEqual([
+      "uninstall acc-dotcom",
+      "uninstall acc-ghe",
       "clone repo-acc-dotcom",
       "clone repo-acc-ghe",
       "remove user-1",
