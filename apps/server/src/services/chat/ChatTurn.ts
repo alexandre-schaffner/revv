@@ -77,7 +77,7 @@ const MAX_PROMPT_ISSUES = 40;
 export const ChatTurnServiceLive = Layer.effect(
   ChatTurnService,
   Effect.gen(function* () {
-    const context = yield* Effect.context<DbService | SettingsService>();
+    const context = yield* Effect.context<SettingsService>();
     const { db } = yield* DbService;
     const prCtx = yield* PrContextService;
     const workspace = yield* PrWorkspace;

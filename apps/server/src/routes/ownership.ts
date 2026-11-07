@@ -16,8 +16,9 @@ import {
   stackMergeRuns,
 } from "../db/schema";
 import { NotFoundError } from "../domain/errors";
-import { tryDb } from "../effects/db-try";
+import { dbTry } from "../effects/db-try";
 import { AppRuntime } from "../runtime";
+import { DbService } from "../services/Db";
 import { errorResponse } from "./middleware";
 
 /** What a guarded field names. Each resolves to the repository that owns it. */
@@ -65,24 +66,26 @@ interface GuardedRequest {
  * names something in one of `userId`'s repositories; else `NotFoundError`.
  */
 export const checkOwnership = (fields: Fields, request: GuardedRequest, userId: string) =>
-  tryDb("check ownership", (db) => {
-    const body = typeof request.body === "object" && request.body !== null ? request.body : {};
-    for (const [field, kind] of Object.entries(fields)) {
-      const id = request.params[field] ?? (body as Record<string, unknown>)[field];
-      if (typeof id !== "string") continue;
-      const repositoryId = OWNING_REPOSITORY[kind](db, id);
-      const owned =
-        repositoryId !== undefined &&
-        db
-          .select({ id: repositories.id })
-          .from(repositories)
-          .innerJoin(account, eq(account.id, repositories.accountId))
-          .where(and(eq(repositories.id, repositoryId), eq(account.userId, userId)))
-          .get() !== undefined;
-      if (!owned) return new NotFoundError({ resource: kind, id });
-    }
-    return null;
-  }).pipe(Effect.flatMap((missing) => (missing ? Effect.fail(missing) : Effect.void)));
+  Effect.flatMap(DbService, ({ db }) =>
+    dbTry("check ownership", () => {
+      const body = typeof request.body === "object" && request.body !== null ? request.body : {};
+      for (const [field, kind] of Object.entries(fields)) {
+        const id = request.params[field] ?? (body as Record<string, unknown>)[field];
+        if (typeof id !== "string") continue;
+        const repositoryId = OWNING_REPOSITORY[kind](db, id);
+        const owned =
+          repositoryId !== undefined &&
+          db
+            .select({ id: repositories.id })
+            .from(repositories)
+            .innerJoin(account, eq(account.id, repositories.accountId))
+            .where(and(eq(repositories.id, repositoryId), eq(account.userId, userId)))
+            .get() !== undefined;
+        if (!owned) return new NotFoundError({ resource: kind, id });
+      }
+      return null;
+    }),
+  ).pipe(Effect.flatMap((missing) => (missing ? Effect.fail(missing) : Effect.void)));
 
 /** {@link checkOwnership} as a router's `beforeHandle` hook, for the signed-in user. */
 export function ownedBy(fields: Fields) {

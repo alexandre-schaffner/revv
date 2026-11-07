@@ -5,9 +5,10 @@ import { Elysia, t } from "elysia";
 import { invalidateAgentProbes } from "../ai/acp/agents";
 import { user } from "../db/schema";
 import { ValidationError } from "../domain/errors";
-import { tryDb } from "../effects/db-try";
+import { dbTry } from "../effects/db-try";
 import type { AppServices } from "../runtime";
 import { AgentLoginService } from "../services/AgentLogin";
+import { DbService } from "../services/Db";
 import { OnboardingService } from "../services/Onboarding";
 import { runRoute, withAuth } from "./middleware";
 import { literalUnion } from "./schemas";
@@ -57,19 +58,24 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
   .use(withAuth)
   .post("/complete", (ctx) =>
     runRoute(
-      tryDb("complete onboarding", (db) => {
-        const userId = ctx.userId;
-        const current = db
-          .select({ onboardedAt: user.onboardedAt })
-          .from(user)
-          .where(eq(user.id, userId))
-          .get()?.onboardedAt;
-        if (current) return { onboardedAt: current.toISOString() };
+      Effect.flatMap(DbService, ({ db }) =>
+        dbTry("complete onboarding", () => {
+          const userId = ctx.userId;
+          const current = db
+            .select({ onboardedAt: user.onboardedAt })
+            .from(user)
+            .where(eq(user.id, userId))
+            .get()?.onboardedAt;
+          if (current) return { onboardedAt: current.toISOString() };
 
-        const now = new Date();
-        db.update(user).set({ onboardedAt: now, updatedAt: now }).where(eq(user.id, userId)).run();
-        return { onboardedAt: now.toISOString() };
-      }),
+          const now = new Date();
+          db.update(user)
+            .set({ onboardedAt: now, updatedAt: now })
+            .where(eq(user.id, userId))
+            .run();
+          return { onboardedAt: now.toISOString() };
+        }),
+      ),
     ),
   )
   /**
@@ -81,12 +87,14 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
    */
   .post("/reset", (ctx) =>
     runRoute(
-      tryDb("reset onboarding", (db) =>
-        db
-          .update(user)
-          .set({ onboardedAt: null, updatedAt: new Date() })
-          .where(eq(user.id, ctx.userId))
-          .run(),
+      Effect.flatMap(DbService, ({ db }) =>
+        dbTry("reset onboarding", () =>
+          db
+            .update(user)
+            .set({ onboardedAt: null, updatedAt: new Date() })
+            .where(eq(user.id, ctx.userId))
+            .run(),
+        ),
       ).pipe(Effect.as({ onboardedAt: null })),
     ),
   )

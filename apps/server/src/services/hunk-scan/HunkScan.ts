@@ -12,7 +12,7 @@ import type { HunkScanEventMessage, HunkScanRow, HunkScanSnapshot } from "@revv/
 import { Context, Deferred, Effect, Exit, type Fiber, Layer, Option, Semaphore } from "effect";
 import { debug } from "../../logger";
 import type { CacheService } from "../Cache";
-import type { DbService } from "../Db";
+import { DbService } from "../Db";
 import type { JevService } from "../Jev";
 import { Realtime } from "../Realtime";
 import { type HunkScanInput, planHunkScan, runHunkScan, selectionFingerprint } from "./run";
@@ -61,15 +61,15 @@ interface InFlight {
 export const HunkScanServiceLive = Layer.effect(
   HunkScanService,
   Effect.gen(function* () {
-    const context = yield* Effect.context<JevService | CacheService | DbService>();
+    const { db } = yield* DbService;
+    const context = yield* Effect.context<JevService | CacheService>();
     const realtime = yield* Realtime;
     const callSlots = yield* Semaphore.make(MAX_CONCURRENT_HUNK_SCANS);
 
     /** By PR id: one run per PR at a time. */
     const inFlight = new Map<string, InFlight>();
 
-    const snapshot = (prId: string, headSha: string) =>
-      loadHunkScan({ prId, headSha }).pipe(Effect.provide(context));
+    const snapshot = (prId: string, headSha: string) => loadHunkScan(db, { prId, headSha });
 
     /**
      * The run for this head and diff, forked unless one is in flight. Looking
@@ -96,6 +96,7 @@ export const HunkScanServiceLive = Layer.effect(
             if (after !== null) yield* Deferred.await(after);
             const emit = (event: HunkScanEventMessage) => realtime.toPr(input.prId, event);
             return yield* runHunkScan({
+              db,
               prId: input.prId,
               headSha: input.headSha,
               selection,

@@ -8,7 +8,8 @@ import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { pullRequests, repositories } from "../../db/schema";
 import { NotFoundError } from "../../domain/errors";
-import { tryDb } from "../../effects/db-try";
+import { dbTry } from "../../effects/db-try";
+import { DbService } from "../../services/Db";
 import { PrContextService } from "../../services/PrContext";
 import { WalkthroughService } from "../../services/walkthrough/Walkthrough";
 import { WalkthroughJobs } from "../../services/walkthrough/WalkthroughJobs";
@@ -71,18 +72,20 @@ const prWalkthroughRoutes = new Elysia({ prefix: "/api/reviews" })
     runRoute(
       Effect.gen(function* () {
         const walkthroughService = yield* WalkthroughService;
-        const pr = yield* tryDb("walkthrough rounds: pull request", (db) =>
-          db
-            .select({ id: pullRequests.id, headSha: pullRequests.headSha })
-            .from(pullRequests)
-            .innerJoin(repositories, eq(repositories.id, pullRequests.repositoryId))
-            .where(
-              and(
-                eq(pullRequests.id, ctx.params.id),
-                eq(repositories.accountId, ctx.account.accountId),
-              ),
-            )
-            .get(),
+        const pr = yield* Effect.flatMap(DbService, ({ db }) =>
+          dbTry("walkthrough rounds: pull request", () =>
+            db
+              .select({ id: pullRequests.id, headSha: pullRequests.headSha })
+              .from(pullRequests)
+              .innerJoin(repositories, eq(repositories.id, pullRequests.repositoryId))
+              .where(
+                and(
+                  eq(pullRequests.id, ctx.params.id),
+                  eq(repositories.accountId, ctx.account.accountId),
+                ),
+              )
+              .get(),
+          ),
         );
         if (!pr) {
           return yield* Effect.fail(

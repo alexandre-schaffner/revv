@@ -10,9 +10,7 @@ import type {
 } from "@revv/shared";
 import type { Context } from "effect";
 import { Effect } from "effect";
-import type { Db } from "../../db";
 import type { DbError } from "../../domain/errors";
-import { withDb } from "../../effects/with-db";
 import type { RemoteWalkthroughCache } from "./RemoteWalkthroughCache";
 import type { WalkthroughService } from "./Walkthrough";
 
@@ -76,23 +74,17 @@ export interface WalkthroughLifecycle {
 }
 
 export function makeWalkthroughLifecycle(deps: {
-  readonly db: Db;
   readonly walkthroughs: Context.Service.Shape<typeof WalkthroughService>;
   readonly remoteCache: Context.Service.Shape<typeof RemoteWalkthroughCache>;
   readonly emit: (walkthroughId: string, event: WalkthroughStreamEvent) => Effect.Effect<unknown>;
 }): WalkthroughLifecycle {
-  const { db } = deps;
-
   const complete = (
     walkthroughId: string,
     tokenUsage: WalkthroughTokenUsage,
     source?: "remote" | "restack",
   ): Effect.Effect<void, DbError> =>
     Effect.gen(function* () {
-      const moved = yield* withDb(
-        db,
-        deps.walkthroughs.finish(walkthroughId, "complete", { tokenUsage }),
-      );
+      const moved = yield* deps.walkthroughs.finish(walkthroughId, "complete", { tokenUsage });
       if (!moved) return;
       if (source !== undefined) {
         yield* deps.emit(walkthroughId, {
@@ -113,13 +105,10 @@ export function makeWalkthroughLifecycle(deps: {
 
   const fail = (walkthroughId: string, failure: WalkthroughFailure): Effect.Effect<void, DbError> =>
     Effect.gen(function* () {
-      const moved = yield* withDb(
-        db,
-        deps.walkthroughs.finish(walkthroughId, "error", {
-          errorMessage: failure.message,
-          endReason: failure.reason,
-        }),
-      );
+      const moved = yield* deps.walkthroughs.finish(walkthroughId, "error", {
+        errorMessage: failure.message,
+        endReason: failure.reason,
+      });
       if (!moved) return;
       yield* deps.emit(walkthroughId, {
         type: "lifecycle:error",
@@ -133,7 +122,7 @@ export function makeWalkthroughLifecycle(deps: {
     mode?: WalkthroughMode,
   ): Effect.Effect<void, DbError> =>
     Effect.gen(function* () {
-      const ids = yield* withDb(db, deps.walkthroughs.supersedeAllForPr(prId, exceptHeadSha, mode));
+      const ids = yield* deps.walkthroughs.supersedeAllForPr(prId, exceptHeadSha, mode);
       for (const walkthroughId of ids) {
         yield* deps.emit(walkthroughId, {
           type: "lifecycle:superseded",

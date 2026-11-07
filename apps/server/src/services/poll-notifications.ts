@@ -1,8 +1,6 @@
 import { loginsMatch, type PullRequest, type Repository, type SyncChange } from "@revv/shared";
 import type { Context } from "effect";
 import { Cause, Effect } from "effect";
-import type { Db } from "../db/index";
-import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
 import type { Realtime } from "./Realtime";
 import type { WalkthroughService } from "./walkthrough/Walkthrough";
@@ -81,7 +79,6 @@ export function collectSyncChanges(viewers: CycleViewers, outcome: CycleOutcome)
  */
 export const announceSyncChanges = (
   svc: {
-    readonly db: Db;
     readonly realtime: Context.Service.Shape<typeof Realtime>;
     readonly walkthroughService: Context.Service.Shape<typeof WalkthroughService>;
     readonly walkthroughJobs: Context.Service.Shape<typeof WalkthroughJobs>;
@@ -117,10 +114,7 @@ export const announceSyncChanges = (
       if (change.kind !== "review_requested") continue;
       const pr = allPrs.find((p) => p.id === change.prId);
       if (!pr || pr.headSha === null) continue;
-      const uncached = yield* withDb(
-        svc.db,
-        svc.walkthroughService.getCached(pr.id, pr.headSha),
-      ).pipe(
+      const uncached = yield* svc.walkthroughService.getCached(pr.id, pr.headSha).pipe(
         Effect.map((cached) => cached === null),
         Effect.catchTag("DbError", (err) =>
           Effect.sync(() => {

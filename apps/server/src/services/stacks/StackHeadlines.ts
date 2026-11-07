@@ -8,7 +8,6 @@ import { pullRequests } from "../../db/schema/pull-requests";
 import { stackBriefs } from "../../db/schema/stack-briefs";
 import type { DbError } from "../../domain/errors";
 import { dbTry } from "../../effects/db-try";
-import { withDb } from "../../effects/with-db";
 import { CacheService } from "../Cache";
 import { DbService } from "../Db";
 import { Realtime } from "../Realtime";
@@ -133,7 +132,7 @@ export const StackHeadlineServiceLive = Layer.effect(
           failedUntil.set(key, Date.now() + RETRY_AFTER_MS);
           return;
         }
-        yield* withDb(db, cache.set<NamedStack>(CACHE_NS, key, named, { ttlMs: CACHE_TTL_MS }));
+        yield* cache.set<NamedStack>(CACHE_NS, key, named, { ttlMs: CACHE_TTL_MS });
         yield* realtime.toAccount(accountId, {
           type: "stack:updated",
           data: { repositoryId, stackNumber: stack.stackNumber },
@@ -152,7 +151,7 @@ export const StackHeadlineServiceLive = Layer.effect(
         const out: Record<number, StackHeadline> = {};
         for (const stack of stacks) {
           const key = namingKey(repositoryId, stack);
-          const named = yield* withDb(db, cache.get<NamedStack>(CACHE_NS, key));
+          const named = yield* cache.get<NamedStack>(CACHE_NS, key);
           const gist = yield* briefGist(repositoryId, stack.stackNumber);
           if (named) {
             out[stack.stackNumber] = {

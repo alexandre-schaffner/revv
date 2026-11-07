@@ -14,10 +14,8 @@
 import { closedWindows, type RecapPeriod } from "@revv/shared";
 import { Cause, Context, Duration, Effect, Layer, Ref, Schedule, Stream } from "effect";
 import { makeRestartableLoop } from "../../effects/restartable-loop";
-import { withDb } from "../../effects/with-db";
 import { debug, logError } from "../../logger";
 import { withGitHubOrigin } from "../../observability/github-ledger/origin";
-import { DbService } from "../Db";
 import { RepositoryService } from "../Repository";
 import { SettingsService } from "../Settings";
 import { ProjectRecapJobs } from "./ProjectRecapJobs";
@@ -39,13 +37,9 @@ export class RecapScheduler extends Context.Service<RecapScheduler, RecapSchedul
 export const RecapSchedulerLive = Layer.effect(
   RecapScheduler,
   Effect.gen(function* () {
-    const { db } = yield* DbService;
     const settingsService = yield* SettingsService;
     const repoService = yield* RepositoryService;
     const recapJobs = yield* ProjectRecapJobs;
-
-    const provideDb = <A, E>(eff: Effect.Effect<A, E, DbService>): Effect.Effect<A, E> =>
-      withDb(db, eff);
 
     const dailyLoop = yield* makeRestartableLoop;
     const weeklyLoop = yield* makeRestartableLoop;
@@ -59,9 +53,7 @@ export const RecapSchedulerLive = Layer.effect(
 
     const sweepPeriod = (period: RecapPeriod): Effect.Effect<void> =>
       Effect.gen(function* () {
-        const repos = yield* provideDb(repoService.listRepos()).pipe(
-          Effect.orElseSucceed(() => []),
-        );
+        const repos = yield* repoService.listRepos().pipe(Effect.orElseSucceed(() => []));
         if (repos.length === 0) return;
 
         const lookback = (yield* Ref.get(backfilled[period])) ? 1 : BACKFILL[period];

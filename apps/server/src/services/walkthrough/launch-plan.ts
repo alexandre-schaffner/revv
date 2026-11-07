@@ -33,7 +33,6 @@ import { repositories } from "../../db/schema/repositories";
 import type { DiffFingerprint, WalkthroughLaunchPlan } from "../../db/schema/walkthroughs";
 import type { DbError } from "../../domain/errors";
 import type { CacheService } from "../Cache";
-import type { DbService } from "../Db";
 import type { JevService } from "../Jev";
 import { changedFiles, fingerprintFiles, isComparable } from "../stacks/fingerprint";
 import type { GeneratedBy, GenerationProviderConfig } from "./cache-format";
@@ -155,7 +154,7 @@ export function parentFingerprintOf(
   stack: WalkthroughStackSnapshot | null,
   generationMode: WalkthroughGenerationMode,
   parentWalkthroughId: string | null,
-): Effect.Effect<DiffFingerprint | null, DbError, WalkthroughService | DbService> {
+): Effect.Effect<DiffFingerprint | null, DbError, WalkthroughService> {
   if (stack === null || generationMode !== "incremental" || parentWalkthroughId === null) {
     return Effect.succeed(null);
   }
@@ -183,7 +182,7 @@ export function planNewRow(input: {
   readonly mode: WalkthroughMode;
   readonly requestedGenerationMode: WalkthroughGenerationMode;
   readonly snapshotStack: Effect.Effect<WalkthroughStackSnapshot | null>;
-}): Effect.Effect<NewRowPlan, DbError, WalkthroughService | DbService> {
+}): Effect.Effect<NewRowPlan, DbError, WalkthroughService> {
   return Effect.gen(function* () {
     const { prId, headSha, mode } = input;
     const walkthroughService = yield* WalkthroughService;
@@ -239,7 +238,7 @@ export function planLaunch(input: {
   readonly state: JobStartStateInput | null;
   readonly settings: UserSettings;
   readonly agent: AcpAgentId;
-}): Effect.Effect<LaunchPlan, never, JevService | CacheService | DbService> {
+}): Effect.Effect<LaunchPlan, never, JevService | CacheService> {
   return Effect.gen(function* () {
     const answers =
       input.state === null

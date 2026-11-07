@@ -3,7 +3,6 @@ import type { PullRequest } from "@revv/shared";
 import type { Context } from "effect";
 import { Effect } from "effect";
 import { asStored, type ObservedPr, STACK_UNSEEN } from "../domain/observed-pr";
-import { withDb } from "../effects/with-db";
 import type { GitHubGateway } from "./github/gateway";
 import { githubClient } from "./github/transport";
 import { ACCOUNT_ID, type Harness, makeHarness, REPO, seedDb } from "./poll-test-support";
@@ -47,11 +46,11 @@ function observed(overrides: Partial<ObservedPr> = {}): ObservedPr {
 const run = <A, E>(eff: Effect.Effect<A, E>) => Effect.runPromise(eff);
 
 async function stored(h: Harness, row: ObservedPr): Promise<PullRequest> {
-  await run(withDb(h.db, h.prService.upsertPrs([row])));
+  await run(h.prService.upsertPrs([row]));
   return asStored(row, undefined);
 }
 
-const readRow = (h: Harness, id = "repo-1:1") => run(withDb(h.db, h.prService.getPr(id)));
+const readRow = (h: Harness, id = "repo-1:1") => run(h.prService.getPr(id));
 
 /** Let the detached worktree prune run. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
@@ -112,7 +111,7 @@ describe("PrMirror.apply", () => {
 
     const row = await readRow(h);
     expect([row.additions, row.deletions, row.changedFiles]).toEqual([3, 2, 4]);
-    const heads = await run(withDb(h.db, h.prService.diffStatsHeads()));
+    const heads = await run(h.prService.diffStatsHeads());
     expect(heads.get("repo-1:1")).toBe("head-1");
   });
 });

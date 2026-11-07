@@ -47,6 +47,14 @@ and its Layer is then `XServiceLive`. No default exports, no `Live`-less Layers.
 mechanical naming rule eliminates the entire class. The `Live` suffix mirrors Effect community
 convention.
 
+**Dependencies are captured when the Layer is built.** A service reads what it needs, `DbService`
+included, once, in its `Layer.effect` body, and returns `X.of({ … })` with methods that close over
+it. Its methods' requirement type is therefore `never`, and no caller provides anything per call.
+Plain functions a service calls take the handle as an argument (`hunk-scan/store.ts`:
+`getHunkScan(db, key)`). Only code that runs straight off the app runtime, such as route handlers
+and the helpers they call (`review-mode.ts`, `walkthrough/perspective.ts`), reads `DbService`
+where it needs it.
+
 **Canonical example.** `Realtime` / `RealtimeLive` (`services/Realtime.ts`) and `CacheService` /
 `CacheServiceLive` (`services/Cache.ts`).
 
@@ -125,9 +133,8 @@ constraint violations, locked tables, schema drift, SQLite IO errors. An unwrapp
 `Effect.gen` lets the throw escape as an Effect *defect*, not a *failure*: callers expecting to
 `catchTag` on a typed DB error get a fiber crash instead.
 
-**Canonical example.** `apps/server/src/effects/db-try.ts`: `dbTry(label, () => db…)` for code
-that holds its `db` handle, `tryDb(label, (db) => db…)` to read it from `DbService`. Both fail
-with `DbError`, which answers HTTP 500. A best-effort write says so at the call site
+**Canonical example.** `apps/server/src/effects/db-try.ts`: `dbTry(label, () => db…)`, which
+fails with `DbError` (HTTP 500). A best-effort write says so at the call site
 (`Effect.catch` + log), never by the helper inventing a value.
 
 **Anti-pattern.** Calling `db.select(...).get()` directly inside an `Effect.gen` body, or

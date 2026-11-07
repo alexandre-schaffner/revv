@@ -9,7 +9,6 @@ import type { AcpAgentId, ReviewDepth, RiskLevel, ThinkingEffortSetting } from "
 import { Effect } from "effect";
 import type { JevUnavailable } from "../../domain/errors";
 import type { CacheService } from "../../services/Cache";
-import type { DbService } from "../../services/Db";
 import { JevService } from "../../services/Jev";
 import { riskCriteria } from "../prompts/risk-tiers";
 import { cachedJev } from "./optional";
@@ -262,7 +261,7 @@ export function resolveJobStartAnswers(
   prId: string,
   headSha: string,
   state: JobStartStateInput,
-): Effect.Effect<JobStartAnswers | null, never, JevService | CacheService | DbService> {
+): Effect.Effect<JobStartAnswers | null, never, JevService | CacheService> {
   return cachedJev(
     `job-start for ${prId}@${headSha.slice(0, 7)}`,
     {

@@ -4,7 +4,6 @@ import type { Context } from "effect";
 import { Effect } from "effect";
 import { GitHubRateLimitError } from "../domain/errors";
 import { type ObservedPr, STACK_UNSEEN, stackSeen } from "../domain/observed-pr";
-import { withDb } from "../effects/with-db";
 import type { GitHubGateway } from "./github/gateway";
 import type { OpenPrList, OpenPrListSignature } from "./github/pulls";
 import type { GitHubClient } from "./github/transport";
@@ -272,7 +271,7 @@ describe("syncRepoOpenPrs", () => {
 
     expect(env.log).toEqual(["list:graphql", "diffStats", "upsert:head-1"]);
     expect(env.upserts[0]?.rows[0]).toMatchObject({ changedFiles: 1, statsHeadSha: "head-1" });
-    const heads = await env.run(withDb(env.db, env.harness.prService.diffStatsHeads()));
+    const heads = await env.run(env.harness.prService.diffStatsHeads());
     expect(heads.get("repo-1:1")).toBe("head-1");
   });
 });
@@ -583,7 +582,7 @@ describe("settleVanishedPrs", () => {
 
   const settle = async (env: Env, vanished: PullRequest[]) => {
     // The vanished PRs are open in the mirror before the cycle notices.
-    await env.run(withDb(env.db, env.harness.prService.upsertPrs(vanished.map(unseenStack))));
+    await env.run(env.harness.prService.upsertPrs(vanished.map(unseenStack)));
     const ids = await env.run(
       Effect.gen(function* () {
         const gate = yield* env.gate();
@@ -597,10 +596,7 @@ describe("settleVanishedPrs", () => {
       }),
     );
     const rows = await env.run(
-      withDb(
-        env.db,
-        Effect.forEach(vanished, (p) => env.harness.prService.getPr(p.id)),
-      ).pipe(Effect.orDie),
+      Effect.forEach(vanished, (p) => env.harness.prService.getPr(p.id)).pipe(Effect.orDie),
     );
     return { ids, status: new Map(rows.map((r) => [r.id, r.status])) };
   };

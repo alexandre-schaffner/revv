@@ -198,7 +198,6 @@ describe("restack carry", () => {
         yield* importer.import({ walkthroughId: id, snapshot });
         yield* service.markCarriedFrom(id, "wt-old");
         const lifecycle = makeWalkthroughLifecycle({
-          db,
           walkthroughs: service,
           remoteCache: { push: () => Effect.die("an import is never pushed") } as never,
           emit: (_id, event) => Effect.sync(() => events.push(event)),

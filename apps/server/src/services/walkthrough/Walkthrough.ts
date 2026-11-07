@@ -30,7 +30,7 @@ import {
   walkthroughs,
 } from "../../db/schema/walkthroughs";
 import type { DbError } from "../../domain/errors";
-import { dbTry, tryDb } from "../../effects/db-try";
+import { dbTry } from "../../effects/db-try";
 import { DbService } from "../Db";
 import type { PrCommit } from "../github/pulls";
 import type { GeneratedBy, GenerationProviderConfig } from "./cache-format";
@@ -153,7 +153,7 @@ export class WalkthroughService extends Context.Service<
       generatedBy?: GeneratedBy | null;
       stackContext?: WalkthroughStackSnapshot | null;
       diffFingerprint?: DiffFingerprint | null;
-    }) => Effect.Effect<string, DbError, DbService>;
+    }) => Effect.Effect<string, DbError>;
 
     /** The row active at `(prId, headSha, mode, generationMode)`, if any. */
     readonly activeAt: (
@@ -163,8 +163,7 @@ export class WalkthroughService extends Context.Service<
       generationMode: WalkthroughGenerationMode,
     ) => Effect.Effect<
       { readonly id: string; readonly status: "generating" | "complete" | "error" } | null,
-      DbError,
-      DbService
+      DbError
     >;
 
     readonly getStackInputs: (walkthroughId: string) => Effect.Effect<
@@ -172,8 +171,7 @@ export class WalkthroughService extends Context.Service<
         readonly stackContext: WalkthroughStackSnapshot | null;
         readonly diffFingerprint: DiffFingerprint | null;
       } | null,
-      DbError,
-      DbService
+      DbError
     >;
 
     /**
@@ -188,12 +186,12 @@ export class WalkthroughService extends Context.Service<
       prId: string,
       headSha: string,
       mode: WalkthroughMode,
-    ) => Effect.Effect<RestackSource | null, DbError, DbService>;
+    ) => Effect.Effect<RestackSource | null, DbError>;
 
     readonly markCarriedFrom: (
       walkthroughId: string,
       fromWalkthroughId: string,
-    ) => Effect.Effect<void, DbError, DbService>;
+    ) => Effect.Effect<void, DbError>;
 
     /**
      * End a run: `generating` → `complete` | `error`, with the review round
@@ -208,13 +206,13 @@ export class WalkthroughService extends Context.Service<
         errorMessage?: string;
         endReason?: WalkthroughEndReason;
       },
-    ) => Effect.Effect<boolean, DbError, DbService>;
+    ) => Effect.Effect<boolean, DbError>;
 
     /**
      * A user's Resume of an `error` row: back to `generating` with a fresh
      * resume budget, keeping its content. False when the row isn't in `error`.
      */
-    readonly revive: (walkthroughId: string) => Effect.Effect<boolean, DbError, DbService>;
+    readonly revive: (walkthroughId: string) => Effect.Effect<boolean, DbError>;
 
     /**
      * Record the launch a row's runs use, and the model and provider config
@@ -226,7 +224,7 @@ export class WalkthroughService extends Context.Service<
       plan: WalkthroughLaunchPlan,
       providerConfig: GenerationProviderConfig,
       risk?: { readonly level: RiskLevel; readonly confidence: number } | null,
-    ) => Effect.Effect<void, DbError, DbService>;
+    ) => Effect.Effect<void, DbError>;
 
     /**
      * Supersede every active walkthrough for a PR, leaving `supersededBy`
@@ -242,13 +240,13 @@ export class WalkthroughService extends Context.Service<
       prId: string,
       exceptHeadSha?: string,
       mode?: WalkthroughMode,
-    ) => Effect.Effect<ReadonlyArray<string>, DbError, DbService>;
+    ) => Effect.Effect<ReadonlyArray<string>, DbError>;
 
     readonly getCached: (
       prId: string,
       headSha: string,
       mode?: WalkthroughMode,
-    ) => Effect.Effect<Walkthrough | null, DbError, DbService>;
+    ) => Effect.Effect<Walkthrough | null, DbError>;
 
     /**
      * The incomplete (generating/error) walkthrough at this head, for resume.
@@ -259,11 +257,7 @@ export class WalkthroughService extends Context.Service<
       headSha: string,
       mode?: WalkthroughMode,
       generationMode?: WalkthroughGenerationMode,
-    ) => Effect.Effect<
-      (Walkthrough & { status: "generating" | "error" }) | null,
-      DbError,
-      DbService
-    >;
+    ) => Effect.Effect<(Walkthrough & { status: "generating" | "error" }) | null, DbError>;
 
     /**
      * Rows still `generating`. On boot these are the ones a crash stranded,
@@ -278,8 +272,7 @@ export class WalkthroughService extends Context.Service<
         readonly generationMode: WalkthroughGenerationMode;
         readonly resumeAttempts: number;
       }>,
-      DbError,
-      DbService
+      DbError
     >;
 
     /**
@@ -301,23 +294,18 @@ export class WalkthroughService extends Context.Service<
         readonly generationMode: WalkthroughGenerationMode;
         readonly status: "generating" | "error";
       } | null,
-      DbError,
-      DbService
+      DbError
     >;
 
     /** Bump the row's resume counter and return the new value. */
-    readonly incrementResumeAttempts: (
-      walkthroughId: string,
-    ) => Effect.Effect<number, DbError, DbService>;
+    readonly incrementResumeAttempts: (walkthroughId: string) => Effect.Effect<number, DbError>;
 
     /**
      * Stamp the given issues as posted to GitHub and return the timestamp.
      * Unknown ids are ignored: a regenerate may have wiped them between the
      * reviewer opening the tab and clicking Submit.
      */
-    readonly markIssuesSubmitted: (
-      issueIds: readonly string[],
-    ) => Effect.Effect<string, DbError, DbService>;
+    readonly markIssuesSubmitted: (issueIds: readonly string[]) => Effect.Effect<string, DbError>;
 
     /**
      * Atomically take the next `seq` to stamp on an outgoing
@@ -327,7 +315,7 @@ export class WalkthroughService extends Context.Service<
      * `status='complete'` use the same counter, so it strictly grows for the
      * lifetime of the row.
      */
-    readonly bumpSeq: (walkthroughId: string) => Effect.Effect<number, DbError, DbService>;
+    readonly bumpSeq: (walkthroughId: string) => Effect.Effect<number, DbError>;
 
     /**
      * The account's `generating` walkthroughs, each with the cursor
@@ -344,8 +332,7 @@ export class WalkthroughService extends Context.Service<
         readonly mode: WalkthroughMode;
         readonly seqAt: number;
       }>,
-      DbError,
-      DbService
+      DbError
     >;
 
     /**
@@ -353,7 +340,7 @@ export class WalkthroughService extends Context.Service<
      * client seeds `lastSeenSeq[walkthroughId]` and drops envelopes the
      * snapshot already covers.
      */
-    readonly getSeqAt: (walkthroughId: string) => Effect.Effect<number, DbError, DbService>;
+    readonly getSeqAt: (walkthroughId: string) => Effect.Effect<number, DbError>;
 
     /**
      * Find the latest completed/superseded walkthrough that can seed an
@@ -367,8 +354,7 @@ export class WalkthroughService extends Context.Service<
         readonly id: string;
         readonly prHeadSha: string;
       } | null,
-      DbError,
-      DbService
+      DbError
     >;
 
     /**
@@ -380,7 +366,7 @@ export class WalkthroughService extends Context.Service<
     readonly getLatestDisplayable: (
       prId: string,
       mode?: WalkthroughMode,
-    ) => Effect.Effect<Walkthrough | null, DbError, DbService>;
+    ) => Effect.Effect<Walkthrough | null, DbError>;
 
     /**
      * The perspective of the PR's newest walkthrough row, any status, or
@@ -389,9 +375,7 @@ export class WalkthroughService extends Context.Service<
      * the walkthrough they actually generated. Superseded rows count: after
      * a push, the stale walkthrough keeps its perspective.
      */
-    readonly getLatestMode: (
-      prId: string,
-    ) => Effect.Effect<WalkthroughMode | null, DbError, DbService>;
+    readonly getLatestMode: (prId: string) => Effect.Effect<WalkthroughMode | null, DbError>;
 
     /**
      * Return a specific walkthrough for a PR, whatever its perspective. This
@@ -403,8 +387,7 @@ export class WalkthroughService extends Context.Service<
       walkthroughId: string,
     ) => Effect.Effect<
       { readonly walkthrough: Walkthrough; readonly status: WalkthroughStatus } | null,
-      DbError,
-      DbService
+      DbError
     >;
 
     /** The PR's review rounds across both perspectives (one is active at a
@@ -412,7 +395,7 @@ export class WalkthroughService extends Context.Service<
     readonly listReviewRounds: (
       prId: string,
       currentHeadSha: string | null,
-    ) => Effect.Effect<WalkthroughReviewRoundsResponse, DbError, DbService>;
+    ) => Effect.Effect<WalkthroughReviewRoundsResponse, DbError>;
   }
 >()("WalkthroughService") {}
 
@@ -448,622 +431,632 @@ function supersedeRows(tx: Db | Tx, ids: readonly string[]): void {
     .run();
 }
 
-export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
-  createRow: (params) =>
-    tryDb("create walkthrough", (db) =>
-      db.transaction((tx): string => {
-        const id = crypto.randomUUID();
-        const generatedAt = new Date().toISOString();
-        const replaced = tx
-          .select({ id: walkthroughs.id })
-          .from(walkthroughs)
-          .where(
-            and(
-              eq(walkthroughs.pullRequestId, params.prId),
-              eq(walkthroughs.prHeadSha, params.prHeadSha),
-              eq(walkthroughs.mode, params.mode),
-              eq(walkthroughs.generationMode, params.generationMode),
-              ne(walkthroughs.status, "superseded"),
-            ),
-          )
-          .all()
-          .map((r) => r.id);
-        supersedeRows(tx, replaced);
+export const WalkthroughServiceLive = Layer.effect(
+  WalkthroughService,
+  Effect.gen(function* () {
+    const { db } = yield* DbService;
+    return WalkthroughService.of({
+      createRow: (params) =>
+        dbTry("create walkthrough", () =>
+          db.transaction((tx): string => {
+            const id = crypto.randomUUID();
+            const generatedAt = new Date().toISOString();
+            const replaced = tx
+              .select({ id: walkthroughs.id })
+              .from(walkthroughs)
+              .where(
+                and(
+                  eq(walkthroughs.pullRequestId, params.prId),
+                  eq(walkthroughs.prHeadSha, params.prHeadSha),
+                  eq(walkthroughs.mode, params.mode),
+                  eq(walkthroughs.generationMode, params.generationMode),
+                  ne(walkthroughs.status, "superseded"),
+                ),
+              )
+              .all()
+              .map((r) => r.id);
+            supersedeRows(tx, replaced);
 
-        tx.insert(walkthroughs)
-          .values({
-            id,
-            reviewSessionId: params.reviewSessionId,
-            pullRequestId: params.prId,
-            summary: "",
-            mode: params.mode,
-            sentiment: null,
-            status: "generating",
-            lastCompletedPhase: "none",
-            generatedAt,
-            modelUsed: "",
-            tokenUsage: "{}",
-            prHeadSha: params.prHeadSha,
-            generationMode: params.generationMode,
-            parentWalkthroughId: params.parentWalkthroughId,
-            baseHeadSha: params.baseHeadSha,
-            resumeAttempts: 0,
-            prCommits: params.prCommits ? JSON.stringify(params.prCommits) : null,
-            stackContext: params.stackContext ?? null,
-            diffFingerprint: params.diffFingerprint ?? null,
-            generatedByGithubUserId: params.generatedBy?.githubUserId ?? null,
-            generatedByGithubLogin: params.generatedBy?.githubLogin ?? null,
-            generatedByDisplayName: params.generatedBy?.displayName ?? null,
-            generatedByAvatarContent: params.generatedBy?.avatarContent ?? null,
-          })
-          .run();
-        if (replaced.length > 0) {
-          tx.update(walkthroughs)
-            .set({ supersededBy: id })
-            .where(inArray(walkthroughs.id, replaced))
-            .run();
-        }
-        const latestRound = tx
-          .select({ roundNumber: reviewRounds.roundNumber })
-          .from(reviewRounds)
-          .where(eq(reviewRounds.pullRequestId, params.prId))
-          .orderBy(desc(reviewRounds.roundNumber))
-          .get();
-        tx.insert(reviewRounds)
-          .values({
-            id: crypto.randomUUID(),
-            pullRequestId: params.prId,
-            reviewSessionId: params.reviewSessionId,
-            walkthroughId: id,
-            previousWalkthroughId: params.parentWalkthroughId,
-            roundNumber: (latestRound?.roundNumber ?? 0) + 1,
-            kind: params.generationMode,
-            visibility: "visible",
-            status: "generating",
-            fromSha: params.baseHeadSha,
-            toSha: params.prHeadSha,
-            createdAt: generatedAt,
-          })
-          .run();
-        return id;
-      }),
-    ),
-
-  activeAt: (prId, headSha, mode, generationMode) =>
-    tryDb("activeAt", (db) => {
-      const row = db
-        .select({ id: walkthroughs.id, status: walkthroughs.status })
-        .from(walkthroughs)
-        .where(
-          and(
-            eq(walkthroughs.pullRequestId, prId),
-            eq(walkthroughs.prHeadSha, headSha),
-            eq(walkthroughs.mode, mode),
-            eq(walkthroughs.generationMode, generationMode),
-            ne(walkthroughs.status, "superseded"),
-          ),
-        )
-        .get();
-      return row && row.status !== "superseded" ? { id: row.id, status: row.status } : null;
-    }),
-
-  finish: (walkthroughId, status, options) =>
-    tryDb("finish", (db) =>
-      db.transaction(() => {
-        // The canonical "walkthrough finished" timestamp the recap pipeline
-        // windows on, distinct from `generatedAt` (job start). Kept through a
-        // later supersede.
-        const completedAt = status === "complete" ? new Date().toISOString() : null;
-        const moved = db
-          .update(walkthroughs)
-          .set({
-            status,
-            errorMessage: status === "error" ? (options?.errorMessage ?? null) : null,
-            endReason: status === "error" ? (options?.endReason ?? null) : null,
-            ...(completedAt ? { completedAt } : {}),
-            ...(options?.tokenUsage ? { tokenUsage: JSON.stringify(options.tokenUsage) } : {}),
-          })
-          .where(and(eq(walkthroughs.id, walkthroughId), eq(walkthroughs.status, "generating")))
-          .returning({ id: walkthroughs.id })
-          .all();
-        if (moved.length === 0) return false;
-        db.update(reviewRounds)
-          .set({ status, ...(completedAt ? { completedAt } : {}) })
-          .where(eq(reviewRounds.walkthroughId, walkthroughId))
-          .run();
-        return true;
-      }),
-    ),
-
-  revive: (walkthroughId) =>
-    tryDb("revive", (db) =>
-      db.transaction(() => {
-        const moved = db
-          .update(walkthroughs)
-          .set({ status: "generating", errorMessage: null, endReason: null, resumeAttempts: 0 })
-          .where(and(eq(walkthroughs.id, walkthroughId), eq(walkthroughs.status, "error")))
-          .returning({ id: walkthroughs.id })
-          .all();
-        if (moved.length === 0) return false;
-        db.update(reviewRounds)
-          .set({ status: "generating" })
-          .where(eq(reviewRounds.walkthroughId, walkthroughId))
-          .run();
-        return true;
-      }),
-    ),
-
-  recordLaunch: (walkthroughId, plan, providerConfig, risk) =>
-    tryDb("recordLaunch", (db) => {
-      db.update(walkthroughs)
-        .set({
-          launchPlan: plan,
-          modelUsed: plan.model,
-          providerConfig: JSON.stringify(providerConfig),
-          ...(risk ? { riskLevel: risk.level, riskConfidence: risk.confidence } : {}),
-        })
-        .where(eq(walkthroughs.id, walkthroughId))
-        .run();
-    }),
-
-  supersedeAllForPr: (prId, exceptHeadSha, mode) =>
-    tryDb("supersedeAllForPr", (db) =>
-      db.transaction(() => {
-        const baseConditions = [
-          eq(walkthroughs.pullRequestId, prId),
-          ne(walkthroughs.status, "superseded"),
-          ...(mode ? [eq(walkthroughs.mode, mode)] : []),
-        ];
-        const condition =
-          exceptHeadSha !== undefined
-            ? and(...baseConditions, ne(walkthroughs.prHeadSha, exceptHeadSha))
-            : and(...baseConditions);
-
-        const activeIds = db
-          .select({ id: walkthroughs.id })
-          .from(walkthroughs)
-          .where(condition)
-          .all()
-          .map((r) => r.id);
-
-        supersedeRows(db, activeIds);
-        return activeIds;
-      }),
-    ),
-
-  getCached: (prId, headSha, mode = "reviewer") =>
-    tryDb(
-      "getCached",
-      (db) =>
-        readWalkthrough(
-          db,
-          and(
-            eq(walkthroughs.pullRequestId, prId),
-            eq(walkthroughs.prHeadSha, headSha),
-            eq(walkthroughs.mode, mode),
-            eq(walkthroughs.status, "complete"),
-          ),
-        )?.walkthrough ?? null,
-    ),
-
-  getPartial: (prId, headSha, mode = "reviewer", generationMode) =>
-    tryDb("getPartial", (db) => {
-      const found = readWalkthrough(
-        db,
-        and(
-          eq(walkthroughs.pullRequestId, prId),
-          eq(walkthroughs.prHeadSha, headSha),
-          eq(walkthroughs.mode, mode),
-          ...(generationMode ? [eq(walkthroughs.generationMode, generationMode)] : []),
-          ne(walkthroughs.status, "complete"),
-          ne(walkthroughs.status, "superseded"),
+            tx.insert(walkthroughs)
+              .values({
+                id,
+                reviewSessionId: params.reviewSessionId,
+                pullRequestId: params.prId,
+                summary: "",
+                mode: params.mode,
+                sentiment: null,
+                status: "generating",
+                lastCompletedPhase: "none",
+                generatedAt,
+                modelUsed: "",
+                tokenUsage: "{}",
+                prHeadSha: params.prHeadSha,
+                generationMode: params.generationMode,
+                parentWalkthroughId: params.parentWalkthroughId,
+                baseHeadSha: params.baseHeadSha,
+                resumeAttempts: 0,
+                prCommits: params.prCommits ? JSON.stringify(params.prCommits) : null,
+                stackContext: params.stackContext ?? null,
+                diffFingerprint: params.diffFingerprint ?? null,
+                generatedByGithubUserId: params.generatedBy?.githubUserId ?? null,
+                generatedByGithubLogin: params.generatedBy?.githubLogin ?? null,
+                generatedByDisplayName: params.generatedBy?.displayName ?? null,
+                generatedByAvatarContent: params.generatedBy?.avatarContent ?? null,
+              })
+              .run();
+            if (replaced.length > 0) {
+              tx.update(walkthroughs)
+                .set({ supersededBy: id })
+                .where(inArray(walkthroughs.id, replaced))
+                .run();
+            }
+            const latestRound = tx
+              .select({ roundNumber: reviewRounds.roundNumber })
+              .from(reviewRounds)
+              .where(eq(reviewRounds.pullRequestId, params.prId))
+              .orderBy(desc(reviewRounds.roundNumber))
+              .get();
+            tx.insert(reviewRounds)
+              .values({
+                id: crypto.randomUUID(),
+                pullRequestId: params.prId,
+                reviewSessionId: params.reviewSessionId,
+                walkthroughId: id,
+                previousWalkthroughId: params.parentWalkthroughId,
+                roundNumber: (latestRound?.roundNumber ?? 0) + 1,
+                kind: params.generationMode,
+                visibility: "visible",
+                status: "generating",
+                fromSha: params.baseHeadSha,
+                toSha: params.prHeadSha,
+                createdAt: generatedAt,
+              })
+              .run();
+            return id;
+          }),
         ),
-      );
-      return found
-        ? { ...found.walkthrough, status: found.status as "generating" | "error" }
-        : null;
-    }),
 
-  getStackInputs: (walkthroughId) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const row = yield* dbTry("getStackInputs", () =>
-        db
-          .select({
-            stackContext: walkthroughs.stackContext,
-            diffFingerprint: walkthroughs.diffFingerprint,
-          })
-          .from(walkthroughs)
-          .where(eq(walkthroughs.id, walkthroughId))
-          .get(),
-      );
-      return row ?? null;
-    }),
+      activeAt: (prId, headSha, mode, generationMode) =>
+        dbTry("activeAt", () => {
+          const row = db
+            .select({ id: walkthroughs.id, status: walkthroughs.status })
+            .from(walkthroughs)
+            .where(
+              and(
+                eq(walkthroughs.pullRequestId, prId),
+                eq(walkthroughs.prHeadSha, headSha),
+                eq(walkthroughs.mode, mode),
+                eq(walkthroughs.generationMode, generationMode),
+                ne(walkthroughs.status, "superseded"),
+              ),
+            )
+            .get();
+          return row && row.status !== "superseded" ? { id: row.id, status: row.status } : null;
+        }),
 
-  findRestackSource: (prId, headSha, mode) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      return yield* dbTry("findRestackSource", (): RestackSource | null => {
-        const live = db
-          .select({ id: walkthroughs.id })
-          .from(walkthroughs)
-          .where(
+      finish: (walkthroughId, status, options) =>
+        dbTry("finish", () =>
+          db.transaction(() => {
+            // The canonical "walkthrough finished" timestamp the recap pipeline
+            // windows on, distinct from `generatedAt` (job start). Kept through a
+            // later supersede.
+            const completedAt = status === "complete" ? new Date().toISOString() : null;
+            const moved = db
+              .update(walkthroughs)
+              .set({
+                status,
+                errorMessage: status === "error" ? (options?.errorMessage ?? null) : null,
+                endReason: status === "error" ? (options?.endReason ?? null) : null,
+                ...(completedAt ? { completedAt } : {}),
+                ...(options?.tokenUsage ? { tokenUsage: JSON.stringify(options.tokenUsage) } : {}),
+              })
+              .where(and(eq(walkthroughs.id, walkthroughId), eq(walkthroughs.status, "generating")))
+              .returning({ id: walkthroughs.id })
+              .all();
+            if (moved.length === 0) return false;
+            db.update(reviewRounds)
+              .set({ status, ...(completedAt ? { completedAt } : {}) })
+              .where(eq(reviewRounds.walkthroughId, walkthroughId))
+              .run();
+            return true;
+          }),
+        ),
+
+      revive: (walkthroughId) =>
+        dbTry("revive", () =>
+          db.transaction(() => {
+            const moved = db
+              .update(walkthroughs)
+              .set({ status: "generating", errorMessage: null, endReason: null, resumeAttempts: 0 })
+              .where(and(eq(walkthroughs.id, walkthroughId), eq(walkthroughs.status, "error")))
+              .returning({ id: walkthroughs.id })
+              .all();
+            if (moved.length === 0) return false;
+            db.update(reviewRounds)
+              .set({ status: "generating" })
+              .where(eq(reviewRounds.walkthroughId, walkthroughId))
+              .run();
+            return true;
+          }),
+        ),
+
+      recordLaunch: (walkthroughId, plan, providerConfig, risk) =>
+        dbTry("recordLaunch", () => {
+          db.update(walkthroughs)
+            .set({
+              launchPlan: plan,
+              modelUsed: plan.model,
+              providerConfig: JSON.stringify(providerConfig),
+              ...(risk ? { riskLevel: risk.level, riskConfidence: risk.confidence } : {}),
+            })
+            .where(eq(walkthroughs.id, walkthroughId))
+            .run();
+        }),
+
+      supersedeAllForPr: (prId, exceptHeadSha, mode) =>
+        dbTry("supersedeAllForPr", () =>
+          db.transaction(() => {
+            const baseConditions = [
+              eq(walkthroughs.pullRequestId, prId),
+              ne(walkthroughs.status, "superseded"),
+              ...(mode ? [eq(walkthroughs.mode, mode)] : []),
+            ];
+            const condition =
+              exceptHeadSha !== undefined
+                ? and(...baseConditions, ne(walkthroughs.prHeadSha, exceptHeadSha))
+                : and(...baseConditions);
+
+            const activeIds = db
+              .select({ id: walkthroughs.id })
+              .from(walkthroughs)
+              .where(condition)
+              .all()
+              .map((r) => r.id);
+
+            supersedeRows(db, activeIds);
+            return activeIds;
+          }),
+        ),
+
+      getCached: (prId, headSha, mode = "reviewer") =>
+        dbTry(
+          "getCached",
+          () =>
+            readWalkthrough(
+              db,
+              and(
+                eq(walkthroughs.pullRequestId, prId),
+                eq(walkthroughs.prHeadSha, headSha),
+                eq(walkthroughs.mode, mode),
+                eq(walkthroughs.status, "complete"),
+              ),
+            )?.walkthrough ?? null,
+        ),
+
+      getPartial: (prId, headSha, mode = "reviewer", generationMode) =>
+        dbTry("getPartial", () => {
+          const found = readWalkthrough(
+            db,
             and(
               eq(walkthroughs.pullRequestId, prId),
               eq(walkthroughs.prHeadSha, headSha),
               eq(walkthroughs.mode, mode),
+              ...(generationMode ? [eq(walkthroughs.generationMode, generationMode)] : []),
+              ne(walkthroughs.status, "complete"),
               ne(walkthroughs.status, "superseded"),
             ),
-          )
-          .get();
-        if (live) return null;
-        const row = db
-          .select({
-            id: walkthroughs.id,
-            generationMode: walkthroughs.generationMode,
-            diffFingerprint: walkthroughs.diffFingerprint,
-          })
-          .from(walkthroughs)
-          .where(
-            and(
-              eq(walkthroughs.pullRequestId, prId),
-              eq(walkthroughs.mode, mode),
-              ne(walkthroughs.prHeadSha, headSha),
-              finishedReview(),
-            ),
-          )
-          .orderBy(desc(walkthroughs.generatedAt))
-          .get();
-        if (!row?.diffFingerprint) return null;
-        return {
-          id: row.id,
-          generationMode: row.generationMode === "incremental" ? "incremental" : "full",
-          diffFingerprint: row.diffFingerprint,
-        };
-      });
-    }),
+          );
+          return found
+            ? { ...found.walkthrough, status: found.status as "generating" | "error" }
+            : null;
+        }),
 
-  markCarriedFrom: (walkthroughId, fromWalkthroughId) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      yield* dbTry("markCarriedFrom", () =>
-        db
-          .update(walkthroughs)
-          .set({ carriedFromWalkthroughId: fromWalkthroughId })
-          .where(eq(walkthroughs.id, walkthroughId))
-          .run(),
-      );
-    }),
+      getStackInputs: (walkthroughId) =>
+        Effect.gen(function* () {
+          const row = yield* dbTry("getStackInputs", () =>
+            db
+              .select({
+                stackContext: walkthroughs.stackContext,
+                diffFingerprint: walkthroughs.diffFingerprint,
+              })
+              .from(walkthroughs)
+              .where(eq(walkthroughs.id, walkthroughId))
+              .get(),
+          );
+          return row ?? null;
+        }),
 
-  listGenerating: () =>
-    tryDb("listGenerating", (db) => {
-      const rows = db
-        .select({
-          id: walkthroughs.id,
-          pullRequestId: walkthroughs.pullRequestId,
-          prHeadSha: walkthroughs.prHeadSha,
-          mode: walkthroughs.mode,
-          generationMode: walkthroughs.generationMode,
-          resumeAttempts: walkthroughs.resumeAttempts,
-        })
-        .from(walkthroughs)
-        .where(eq(walkthroughs.status, "generating"))
-        .all();
-      return rows.map((r) => ({
-        id: r.id,
-        pullRequestId: r.pullRequestId,
-        prHeadSha: r.prHeadSha,
-        mode: r.mode as WalkthroughMode,
-        generationMode: r.generationMode as WalkthroughGenerationMode,
-        resumeAttempts: r.resumeAttempts,
-      }));
-    }),
+      findRestackSource: (prId, headSha, mode) =>
+        Effect.gen(function* () {
+          return yield* dbTry("findRestackSource", (): RestackSource | null => {
+            const live = db
+              .select({ id: walkthroughs.id })
+              .from(walkthroughs)
+              .where(
+                and(
+                  eq(walkthroughs.pullRequestId, prId),
+                  eq(walkthroughs.prHeadSha, headSha),
+                  eq(walkthroughs.mode, mode),
+                  ne(walkthroughs.status, "superseded"),
+                ),
+              )
+              .get();
+            if (live) return null;
+            const row = db
+              .select({
+                id: walkthroughs.id,
+                generationMode: walkthroughs.generationMode,
+                diffFingerprint: walkthroughs.diffFingerprint,
+              })
+              .from(walkthroughs)
+              .where(
+                and(
+                  eq(walkthroughs.pullRequestId, prId),
+                  eq(walkthroughs.mode, mode),
+                  ne(walkthroughs.prHeadSha, headSha),
+                  finishedReview(),
+                ),
+              )
+              .orderBy(desc(walkthroughs.generatedAt))
+              .get();
+            if (!row?.diffFingerprint) return null;
+            return {
+              id: row.id,
+              generationMode: row.generationMode === "incremental" ? "incremental" : "full",
+              diffFingerprint: row.diffFingerprint,
+            };
+          });
+        }),
 
-  findResumable: (prId, mode) =>
-    tryDb("findResumable", (db) => {
-      const row = db
-        .select({
-          id: walkthroughs.id,
-          pullRequestId: walkthroughs.pullRequestId,
-          prHeadSha: walkthroughs.prHeadSha,
-          mode: walkthroughs.mode,
-          generationMode: walkthroughs.generationMode,
-          status: walkthroughs.status,
-        })
-        .from(walkthroughs)
-        .where(
-          and(
-            eq(walkthroughs.pullRequestId, prId),
-            ...(mode ? [eq(walkthroughs.mode, mode)] : []),
-            inArray(walkthroughs.status, ["generating", "error"]),
-          ),
-        )
-        .orderBy(desc(walkthroughs.generatedAt))
-        .get();
-      if (!row) return null;
-      return {
-        id: row.id,
-        pullRequestId: row.pullRequestId,
-        prHeadSha: row.prHeadSha,
-        mode: row.mode as WalkthroughMode,
-        generationMode: row.generationMode as WalkthroughGenerationMode,
-        status: row.status as "generating" | "error",
-      };
-    }),
+      markCarriedFrom: (walkthroughId, fromWalkthroughId) =>
+        Effect.gen(function* () {
+          yield* dbTry("markCarriedFrom", () =>
+            db
+              .update(walkthroughs)
+              .set({ carriedFromWalkthroughId: fromWalkthroughId })
+              .where(eq(walkthroughs.id, walkthroughId))
+              .run(),
+          );
+        }),
 
-  incrementResumeAttempts: (walkthroughId) =>
-    tryDb("incrementResumeAttempts", (db) => {
-      const row = db
-        .select({ resumeAttempts: walkthroughs.resumeAttempts })
-        .from(walkthroughs)
-        .where(eq(walkthroughs.id, walkthroughId))
-        .get();
-      const next = (row?.resumeAttempts ?? 0) + 1;
-      db.update(walkthroughs)
-        .set({ resumeAttempts: next })
-        .where(eq(walkthroughs.id, walkthroughId))
-        .run();
-      return next;
-    }),
+      listGenerating: () =>
+        dbTry("listGenerating", () => {
+          const rows = db
+            .select({
+              id: walkthroughs.id,
+              pullRequestId: walkthroughs.pullRequestId,
+              prHeadSha: walkthroughs.prHeadSha,
+              mode: walkthroughs.mode,
+              generationMode: walkthroughs.generationMode,
+              resumeAttempts: walkthroughs.resumeAttempts,
+            })
+            .from(walkthroughs)
+            .where(eq(walkthroughs.status, "generating"))
+            .all();
+          return rows.map((r) => ({
+            id: r.id,
+            pullRequestId: r.pullRequestId,
+            prHeadSha: r.prHeadSha,
+            mode: r.mode as WalkthroughMode,
+            generationMode: r.generationMode as WalkthroughGenerationMode,
+            resumeAttempts: r.resumeAttempts,
+          }));
+        }),
 
-  markIssuesSubmitted: (issueIds) =>
-    tryDb("markIssuesSubmitted", (db) => {
-      const submittedAt = new Date().toISOString();
-      if (issueIds.length === 0) return submittedAt;
-      db.update(walkthroughIssues)
-        .set({ submittedAt })
-        .where(inArray(walkthroughIssues.id, [...issueIds]))
-        .run();
-      return submittedAt;
-    }),
+      findResumable: (prId, mode) =>
+        dbTry("findResumable", () => {
+          const row = db
+            .select({
+              id: walkthroughs.id,
+              pullRequestId: walkthroughs.pullRequestId,
+              prHeadSha: walkthroughs.prHeadSha,
+              mode: walkthroughs.mode,
+              generationMode: walkthroughs.generationMode,
+              status: walkthroughs.status,
+            })
+            .from(walkthroughs)
+            .where(
+              and(
+                eq(walkthroughs.pullRequestId, prId),
+                ...(mode ? [eq(walkthroughs.mode, mode)] : []),
+                inArray(walkthroughs.status, ["generating", "error"]),
+              ),
+            )
+            .orderBy(desc(walkthroughs.generatedAt))
+            .get();
+          if (!row) return null;
+          return {
+            id: row.id,
+            pullRequestId: row.pullRequestId,
+            prHeadSha: row.prHeadSha,
+            mode: row.mode as WalkthroughMode,
+            generationMode: row.generationMode as WalkthroughGenerationMode,
+            status: row.status as "generating" | "error",
+          };
+        }),
 
-  bumpSeq: (walkthroughId) =>
-    tryDb("bumpSeq", (db) => {
-      return db.transaction((tx): number => {
-        const row = tx
-          .select({ nextSeq: walkthroughs.nextSeq })
-          .from(walkthroughs)
-          .where(eq(walkthroughs.id, walkthroughId))
-          .get();
-        const seq = row?.nextSeq ?? 0;
-        tx.update(walkthroughs)
-          .set({ nextSeq: seq + 1 })
-          .where(eq(walkthroughs.id, walkthroughId))
-          .run();
-        return seq;
-      });
-    }),
+      incrementResumeAttempts: (walkthroughId) =>
+        dbTry("incrementResumeAttempts", () => {
+          const row = db
+            .select({ resumeAttempts: walkthroughs.resumeAttempts })
+            .from(walkthroughs)
+            .where(eq(walkthroughs.id, walkthroughId))
+            .get();
+          const next = (row?.resumeAttempts ?? 0) + 1;
+          db.update(walkthroughs)
+            .set({ resumeAttempts: next })
+            .where(eq(walkthroughs.id, walkthroughId))
+            .run();
+          return next;
+        }),
 
-  listActiveForAccount: (accountId) =>
-    tryDb("listActiveForAccount", (db) => {
-      const rows = db
-        .select({
-          walkthroughId: walkthroughs.id,
-          prId: walkthroughs.pullRequestId,
-          prHeadSha: walkthroughs.prHeadSha,
-          mode: walkthroughs.mode,
-          nextSeq: walkthroughs.nextSeq,
-        })
-        .from(walkthroughs)
-        .innerJoin(pullRequests, eq(pullRequests.id, walkthroughs.pullRequestId))
-        .innerJoin(repositories, eq(repositories.id, pullRequests.repositoryId))
-        .where(and(eq(walkthroughs.status, "generating"), eq(repositories.accountId, accountId)))
-        .all();
-      return rows.map((r) => ({
-        prId: r.prId,
-        walkthroughId: r.walkthroughId,
-        prHeadSha: r.prHeadSha,
-        mode: r.mode,
-        seqAt: Math.max(0, r.nextSeq - 1),
-      }));
-    }),
+      markIssuesSubmitted: (issueIds) =>
+        dbTry("markIssuesSubmitted", () => {
+          const submittedAt = new Date().toISOString();
+          if (issueIds.length === 0) return submittedAt;
+          db.update(walkthroughIssues)
+            .set({ submittedAt })
+            .where(inArray(walkthroughIssues.id, [...issueIds]))
+            .run();
+          return submittedAt;
+        }),
 
-  getSeqAt: (walkthroughId) =>
-    tryDb("getSeqAt", (db) => {
-      const row = db
-        .select({ nextSeq: walkthroughs.nextSeq })
-        .from(walkthroughs)
-        .where(eq(walkthroughs.id, walkthroughId))
-        .get();
-      return Math.max(0, (row?.nextSeq ?? 1) - 1);
-    }),
+      bumpSeq: (walkthroughId) =>
+        dbTry("bumpSeq", () => {
+          return db.transaction((tx): number => {
+            const row = tx
+              .select({ nextSeq: walkthroughs.nextSeq })
+              .from(walkthroughs)
+              .where(eq(walkthroughs.id, walkthroughId))
+              .get();
+            const seq = row?.nextSeq ?? 0;
+            tx.update(walkthroughs)
+              .set({ nextSeq: seq + 1 })
+              .where(eq(walkthroughs.id, walkthroughId))
+              .run();
+            return seq;
+          });
+        }),
 
-  findLatestReviewArtifact: (prId, mode = "reviewer") =>
-    tryDb("findLatestReviewArtifact", (db) => {
-      // Phase A's `set_overview` is the pipeline's first write, so a row still
-      // at 'none' reviewed nothing. Rows die there when a supersede sweep
-      // cancels them mid-exploration; taking one as the base would make the
-      // next incremental run review an empty commit range.
-      const reviewed = [
-        eq(walkthroughs.mode, mode),
-        inArray(walkthroughs.status, ["complete", "superseded"]),
-        ne(walkthroughs.lastCompletedPhase, "none"),
-      ];
-      const roundRows = db
-        .select({
-          id: walkthroughs.id,
-          prHeadSha: walkthroughs.prHeadSha,
-          kind: reviewRounds.kind,
-          visibility: reviewRounds.visibility,
-          fromSha: reviewRounds.fromSha,
-          toSha: reviewRounds.toSha,
-        })
-        .from(reviewRounds)
-        .innerJoin(walkthroughs, eq(walkthroughs.id, reviewRounds.walkthroughId))
-        .where(and(eq(reviewRounds.pullRequestId, prId), ...reviewed))
-        .orderBy(desc(reviewRounds.roundNumber))
-        .all();
+      listActiveForAccount: (accountId) =>
+        dbTry("listActiveForAccount", () => {
+          const rows = db
+            .select({
+              walkthroughId: walkthroughs.id,
+              prId: walkthroughs.pullRequestId,
+              prHeadSha: walkthroughs.prHeadSha,
+              mode: walkthroughs.mode,
+              nextSeq: walkthroughs.nextSeq,
+            })
+            .from(walkthroughs)
+            .innerJoin(pullRequests, eq(pullRequests.id, walkthroughs.pullRequestId))
+            .innerJoin(repositories, eq(repositories.id, pullRequests.repositoryId))
+            .where(
+              and(eq(walkthroughs.status, "generating"), eq(repositories.accountId, accountId)),
+            )
+            .all();
+          return rows.map((r) => ({
+            prId: r.prId,
+            walkthroughId: r.walkthroughId,
+            prHeadSha: r.prHeadSha,
+            mode: r.mode,
+            seqAt: Math.max(0, r.nextSeq - 1),
+          }));
+        }),
 
-      const visibleRound = roundRows.find(
-        (row) =>
-          row.visibility !== "hidden" && !(row.kind === "incremental" && row.fromSha === row.toSha),
-      );
-      if (visibleRound) {
-        return {
-          id: visibleRound.id,
-          prHeadSha: visibleRound.prHeadSha,
-        };
-      }
+      getSeqAt: (walkthroughId) =>
+        dbTry("getSeqAt", () => {
+          const row = db
+            .select({ nextSeq: walkthroughs.nextSeq })
+            .from(walkthroughs)
+            .where(eq(walkthroughs.id, walkthroughId))
+            .get();
+          return Math.max(0, (row?.nextSeq ?? 1) - 1);
+        }),
 
-      const row = db
-        .select({
-          id: walkthroughs.id,
-          prHeadSha: walkthroughs.prHeadSha,
-        })
-        .from(walkthroughs)
-        .where(and(eq(walkthroughs.pullRequestId, prId), ...reviewed))
-        .orderBy(desc(walkthroughs.generatedAt))
-        .get();
-      return row ?? null;
-    }),
-
-  getLatestDisplayable: (prId, mode = "reviewer") =>
-    tryDb(
-      "getLatestDisplayable",
-      (db) =>
-        readWalkthrough(
-          db,
-          and(
-            eq(walkthroughs.pullRequestId, prId),
+      findLatestReviewArtifact: (prId, mode = "reviewer") =>
+        dbTry("findLatestReviewArtifact", () => {
+          // Phase A's `set_overview` is the pipeline's first write, so a row still
+          // at 'none' reviewed nothing. Rows die there when a supersede sweep
+          // cancels them mid-exploration; taking one as the base would make the
+          // next incremental run review an empty commit range.
+          const reviewed = [
             eq(walkthroughs.mode, mode),
             inArray(walkthroughs.status, ["complete", "superseded"]),
+            ne(walkthroughs.lastCompletedPhase, "none"),
+          ];
+          const roundRows = db
+            .select({
+              id: walkthroughs.id,
+              prHeadSha: walkthroughs.prHeadSha,
+              kind: reviewRounds.kind,
+              visibility: reviewRounds.visibility,
+              fromSha: reviewRounds.fromSha,
+              toSha: reviewRounds.toSha,
+            })
+            .from(reviewRounds)
+            .innerJoin(walkthroughs, eq(walkthroughs.id, reviewRounds.walkthroughId))
+            .where(and(eq(reviewRounds.pullRequestId, prId), ...reviewed))
+            .orderBy(desc(reviewRounds.roundNumber))
+            .all();
+
+          const visibleRound = roundRows.find(
+            (row) =>
+              row.visibility !== "hidden" &&
+              !(row.kind === "incremental" && row.fromSha === row.toSha),
+          );
+          if (visibleRound) {
+            return {
+              id: visibleRound.id,
+              prHeadSha: visibleRound.prHeadSha,
+            };
+          }
+
+          const row = db
+            .select({
+              id: walkthroughs.id,
+              prHeadSha: walkthroughs.prHeadSha,
+            })
+            .from(walkthroughs)
+            .where(and(eq(walkthroughs.pullRequestId, prId), ...reviewed))
+            .orderBy(desc(walkthroughs.generatedAt))
+            .get();
+          return row ?? null;
+        }),
+
+      getLatestDisplayable: (prId, mode = "reviewer") =>
+        dbTry(
+          "getLatestDisplayable",
+          () =>
+            readWalkthrough(
+              db,
+              and(
+                eq(walkthroughs.pullRequestId, prId),
+                eq(walkthroughs.mode, mode),
+                inArray(walkthroughs.status, ["complete", "superseded"]),
+              ),
+            )?.walkthrough ?? null,
+        ),
+
+      getLatestMode: (prId) =>
+        Effect.gen(function* () {
+          const row = yield* dbTry(`getLatestMode(${prId})`, () =>
+            db
+              .select({ mode: walkthroughs.mode })
+              .from(walkthroughs)
+              .where(eq(walkthroughs.pullRequestId, prId))
+              .orderBy(desc(walkthroughs.generatedAt))
+              .get(),
+          );
+          return row?.mode ?? null;
+        }),
+
+      getReport: (prId, walkthroughId) =>
+        dbTry("getReport", () =>
+          readWalkthrough(
+            db,
+            and(eq(walkthroughs.id, walkthroughId), eq(walkthroughs.pullRequestId, prId)),
           ),
-        )?.walkthrough ?? null,
-    ),
+        ),
 
-  getLatestMode: (prId) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const row = yield* dbTry(`getLatestMode(${prId})`, () =>
-        db
-          .select({ mode: walkthroughs.mode })
-          .from(walkthroughs)
-          .where(eq(walkthroughs.pullRequestId, prId))
-          .orderBy(desc(walkthroughs.generatedAt))
-          .get(),
-      );
-      return row?.mode ?? null;
-    }),
+      listReviewRounds: (prId, currentHeadSha) =>
+        dbTry("listReviewRounds", () => {
+          const rows = db
+            .select({
+              id: reviewRounds.id,
+              walkthroughId: reviewRounds.walkthroughId,
+              previousWalkthroughId: reviewRounds.previousWalkthroughId,
+              roundNumber: reviewRounds.roundNumber,
+              kind: reviewRounds.kind,
+              mode: walkthroughs.mode,
+              visibility: reviewRounds.visibility,
+              status: reviewRounds.status,
+              fromSha: reviewRounds.fromSha,
+              toSha: reviewRounds.toSha,
+              createdAt: reviewRounds.createdAt,
+              completedAt: reviewRounds.completedAt,
+              summary: walkthroughs.summary,
+              prCommits: walkthroughs.prCommits,
+              prHeadSha: walkthroughs.prHeadSha,
+            })
+            .from(reviewRounds)
+            .innerJoin(walkthroughs, eq(walkthroughs.id, reviewRounds.walkthroughId))
+            .where(eq(reviewRounds.pullRequestId, prId))
+            .orderBy(asc(reviewRounds.roundNumber))
+            .all();
 
-  getReport: (prId, walkthroughId) =>
-    tryDb("getReport", (db) =>
-      readWalkthrough(
-        db,
-        and(eq(walkthroughs.id, walkthroughId), eq(walkthroughs.pullRequestId, prId)),
-      ),
-    ),
+          let rounds: WalkthroughReviewRound[] = rows.map((row) => ({
+            id: row.id,
+            walkthroughId: row.walkthroughId,
+            previousWalkthroughId: row.previousWalkthroughId ?? null,
+            roundNumber: row.roundNumber,
+            kind: row.kind === "incremental" ? "incremental" : "full",
+            mode: row.mode,
+            visibility:
+              row.visibility === "hidden" ||
+              (row.kind === "incremental" && row.fromSha === row.toSha)
+                ? "hidden"
+                : "visible",
+            status: row.status as WalkthroughStatus,
+            fromSha: row.fromSha ?? null,
+            toSha: row.toSha,
+            createdAt: row.createdAt,
+            completedAt: row.completedAt ?? null,
+            summary: row.summary.trim() ? row.summary : null,
+            focusTitle: deriveRoundFocusTitle(row.prCommits, row.fromSha ?? null, row.toSha),
+            prHeadSha: row.prHeadSha,
+          }));
 
-  listReviewRounds: (prId, currentHeadSha) =>
-    tryDb("listReviewRounds", (db) => {
-      const rows = db
-        .select({
-          id: reviewRounds.id,
-          walkthroughId: reviewRounds.walkthroughId,
-          previousWalkthroughId: reviewRounds.previousWalkthroughId,
-          roundNumber: reviewRounds.roundNumber,
-          kind: reviewRounds.kind,
-          mode: walkthroughs.mode,
-          visibility: reviewRounds.visibility,
-          status: reviewRounds.status,
-          fromSha: reviewRounds.fromSha,
-          toSha: reviewRounds.toSha,
-          createdAt: reviewRounds.createdAt,
-          completedAt: reviewRounds.completedAt,
-          summary: walkthroughs.summary,
-          prCommits: walkthroughs.prCommits,
-          prHeadSha: walkthroughs.prHeadSha,
-        })
-        .from(reviewRounds)
-        .innerJoin(walkthroughs, eq(walkthroughs.id, reviewRounds.walkthroughId))
-        .where(eq(reviewRounds.pullRequestId, prId))
-        .orderBy(asc(reviewRounds.roundNumber))
-        .all();
+          // legacy-upgrade: walkthroughOnlyReviewRounds.
+          if (rounds.length === 0) {
+            const legacyRows = db
+              .select({
+                id: walkthroughs.id,
+                previousWalkthroughId: walkthroughs.parentWalkthroughId,
+                status: walkthroughs.status,
+                generatedAt: walkthroughs.generatedAt,
+                completedAt: walkthroughs.completedAt,
+                summary: walkthroughs.summary,
+                prCommits: walkthroughs.prCommits,
+                prHeadSha: walkthroughs.prHeadSha,
+                generationMode: walkthroughs.generationMode,
+                mode: walkthroughs.mode,
+                baseHeadSha: walkthroughs.baseHeadSha,
+              })
+              .from(walkthroughs)
+              .where(eq(walkthroughs.pullRequestId, prId))
+              .orderBy(asc(walkthroughs.generatedAt))
+              .all();
 
-      let rounds: WalkthroughReviewRound[] = rows.map((row) => ({
-        id: row.id,
-        walkthroughId: row.walkthroughId,
-        previousWalkthroughId: row.previousWalkthroughId ?? null,
-        roundNumber: row.roundNumber,
-        kind: row.kind === "incremental" ? "incremental" : "full",
-        mode: row.mode,
-        visibility:
-          row.visibility === "hidden" || (row.kind === "incremental" && row.fromSha === row.toSha)
-            ? "hidden"
-            : "visible",
-        status: row.status as WalkthroughStatus,
-        fromSha: row.fromSha ?? null,
-        toSha: row.toSha,
-        createdAt: row.createdAt,
-        completedAt: row.completedAt ?? null,
-        summary: row.summary.trim() ? row.summary : null,
-        focusTitle: deriveRoundFocusTitle(row.prCommits, row.fromSha ?? null, row.toSha),
-        prHeadSha: row.prHeadSha,
-      }));
+            rounds = legacyRows.map((row, index) => ({
+              id: `legacy-${row.id}`,
+              walkthroughId: row.id,
+              previousWalkthroughId: row.previousWalkthroughId ?? null,
+              roundNumber: index + 1,
+              kind: row.generationMode === "incremental" ? "incremental" : "full",
+              mode: row.mode,
+              visibility:
+                row.generationMode === "incremental" && row.baseHeadSha === row.prHeadSha
+                  ? "hidden"
+                  : "visible",
+              status: row.status as WalkthroughStatus,
+              fromSha: row.baseHeadSha ?? null,
+              toSha: row.prHeadSha,
+              createdAt: row.generatedAt,
+              completedAt: row.completedAt ?? null,
+              summary: row.summary.trim() ? row.summary : null,
+              focusTitle: deriveRoundFocusTitle(
+                row.prCommits,
+                row.baseHeadSha ?? null,
+                row.prHeadSha,
+              ),
+              prHeadSha: row.prHeadSha,
+            }));
+          }
 
-      // legacy-upgrade: walkthroughOnlyReviewRounds.
-      if (rounds.length === 0) {
-        const legacyRows = db
-          .select({
-            id: walkthroughs.id,
-            previousWalkthroughId: walkthroughs.parentWalkthroughId,
-            status: walkthroughs.status,
-            generatedAt: walkthroughs.generatedAt,
-            completedAt: walkthroughs.completedAt,
-            summary: walkthroughs.summary,
-            prCommits: walkthroughs.prCommits,
-            prHeadSha: walkthroughs.prHeadSha,
-            generationMode: walkthroughs.generationMode,
-            mode: walkthroughs.mode,
-            baseHeadSha: walkthroughs.baseHeadSha,
-          })
-          .from(walkthroughs)
-          .where(eq(walkthroughs.pullRequestId, prId))
-          .orderBy(asc(walkthroughs.generatedAt))
-          .all();
+          const reportRounds = rounds.filter((round) => round.visibility !== "hidden");
+          const latestReviewed =
+            [...reportRounds].reverse().find((round) => round.completedAt !== null) ??
+            [...reportRounds]
+              .reverse()
+              .find((round) => round.status === "complete" || round.status === "superseded") ??
+            null;
 
-        rounds = legacyRows.map((row, index) => ({
-          id: `legacy-${row.id}`,
-          walkthroughId: row.id,
-          previousWalkthroughId: row.previousWalkthroughId ?? null,
-          roundNumber: index + 1,
-          kind: row.generationMode === "incremental" ? "incremental" : "full",
-          mode: row.mode,
-          visibility:
-            row.generationMode === "incremental" && row.baseHeadSha === row.prHeadSha
-              ? "hidden"
-              : "visible",
-          status: row.status as WalkthroughStatus,
-          fromSha: row.baseHeadSha ?? null,
-          toSha: row.prHeadSha,
-          createdAt: row.generatedAt,
-          completedAt: row.completedAt ?? null,
-          summary: row.summary.trim() ? row.summary : null,
-          focusTitle: deriveRoundFocusTitle(row.prCommits, row.baseHeadSha ?? null, row.prHeadSha),
-          prHeadSha: row.prHeadSha,
-        }));
-      }
+          const latestReviewedHeadSha = latestReviewed?.toSha ?? null;
+          const hasNewCommits =
+            currentHeadSha !== null &&
+            latestReviewedHeadSha !== null &&
+            latestReviewedHeadSha !== currentHeadSha;
 
-      const reportRounds = rounds.filter((round) => round.visibility !== "hidden");
-      const latestReviewed =
-        [...reportRounds].reverse().find((round) => round.completedAt !== null) ??
-        [...reportRounds]
-          .reverse()
-          .find((round) => round.status === "complete" || round.status === "superseded") ??
-        null;
-
-      const latestReviewedHeadSha = latestReviewed?.toSha ?? null;
-      const hasNewCommits =
-        currentHeadSha !== null &&
-        latestReviewedHeadSha !== null &&
-        latestReviewedHeadSha !== currentHeadSha;
-
-      return {
-        prId,
-        currentHeadSha,
-        latestReviewedHeadSha,
-        hasNewCommits,
-        nextBaseHeadSha: hasNewCommits ? latestReviewedHeadSha : null,
-        rounds,
-      };
-    }),
-});
+          return {
+            prId,
+            currentHeadSha,
+            latestReviewedHeadSha,
+            hasNewCommits,
+            nextBaseHeadSha: hasNewCommits ? latestReviewedHeadSha : null,
+            rounds,
+          };
+        }),
+    });
+  }),
+);

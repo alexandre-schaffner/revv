@@ -94,16 +94,18 @@ function stubJev(opts: StubOptions = {}) {
   return { layer, asked, questionsByPath };
 }
 
-const withDb = (db: Db) => Layer.succeed(DbService, { db });
+const dbLayer = (db: Db) => Layer.succeed(DbService, { db });
 
 /** `runHunkScan` as `HunkScanService` calls it, minus the service's in-flight bookkeeping. */
 function runInput(
+  db: Db,
   headSha: string,
   files: readonly FileLike[],
   retry: boolean,
   emit: (event: HunkScanEventMessage) => Effect.Effect<void>,
 ) {
   return {
+    db,
     prId: PR,
     headSha,
     selection: planHunkScan({ prId: PR, headSha, files, filePriorities: null }),
@@ -122,13 +124,13 @@ function scan(
 ) {
   const events: HunkScanEventMessage[] = [];
   const run = runHunkScan(
-    runInput(headSha, files, retry, (event) => Effect.sync(() => void events.push(event))),
-  ).pipe(Effect.provide(CacheServiceLive), Effect.provide(jev), Effect.provide(withDb(db)));
+    runInput(db, headSha, files, retry, (event) => Effect.sync(() => void events.push(event))),
+  ).pipe(Effect.provide(CacheServiceLive), Effect.provide(jev), Effect.provide(dbLayer(db)));
   return Effect.runPromise(run).then((rows) => ({ rows, events }));
 }
 
 const persisted = (db: Db, headSha: string) =>
-  Effect.runPromise(loadHunkScan({ prId: PR, headSha }).pipe(Effect.provide(withDb(db))));
+  Effect.runPromise(loadHunkScan(db, { prId: PR, headSha }));
 
 const QUIET = {
   vulnerability: 0,
@@ -146,13 +148,13 @@ const QUIET = {
 function cutOff(db: Db, headSha: string) {
   return Effect.runPromise(
     runHunkScan(
-      runInput(headSha, FILES, false, (e) =>
+      runInput(db, headSha, FILES, false, (e) =>
         e.type === "hunk-scan:started" ? Effect.interrupt : Effect.void,
       ),
     ).pipe(
       Effect.provide(CacheServiceLive),
       Effect.provide(stubJev().layer),
-      Effect.provide(withDb(db)),
+      Effect.provide(dbLayer(db)),
       Effect.exit,
     ),
   );
@@ -330,13 +332,13 @@ describe("runHunkScan", () => {
     if (!answered) throw new Error("seeded rows expected");
     await Effect.runPromise(
       Effect.gen(function* () {
-        const cutScan = yield* getHunkScan({ prId: PR, headSha: "sha-1" });
+        const cutScan = yield* getHunkScan(db, { prId: PR, headSha: "sha-1" });
         if (!cutScan) throw new Error("scan row expected");
-        yield* recordHunkSignals(cutScan.id, answered.filePath, answered.hunkIndex, {
+        yield* recordHunkSignals(db, cutScan.id, answered.filePath, answered.hunkIndex, {
           ...QUIET,
           slop: 0.9,
         });
-      }).pipe(Effect.provide(withDb(db))),
+      }),
     );
 
     const { layer, asked } = stubJev();
@@ -411,14 +413,18 @@ describe("runHunkScan", () => {
 });
 
 const realtimeFor = (db: Db) =>
-  RealtimeLive.pipe(Layer.provide(Layer.merge(BroadcasterLive, withDb(db))));
+  RealtimeLive.pipe(Layer.provide(Layer.merge(BroadcasterLive, dbLayer(db))));
 
 describe("HunkScanService", () => {
   it("runs one scan per head when the review page and a walkthrough ask at once", async () => {
     const db = makeDb();
     const { layer, asked } = stubJev();
     const service = HunkScanServiceLive.pipe(
-      Layer.provide(Layer.mergeAll(CacheServiceLive, layer, withDb(db), realtimeFor(db))),
+      Layer.provide(
+        Layer.mergeAll(CacheServiceLive, layer, realtimeFor(db)).pipe(
+          Layer.provideMerge(dbLayer(db)),
+        ),
+      ),
     );
     const input = { prId: PR, headSha: "sha-1", files: FILES, filePriorities: null };
     const [fromPage, fromJob] = await Effect.runPromise(
@@ -440,7 +446,11 @@ describe("HunkScanService", () => {
     const gate = Effect.runSync(Deferred.make<void>());
     const { layer } = stubJev({ gate: Deferred.await(gate) });
     const service = HunkScanServiceLive.pipe(
-      Layer.provide(Layer.mergeAll(CacheServiceLive, layer, withDb(db), realtimeFor(db))),
+      Layer.provide(
+        Layer.mergeAll(CacheServiceLive, layer, realtimeFor(db)).pipe(
+          Layer.provideMerge(dbLayer(db)),
+        ),
+      ),
     );
     const input = { prId: PR, headSha: "sha-1", files: FILES, filePriorities: null };
     const rows = await Effect.runPromise(

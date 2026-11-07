@@ -11,7 +11,6 @@ import { pullRequests } from "../../db/schema/pull-requests";
 import { type StackBriefSnapshot, stackBriefs } from "../../db/schema/stack-briefs";
 import type { DbError } from "../../domain/errors";
 import { dbTry } from "../../effects/db-try";
-import { withDb } from "../../effects/with-db";
 import { withTraceAnchor } from "../../observability/span-graft";
 import { DbService } from "../Db";
 import type { GitHubStack } from "../github/stacks";
@@ -191,9 +190,7 @@ export const StackBriefJobsLive = Layer.effect(
           return { kind: "failed", failure: "The stack snapshot has no layers" };
         }
 
-        const repo = yield* withDb(db, prCtx.getRepo(row.repositoryId)).pipe(
-          Effect.orElseSucceed(() => null),
-        );
+        const repo = yield* prCtx.getRepo(row.repositoryId).pipe(Effect.orElseSucceed(() => null));
         return yield* runToolGatedTurn({
           run,
           purpose: "brief",
@@ -232,7 +229,7 @@ export const StackBriefJobsLive = Layer.effect(
 
     const ensure = (prId: string, accountId: string) =>
       Effect.gen(function* () {
-        const ctx = yield* withDb(db, prCtx.forPr(prId, accountId));
+        const ctx = yield* prCtx.forPr(prId, accountId);
         const stack = yield* stacks.fetchFresh(ctx, ctx.pr.externalId);
         if (!stack) return null;
         const open = stack.layers.filter(isOpenLayer);

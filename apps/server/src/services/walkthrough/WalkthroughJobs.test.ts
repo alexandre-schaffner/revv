@@ -58,7 +58,7 @@ function jobsAt(db: Db, head: string) {
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(DbService, { db }),
-        WalkthroughServiceLive,
+        WalkthroughServiceLive.pipe(Layer.provide(Layer.succeed(DbService, { db }))),
         Layer.succeed(PrContextService, {
           forPr: () => Effect.succeed(context),
           withDiff: () =>

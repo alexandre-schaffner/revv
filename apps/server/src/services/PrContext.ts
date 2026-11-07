@@ -7,8 +7,6 @@ import {
   GitHubNotFoundError,
   type NotFoundError,
 } from "../domain/errors";
-import { withDb } from "../effects/with-db";
-import { DbService } from "./Db";
 import { DiffCacheService, toGitHubFileShape } from "./DiffCache";
 import { GitHubAccounts } from "./github/accounts";
 import { GitHubGateway } from "./github/gateway";
@@ -67,7 +65,6 @@ export class PrContextService extends Context.Service<
 export const PrContextServiceLive = Layer.effect(
   PrContextService,
   Effect.gen(function* () {
-    const { db } = yield* DbService;
     const prService = yield* PullRequestService;
     const repoService = yield* RepositoryService;
     const accounts = yield* GitHubAccounts;
@@ -76,15 +73,15 @@ export const PrContextServiceLive = Layer.effect(
 
     const forRepo = (repoId: string) =>
       Effect.gen(function* () {
-        const repo = yield* withDb(db, repoService.getRepoById(repoId));
-        const accountId = yield* withDb(db, repoService.getAccountIdForRepo(repo.id));
+        const repo = yield* repoService.getRepoById(repoId);
+        const accountId = yield* repoService.getAccountIdForRepo(repo.id);
         const client = yield* accounts.clientFor(accountId);
         return { repo, accountId, client } satisfies RepoContext;
       });
 
     const forPr = (prId: string, accountId?: string) =>
       Effect.gen(function* () {
-        const pr = yield* withDb(db, prService.getPr(prId, accountId));
+        const pr = yield* prService.getPr(prId, accountId);
         return { ...(yield* forRepo(pr.repositoryId)), pr } satisfies PrContextBasic;
       });
 
@@ -124,7 +121,7 @@ export const PrContextServiceLive = Layer.effect(
       });
 
     return {
-      getRepo: (repoId: string) => withDb(db, repoService.getRepoById(repoId)),
+      getRepo: (repoId: string) => repoService.getRepoById(repoId),
       forRepo,
       forPr,
       withDiff,

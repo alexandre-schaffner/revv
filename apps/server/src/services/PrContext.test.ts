@@ -72,9 +72,7 @@ async function withDiff(live: { headSha: string; title: string }) {
   const layer = PrContextServiceLive.pipe(
     Layer.provide(
       Layer.mergeAll(
-        dbLayer,
-        PullRequestServiceLive,
-        RepositoryServiceLive,
+        Layer.mergeAll(PullRequestServiceLive, RepositoryServiceLive).pipe(Layer.provide(dbLayer)),
         Layer.succeed(GitHubAccounts, {
           clientFor: () => Effect.succeed(githubClient("github.com", "tok", ACCOUNT_ID)),
         } as unknown as Context.Service.Shape<typeof GitHubAccounts>),
