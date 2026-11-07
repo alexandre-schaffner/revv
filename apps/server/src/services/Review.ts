@@ -43,7 +43,6 @@ export interface NewMessage {
   authorLogin?: string;
   body: string;
   messageType: MessageType;
-  codeSuggestion?: string;
   externalId?: string;
   createdAt?: string;
 }
@@ -146,7 +145,9 @@ export class ReviewService extends Context.Service<
     /** Drop a thread GitHub doesn't have after all (submit couldn't link it). Announces `thread:deleted`. */
     readonly dropThread: (threadId: string) => Effect.Effect<void, DbError>;
 
-    // GitHub bookkeeping: announces nothing; readers reconcile on their next read.
+    // GitHub bookkeeping. Announces nothing itself: the push that posted the
+    // comments announces `threads:synced` once it has linked them all
+    // (`SyncService`), and clients re-read the PR's threads.
 
     readonly linkThread: (
       threadId: string,
@@ -208,7 +209,6 @@ export function toMessage(row: MessageRow, avatarContent: string | null): Thread
     authorAvatarContent: avatarContent,
     body: row.body,
     messageType: row.messageType as MessageType,
-    codeSuggestion: row.codeSuggestion ?? null,
     createdAt: row.createdAt,
     editedAt: row.editedAt ?? null,
     externalId: row.externalId ?? null,
@@ -293,7 +293,6 @@ function insertMessage(
     createdAt: params.createdAt ?? new Date().toISOString(),
   };
   if (params.authorLogin !== undefined) row.authorLogin = params.authorLogin;
-  if (params.codeSuggestion !== undefined) row.codeSuggestion = params.codeSuggestion;
   if (params.externalId !== undefined) row.externalId = params.externalId;
   db.insert(threadMessages).values(row).run();
   const message = readMessage(db, id);

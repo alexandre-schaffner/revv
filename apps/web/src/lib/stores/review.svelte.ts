@@ -142,7 +142,7 @@ export async function addThread(prId: string, params: NewThread): Promise<Commen
         startLine: params.startLine,
         endLine: params.endLine,
         diffSide: params.diffSide,
-        message: { body: params.body, messageType: "comment" },
+        message: { body: params.body },
       }),
       "Failed to create thread",
     );
@@ -169,7 +169,7 @@ export async function addThreadMessage(threadId: string, body: string): Promise<
   let message: ThreadMessage;
   try {
     message = await call(
-      api.api.threads({ id: threadId }).messages.post({ body, messageType: "reply" }),
+      api.api.threads({ id: threadId }).messages.post({ body }),
       "Failed to add reply",
     );
   } catch (e) {
@@ -286,15 +286,14 @@ export async function deleteThread(threadId: string): Promise<boolean> {
 
 /** Push one local draft comment to GitHub under the active account's identity. */
 export async function pushThreadToGitHub(threadId: string): Promise<boolean> {
-  const prId = prOfThread(threadId);
   try {
     await call(api.api.threads({ id: threadId }).push.post(), "Failed to send comment to GitHub");
   } catch (e) {
     toast.error(thrownMessage(e));
     return false;
   }
-
-  if (prId) await loadSession(prId, true);
+  // The server announces `threads:synced` once the thread is linked; the
+  // re-read it triggers makes the posted draft read-only.
   toast.success("Comment sent to GitHub");
   return true;
 }

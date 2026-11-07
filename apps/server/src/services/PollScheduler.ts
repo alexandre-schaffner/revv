@@ -70,7 +70,6 @@ type PollSchedulerService = {
   readonly refreshPr: (
     prId: string,
   ) => Effect.Effect<void, NotFoundError | DbError | GitHubAuthError | GitHubError | SyncError>;
-  readonly syncThreadsNow: (prId: string) => Effect.Effect<void>;
 };
 
 export class PollScheduler extends Context.Service<PollScheduler, PollSchedulerService>()(
@@ -427,34 +426,6 @@ export const PollSchedulerLive = Layer.effect(
       freshen: () => runSyncOnce("freshen"),
 
       refreshPr: (prId) => refreshPr(prId).pipe(withGitHubOrigin(`poll:refresh-pr`)),
-
-      syncThreadsNow: (prId: string) =>
-        syncService.syncThreads(prId, { force: true }).pipe(
-          Effect.asVoid,
-          Effect.catchTag("NotFoundError", () => Effect.void),
-          Effect.catch((err) =>
-            Effect.gen(function* () {
-              logError("PollScheduler", `Manual thread sync failed for PR ${prId}:`, err);
-              yield* realtime.toPr(prId, {
-                type: "threads:sync-error",
-                data: { prId, message: httpErrorOf(err).message },
-              });
-            }),
-          ),
-          Effect.catchCause((cause) =>
-            Effect.gen(function* () {
-              logError(
-                "PollScheduler",
-                `Manual thread sync failed for PR ${prId}:`,
-                Cause.pretty(cause),
-              );
-              yield* realtime.toPr(prId, {
-                type: "threads:sync-error",
-                data: { prId, message: "Thread sync failed unexpectedly" },
-              });
-            }),
-          ),
-        ),
     };
   }),
 );

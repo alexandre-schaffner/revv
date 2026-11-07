@@ -27,6 +27,7 @@ import {
 } from "../services/pr-file-prerender";
 import { RepositoryService } from "../services/Repository";
 import { ReviewService } from "../services/Review";
+import { SyncService } from "../services/Sync";
 import { runRoute, withAccount, withAuth } from "./middleware";
 import { asOwner, ownedBy } from "./ownership";
 import { literalUnion } from "./schemas";
@@ -395,7 +396,7 @@ const prByIdRoutes = new Elysia({ prefix: "/api/prs" })
 
   .post("/:id/sync-threads", (ctx) =>
     runRoute(
-      Effect.flatMap(PollScheduler, (s) => s.syncThreadsNow(ctx.params.id)).pipe(
+      Effect.flatMap(SyncService, (s) => s.syncThreadsNow(ctx.params.id)).pipe(
         Effect.as({ success: true }),
       ),
     ),

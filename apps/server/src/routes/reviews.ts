@@ -26,6 +26,7 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
           const created = yield* review.startThread(ctx.params.id, anchor, {
             ...message,
             ...author,
+            messageType: "comment",
           });
           ctx.set.status = 201;
           return created;

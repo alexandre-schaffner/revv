@@ -12,6 +12,7 @@ export const threadMessages = sqliteTable("thread_messages", {
   authorLogin: text("author_login"),
   body: text("body").notNull(),
   messageType: text("message_type").notNull().default("comment"),
+  // Retired: never written or read.
   codeSuggestion: text("code_suggestion"),
   createdAt: text("created_at").notNull(),
   editedAt: text("edited_at"),

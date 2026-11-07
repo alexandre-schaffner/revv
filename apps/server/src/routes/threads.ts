@@ -99,7 +99,11 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
         Effect.gen(function* () {
           const review = yield* ReviewService;
           const author = humanAuthor(yield* viewerOnThread(ctx.params.id));
-          const { message } = yield* review.reply(ctx.params.id, { ...ctx.body, ...author });
+          const { message } = yield* review.reply(ctx.params.id, {
+            ...ctx.body,
+            ...author,
+            messageType: "reply",
+          });
           ctx.set.status = 201;
           return message;
         }),

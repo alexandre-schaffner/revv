@@ -37,7 +37,8 @@ export function isThreadResolved(status: string): boolean {
 export const AUTHOR_ROLES = ["reviewer", "coder", "ai_agent"] as const;
 export type AuthorRole = (typeof AUTHOR_ROLES)[number];
 
-export const MESSAGE_TYPES = ["comment", "reply", "suggestion", "resolution"] as const;
+/** A thread's first message is its `comment`; every later one is a `reply`. */
+export const MESSAGE_TYPES = ["comment", "reply"] as const;
 export type MessageType = (typeof MESSAGE_TYPES)[number];
 
 export interface CommentThread {
@@ -65,7 +66,6 @@ export interface ThreadMessage {
   authorAvatarContent: string | null;
   body: string;
   messageType: MessageType;
-  codeSuggestion: string | null;
   createdAt: string;
   editedAt: string | null;
   externalId: string | null;
