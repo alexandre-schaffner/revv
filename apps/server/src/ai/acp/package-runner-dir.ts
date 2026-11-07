@@ -42,3 +42,12 @@ export function ensurePackageRunnerDir(dir: string = PACKAGE_RUNNER_DIR): string
     return null;
   }
 }
+
+/**
+ * The working directory of an agent turn that has no project to work in: the
+ * Revv-owned runner directory, never the server's own directory, which an
+ * agent with shell and edit tools must not be handed.
+ */
+export function projectlessAgentCwd(): string {
+  return ensurePackageRunnerDir() ?? process.cwd();
+}

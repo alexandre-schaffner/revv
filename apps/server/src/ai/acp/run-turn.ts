@@ -20,7 +20,7 @@ import { type AcpConnectionHandle, getAcpConnection, peekAcpConnection } from ".
 import { type AgentTurnFailure, agentTurnFailure } from "./agent-failure";
 import type { AgentLaunch } from "./agent-launch";
 import { isAgentLaunchable } from "./launch";
-import { ensurePackageRunnerDir } from "./package-runner-dir";
+import { projectlessAgentCwd } from "./package-runner-dir";
 import { findPlanModeId, modeToExitPlan } from "./session-config";
 
 export interface TurnDeadlines {
@@ -443,7 +443,7 @@ export async function promptOnce(input: {
   const outcome = await runAcpTurn({
     label: input.label,
     launch: input.launch,
-    cwd: ensurePackageRunnerDir() ?? process.cwd(),
+    cwd: projectlessAgentCwd(),
     prompt: () => [{ type: "text", text: input.text }],
     onUpdate: (update) => {
       for (const ev of decodeAcpSessionUpdate(update, decodeState)) {
