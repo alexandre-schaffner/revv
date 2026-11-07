@@ -92,7 +92,7 @@ jobs:
           mv "$tmp" apps/desktop/tauri.conf.json
       - name: Build unsigned app
         working-directory: apps/desktop
-        run: bunx --no-install tauri build --ci --target "$TARGET" --config '{"bundle":{"createUpdaterArtifacts":false}}' -- --locked
+        run: bunx --no-install tauri build --ci --target "$TARGET" -- --locked
       - name: Verify and stage bundles
         run: python3 scripts/release/stage.py "$TARGET" "$ARCH" "$VERSION"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

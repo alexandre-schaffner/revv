@@ -193,6 +193,7 @@ info "Project root: $PROJECT_ROOT"
 step "Detecting platform"
 detect_platform
 success "Platform: $PLATFORM ($ARCH) → target $RUST_TARGET"
+revv_paths
 
 step "Checking build toolchain"
 ensure_xcode_clt
@@ -246,10 +247,11 @@ if [[ "$MODE" == "dev" ]]; then
   printf '  └─────────────────────────────────────┘\n'
   printf '%s\n' "$REVV_RESET"
   printf '  %sStart developing:%s\n' "$REVV_BOLD" "$REVV_RESET"
-  printf '    %s$%s make dev             %s# all services (web, server, Tauri)%s\n' "$REVV_DIM" "$REVV_RESET" "$REVV_DIM" "$REVV_RESET"
+  printf '    %s$%s make dev             %s# web, server and collector (no desktop shell)%s\n' "$REVV_DIM" "$REVV_RESET" "$REVV_DIM" "$REVV_RESET"
+  printf '    %s$%s make dev-desktop     %s# the same plus the Tauri dev app%s\n' "$REVV_DIM" "$REVV_RESET" "$REVV_DIM" "$REVV_RESET"
   printf '    %s$%s make dev-server      %s# API only (port 45679)%s\n\n' "$REVV_DIM" "$REVV_RESET" "$REVV_DIM" "$REVV_RESET"
-  printf '  No .env file is required for normal use — see .env.example for\n'
-  printf '  optional overrides (custom GitHub client_id, DB path, etc.).\n\n'
+  printf '  No .env file is required. .env.example shows a few optional overrides;\n'
+  printf '  apps/server/src/config.ts reads them all.\n\n'
   exit 0
 fi
 
@@ -271,55 +273,15 @@ step "Installing pre-built Revv.app"
 release_tag="$(_resolve_install_release_tag || true)"
 if ! install_release_app "$release_tag" "$REVV_APP_DIR"; then
   warn "Could not install a pre-built app bundle; falling back to a local build."
-  ensure_rust
   step "Building Revv.app (first run can take several minutes)"
-  (
-    cd "$PROJECT_ROOT/packages/shared" && bun run typecheck
-  )
-  (
-    cd "$PROJECT_ROOT" && bun run build
-  )
-  (
-    cd "$PROJECT_ROOT/apps/desktop" && bunx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
-  )
-
-  bundle_macos_dir="$PROJECT_ROOT/apps/desktop/target/release/bundle/macos"
-  bundle_app="$(find "$bundle_macos_dir" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
-  if [[ -z "$bundle_app" ]]; then
-    bundle_app="$(find "$PROJECT_ROOT/apps/desktop/target" -maxdepth 6 -type d -name '*.app' -path '*/bundle/macos/*' 2>/dev/null | head -1)"
-  fi
-  [[ -n "$bundle_app" && -d "$bundle_app" ]] \
-    || fail "Build finished but no .app was found under $bundle_macos_dir"
-  app_name="$(basename "$bundle_app")"
-  success "Built $bundle_app"
-
-  step "Installing $app_name"
-  if [[ -w "$REVV_APP_DIR" ]]; then
-    dest_app_dir="$REVV_APP_DIR"
-  else
-    warn "$REVV_APP_DIR is not writable — using ~/Applications"
-    dest_app_dir="$HOME/Applications"
-    mkdir -p "$dest_app_dir"
-  fi
-  dest_app="$dest_app_dir/$app_name"
-
-  xattr -cr "$bundle_app" 2>/dev/null || true
-
-  if [[ -f "$REVV_LAUNCH_AGENT_PLIST" ]]; then
-    launchctl unload "$REVV_LAUNCH_AGENT_PLIST" 2>/dev/null || true
-  fi
-  quit_revv_app "$dest_app"
-
-  [[ -d "$dest_app" ]] && rm -rf "$dest_app"
-  cp -R "$bundle_app" "$dest_app"
-  xattr -cr "$dest_app" 2>/dev/null || true
-  success "Installed → $dest_app"
-else
-  dest_app="$REVV_INSTALLED_APP"
-  app_name="$(basename "$dest_app")"
-  dest_app_dir="$(dirname "$dest_app")"
-  success "Installed → $dest_app"
+  build_local_app "$PROJECT_ROOT"
+  success "Built $REVV_BUILT_APP"
+  install_app_bundle "$REVV_BUILT_APP" "$REVV_APP_DIR" \
+    || fail "Could not install $REVV_BUILT_APP into $REVV_APP_DIR"
 fi
+dest_app="$REVV_INSTALLED_APP"
+dest_app_dir="$(dirname "$dest_app")"
+success "Installed → $dest_app"
 
 # The server bundles a github.com OAuth App (defaults in
 # apps/server/src/config.ts). To target another GitHub instance, export both

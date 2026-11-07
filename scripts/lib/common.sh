@@ -291,9 +291,13 @@ revv_sha256_of() {
   fi
 }
 
+# install_release_app TAG [INSTALL_DIR] [PREVIOUS_APP]: installs the app from
+# a GitHub release's updater archive (see install_app_bundle). Returns 1 when
+# the release or its archive is unavailable.
 install_release_app() {
-  local release_tag="$1" app_dir="${2:-}" asset_arch asset_name release_json bundle_url bundle_sha
-  local sums_file bundle_file actual_sha extract_dir app_source install_dir installed_app tmp_app backup_app
+  local release_tag="$1" install_dir="${2:-}" previous_app="${3:-}"
+  local asset_arch asset_name release_json bundle_url bundle_sha
+  local sums_file bundle_file actual_sha extract_dir app_source rc
 
   REVV_INSTALLED_APP=""
   [[ -n "$release_tag" ]] || return 1
@@ -355,27 +359,61 @@ install_release_app() {
     return 1
   fi
 
-  install_dir="${app_dir:-/Applications}"
+  rc=0
+  install_app_bundle "$app_source" "$install_dir" "$previous_app" || rc=$?
+  rm -rf "$extract_dir"
+  return "$rc"
+}
+
+# build_local_app PROJECT_ROOT: builds Revv.app from the checkout with
+# `bun run dist` and sets REVV_BUILT_APP.
+build_local_app() {
+  local project_root="$1" bundle_dir
+  detect_platform
+  ensure_xcode_clt
+  ensure_rust
+  (cd "$project_root" && bun run dist) || fail "Building Revv.app failed (see the output above)."
+
+  bundle_dir="$project_root/apps/desktop/target/release/bundle/macos"
+  REVV_BUILT_APP="$(find "$bundle_dir" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
+  if [[ -z "$REVV_BUILT_APP" ]]; then
+    # A cargo build.target setting puts the bundle under target/<triple>/.
+    REVV_BUILT_APP="$(find "$project_root/apps/desktop/target" -maxdepth 6 -type d -name '*.app' -path '*/bundle/macos/*' 2>/dev/null | head -1)"
+  fi
+  [[ -n "$REVV_BUILT_APP" ]] || fail "Build finished but no .app was found under $bundle_dir"
+}
+
+# install_app_bundle SOURCE_APP [INSTALL_DIR] [PREVIOUS_APP]: copies
+# SOURCE_APP into INSTALL_DIR (default /Applications; ~/Applications when it
+# isn't writable) and swaps it in for the installed copy in one rename, so a
+# failure leaves the old app in place. PREVIOUS_APP is the app this replaces;
+# it is removed when the product name changed. Sets REVV_INSTALLED_APP.
+install_app_bundle() {
+  local source_app="$1" install_dir="${2:-/Applications}" previous_app="${3:-}"
+  local installed_app tmp_app backup_app=""
+
+  REVV_INSTALLED_APP=""
   [[ -w "$install_dir" ]] || install_dir="$HOME/Applications"
-  mkdir -p "$install_dir" || {
-    rm -rf "$extract_dir"
-    return 1
-  }
-  installed_app="$install_dir/$(basename "$app_source")"
+  mkdir -p "$install_dir" || return 1
+  installed_app="$install_dir/$(basename "$source_app")"
   tmp_app="${installed_app}.tmp.$$"
 
-  rm -rf "$tmp_app" || {
-    rm -rf "$extract_dir"
-    return 1
-  }
-  if ! mv "$app_source" "$tmp_app"; then
-    rm -rf "$tmp_app" "$extract_dir"
+  rm -rf "$tmp_app" || return 1
+  if ! cp -R "$source_app" "$tmp_app"; then
+    rm -rf "$tmp_app"
     return 1
   fi
-  rm -rf "$extract_dir"
   xattr -cr "$tmp_app" 2>/dev/null || true
 
-  backup_app=""
+  # legacy-upgrade: launchAgent. Its KeepAlive server runs from inside the
+  # installed bundle; stop it before the bundle moves. The plist stays for
+  # write_desktop_server_config to migrate, then retire_server_launch_agent
+  # removes it.
+  local launch_agent="${REVV_LAUNCH_AGENT_PLIST:-$HOME/Library/LaunchAgents/com.revv.server.plist}"
+  if [[ -f "$launch_agent" ]]; then
+    launchctl unload "$launch_agent" 2>/dev/null || true
+  fi
+
   if [[ -e "$installed_app" ]]; then
     quit_revv_app "$installed_app"
     backup_app="${installed_app}.backup.$$"
@@ -393,6 +431,12 @@ install_release_app() {
   fi
   if [[ -n "$backup_app" ]]; then
     rm -rf "$backup_app" || warn "Installed app, but could not remove backup: $backup_app"
+  fi
+
+  if [[ -n "$previous_app" && "$previous_app" != "$installed_app" && -d "$previous_app" ]]; then
+    info "Product name changed — removing $previous_app"
+    quit_revv_app "$previous_app"
+    rm -rf "$previous_app" || warn "Installed app, but could not remove $previous_app"
   fi
 
   REVV_INSTALLED_APP="$installed_app"

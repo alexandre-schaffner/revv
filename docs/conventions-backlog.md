@@ -18,8 +18,8 @@ default sort.
 
 ## Open
 
-<a id="e-003"></a>
-### E-003 — `CacheService.getOrFetch` runs its fetcher with `Effect.runPromiseWith`
+<a id="e-007"></a>
+### E-007 — `CacheService.getOrFetch` runs its fetcher with `Effect.runPromiseWith`
 
 **Rule violated:** [§2.2 — Stay inside Effect](./conventions.md#effect-stay-inside).
 
@@ -33,8 +33,8 @@ fetch, typed failures for every caller, the entry dropped on settle) without lea
 
 **Severity:** Low.
 
-<a id="s-001"></a>
-### S-001 — Feature files still flat beside (or instead of) a `services/<feature>/` folder
+<a id="s-006"></a>
+### S-006 — Feature files still flat beside (or instead of) a `services/<feature>/` folder
 
 **Rule violated:** [§2.7 — A multi-file feature owns a folder](./conventions.md#services-layout).
 
@@ -47,6 +47,7 @@ fetch, typed failures for every caller, the entry dropped on settle) without lea
 - team cache: `Cache.ts`, `cache-eligibility.ts`, beside `cache-signing/` and `blob/`
 - no folder yet:
   - poll: `PollScheduler.ts`, `poll-{gate,maintenance,notifications,open-prs,state}.ts`
+  - PR mirror: `PrMirror.ts`, `pr-head-move.ts`, `pr-head-moves.ts` (which only the mirror and its listeners use)
   - review: `Review.ts`, `review-submit.ts`, `review-mode.ts`, `github-review-comment.ts`, `Sync.ts`, `diff-anchors.ts`
   - onboarding: `Onboarding.ts`, `AgentLogin.ts`, `EventJobRegistry.ts` (which only those two use)
 

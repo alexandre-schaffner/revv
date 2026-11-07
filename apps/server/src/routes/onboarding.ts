@@ -99,10 +99,9 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
     ),
   )
   /**
-   * Single detection snapshot the agent-selection step consumes: per-agent
-   * installed + authed + login command, plus whether this host supports the
-   * embedded PTY login. Drives the picker's installed/needs-sign-in tags and the
-   * adaptive Install / Sign-in / Continue CTA.
+   * Single detection snapshot the agent-selection step consumes: per agent,
+   * whether it is installed and how it is signed in. Drives the picker's
+   * installed/needs-sign-in tags and the adaptive Install / Sign-in / Continue CTA.
    */
   .get("/agent-status", async (ctx) => {
     if (ctx.query?.refresh === "1") invalidateAgentProbes();

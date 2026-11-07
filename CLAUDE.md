@@ -121,7 +121,7 @@ Proposing a new convention: open a PR editing `docs/conventions.md`; no RFC cere
 
 ## Environment
 
-Nothing is required to develop: sign-in is GitHub's device flow, the github.com client ids are bundled (`apps/server/src/config.ts`), and tokens live in the OS keychain; when it is unavailable they fall back to an encrypted file keyed by `secret-store.key`, generated in the app-data dir on first use (`BETTER_AUTH_SECRET` overrides it, a name kept so existing fallback stores stay readable). `config.ts` is the only reader of Revv's env vars; `.env.example` lists the optional ones. A GitHub Enterprise host needs its own OAuth/App client id, entered during onboarding (or `GITHUB_CLIENT_ID`).
+Nothing is required to develop: sign-in is GitHub's device flow, the github.com client ids are bundled (`apps/server/src/config.ts`), and tokens live in the OS keychain; when it is unavailable they fall back to an encrypted file keyed by `secret-store.key`, generated in the app-data dir on first use (`BETTER_AUTH_SECRET` overrides it, a name kept so existing fallback stores stay readable). `config.ts` is the only reader of Revv's env vars; `.env.example` shows a few of them. A GitHub Enterprise host needs its own OAuth/App client id, entered during onboarding (or `GITHUB_CLIENT_ID`).
 
 ## Product Direction
 

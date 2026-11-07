@@ -442,7 +442,7 @@ cmd_update() {
     source "$INSTALL_DIR/scripts/lib/common.sh"
   fi
 
-  local bundle_app app_name dest_app dest_dir old_app used_prebuilt=0
+  local old_app
   old_app="$(find_app)" || old_app=""
 
   printf "\n"
@@ -451,67 +451,22 @@ cmd_update() {
   spin_stop 1
 
   step "Desktop app"
-  local release_tag old_app_dir=""
+  local release_tag install_dir=""
   if [[ "$channel" == "stable" ]]; then
     release_tag="$(git -C "$INSTALL_DIR" describe --tags --exact-match HEAD 2>/dev/null || true)"
   else
     release_tag="nightly-$(git -C "$INSTALL_DIR" rev-parse --short HEAD)"
   fi
-  [[ -n "$old_app" ]] && old_app_dir="$(dirname "$old_app")"
-  if install_release_app "$release_tag" "$old_app_dir"; then
-    dest_app="$REVV_INSTALLED_APP"
-    app_name="$(basename "$dest_app")"
-    used_prebuilt=1
-    success "Installed → $dest_app"
-  else
+  [[ -n "$old_app" ]] && install_dir="$(dirname "$old_app")"
+  if ! install_release_app "$release_tag" "$install_dir" "$old_app"; then
     warn "Could not install a pre-built app bundle; falling back to a local build."
-  fi
-
-  if [[ "$used_prebuilt" -eq 0 ]]; then
-    if declare -F detect_platform >/dev/null 2>&1 \
-      && declare -F ensure_xcode_clt >/dev/null 2>&1 \
-      && declare -F ensure_rust >/dev/null 2>&1; then
-      step "Checking local build toolchain"
-      detect_platform
-      ensure_xcode_clt
-      ensure_rust
-    elif ! command -v cargo >/dev/null 2>&1; then
-      fail "Rust/Cargo is required for the local Tauri build fallback. Install it with: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
-    fi
-
     step "Build"
-    (cd "$INSTALL_DIR" && make dist)
-
-    bundle_app="$(find "$INSTALL_DIR/apps/desktop/target/release/bundle/macos" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
-    if [[ -z "$bundle_app" ]]; then
-      bundle_app="$(find "$INSTALL_DIR/apps/desktop/target" -maxdepth 6 -type d -name '*.app' -path '*/bundle/macos/*' 2>/dev/null | head -1)"
-    fi
-    [[ -d "$bundle_app" ]] || fail "Build finished but no .app bundle was produced."
-    app_name="$(basename "$bundle_app")"
-
-    if [[ -n "$old_app" ]]; then
-      dest_dir="$(dirname "$old_app")"
-    else
-      dest_dir="/Applications"
-    fi
-    if [[ ! -w "$dest_dir" ]]; then
-      warn "$dest_dir is not writable — falling back to ~/Applications"
-      dest_dir="$HOME/Applications"
-      mkdir -p "$dest_dir"
-    fi
-    dest_app="$dest_dir/$app_name"
-
-    if [[ -n "$old_app" && "$old_app" != "$dest_app" && -d "$old_app" ]]; then
-      info "Product name changed — removing stale $old_app"
-      rm -rf "$old_app"
-    fi
-
-    spin_start "Installing ${app_name}…"
-    rm -rf "$dest_app"
-    cp -R "$bundle_app" "$dest_app"
-    xattr -cr "$dest_app" 2>/dev/null || true
-    spin_stop 1
+    build_local_app "$INSTALL_DIR"
+    install_app_bundle "$REVV_BUILT_APP" "$install_dir" "$old_app" \
+      || fail "Could not install $REVV_BUILT_APP"
   fi
+  local dest_app="$REVV_INSTALLED_APP"
+  success "Installed → $dest_app"
 
   configure_server
   open -g "$dest_app" --args --hidden
