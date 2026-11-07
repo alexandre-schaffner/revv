@@ -44,7 +44,6 @@ function handleAgentChange(value: string | undefined): void {
 	<SettingsGroup>
 		<SettingsRow
 			row={pane.rows.enabled}
-			label="Generate recaps"
 			hint="Summarize each repository's merged and in-flight work on a schedule. When off, nothing is generated in the background."
 		>
 			{#snippet control()}
@@ -61,7 +60,7 @@ function handleAgentChange(value: string | undefined): void {
 		heading="Schedule"
 		description="Schedules run on UTC boundaries: daily recaps cover the previous UTC day, weekly ones the previous ISO week."
 	>
-		<SettingsRow row={pane.rows.daily} label="Daily recap" disabled={!enabled}>
+		<SettingsRow row={pane.rows.daily} disabled={!enabled}>
 			{#snippet control()}
 				<Switch
 					checked={recap.dailyEnabled}
@@ -71,7 +70,7 @@ function handleAgentChange(value: string | undefined): void {
 				/>
 			{/snippet}
 		</SettingsRow>
-		<SettingsRow row={pane.rows.weekly} label="Weekly recap" disabled={!enabled}>
+		<SettingsRow row={pane.rows.weekly} disabled={!enabled}>
 			{#snippet control()}
 				<Switch
 					checked={recap.weeklyEnabled}
@@ -83,7 +82,6 @@ function handleAgentChange(value: string | undefined): void {
 		</SettingsRow>
 		<SettingsRow
 			row={pane.rows.agent}
-			label="Recap agent"
 			hint="Which agent writes recaps. Following the main agent keeps it in step with Settings → AI agent."
 			disabled={!enabled}
 		>

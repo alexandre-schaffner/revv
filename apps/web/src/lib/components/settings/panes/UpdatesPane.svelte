@@ -86,7 +86,7 @@ const clipboard = copyFeedback(1400);
 
 <SettingsPane {pane}>
 	<SettingsGroup>
-		<SettingsRow row={pane.rows.channel} label="Release channel" hint={channelDescriptions[channel]}>
+		<SettingsRow row={pane.rows.channel} hint={channelDescriptions[channel]}>
 			{#snippet control()}
 				<SegmentedControl
 					aria-label="Release channel"
@@ -96,7 +96,7 @@ const clipboard = copyFeedback(1400);
 				/>
 			{/snippet}
 		</SettingsRow>
-		<SettingsRow row={pane.rows.check} label="Check for updates" hint="Revv also checks on its own every hour.">
+		<SettingsRow row={pane.rows.check} hint="Revv also checks on its own every hour.">
 			{#snippet control()}
 				<Button variant="outline" size="sm" onclick={handleCheckNow} disabled={checking}>
 					{#if checking}
@@ -109,7 +109,7 @@ const clipboard = copyFeedback(1400);
 				</Button>
 			{/snippet}
 		</SettingsRow>
-		<SettingsRow row={pane.rows.build} label="App build" hint="The commit this app was built from.">
+		<SettingsRow row={pane.rows.build} hint="The commit this app was built from.">
 			{#snippet control()}
 				<span class="build-hash">{commitHash}</span>
 				<Button
@@ -135,7 +135,6 @@ const clipboard = copyFeedback(1400);
 		</SettingsRow>
 		<SettingsRow
 			row={pane.rows.serviceBuild}
-			label="Background service build"
 			hint={serviceBuild?.mismatch
 				? 'Does not match this app. Quit Revv from the menu bar icon and open it again.'
 				: 'The commit the service that runs reviews and chat was started from.'}

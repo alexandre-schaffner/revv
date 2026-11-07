@@ -63,14 +63,14 @@ function repoHint(repo: Repository): string | undefined {
 
 		{#if repositories.length === 0}
 			<SettingsRow
-				row={pane.rows.list}
+				searchRow={pane.rows.list}
 				label="No repositories yet"
 				hint="Add a repository to start syncing its pull requests."
 			/>
 		{:else}
 			{#each repositories as repo, i (repo.id)}
 				<SettingsRow
-					row={i === 0 ? pane.rows.list : undefined}
+					searchRow={i === 0 ? pane.rows.list : undefined}
 					label={repo.fullName}
 					hint={repoHint(repo)}
 				>
