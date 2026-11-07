@@ -248,15 +248,10 @@ if [[ "$MODE" == "dev" ]]; then
   printf '  %sStart developing:%s\n' "$REVV_BOLD" "$REVV_RESET"
   printf '    %s$%s make dev             %s# all services (web, server, Tauri)%s\n' "$REVV_DIM" "$REVV_RESET" "$REVV_DIM" "$REVV_RESET"
   printf '    %s$%s make dev-server      %s# API only (port 45679)%s\n\n' "$REVV_DIM" "$REVV_RESET" "$REVV_DIM" "$REVV_RESET"
-  printf '  On first server start, Revv generates an auth key at:\n'
-  printf '    %s\n' "${REVV_AUTH_KEY:-$HOME/Library/Application Support/Revv/auth.key}"
   printf '  No .env file is required for normal use — see .env.example for\n'
   printf '  optional overrides (custom GitHub client_id, DB path, etc.).\n\n'
   exit 0
 fi
-
-step "Ensuring auth key"
-ensure_auth_key
 
 _resolve_install_release_tag() {
   if [[ -n "${REVV_RELEASE_TAG:-}" ]]; then
@@ -278,8 +273,6 @@ if ! install_release_app "$release_tag" "$REVV_APP_DIR"; then
   warn "Could not install a pre-built app bundle; falling back to a local build."
   ensure_rust
   step "Building Revv.app (first run can take several minutes)"
-  # Only the .app: create-dmg breaks on paths with spaces or parentheses,
-  # and the .app is copied to /Applications directly anyway.
   (
     cd "$PROJECT_ROOT/packages/shared" && bun run typecheck
   )
@@ -287,7 +280,7 @@ if ! install_release_app "$release_tag" "$REVV_APP_DIR"; then
     cd "$PROJECT_ROOT" && bun run build
   )
   (
-    cd "$PROJECT_ROOT/apps/desktop" && bunx tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
+    cd "$PROJECT_ROOT/apps/desktop" && bunx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
   )
 
   bundle_macos_dir="$PROJECT_ROOT/apps/desktop/target/release/bundle/macos"
@@ -414,7 +407,6 @@ printf '%s\n' "$REVV_RESET"
 printf '  %sApp:%s        %s\n'    "$REVV_BOLD" "$REVV_RESET" "$dest_app"
 printf '  %sSource:%s     %s\n'    "$REVV_BOLD" "$REVV_RESET" "$PROJECT_ROOT"
 printf '  %sServer:%s     owned by Revv (http://localhost:45678)\n' "$REVV_BOLD" "$REVV_RESET"
-printf '  %sAuth key:%s   %s\n'    "$REVV_BOLD" "$REVV_RESET" "$REVV_AUTH_KEY"
 printf '  %sLogs:%s       %s\n'    "$REVV_BOLD" "$REVV_RESET" "$REVV_LOG_DIR"
 printf '\n  %sManage with the revv CLI:%s\n' "$REVV_BOLD" "$REVV_RESET"
 printf '    %s$%s revv status      show app + server status\n'    "$REVV_DIM" "$REVV_RESET"

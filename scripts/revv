@@ -105,7 +105,6 @@ if [[ "$__revv_lib_loaded" -eq 0 ]]; then
 fi
 
 REVV_SUPPORT_DIR="${REVV_SUPPORT_DIR:-$HOME/Library/Application Support/Revv}"
-REVV_AUTH_KEY="${REVV_AUTH_KEY:-$REVV_SUPPORT_DIR/auth.key}"
 SERVER_CONFIG="$REVV_SUPPORT_DIR/desktop-server.json"
 # Same DB the desktop server is configured with; installs from before the
 # app owned the server still carry it in the LaunchAgent plist.
@@ -256,7 +255,7 @@ ${BOLD}Data${RESET}
   Database:        $REVV_DB_PATH
   Git clones:      $HOME/.revv/repos/
   Settings:        $HOME/.revv/settings.json
-  Auth key:        $REVV_AUTH_KEY
+  Secret store:    $REVV_SUPPORT_DIR/secret-store.key (only when the keychain is unavailable)
   GitHub config:   $REVV_SUPPORT_DIR/github.conf
 
 ${BOLD}Services${RESET}
@@ -607,7 +606,7 @@ ${BOLD}This will permanently remove ALL Revv artifacts:${RESET}
     • $revv_data_dir/  (git clones, worktrees, settings)
 
   ${CYAN}Configuration${RESET}
-    • $REVV_SUPPORT_DIR/  (auth key, config, github.conf, source tree)
+    • $REVV_SUPPORT_DIR/  (config, github.conf, secret-store fallback, source tree)
     • $LOG_DIR/  (server logs)
 
   ${CYAN}Tauri / WebView data${RESET}
@@ -738,22 +737,6 @@ cmd_doctor() {
   if command -v bun >/dev/null 2>&1; then success "bun $(bun --version)"; else warn "bun not on PATH"; bump; fi
   if command -v cargo >/dev/null 2>&1; then success "cargo $(cargo --version | awk '{print $2}')"; else warn "cargo not on PATH"; bump; fi
   if server_running; then success "API server responding on $API_URL"; else warn "API server not responding — try 'revv restart'"; bump; fi
-
-  # The server generates the auth key (mode 0600) on first start.
-  if [[ -f "$REVV_AUTH_KEY" ]]; then
-    local mode
-    # `stat -f` on macOS/BSD, `stat -c` on GNU.
-    mode="$(stat -f '%Lp' "$REVV_AUTH_KEY" 2>/dev/null || stat -c '%a' "$REVV_AUTH_KEY" 2>/dev/null || echo '?')"
-    if [[ "$mode" == "600" ]]; then
-      success "Auth key present (mode 600)"
-    else
-      warn "Auth key exists but permissions are $mode — expected 600. Fix with: chmod 600 '$REVV_AUTH_KEY'"
-      bump
-    fi
-  else
-    warn "Auth key missing at $REVV_AUTH_KEY — server will create it on next start"
-    bump
-  fi
 
   printf "\n"
   if [[ $issues -eq 0 ]]; then

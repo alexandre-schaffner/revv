@@ -76,7 +76,6 @@ class Artifacts(unittest.TestCase):
 
     def test_rejects_unexpected_release_asset(self):
         for arch, cpu in [("aarch64", 0x0100000C), ("x64", 0x01000007)]:
-            (self.directory / f"Revv_1.2.3_{arch}.dmg").write_bytes(b"dmg")
             archive(self.directory / f"Revv_{arch}.app.tar.gz", arch=cpu)
         (self.directory / "unexpected.sh").write_text("echo unsafe")
         with self.assertRaisesRegex(ValueError, "asset set"):
@@ -88,9 +87,8 @@ class Artifacts(unittest.TestCase):
 
     def test_complete_set(self):
         for arch, cpu in [("aarch64", 0x0100000C), ("x64", 0x01000007)]:
-            (self.directory / f"Revv_1.2.3_{arch}.dmg").write_bytes(b"dmg")
             archive(self.directory / f"Revv_{arch}.app.tar.gz", arch=cpu)
-        self.assertEqual(len(validate_set(self.directory, "1.2.3")), 4)
+        self.assertEqual(len(validate_set(self.directory, "1.2.3")), 2)
 
     def build_installer(self):
         root = self.directory / "source"
@@ -102,20 +100,20 @@ class Artifacts(unittest.TestCase):
         result = subprocess.run(["bash", str(root / "scripts/release/build-installer.sh")], env=env, capture_output=True, text=True)
         return root, result
 
-    def test_installer_rejects_missing_dmg(self):
+    def test_installer_rejects_missing_app_archive(self):
+        (self.directory / "Revv_aarch64.app.tar.gz").unlink()
         root, result = self.build_installer()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Missing required DMG", result.stderr)
+        self.assertIn("Missing required app archive", result.stderr)
         self.assertFalse((root / "dist/install.sh").exists())
 
     def test_installer_contains_both_checksums(self):
-        for arch in ["aarch64", "x64"]:
-            (self.directory / f"Revv_1.2.3_{arch}.dmg").write_bytes(arch.encode())
+        archive(self.directory / "Revv_x64.app.tar.gz", arch=0x01000007)
         root, result = self.build_installer()
         self.assertEqual(result.returncode, 0, result.stderr)
         sums = (root / "dist/SHA256SUMS").read_text()
-        self.assertIn("Revv_1.2.3_aarch64.dmg", sums)
-        self.assertIn("Revv_1.2.3_x64.dmg", sums)
+        self.assertIn("Revv_aarch64.app.tar.gz", sums)
+        self.assertIn("Revv_x64.app.tar.gz", sums)
         self.assertNotIn("MISSING", (root / "dist/install.sh").read_text())
 
 
@@ -183,23 +181,23 @@ class Publication(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.directory = pathlib.Path(self.temp.name)
-        (self.directory / "asset.dmg").write_bytes(b"verified bytes")
+        (self.directory / "asset.tar.gz").write_bytes(b"verified bytes")
         self.calls = []
 
     def transport(self, *, corrupt=False, upload_failure=False, extra_after_upload=False):
         def gh(*args):
             self.calls.append(args)
             if args[:2] == ("release", "view"):
-                return json.dumps({"databaseId": 42, "assets": [{"name": "old.dmg"}]})
+                return json.dumps({"databaseId": 42, "assets": [{"name": "old.tar.gz"}]})
             if args[:2] == ("release", "upload") and upload_failure:
                 raise subprocess.CalledProcessError(1, args)
             if args[0] == "api":
                 # GitHub's tag endpoint returns 404 while the release is a draft.
                 if args[1] != "repos/test/revv/releases/42":
                     raise subprocess.CalledProcessError(1, args, stderr="Not Found (HTTP 404)")
-                assets = [{"name": "asset.dmg", "size": 14, "digest": "sha256:" + hashlib.sha256(b"wrong contents" if corrupt else b"verified bytes").hexdigest()}]
+                assets = [{"name": "asset.tar.gz", "size": 14, "digest": "sha256:" + hashlib.sha256(b"wrong contents" if corrupt else b"verified bytes").hexdigest()}]
                 if extra_after_upload:
-                    assets.append({"name": "unexpected.dmg", "size": 1})
+                    assets.append({"name": "unexpected.tar.gz", "size": 1})
                 return json.dumps({"assets": assets, "immutable": True})
             return ""
         return gh
@@ -218,7 +216,7 @@ class Publication(unittest.TestCase):
 
     def test_removes_stale_draft_assets_before_upload(self):
         self.execute()
-        self.assertLess(self.calls.index(("release", "delete-asset", "v1.2.3", "old.dmg", "--yes")), next(i for i, c in enumerate(self.calls) if c[:2] == ("release", "upload")))
+        self.assertLess(self.calls.index(("release", "delete-asset", "v1.2.3", "old.tar.gz", "--yes")), next(i for i, c in enumerate(self.calls) if c[:2] == ("release", "upload")))
         self.assertTrue(any(c[:2] == ("release", "edit") for c in self.calls))
 
     def test_upload_failure_never_publishes(self):

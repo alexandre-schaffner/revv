@@ -165,7 +165,7 @@ detect_platform() {
 }
 
 # Sets and exports REVV_SUPPORT_DIR, REVV_SRC_DIR, REVV_LOG_DIR,
-# REVV_LAUNCH_AGENT_PLIST, REVV_CLI_DIR, REVV_AUTH_KEY.
+# REVV_LAUNCH_AGENT_PLIST, REVV_CLI_DIR.
 revv_paths() {
   : "${PLATFORM:=$(uname -s)}"
   # bash 3.2 (macOS /bin/bash) lacks ${VAR,,}; lowercase via tr.
@@ -183,35 +183,8 @@ revv_paths() {
   esac
   REVV_SRC_DIR="${REVV_INSTALL_DIR:-$REVV_SUPPORT_DIR/src}"
   REVV_CLI_DIR="${REVV_CLI_DIR:-$HOME/.local/bin}"
-  REVV_AUTH_KEY="${REVV_AUTH_KEY:-$REVV_SUPPORT_DIR/auth.key}"
   export REVV_SUPPORT_DIR REVV_SRC_DIR REVV_LOG_DIR
-  export REVV_LAUNCH_AGENT_PLIST REVV_CLI_DIR REVV_AUTH_KEY
-}
-
-# The server reads this key at startup (loadOrCreateAuthSecret in
-# apps/server/src/auth.ts).
-ensure_auth_key() {
-  revv_paths
-  if [[ -s "$REVV_AUTH_KEY" ]]; then
-    success "Auth key already present"
-    return 0
-  fi
-  mkdir -p "$REVV_SUPPORT_DIR"
-  chmod 700 "$REVV_SUPPORT_DIR" 2>/dev/null || true
-  local secret=""
-  if check_cmd openssl; then
-    secret="$(openssl rand -hex 32)"
-  elif check_cmd xxd; then
-    secret="$(head -c 32 /dev/urandom | xxd -p -c 32)"
-  else
-    secret="$(LC_ALL=C tr -dc 'a-f0-9' </dev/urandom | head -c 64)"
-  fi
-  if [[ ${#secret} -lt 32 ]]; then
-    fail "Could not generate an auth key (no openssl/xxd/urandom available)"
-  fi
-  printf '%s' "$secret" > "$REVV_AUTH_KEY"
-  chmod 600 "$REVV_AUTH_KEY"
-  success "Generated auth key at $REVV_AUTH_KEY"
+  export REVV_LAUNCH_AGENT_PLIST REVV_CLI_DIR
 }
 
 ensure_xcode_clt() {
@@ -319,8 +292,8 @@ revv_sha256_of() {
 }
 
 install_release_app() {
-  local release_tag="$1" app_dir="${2:-}" asset_arch release_json bundle_url bundle_sha
-  local sums_file sums_url bundle_filename bundle_file actual_sha mount_point app_source install_dir installed_app tmp_app backup_app
+  local release_tag="$1" app_dir="${2:-}" asset_arch asset_name release_json bundle_url bundle_sha
+  local sums_file bundle_file actual_sha extract_dir app_source install_dir installed_app tmp_app backup_app
 
   REVV_INSTALLED_APP=""
   [[ -n "$release_tag" ]] || return 1
@@ -329,28 +302,28 @@ install_release_app() {
     x86_64)        asset_arch="x64" ;;
     *)             return 1 ;;
   esac
+  # The updater archive: the release's only copy of the app.
+  asset_name="Revv_${asset_arch}.app.tar.gz"
 
   release_json="$(mktemp)"
   curl -fsSL \
     "https://api.github.com/repos/${REVV_GITHUB_REPO}/releases/tags/${release_tag}" \
     -o "$release_json" || { rm -f "$release_json"; return 1; }
 
-  bundle_url="$(sed -n "s/.*\"browser_download_url\": \"\([^\"]*_${asset_arch}\.dmg\)\".*/\1/p" "$release_json" | head -1)"
-  bundle_sha="$(sed -n "/\"name\": \".*_${asset_arch}\.dmg\"/,/\"browser_download_url\"/ s/.*\"digest\": *\"sha256:\([a-fA-F0-9]*\)\".*/\1/p" "$release_json" | head -1)"
+  bundle_url="$(sed -n "s/.*\"browser_download_url\": \"\([^\"]*\/${asset_name//./\\.}\)\".*/\1/p" "$release_json" | head -1)"
+  bundle_sha="$(sed -n "/\"name\": \"${asset_name//./\\.}\"/,/\"browser_download_url\"/ s/.*\"digest\": *\"sha256:\([a-fA-F0-9]*\)\".*/\1/p" "$release_json" | head -1)"
   rm -f "$release_json"
   [[ -n "$bundle_url" ]] || return 1
 
   if [[ -z "$bundle_sha" ]]; then
-    sums_url="https://github.com/${REVV_GITHUB_REPO}/releases/download/${release_tag}/SHA256SUMS"
     sums_file="$(mktemp)"
-    if curl -fsSL "$sums_url" -o "$sums_file" 2>/dev/null; then
-      bundle_filename="$(basename "$bundle_url")"
-      bundle_sha="$(awk -v name="$bundle_filename" '$2 == name {print $1}' "$sums_file" | head -1)"
+    if curl -fsSL "https://github.com/${REVV_GITHUB_REPO}/releases/download/${release_tag}/SHA256SUMS" -o "$sums_file" 2>/dev/null; then
+      bundle_sha="$(awk -v name="$asset_name" '$2 == name {print $1}' "$sums_file" | head -1)"
     fi
     rm -f "$sums_file"
   fi
 
-  bundle_file="$(mktemp).dmg"
+  bundle_file="$(mktemp)"
   spin_start "Downloading Revv.app from ${release_tag} (${asset_arch})"
   if ! curl -fsSL "$bundle_url" -o "$bundle_file"; then
     spin_stop 0
@@ -363,42 +336,43 @@ install_release_app() {
     actual_sha="$(revv_sha256_of "$bundle_file")"
     if [[ "$actual_sha" != "$bundle_sha" ]]; then
       rm -f "$bundle_file"
-      fail "Downloaded DMG checksum mismatch for ${release_tag}."
+      fail "Downloaded app archive checksum mismatch for ${release_tag}."
     fi
   else
-    warn "SHA256SUMS unavailable for ${release_tag}; installing without checksum verification."
+    warn "No checksum published for ${release_tag}; installing without checksum verification."
   fi
 
-  mount_point="$(mktemp -d)"
-  hdiutil attach -quiet -nobrowse -mountpoint "$mount_point" "$bundle_file" || {
-    _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
+  extract_dir="$(mktemp -d)"
+  tar -xzf "$bundle_file" -C "$extract_dir" || {
+    rm -rf "$extract_dir" "$bundle_file"
     return 1
   }
+  rm -f "$bundle_file"
 
-  app_source="$(find "$mount_point" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
+  app_source="$(find "$extract_dir" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
   if [[ -z "$app_source" ]]; then
-    _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
+    rm -rf "$extract_dir"
     return 1
   fi
 
   install_dir="${app_dir:-/Applications}"
   [[ -w "$install_dir" ]] || install_dir="$HOME/Applications"
   mkdir -p "$install_dir" || {
-    _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
+    rm -rf "$extract_dir"
     return 1
   }
   installed_app="$install_dir/$(basename "$app_source")"
   tmp_app="${installed_app}.tmp.$$"
 
   rm -rf "$tmp_app" || {
-    _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
+    rm -rf "$extract_dir"
     return 1
   }
-  if ! cp -R "$app_source" "$tmp_app"; then
-    rm -rf "$tmp_app"
-    _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
+  if ! mv "$app_source" "$tmp_app"; then
+    rm -rf "$tmp_app" "$extract_dir"
     return 1
   fi
+  rm -rf "$extract_dir"
   xattr -cr "$tmp_app" 2>/dev/null || true
 
   backup_app=""
@@ -407,7 +381,6 @@ install_release_app() {
     backup_app="${installed_app}.backup.$$"
     if ! rm -rf "$backup_app" || ! mv "$installed_app" "$backup_app"; then
       rm -rf "$tmp_app"
-      _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
       return 1
     fi
   fi
@@ -416,21 +389,13 @@ install_release_app() {
     if [[ -n "$backup_app" ]]; then
       mv "$backup_app" "$installed_app" 2>/dev/null || true
     fi
-    _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
     return 1
   fi
   if [[ -n "$backup_app" ]]; then
     rm -rf "$backup_app" || warn "Installed app, but could not remove backup: $backup_app"
   fi
 
-  _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
   REVV_INSTALLED_APP="$installed_app"
-}
-
-_revv_cleanup_release_app_install() {
-  local mount_point="$1" bundle_file="$2"
-  hdiutil detach -quiet "$mount_point" 2>/dev/null || true
-  rm -rf "$mount_point" "$bundle_file"
 }
 
 quit_revv_app() {

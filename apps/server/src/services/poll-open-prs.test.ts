@@ -28,11 +28,9 @@ function pr(number: number, overrides: Partial<PullRequest> = {}): PullRequest {
     body: null,
     authorLogin: "author",
     authorAvatarContent: null,
-    authorAvatarUrl: null,
     requestedReviewers: [],
     mentionedUsers: [],
     status: "open",
-    reviewStatus: "pending",
     isDraft: false,
     sourceBranch: "feature",
     targetBranch: "main",
@@ -69,8 +67,16 @@ interface Fakes {
   stacks?: "listed" | "refused" | "unsupported";
 }
 
-const unseenStack = (pr: PullRequest): ObservedPr => ({ ...pr, stack: STACK_UNSEEN });
-const seenStack = (pr: PullRequest): ObservedPr => ({ ...pr, stack: stackSeen(pr.stack) });
+const unseenStack = (pr: PullRequest): ObservedPr => ({
+  ...pr,
+  authorAvatarUrl: null,
+  stack: STACK_UNSEEN,
+});
+const seenStack = (pr: PullRequest): ObservedPr => ({
+  ...pr,
+  authorAvatarUrl: null,
+  stack: stackSeen(pr.stack),
+});
 
 async function setup(overrides: Partial<Fakes> = {}) {
   const db = seedDb();

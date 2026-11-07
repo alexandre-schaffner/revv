@@ -12,6 +12,7 @@
 
 import type { ContentBlock, McpServer, SessionUpdate, StopReason } from "@agentclientprotocol/sdk";
 import { getAcpAgent } from "@revv/shared";
+import { spanName } from "@revv/shared/telemetry";
 import { serverEnv } from "../../config";
 import { debug } from "../../logger";
 import { graftedSpan, publishTraceAnchor } from "../../observability/span-graft";
@@ -287,7 +288,9 @@ export async function runAcpTurn(
   };
 
   const body = async (): Promise<StopReason | null> => {
-    const h = await traced(trace, "Acp.connect", spanAttrs, () => connect(req.cwd, launch));
+    const h = await traced(trace, spanName("acp", "connect"), spanAttrs, () =>
+      connect(req.cwd, launch),
+    );
     held.handle = h;
     h.jobStarted();
     if (turn.ended() || released) {
@@ -313,7 +316,7 @@ export async function runAcpTurn(
       }
     }
 
-    const opened = await traced(trace, "Acp.newSession", spanAttrs, async () => {
+    const opened = await traced(trace, spanName("acp", "newSession"), spanAttrs, async () => {
       if (req.resumeSessionId && h.loadSessionSupported) {
         try {
           const state = await h.loadSession(req.resumeSessionId, mcpServers);
@@ -373,7 +376,7 @@ export async function runAcpTurn(
     if (trace === undefined) return h.prompt(sessionId, blocks);
     // Re-anchored so everything the turn provokes (the agent's own tool calls,
     // its MCP writes arriving over HTTP) nests inside the prompt span.
-    const span = graftedSpan(trace.key, "Acp.prompt", { attributes: promptAttrs });
+    const span = graftedSpan(trace.key, spanName("acp", "prompt"), { attributes: promptAttrs });
     const restoreAnchor = publishTraceAnchor(trace.key, span.anchor);
     try {
       const stopReason = await h.prompt(sessionId, blocks);

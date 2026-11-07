@@ -2,7 +2,9 @@
  * The maintenance phases of `PollScheduler.syncAllRepos` — work that runs
  * after the open-PR list has gone out, because nothing on screen waits on it.
  */
+
 import type { PullRequest, Repository } from "@revv/shared";
+import { SPAN_ATTR } from "@revv/shared/telemetry";
 import { and, inArray, isNotNull, lt } from "drizzle-orm";
 import type { Context } from "effect";
 import { Effect } from "effect";
@@ -168,7 +170,11 @@ export const refetchDiffs = (
           `diff refill failed for ${pr.id}`,
         );
         if (filled) yield* Effect.annotateCurrentSpan("files", filled.files.length);
-      }).pipe(Effect.withSpan("PollScheduler.refreshPrFiles", { attributes: { prId: pr.id } })),
+      }).pipe(
+        Effect.withSpan("PollScheduler.refreshPrFiles", {
+          attributes: { [SPAN_ATTR.prId]: pr.id },
+        }),
+      ),
     { concurrency: 1, discard: true },
   );
 

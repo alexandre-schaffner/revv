@@ -9,9 +9,8 @@ import { literalUnion } from "./schemas";
 
 /**
  * Settings' "Test agent" button: one real turn with the configured review
- * model (see `checkAgent`). Behind auth because, unlike the rest of Settings,
- * it spends tokens. Explicit user action only, so opening Settings never
- * starts an agent or a Keychain prompt.
+ * model (see `checkAgent`). Explicit user action only, so opening Settings
+ * never starts an agent or a Keychain prompt.
  */
 export const agentCheckRoutes = new Elysia().use(withAuth).post(
   "/api/agent/check",

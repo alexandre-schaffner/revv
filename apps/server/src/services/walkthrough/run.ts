@@ -10,6 +10,7 @@ import type {
   WalkthroughLiveEvent,
   WalkthroughStackSnapshot,
 } from "@revv/shared";
+import { spanName } from "@revv/shared/telemetry";
 import { count, eq } from "drizzle-orm";
 import { type Context, Effect } from "effect";
 import { adjudicateContinuation, classifyFailure } from "../../ai/jev/continuation";
@@ -226,7 +227,7 @@ export function runWalkthrough(
             files: result.files.length,
           }),
         ),
-        Effect.withSpan("Walkthrough.resolveDiff"),
+        Effect.withSpan(spanName("walkthrough", "resolveDiff")),
       );
       const hunkLeads = yield* prepareFirstPassLeads(db, run.id, hunkScanRows, promptInput);
       yield* deps.announceLeads(hunkLeads);

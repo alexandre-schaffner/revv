@@ -125,10 +125,9 @@ export function chapterNumbersByIndex(
  * Consequence tier of a flagged concern. Sent by the agent, then relabelled
  * by the Jev relevance pass when Jev is on.
  */
-export type IssueSeverity = "info" | "warning" | "critical";
-
 /** Most severe first: the order every issue list renders its severity groups in. */
-export const ISSUE_SEVERITIES: readonly IssueSeverity[] = ["critical", "warning", "info"];
+export const ISSUE_SEVERITIES = ["critical", "warning", "info"] as const;
+export type IssueSeverity = (typeof ISSUE_SEVERITIES)[number];
 
 export const ISSUE_SEVERITY_LABEL: Readonly<Record<IssueSeverity, string>> = {
   critical: "Critical",
@@ -162,7 +161,8 @@ export function severityRank(severity: IssueSeverity): number {
   return ISSUE_SEVERITIES.length - ISSUE_SEVERITIES.indexOf(severity);
 }
 
-export type IssueResolutionStatus = "open" | "addressed" | "wont_fix";
+export const ISSUE_RESOLUTION_STATUSES = ["open", "addressed", "wont_fix"] as const;
+export type IssueResolutionStatus = (typeof ISSUE_RESOLUTION_STATUSES)[number];
 
 export function isResolvedIssueStatus(
   status: string | null | undefined,
@@ -219,7 +219,8 @@ export interface WalkthroughIssue {
   resolvedBy?: ExternalAgentProvider;
 }
 
-export type RiskLevel = "low" | "medium" | "high";
+export const RISK_LEVELS = ["low", "medium", "high"] as const;
+export type RiskLevel = (typeof RISK_LEVELS)[number];
 
 export type WalkthroughMode = ReviewMode;
 
@@ -311,8 +312,10 @@ export const RATING_AXIS_LABELS: Record<RatingAxis, string> = {
   description: "Description",
 };
 
-export type Verdict = "pass" | "concern" | "blocker";
-export type Confidence = "low" | "medium" | "high";
+export const VERDICTS = ["pass", "concern", "blocker"] as const;
+export type Verdict = (typeof VERDICTS)[number];
+export const CONFIDENCES = ["low", "medium", "high"] as const;
+export type Confidence = (typeof CONFIDENCES)[number];
 
 export interface RatingCitation {
   filePath: string;

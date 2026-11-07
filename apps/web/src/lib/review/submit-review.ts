@@ -3,7 +3,7 @@
 // reviewer's pending replies and pulls the threads back; this asks for it and
 // reports the outcome.
 
-import type { WalkthroughIssue } from "@revv/shared";
+import type { ReviewAction, WalkthroughIssue } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { call } from "$lib/api/errors";
@@ -12,8 +12,6 @@ import { acceptWriteResult } from "$lib/stores/conversation.svelte";
 import { loadSession } from "$lib/stores/review.svelte";
 import { markIssuesAsSubmitted } from "$lib/walkthrough/store.svelte";
 import { draftThreadIds } from "./threads";
-
-export type ReviewAction = "approve" | "request_changes" | "comment";
 
 function actionLabel(action: ReviewAction): string {
   if (action === "approve") return "Approved";

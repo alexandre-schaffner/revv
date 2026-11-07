@@ -15,7 +15,7 @@ import type {
   WalkthroughTokenUsage,
 } from "@revv/shared";
 import { ZERO_TOKEN_USAGE } from "@revv/shared";
-import { SPAN_ATTR } from "@revv/shared/telemetry";
+import { SPAN_ATTR, spanName } from "@revv/shared/telemetry";
 import { debug, logError } from "../../logger";
 import { graftedSpan } from "../../observability/span-graft";
 import type { PrFileMeta } from "../../services/github/pulls";
@@ -153,7 +153,7 @@ export async function runWalkthroughTurn(
           surfacedExplorationCallIds.add(ev.callId);
           openToolSpans.set(
             ev.callId,
-            graftedSpan(params.walkthroughId, `Agent.${ev.toolName}`, {
+            graftedSpan(params.walkthroughId, spanName("agentTool", ev.toolName), {
               attributes: {
                 [SPAN_ATTR.walkthroughId]: params.walkthroughId,
                 agent_tool: ev.toolName,

@@ -2,9 +2,9 @@ import type { ApiErrorCode } from "./api-errors";
 
 // The chat turn, push-resolution, base-conflict and review streams send one
 // `data: <json>` frame per item, end with a `data: [DONE]` frame, and report
-// a failure mid-stream as an `event: error` frame. A request refused before
-// its stream starts answers with a JSON body instead. Either failure carries
-// one of the codes below; the client branches on the code, never on the
+// a failure mid-stream as an `event: error` frame (`StreamErrorBody`). A
+// request refused before its stream starts is refused like any REST request,
+// with an `ApiErrorBody`. The client branches on the code, never on the
 // message.
 
 export const SSE_DONE_DATA = "[DONE]";
@@ -25,8 +25,7 @@ export function sseErrorFrame(body: StreamErrorBody): string {
 }
 
 export type StreamErrorCode =
-  // An API error: refused before the stream starts, or `GENERATION_ERROR`
-  // mid-stream.
+  // An API error mid-stream, or `GENERATION_ERROR`.
   | ApiErrorCode
   // The client's own transport failures.
   | "NETWORK_ERROR"

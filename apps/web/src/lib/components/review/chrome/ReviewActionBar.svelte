@@ -1,5 +1,5 @@
 <script lang="ts">
-import { loginsMatch } from "@revv/shared";
+import { loginsMatch, type ReviewAction } from "@revv/shared";
 import ArrowUp from "phosphor-svelte/lib/ArrowUp";
 import Check from "phosphor-svelte/lib/Check";
 import PaperPlaneRight from "phosphor-svelte/lib/PaperPlaneRight";
@@ -10,7 +10,6 @@ import { isChatStreaming } from "$lib/chat/timeline.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { Shimmer } from "$lib/components/ui/shimmer";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
-import type { ReviewAction } from "$lib/review/submit-review";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { viewerApproved } from "$lib/stores/merge-eligibility.svelte";
 import { closePr, convertPrToDraft, getPrById, markPrReadyForReview } from "$lib/stores/prs.svelte";

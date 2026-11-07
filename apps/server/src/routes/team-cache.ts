@@ -38,5 +38,5 @@ export const teamCacheRoutes = new Elysia({ prefix: "/api/settings/cache" })
   .use(signingTestRoute)
   .use(withAuth)
   .get("/status", () => runRoute(Effect.flatMap(BlobStore, (blob) => blob.status())))
-  .get("/adc-status", () => runRoute(Effect.sync(adcStatus)))
+  .get("/adc-status", () => runRoute(Effect.promise(adcStatus)))
   .post("/adc-login", () => runRoute(Effect.sync(startAdcLogin)));

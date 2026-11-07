@@ -134,15 +134,17 @@ const LOST_CONNECTION_MESSAGE =
   "Lost connection to the local server. The agent may have stopped — check the server logs and try again.";
 
 /**
- * How a {@link streamSse} call ended badly, as the server's `{ code, message }`
- * body: its refusal, its `event: error` frame, or the client's own transport
+/**
+ * How a {@link streamSse} call ended badly, as an `event: error` frame's
+ * `{ code, message }` body: the server's refusal (an `ApiErrorBody`, whose
+ * details are kept), its `event: error` frame, or the client's own transport
  * failure. Null when the caller aborted it.
  */
 export function sseError(err: unknown): StreamErrorBody | null {
   if (err instanceof ApiError) {
-    return err.code !== null
-      ? { ...err.body, code: err.code, message: err.message }
-      : { code: "UNKNOWN", message: err.message };
+    if (err.code === null) return { code: "UNKNOWN", message: err.message };
+    const { error: _error, ...details } = err.body ?? {};
+    return { ...details, code: err.code, message: err.message };
   }
   if (err instanceof SseFrameError) return { code: err.code, message: err.message };
   if (err instanceof SseIdleError)

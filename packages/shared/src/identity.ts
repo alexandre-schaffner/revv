@@ -20,12 +20,6 @@ export interface UserIdentity {
    */
   avatarContent: string | null;
   /**
-   * `true` when the signed-in user's GitHub login is on the project
-   * maintainer allowlist (`MAINTAINER_LOGINS`). Maintainers see new updates
-   * the moment CI publishes them — the 48h stable cooldown is bypassed.
-   */
-  isMaintainer: boolean;
-  /**
    * `true` when the active account's GitHub token is invalid and could not be
    * silently refreshed — the client gates the app behind a re-sign-in modal.
    * Authoritative reconcile source for `auth:reauth-required` SSE signals on

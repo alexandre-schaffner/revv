@@ -1,12 +1,12 @@
 <script lang="ts">
-import { isIssueResolved, isThreadResolved } from "@revv/shared";
+import { isIssueResolved, isThreadResolved, type ReviewAction } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { submitChatMessage } from "$lib/chat/turn.svelte";
 import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import ReviewActionBar from "$lib/components/review/chrome/ReviewActionBar.svelte";
 import { buildAddressIssuesPrompt } from "$lib/review/address-issues-prompt";
 import { IssueSelection } from "$lib/review/issue-selection.svelte";
-import { type ReviewAction, submitReview } from "$lib/review/submit-review";
+import { submitReview } from "$lib/review/submit-review";
 import { postableThreadCount } from "$lib/review/threads";
 import { getActiveTab } from "$lib/stores/pr-view-state.svelte";
 import { deleteThread, getThreads } from "$lib/stores/review.svelte";

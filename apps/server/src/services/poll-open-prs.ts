@@ -447,6 +447,7 @@ export const settleVanishedPrs = (
             (pr): ObservedPr =>
               fetched.get(pr.externalId) ?? {
                 ...pr,
+                authorAvatarUrl: null,
                 stack: STACK_UNSEEN,
                 status: "closed",
                 closedAt: now,

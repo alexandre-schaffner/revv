@@ -1,7 +1,7 @@
 // The tool-input shapes of walkthrough content, shared by the generation
 // tools and the chat-edit tools so a change to the contract reaches both.
 
-import { RATING_AXES } from "@revv/shared";
+import { CONFIDENCES, ISSUE_SEVERITIES, RATING_AXES, VERDICTS } from "@revv/shared";
 import { z } from "zod";
 
 export const ARTIFACT_HTML_CONTRACT =
@@ -51,9 +51,9 @@ export const blockRefSchema = z.object({
 
 export const ratingAxisSchema = z.enum(RATING_AXES);
 
-export const verdictSchema = z.enum(["pass", "concern", "blocker"]);
+export const verdictSchema = z.enum(VERDICTS);
 
-export const confidenceSchema = z.enum(["low", "medium", "high"]);
+export const confidenceSchema = z.enum(CONFIDENCES);
 
 export const citationSchema = z.object({
   file_path: z.string(),
@@ -62,7 +62,7 @@ export const citationSchema = z.object({
   note: z.string().nullable(),
 });
 
-export const severitySchema = z.enum(["info", "warning", "critical"]);
+export const severitySchema = z.enum(ISSUE_SEVERITIES);
 
 /**
  * When a concern earns an issue, and at what severity. `flag_issue` adds the

@@ -66,12 +66,10 @@ def validate_archive(path, version, arch):
 def validate_set(directory, version, *, prepared=False, nightly=False):
     files = []
     for arch in ARCHES:
-        dmg = directory / f"Revv_{version}_{arch}.dmg"
         updater = directory / f"Revv_{arch}.app.tar.gz"
-        for path in (dmg, updater):
-            if not path.is_file() or path.is_symlink() or path.stat().st_size == 0:
-                raise ValueError(f"Missing or empty release asset: {path.name}")
-            files.append(path)
+        if not updater.is_file() or updater.is_symlink() or updater.stat().st_size == 0:
+            raise ValueError(f"Missing or empty release asset: {updater.name}")
+        files.append(updater)
         validate_archive(updater, version, arch)
     expected = {p.name for p in files}
     if prepared:

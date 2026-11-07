@@ -9,7 +9,6 @@ const status = (patch: Partial<AgentStatus>): AgentStatus => ({
   authSource: "subscription",
   authLabel: "Signed in",
   authWarning: null,
-  loginCommand: null,
   ...patch,
 });
 

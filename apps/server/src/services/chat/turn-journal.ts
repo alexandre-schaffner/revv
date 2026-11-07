@@ -14,7 +14,7 @@
 //     when the agent failed, so the timeline closes the turn on reload.
 
 import { SpanStatusCode, trace } from "@opentelemetry/api";
-import { SPAN_ATTR } from "@revv/shared/telemetry";
+import { SPAN_ATTR, spanName } from "@revv/shared/telemetry";
 import { Cause, type Context, Effect, Exit } from "effect";
 import type { ChatStreamFrame, RawChatStreamFrame } from "../../ai/providers/chat-types";
 import type { ChatSessionService } from "./ChatSession";
@@ -46,7 +46,7 @@ export function journalTurn(params: JournalParams): ReadableStream<ChatStreamFra
 
   return new ReadableStream<ChatStreamFrame>({
     async start(controller) {
-      const span = trace.getTracer("revv-server").startSpan("Chat.stream", {
+      const span = trace.getTracer("revv-server").startSpan(spanName("chat", "stream"), {
         attributes: { [SPAN_ATTR.prId]: params.prId, [SPAN_ATTR.provider]: "acp" },
       });
       const startedAt = Date.now();

@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { RecapPeriod } from "@revv/shared";
+import { RECAP_PERIODS, type RecapPeriod } from "@revv/shared";
 import { page } from "$app/state";
 import PillTabs from "$lib/components/layout/PillTabs.svelte";
 import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
@@ -10,9 +10,7 @@ const repoId = $derived(page.params.repoId ?? "");
 
 let activePeriod = $state<RecapPeriod>("daily");
 
-const PERIODS: readonly RecapPeriod[] = ["daily", "weekly"];
-
-const tabs = PERIODS.map((id) => ({ id, label: RECAP_PERIOD_COPY[id].label }));
+const tabs = RECAP_PERIODS.map((id) => ({ id, label: RECAP_PERIOD_COPY[id].label }));
 
 useShellChrome(() => ({ tabs: { snippet: periodTabs, key: repoId } }));
 </script>

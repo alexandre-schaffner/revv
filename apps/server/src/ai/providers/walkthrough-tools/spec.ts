@@ -1,4 +1,9 @@
-import type { ThreadEventMessage, WalkthroughStreamEvent } from "@revv/shared";
+import {
+  RECAP_PERIODS,
+  RISK_LEVELS,
+  type ThreadEventMessage,
+  type WalkthroughStreamEvent,
+} from "@revv/shared";
 import { z } from "zod";
 import type { Db } from "../../../db";
 import type { ArtifactVerdict } from "../../jev/artifact-quality";
@@ -80,7 +85,7 @@ export type WalkthroughToolHandler<TInput> = (
 const getWalkthroughStateSchema = z.object({});
 
 const getRepoContextSchema = z.object({
-  period: z.enum(["daily", "weekly"]).nullable().optional(),
+  period: z.enum(RECAP_PERIODS).nullable().optional(),
   limit: z.coerce.number().int().positive().max(10).nullable().optional(),
 });
 
@@ -93,7 +98,7 @@ const setOverviewSchema = z.object({
   // Optional, not removed: ignored once the orchestrator has assigned the
   // tier (invariant 2's carve-out); otherwise still the only source of it.
   risk_level: z
-    .enum(["low", "medium", "high"])
+    .enum(RISK_LEVELS)
     .nullable()
     .optional()
     .describe(

@@ -1,3 +1,5 @@
+import type { DiffSide } from "./review";
+
 export const PIERRE_DIFF_PRELOAD_LANGS = [
   "typescript",
   "javascript",
@@ -73,7 +75,7 @@ export function buildGitPatchHeader(file: GitPatchHeaderFile): string {
  * viewer must place it identically, or the hydrated annotation slots mismatch.
  */
 export function threadAnnotationPosition(thread: {
-  readonly diffSide: "old" | "new";
+  readonly diffSide: DiffSide;
   readonly startLine: number;
 }): { side: "deletions" | "additions"; lineNumber: number } {
   return {

@@ -26,7 +26,6 @@ bun run test             # Every package's tests, against a sandboxed DB and git
 # Build & Distribution
 make build               # Build all packages
 make dist                # Build Revv.app (what the source installer copies)
-make dmg                 # Build the DMG installer
 
 # Database
 cd apps/server && bunx drizzle-kit generate   # Generate migration from schema changes (needs a TTY)
@@ -114,7 +113,7 @@ Canonical patterns live in [`docs/conventions.md`](docs/conventions.md). Existin
 
 - **Effect services.** A service tag `X` (or `XService`) pairs with its Layer `XLive` (`XServiceLive`). No `Effect.runPromise` inside an Effect-returning method — schedule with `Effect.forkChild` / `Effect.sleep` / `Effect.callback`. Tagged errors live in `apps/server/src/domain/errors.ts`, never inline. Drizzle calls inside `Effect.gen` are wrapped in `Effect.try*` mapping to a tagged DB error. ([§2](docs/conventions.md#effect-services))
 - **SSE event envelopes.** Shape is `{ type, data? }`; type strings are `namespace:action` colon-style; payload contract is one of signal / full-state / delta and documented at the type definition. Features send through `Realtime` (`services/Realtime.ts`); `Broadcaster` is transport only. Data-bearing envelopes are account-scoped (`Realtime.toAccount`, or `toRepo`/`toPr`, which resolve the owning account); `Realtime.toAll` is reserved for server-global sync signals. Source of truth: `packages/shared/src/events.ts`. ([§3](docs/conventions.md#event-envelopes))
-- **Web stores.** Singleton module + `getX/setX` exports; per-PR state is `Map<prId, Entry>` with shared `setEntry/deleteEntry/updateEntry` helpers; every Map/Set write is followed by reassignment for reactivity; request-state is a tagged `RequestState<T>` union, not parallel boolean+nullable triples; event handlers are named `on<EventName>` matching the message type and take the envelope's `data` whole; per-key fetches go through `createResource` (`stores/resource.ts`); account-scoped stores export `reset()`, called from `session/lifecycle.svelte.ts`; JSON calls go through Eden (`api/client.ts`, no hand-typed response shapes) and refusals read through `apiErrorMessage`. ([§4](docs/conventions.md#stores))
+- **Web stores.** Singleton module + `getX/setX` exports; per-PR state is `Map<prId, Entry>` with shared `setEntry/deleteEntry/updateEntry` helpers; every Map/Set write is followed by reassignment for reactivity; request-state is a tagged `RequestState<T>` union, not parallel boolean+nullable triples; event handlers are named `on<EventName>` matching the message type and take the envelope's `data` whole; per-key fetches go through `createResource` (`stores/resource.ts`); account-scoped stores export `reset()`, called from `session/lifecycle.svelte.ts`; JSON calls go through Eden (`api/client.ts`, no hand-typed response shapes), awaited with `call(request, fallback)` (`api/errors.ts`), which throws a refusal as an `ApiError`. ([§4](docs/conventions.md#stores))
 - **Motion.** All durations and easings come from the `@theme` block in `app.css` (`--duration-snap/quick/smooth`, `--ease-soft/out-expo/standard`). A ceremonial tier (`--duration-ceremonial-quick/medium/slow`) is reserved for onboarding-style theatrical motion. No hand-typed `cubic-bezier(...)`, no `220ms`/`0.55s` literals. ([§5.1–5.2](docs/conventions.md#motion-tokens))
 - **Svelte components.** Props declared as `interface Props` + `$props()`. Event handlers as `onclick={fn}` (lowercase property style), not `on:click`. ([§6](docs/conventions.md#components))
 
@@ -122,7 +121,7 @@ Proposing a new convention: open a PR editing `docs/conventions.md`; no RFC cere
 
 ## Environment
 
-Nothing is required to develop: sign-in is GitHub's device flow, the github.com client ids are bundled (`apps/server/src/config.ts`), and the secret-store key is generated on first run (`auth.key` in the app-data dir; `BETTER_AUTH_SECRET` overrides it, a name kept so existing fallback stores stay readable). `config.ts` is the only reader of Revv's env vars; `.env.example` lists the optional ones. A GitHub Enterprise host needs its own OAuth/App client id, entered during onboarding (or `GITHUB_CLIENT_ID`).
+Nothing is required to develop: sign-in is GitHub's device flow, the github.com client ids are bundled (`apps/server/src/config.ts`), and tokens live in the OS keychain; when it is unavailable they fall back to an encrypted file keyed by `secret-store.key`, generated in the app-data dir on first use (`BETTER_AUTH_SECRET` overrides it, a name kept so existing fallback stores stay readable). `config.ts` is the only reader of Revv's env vars; `.env.example` lists the optional ones. A GitHub Enterprise host needs its own OAuth/App client id, entered during onboarding (or `GITHUB_CLIENT_ID`).
 
 ## Product Direction
 

@@ -81,7 +81,7 @@ describe("streamSse", () => {
 
   it("rejects a refusal as the same ApiError a REST call throws", async () => {
     globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ code: "BUSY", message: "Busy right now" }), {
+      new Response(JSON.stringify({ code: "BUSY", error: "Busy right now" }), {
         status: 409,
       })) as unknown as typeof fetch;
     const err = await collect().catch((e: unknown) => e);
@@ -166,7 +166,7 @@ describe("streamSse", () => {
 describe("sseError", () => {
   it("keeps a refusal's code, details and wording", () => {
     const err = new ApiError(
-      { status: 409, value: { code: "WORKTREE_BLOCKED", message: "Commit first", commits: ["a"] } },
+      { status: 409, value: { code: "WORKTREE_BLOCKED", error: "Commit first", commits: ["a"] } },
       "Refused",
     );
     expect(sseError(err)).toEqual({

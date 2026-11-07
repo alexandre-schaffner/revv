@@ -27,7 +27,22 @@ export function reviewModeFor(
   return loginsMatch(authorLogin, viewerLogin) ? REVIEW_MODE.author : REVIEW_MODE.reviewer;
 }
 
-export type ThreadStatus = "open" | "pending_coder" | "pending_reviewer" | "resolved" | "wont_fix";
+export const THREAD_STATUSES = [
+  "open",
+  "pending_coder",
+  "pending_reviewer",
+  "resolved",
+  "wont_fix",
+] as const;
+export type ThreadStatus = (typeof THREAD_STATUSES)[number];
+
+/** The side of a diff a line comment anchors to. */
+export const DIFF_SIDES = ["old", "new"] as const;
+export type DiffSide = (typeof DIFF_SIDES)[number];
+
+/** A submitted review's verdict, as GitHub's review event. */
+export const REVIEW_ACTIONS = ["approve", "request_changes", "comment"] as const;
+export type ReviewAction = (typeof REVIEW_ACTIONS)[number];
 
 /** `wont_fix` closes a thread just as `resolved` does. */
 export function isThreadResolved(status: string): boolean {
@@ -46,7 +61,7 @@ export interface CommentThread {
   filePath: string;
   startLine: number;
   endLine: number;
-  diffSide: "old" | "new";
+  diffSide: DiffSide;
   status: ThreadStatus;
   createdAt: string;
   resolvedAt: string | null;

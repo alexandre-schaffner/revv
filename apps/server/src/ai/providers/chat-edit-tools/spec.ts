@@ -3,10 +3,12 @@
 // `lastCompletedPhase`; `runChatEdit` stamps `lastEditedAt` / `lastEditedBy`
 // and publishes the edit.
 
-import type {
-  ExternalAgentProvider,
-  ThreadEventMessage,
-  WalkthroughStreamEvent,
+import {
+  DIFF_SIDES,
+  type ExternalAgentProvider,
+  RISK_LEVELS,
+  type ThreadEventMessage,
+  type WalkthroughStreamEvent,
 } from "@revv/shared";
 import { z } from "zod";
 import type { Db } from "../../../db";
@@ -101,7 +103,7 @@ export const updateOverviewSchema = z.object({
       `New PR summary. ${SUMMARY_CONTRACT} ${PROSE_VOICE_CONTRACT} Omit (or send null) to leave the existing summary unchanged.`,
     ),
   risk_level: z
-    .enum(["low", "medium", "high"])
+    .enum(RISK_LEVELS)
     .nullable()
     .optional()
     .describe(
@@ -295,7 +297,7 @@ export const addIssueCommentEditSchema = z.object({
   file_path: z.string(),
   start_line: z.coerce.number().int(),
   end_line: z.coerce.number().int(),
-  diff_side: z.enum(["old", "new"]).default("new"),
+  diff_side: z.enum(DIFF_SIDES).default("new"),
   body: z.string(),
 });
 

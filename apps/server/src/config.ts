@@ -17,9 +17,9 @@ const EnvConfig = Config.all({
   host: Config.String("REVV_HOST").pipe(Config.withDefault("127.0.0.1")),
   channel: Config.String("REVV_CHANNEL").pipe(Config.withDefault(DEFAULT_APP_CHANNEL)),
   // SQLite location. Empty (the default) resolves to `<appDataDir>/revv.db`
-  // (`resolveDbPath` in `db/index.ts`), beside `auth.key` and the secret store,
-  // so the DB survives app updates. `REVV_DB_PATH` overrides for
-  // dev/CI/self-hosting.
+  // (`resolveDbPath` in `db/index.ts`), beside the secret store
+  // (`secret-store.key`/`.enc`), so the DB survives app updates.
+  // `REVV_DB_PATH` overrides for dev/CI/self-hosting.
   dbPath: Config.String("REVV_DB_PATH").pipe(Config.withDefault("")),
   // Build edition. `oss` (default) authenticates via the classic OAuth App
   // with the coarse `repo` scope, bring-your-own-credentials, for self-hosting.

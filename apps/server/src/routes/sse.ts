@@ -15,6 +15,7 @@ import { Cause, type Effect, Exit } from "effect";
 import { httpErrorOf, isAppError } from "../domain/errors";
 import { debug, logError } from "../logger";
 import { AppRuntime, type AppServices } from "../runtime";
+import { refusalOf } from "./middleware";
 
 /**
  * Heartbeats keep Bun's idle timeout and WKWebView's TCP-idle drop from
@@ -172,15 +173,14 @@ export function pipeToSse<T>(frames: ReadableStream<T>): Response {
 }
 
 /**
- * Run the work that opens a stream. A failure before the stream starts
- * answers with its HTTP status and a `{ code, message }` body.
+ * Run the work that opens a stream. A failure before the stream starts is
+ * refused like any REST request (`refusalOf`).
  */
 export async function runStream<E>(
   work: Effect.Effect<Response, E, AppServices>,
 ): Promise<Response> {
   const exit = await AppRuntime.runPromiseExit(work);
   if (Exit.isSuccess(exit)) return exit.value;
-  const { status, code, message, details } = httpErrorOf(Cause.squash(exit.cause));
-  if (status >= 500) logError("sse", `refused (${code}):`, message);
-  return Response.json({ ...details, code, message } satisfies StreamErrorBody, { status });
+  const refusal = refusalOf(Cause.squash(exit.cause));
+  return Response.json(refusal.body, { status: refusal.status });
 }
