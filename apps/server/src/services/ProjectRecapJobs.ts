@@ -21,9 +21,7 @@ import type {
 } from "@revv/shared";
 import { rollingWindow } from "@revv/shared";
 import { SPAN } from "@revv/shared/telemetry";
-import { Cause, Context, Effect, Layer } from "effect";
-import { resolveAgentLaunch } from "../ai/acp/agent-launch";
-import { isAgentLaunchable } from "../ai/acp/launch";
+import { Context, Effect, Layer } from "effect";
 import { runRecapAgentViaAcp } from "../ai/providers/recap-acp";
 import { type RecapToolContext, recapCompletionBlocker } from "../ai/providers/recap-tools";
 import type { DbError, RecapNotFoundError } from "../domain/errors";
@@ -40,11 +38,17 @@ import { makeSubscriberRegistry, type SubscriberChannel } from "./job-subscriber
 import {
   type AgentJobs,
   type AgentRun,
-  MAX_RESUME_ATTEMPTS,
   makeAgentJobs,
   type RunEnd,
   type RunOutcome,
 } from "./jobs/agent-jobs";
+import {
+  newToolGate,
+  runToolGatedTurn,
+  TOOL_GATED_FAILURES,
+  type ToolGate,
+  toolGateHooks,
+} from "./jobs/tool-gated-run";
 import { PrContextService } from "./PrContext";
 import { PrMirror } from "./PrMirror";
 import { ProjectRecapService } from "./ProjectRecap";
@@ -58,12 +62,9 @@ import { SettingsService } from "./Settings";
 export const MAX_CONCURRENT_RECAP_JOBS = 2;
 
 /** A run's live state: its SSE subscribers and what the MCP route hands the tools. */
-interface RecapRun extends SubscriberChannel<RecapStreamEvent> {
+interface RecapRun extends SubscriberChannel<RecapStreamEvent>, ToolGate {
   /** Set once the source bundle is assembled; the token resolves to nothing before. */
   tools: RecapToolContext | null;
-  calledAnyTool: boolean;
-  validated: boolean;
-  modelUsed: string | null;
 }
 
 export interface RecapRequest {
@@ -213,8 +214,7 @@ export const ProjectRecapJobsLive = Layer.effect(
           dbTry("recap completion check", () => recapCompletionBlocker(db, recapId)),
       },
       settle,
-      crashed: (cause) => `Generation failed unexpectedly: ${Cause.pretty(cause).slice(0, 200)}`,
-      resumeExhausted: `Exceeded max resume attempts (${MAX_RESUME_ATTEMPTS}) after repeated crashes`,
+      ...TOOL_GATED_FAILURES,
       relaunch: (recapId) => launch(recapId),
     });
 
@@ -274,17 +274,6 @@ export const ProjectRecapJobsLive = Layer.effect(
           recapService.getLatestForRepo(recap.repositoryId, { limit: 5 }),
         ).pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<ProjectRecap>)));
 
-        const agentLaunch = yield* resolveAgentLaunch("recap").pipe(
-          Effect.provideService(SettingsService, settingsService),
-        );
-        if (!isAgentLaunchable(agentLaunch.agent)) {
-          return {
-            kind: "failed",
-            failure: `The configured recap agent ('${agentLaunch.agent}') is not available on this machine.`,
-          };
-        }
-        run.context.modelUsed = agentLaunch.model;
-
         const repoClient = yield* Effect.cached(sources.repoClient(recap.repositoryId));
         const runContext = yield* Effect.context<never>();
         const tools: RecapToolContext = {
@@ -301,39 +290,33 @@ export const ProjectRecapJobsLive = Layer.effect(
               Effect.provide(runContext),
             ),
           emit,
-          onToolCall: () => {
-            run.context.calledAnyTool = true;
-          },
-          onCompleted: () => {
-            run.context.validated = true;
-            if (!run.abort.signal.aborted) run.abort.abort(new Error("Recap completed"));
-          },
+          ...toolGateHooks(run.context, run.abort),
         };
         run.context.tools = tools;
 
-        emit({ type: "phase", data: { phase: "analyzing", message: "Analyzing pull requests…" } });
-
-        agentStartMs = Date.now();
-        const outcome = yield* Effect.promise(() =>
-          runRecapAgentViaAcp({
-            ctx: tools,
-            sessionToken: run.token,
-            launch: agentLaunch,
-            workingDir: repo.clonePath ?? process.cwd(),
-            abortController: run.abort,
-            activity: run.activity,
-            calledAnyTool: () => run.context.calledAnyTool,
-            isValidated: () => run.context.validated,
-          }),
-        );
-        if (ttftMs !== null) yield* Effect.annotateCurrentSpan("ttft_ms", ttftMs);
-
-        return {
-          kind: "journal",
-          failure:
-            outcome.error ??
+        const end = yield* runToolGatedTurn({
+          run,
+          purpose: "recap",
+          clonePath: repo.clonePath,
+          turn: (agent) => {
+            emit({
+              type: "phase",
+              data: { phase: "analyzing", message: "Analyzing pull requests…" },
+            });
+            agentStartMs = Date.now();
+            return runRecapAgentViaAcp({
+              ctx: tools,
+              sessionToken: run.token,
+              abortController: run.abort,
+              activity: run.activity,
+              ...agent,
+            });
+          },
+          unfinished:
             "Agent finished without calling complete_recap — the overview may be empty or invalid",
-        };
+        }).pipe(Effect.provideService(SettingsService, settingsService));
+        if (ttftMs !== null) yield* Effect.annotateCurrentSpan("ttft_ms", ttftMs);
+        return end;
       });
 
     const launch = (recapId: string): Effect.Effect<void> =>
@@ -341,12 +324,10 @@ export const ProjectRecapJobsLive = Layer.effect(
         .launch({
           id: recapId,
           context: (): RecapRun => ({
+            ...newToolGate(),
             subscribers: new Set(),
             nextSeq: 0,
             tools: null,
-            calledAnyTool: false,
-            validated: false,
-            modelUsed: null,
           }),
           body: runRecap,
           instrument: (_run, effect) =>
