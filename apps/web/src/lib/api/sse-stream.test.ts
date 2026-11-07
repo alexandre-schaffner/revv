@@ -73,7 +73,7 @@ describe("streamSse", () => {
 
   it("rejects a non-OK response with the server's message", async () => {
     globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ code: "NOPE", message: "Refused" }), {
+      new Response(JSON.stringify({ code: "NOPE", error: "Refused" }), {
         status: 409,
       })) as unknown as typeof fetch;
     const err = await collect().catch((e: unknown) => e);
@@ -157,7 +157,7 @@ describe("sseError", () => {
   it("keeps a refusal's code, details and wording", () => {
     const err = new SseHttpError(409, "Conflict", {
       code: "WORKTREE_BLOCKED",
-      message: "Commit first",
+      error: "Commit first",
       commits: ["a"],
     });
     expect(sseError(err, "Refused")).toEqual({

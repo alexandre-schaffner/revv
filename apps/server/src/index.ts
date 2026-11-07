@@ -25,6 +25,7 @@ import { mcpExternalAgentRoute } from "./routes/mcp/external-agent";
 import { mcpRecapRoute } from "./routes/mcp/recap";
 import { mcpStackBriefRoute } from "./routes/mcp/stack-brief";
 import { mcpWalkthroughRoute } from "./routes/mcp/walkthrough";
+import { requestRefusals } from "./routes/middleware";
 import { onboardingRoutes } from "./routes/onboarding";
 import { prRoutes } from "./routes/prs";
 import { prBaseConflictsRoutes } from "./routes/prs-base-conflicts";
@@ -119,6 +120,7 @@ const app = new Elysia()
         : { name: "Error", message: String(err) },
     );
   })
+  .use(requestRefusals)
   .use(chatRoute)
   .use(repoRoutes)
   .use(githubRoutes)

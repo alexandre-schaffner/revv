@@ -10,16 +10,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-/**
- * The server's wording in a refused request's body: the error table's
- * `error`, else `message` (Elysia's validator, and a stream refused before it
- * opened).
- */
+/** The server's wording in a refused request's body (`ApiErrorBody.error`). */
 export function bodyMessage(body: unknown): string | undefined {
   if (!isRecord(body)) return undefined;
-  if (typeof body.error === "string" && body.error) return body.error;
-  if (typeof body.message === "string" && body.message) return body.message;
-  return undefined;
+  return typeof body.error === "string" && body.error ? body.error : undefined;
 }
 
 /**
@@ -35,7 +29,7 @@ export function apiErrorMessage(error: EdenError, fallback: string): string {
 export class ApiError extends Error {
   override readonly name = "ApiError";
   readonly status: number;
-  /** The error table's code; null for a refusal outside it (Elysia's validator, a proxy). */
+  /** The error table's code; null for a refusal that isn't the server's (a proxy). */
   readonly code: ApiErrorCode | null;
   /** The refusal's JSON body, with any code-specific details (see `ApiErrorBody`). */
   readonly body: Readonly<Record<string, unknown>> | null;

@@ -78,12 +78,38 @@ export type ApiErrorResponse = ElysiaCustomStatusResponse<
   HttpErrorStatus
 >;
 
-/** Answer a request with `error`'s HTTP meaning (see `httpErrorOf`). */
-export function errorResponse(error: unknown): ApiErrorResponse {
+/** `error`'s HTTP status and refusal body (see `httpErrorOf`); logs a server fault. */
+export function refusalOf(error: unknown): { status: HttpErrorStatus; body: ApiErrorBody } {
   const { status: code, code: errorCode, message, details } = httpErrorOf(error);
   if (code >= 500) logError("route", `${errorCode}:`, message);
-  return status(code, { ...details, error: message, code: errorCode } satisfies ApiErrorBody);
+  return { status: code, body: { ...details, error: message, code: errorCode } };
 }
+
+/** Answer a request with `error`'s HTTP meaning (see `httpErrorOf`). */
+export function errorResponse(error: unknown): ApiErrorResponse {
+  const refusal = refusalOf(error);
+  return status(refusal.status, refusal.body);
+}
+
+/**
+ * Elysia's own refusals, a body that fails its route schema or doesn't parse,
+ * answered with the same body as every other refusal.
+ */
+export const requestRefusals = new Elysia({ name: "request-refusals" }).onError(
+  { as: "global" },
+  ({ code, error }) => {
+    if (code === "VALIDATION") {
+      const message = error.all[0]?.summary ?? error.valueError?.message ?? "Invalid request";
+      return status(422, { error: message, code: "INVALID" } satisfies ApiErrorBody);
+    }
+    if (code === "PARSE") {
+      return status(400, {
+        error: "The request body isn't valid JSON",
+        code: "INVALID",
+      } satisfies ApiErrorBody);
+    }
+  },
+);
 
 /**
  * Run a route's work on the app runtime and answer with its value, or with

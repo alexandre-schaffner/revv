@@ -152,18 +152,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * How a {@link streamSse} call ended badly, as the server's `{ code, message }`
- * body: its refusal, its `event: error` frame, or the client's own transport
- * failure. Null when the caller aborted it. `fallback` words a refusal whose
- * body says nothing.
+ * How a {@link streamSse} call ended badly, as an `event: error` frame's
+ * `{ code, message }` body: the server's refusal (an `ApiErrorBody`), its
+ * `event: error` frame, or the client's own transport failure. Null when the
+ * caller aborted it. `fallback` words a refusal whose body says nothing.
  */
 export function sseError(err: unknown, fallback: string): StreamErrorBody | null {
   if (err instanceof SseHttpError) {
-    const code = isRecord(err.body) && typeof err.body.code === "string" ? err.body.code : null;
     const message = err.serverMessage ?? `${fallback} (HTTP ${err.status})`;
-    return code !== null
-      ? { ...(err.body as Record<string, unknown>), code: code as StreamErrorCode, message }
-      : { code: "UNKNOWN", message };
+    if (!isRecord(err.body) || typeof err.body.code !== "string") return { code: "UNKNOWN", message };
+    const { error: _error, ...details } = err.body;
+    return { ...details, code: err.body.code as StreamErrorCode, message };
   }
   if (err instanceof SseFrameError) return { code: err.code, message: err.message };
   if (err instanceof SseIdleError)

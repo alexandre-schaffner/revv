@@ -203,7 +203,8 @@ the scheduler restarts.
 `runRoute` answers with the value, or with the failure's row of `httpErrorOf` as a typed
 `status(code, ApiErrorBody)`, so Eden types every error status a route can answer. A stream
 opens through `routes/sse.ts` (`openSse`, `pipeToSse`, `runStream` for a refusal before the
-stream starts). A router whose paths carry resource ids registers `ownedBy({ id: "pull request" })`
+stream starts, which answers the same `ApiErrorBody`). Elysia's own schema and parse refusals
+answer it too, as `INVALID` (`requestRefusals`). A router whose paths carry resource ids registers `ownedBy({ id: "pull request" })`
 (`routes/ownership.ts`) right after its auth plugin.
 
 **Why.** One table means a REST route, a stream refusal and the external agent's MCP route
