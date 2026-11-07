@@ -10,11 +10,12 @@ import {
   DiffCacheService,
   DiffCacheServiceLive,
   type FetchedFor,
+  readCurrentHeadDiff,
   readCurrentHeadFiles,
   readCurrentHeadPatch,
 } from "./DiffCache";
 import { GitHubGateway } from "./github/gateway";
-import type { PrFileMeta } from "./github/pulls";
+import type { PrCommit, PrFileMeta } from "./github/pulls";
 import { githubClient } from "./github/transport";
 import { Realtime } from "./Realtime";
 
@@ -60,10 +61,18 @@ function seedPr(db: Db): void {
     .run();
 }
 
-/** A diff cache over `db` whose GitHub answers `files()`; the pushes it sends land in `pushed`. */
+const COMMITS: PrCommit[] = [
+  { sha: "A", message: "feat: a", authorLogin: "alex", authorAvatarUrl: null, date: null },
+];
+
+/**
+ * A diff cache over `db` whose GitHub answers `files()` and `commits()`; the
+ * pushes it sends land in `pushed`.
+ */
 function diffCache(
   db: Db,
   files: () => Effect.Effect<PrFileMeta[], GitHubError>,
+  commits: () => Effect.Effect<PrCommit[], GitHubError> = () => Effect.succeed(COMMITS),
 ): {
   readonly run: <A, E>(
     use: (s: Context.Service.Shape<typeof DiffCacheService>) => Effect.Effect<A, E>,
@@ -76,7 +85,7 @@ function diffCache(
       Layer.mergeAll(
         Layer.succeed(DbService, { db }),
         Layer.succeed(GitHubGateway, {
-          prs: { files: () => files() },
+          prs: { files: () => files(), commits: () => commits() },
         } as unknown as Context.Service.Shape<typeof GitHubGateway>),
         Layer.succeed(Realtime, {
           toPr: (_prId: string, msg: ServerEventMessage) =>
@@ -236,7 +245,7 @@ describe("files cached for a PR's current head and base", () => {
     const second = await fetchFiles(cache);
 
     expect(fetches).toBe(1);
-    expect(second).toEqual({ files: [], source: "cache" });
+    expect(second).toEqual({ files: [], commits: COMMITS, source: "cache" });
     expect(readCurrentHeadFiles(db, ["pr-1"]).get("pr-1")).toEqual([]);
   });
 
@@ -281,5 +290,37 @@ describe("files cached for a PR's current head and base", () => {
         .get("pr-1")
         ?.map((f) => f.path),
     ).toEqual(["src/fetch-2.ts"]);
+  });
+});
+
+describe("commits cached with a PR's files", () => {
+  it("are served with them for the same head and base, and not past a move", async () => {
+    const db = freshDb();
+    seedPr(db);
+    await cacheFiles(db, [githubFile("src/a.ts")]);
+
+    expect(readCurrentHeadDiff(db, "pr-1")?.commits).toEqual(COMMITS);
+    const { answer, fetches } = await answerAfter(db, {});
+    expect(fetches).toBe(0);
+    expect(answer).toMatchObject({ commits: COMMITS, source: "cache" });
+
+    db.update(pullRequests).set({ headSha: "B" }).where(eq(pullRequests.id, "pr-1")).run();
+    expect(readCurrentHeadDiff(db, "pr-1")).toBeNull();
+  });
+
+  it("are refetched with the files when the cached diff predates them", async () => {
+    const db = freshDb();
+    seedPr(db);
+    await cacheFiles(db, [githubFile("src/a.ts")]);
+    db.update(pullRequests).set({ diffCommits: null }).where(eq(pullRequests.id, "pr-1")).run();
+
+    expect(readCurrentHeadDiff(db, "pr-1")).toBeNull();
+    expect(readCurrentHeadFiles(db, ["pr-1"]).has("pr-1")).toBe(true);
+    const { answer, fetches } = await answerAfter(db, {}, () =>
+      Effect.succeed([githubFile("src/a.ts")]),
+    );
+    expect(fetches).toBe(1);
+    expect(answer).toMatchObject({ commits: COMMITS, source: "github" });
+    expect(readCurrentHeadDiff(db, "pr-1")?.commits).toEqual(COMMITS);
   });
 });

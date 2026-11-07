@@ -6,6 +6,7 @@ import CheckCircle from "phosphor-svelte/lib/CheckCircle";
 import FileText from "phosphor-svelte/lib/FileText";
 import Sparkle from "phosphor-svelte/lib/Sparkle";
 import Spinner from "phosphor-svelte/lib/Spinner";
+import Stop from "phosphor-svelte/lib/Stop";
 import Warning from "phosphor-svelte/lib/Warning";
 import XCircle from "phosphor-svelte/lib/XCircle";
 import { untrack } from "svelte";
@@ -17,7 +18,9 @@ import {
   checkBaseConflicts,
   dismissBaseConflictRun,
   getBaseConflicts,
+  isStoppingBaseConflictRun,
   resolveBaseConflicts,
+  stopBaseConflictRun,
 } from "$lib/stores/base-conflicts.svelte";
 import { useMergeEligibility } from "$lib/stores/merge-eligibility.svelte";
 import { getPrById } from "$lib/stores/prs.svelte";
@@ -60,6 +63,7 @@ const checking = $derived(view.checking);
 const checkError = $derived(view.error);
 const run = $derived(view.run);
 const running = $derived(run?.outcome.status === "loading" || local?.resolving === true);
+const stopping = $derived(isStoppingBaseConflictRun(prId));
 
 $effect(() => {
   if (!applies || !githubDirty) return;
@@ -149,6 +153,17 @@ function onResolveClick(): void {
 			{/if}
 		{/snippet}
 		{#snippet actions()}
+			{#if running}
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={stopping}
+					title="Stop the agent; nothing is pushed"
+					onclick={() => void stopBaseConflictRun(prId)}
+				>
+					<Stop />{stopping ? 'Stopping…' : 'Stop'}
+				</Button>
+			{/if}
 			{#if local?.status === 'clean' && !running}
 				<Button
 					variant="ghost"

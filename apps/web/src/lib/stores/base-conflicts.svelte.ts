@@ -3,6 +3,7 @@ import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { ApiError, call } from "$lib/api/errors";
 import { sseErrorMessage, streamSse } from "$lib/api/sse-stream";
+import { thrownMessage } from "$lib/api/wire";
 import { RequestState } from "./_types";
 import { createResource } from "./resource";
 
@@ -12,7 +13,10 @@ export interface ProgressRow {
   readonly toolName: string | null;
 }
 
-/** One "Resolve with agent" run, kept until the PR moves or the user dismisses it. */
+/**
+ * One "Resolve with agent" run, kept until the PR moves or the user dismisses
+ * it. A stopped run's outcome is idle again: nothing was pushed.
+ */
 export interface ResolveRun {
   readonly status: string | null;
   readonly rows: readonly ProgressRow[];
@@ -40,6 +44,8 @@ const checks = createResource<
 });
 
 let runs = $state(new Map<string, ResolveRun>());
+/** PRs whose run a Stop was asked of, until the server answers. */
+let stopping = $state(new Set<string>());
 const resolveStreams = new Map<string, AbortController>();
 
 function setRun(prId: string, run: ResolveRun | null): void {
@@ -157,6 +163,13 @@ function onResult(prId: string, frame: Extract<BaseConflictFrame, { kind: "resul
         outcome: RequestState.error(frame.message),
       }));
       return;
+    case "stopped":
+      updateRun(prId, (run) => ({
+        ...run,
+        status: "Stopped. Nothing was pushed.",
+        outcome: RequestState.idle(),
+      }));
+      return;
   }
 }
 
@@ -167,7 +180,12 @@ function onResult(prId: string, frame: Extract<BaseConflictFrame, { kind: "resul
  */
 export function resolveBaseConflicts(prId: string, expectedHeadSha: string): void {
   if (runs.get(prId)?.outcome.status === "loading") return;
-  setRun(prId, { status: "Starting…", rows: [], agentText: "", outcome: RequestState.loading() });
+  setRun(prId, {
+    status: "Starting…",
+    rows: [],
+    agentText: "",
+    outcome: RequestState.loading(),
+  });
   const controller = new AbortController();
   resolveStreams.set(prId, controller);
   void streamResolve(prId, expectedHeadSha, controller.signal).finally(() => {
@@ -205,6 +223,39 @@ async function streamResolve(
   if (!sawResult) failRun(prId, "Lost the connection before the run finished");
 }
 
+export function isStoppingBaseConflictRun(prId: string): boolean {
+  return stopping.has(prId);
+}
+
+/**
+ * Stop the PR's run while its agent works, also one this window lost the
+ * stream of (the run carries on without it). The server answers once the run
+ * has ended; its stream, or else a re-check, reports how.
+ */
+export async function stopBaseConflictRun(prId: string): Promise<void> {
+  if (stopping.has(prId)) return;
+  stopping = new Set(stopping).add(prId);
+  try {
+    const { stopped } = await call(
+      api.api.prs({ id: prId })["base-conflicts"].resolve.stop.post(),
+      "Couldn't stop the agent",
+    );
+    if (!stopped) {
+      toast.message("Nothing to stop: the agent isn't working on these conflicts right now.");
+    }
+  } catch (e) {
+    toast.error(thrownMessage(e));
+  } finally {
+    const next = new Set(stopping);
+    next.delete(prId);
+    stopping = next;
+  }
+  if (!resolveStreams.has(prId)) {
+    const asked = checks.argOf(prId);
+    if (asked) checkBaseConflicts(prId, asked.headSha, { force: true });
+  }
+}
+
 function failRun(prId: string, message: string): void {
   if (runs.get(prId)?.outcome.status !== "loading") return;
   updateRun(prId, (run) => ({ ...run, status: null, outcome: RequestState.error(message) }));
@@ -216,4 +267,5 @@ export function reset(): void {
   resolveStreams.clear();
   checks.reset();
   runs = new Map();
+  stopping = new Set();
 }

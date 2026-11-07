@@ -23,7 +23,7 @@ import { keyedSingleFlight } from "../../effects/keyed-single-flight";
 import { logError } from "../../logger";
 import { AiService } from "../Ai";
 import { RepoCloneService } from "../clone/RepoClone";
-import { runConflictResolve } from "../conflict-resolve-run";
+import { createResolveRuns, type PushedOf } from "../conflict-resolve-run";
 import { BranchPushLock, type PushTarget } from "../git/branch-push-lock";
 import { assertNotFlagLike, gitTry, isAncestor } from "../git/ops";
 import { lsRemoteHead } from "../git/push";
@@ -67,6 +67,8 @@ export class BaseConflictsService extends Context.Service<
       readonly prId: string;
       readonly expectedHeadSha: string;
     }) => Effect.Effect<ReadableStream<BaseConflictFrame>, BaseConflictsError>;
+    /** Stop the PR's run while its agent works; whether there was one to stop. */
+    readonly stop: (prId: string) => Effect.Effect<boolean>;
   }
 >()("BaseConflictsService") {}
 
@@ -96,6 +98,7 @@ export const BaseConflictsServiceLive = Layer.effect(
       { readonly prHeadSha: string | null; readonly at: number; readonly check: BaseConflictsCheck }
     >();
     const checkOnce = keyedSingleFlight<string, BaseConflictsCheck, DbError>();
+    const resolveRuns = createResolveRuns<PushedOf<BaseConflictFrame>>();
 
     const placeOf = (ctx: PrContextBasic) =>
       repoClone.scratchPlace(ctx.repo, ctx.client.token, (layout) =>
@@ -340,8 +343,9 @@ export const BaseConflictsServiceLive = Layer.effect(
             : { kind: "base-rebase", baseBranch: op.baseBranch, sourceBranch: op.sourceBranch };
         const conflictFiles = started.kind === "conflict" ? started.files : [];
         const result = (frame: Extract<BaseConflictFrame, { kind: "result" }>) => frame;
+        const abort = new AbortController();
 
-        return yield* runConflictResolve<BaseConflictFrame>({
+        return yield* resolveRuns.start(params.prId, {
           opening: [
             {
               kind: "status",
@@ -360,9 +364,15 @@ export const BaseConflictsServiceLive = Layer.effect(
                 ]
               : []),
           ],
+          abort,
           agent:
             started.kind === "conflict"
-              ? ai.resolveMergeConflict({ cwd: op.scratchPath, task, conflictFiles })
+              ? ai.resolveMergeConflict({
+                  cwd: op.scratchPath,
+                  task,
+                  conflictFiles,
+                  abortController: abort,
+                })
               : null,
           finish: (offer) =>
             Effect.gen(function* () {
@@ -407,12 +417,10 @@ export const BaseConflictsServiceLive = Layer.effect(
                 strategy: op.strategy,
               });
             }),
-          failed: (message) =>
-            Effect.succeed(result({ kind: "result", status: "failed", message })),
           cleanup,
         });
       });
 
-    return { check, resolve };
+    return { check, resolve, stop: resolveRuns.stop };
   }),
 );

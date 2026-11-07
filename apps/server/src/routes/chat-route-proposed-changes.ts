@@ -66,6 +66,17 @@ export const chatProposedChangesRoutes = new Elysia()
       ),
     { params: prParams },
   )
+  // Stops the run above while its agent works, wherever its stream went.
+  .post(
+    "/api/chat/:prId/proposed-changes/resolve-and-push/stop",
+    (ctx) =>
+      runRoute(
+        Effect.flatMap(PrWorkspace, (w) => w.stopResolveAndPush(ctx.params.prId)).pipe(
+          Effect.map((stopped) => ({ stopped })),
+        ),
+      ),
+    { params: prParams },
+  )
   .post(
     "/api/chat/:prId/proposed-changes/cherry-pick",
     (ctx) =>

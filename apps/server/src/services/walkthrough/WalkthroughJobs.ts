@@ -56,7 +56,7 @@ import { AiService } from "../Ai";
 import { CacheService } from "../Cache";
 import { RepoCloneService } from "../clone/RepoClone";
 import { DbService } from "../Db";
-import { DiffCacheService, toGitHubFileShape } from "../DiffCache";
+import { DiffCacheService } from "../DiffCache";
 import { GitHubGateway } from "../github/gateway";
 import { HunkScanService } from "../hunk-scan/HunkScan";
 import { JevService } from "../Jev";
@@ -69,11 +69,12 @@ import { Realtime } from "../Realtime";
 import { ReviewService } from "../Review";
 import { SettingsService } from "../Settings";
 import { StackService } from "../stacks/StackService";
-import type { WalkthroughSnapshotV2 } from "./cache-format";
+import type { CacheRepo, WalkthroughSnapshotV2 } from "./cache-format";
 import { orchestratorCompletionBlocker } from "./completion";
 import { loadWalkthroughRow, type WalkthroughRow } from "./content";
 import {
   generatedByOf,
+  launchDiff,
   launchFor,
   parentFingerprintOf,
   planLaunch,
@@ -457,10 +458,10 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly row: WalkthroughRow;
       readonly context: PrContextBasic;
       readonly files: ReadonlyArray<PromptFile>;
+      readonly commits: JobStartStateInput["commits"];
       readonly trigger: WalkthroughStartTrigger;
       readonly cloneInProgress: boolean;
       readonly resumed: boolean;
-      readonly jobStart: JobStartStateInput;
     }): Effect.Effect<void, DbError> =>
       Effect.gen(function* () {
         const { row, context } = input;
@@ -475,7 +476,10 @@ export const WalkthroughJobsLive = Layer.effect(
           const planned = yield* planLaunch({
             prId: pr.id,
             headSha: row.prHeadSha,
-            state: row.lastCompletedPhase === "none" ? input.jobStart : null,
+            state:
+              row.lastCompletedPhase === "none"
+                ? { pr, files: input.files, commits: input.commits }
+                : null,
             settings,
             agent: yield* settingsService.resolveAgent(),
           }).pipe(
@@ -618,7 +622,7 @@ export const WalkthroughJobsLive = Layer.effect(
     /** The finished review a new row at `headSha` can take over, if any. */
     const findCarry = (input: {
       readonly restack: RestackCarry | null;
-      readonly repoFullName: string;
+      readonly repo: CacheRepo;
       readonly headSha: string;
       readonly mode: WalkthroughMode;
     }): Effect.Effect<Carry | null> =>
@@ -629,7 +633,7 @@ export const WalkthroughJobsLive = Layer.effect(
             try: () =>
               exportWalkthroughSnapshot(db, {
                 walkthroughId: restack.fromWalkthroughId,
-                repoFullName: input.repoFullName,
+                repoFullName: input.repo.fullName,
               }),
             catch: (cause) => cause,
           }).pipe(
@@ -653,7 +657,7 @@ export const WalkthroughJobsLive = Layer.effect(
             };
           }
         }
-        const snapshot = yield* remoteCache.fetch(input.repoFullName, input.headSha, input.mode);
+        const snapshot = yield* remoteCache.fetch(input.repo, input.headSha, input.mode);
         return Option.isSome(snapshot) ? { snapshot: snapshot.value, source: "remote" } : null;
       });
 
@@ -684,6 +688,7 @@ export const WalkthroughJobsLive = Layer.effect(
     interface RelaunchAt {
       readonly context: PrContextBasic;
       readonly files: ReadonlyArray<PromptFile>;
+      readonly commits: JobStartStateInput["commits"];
       readonly cloneInProgress: boolean;
       readonly trigger: WalkthroughStartTrigger;
     }
@@ -712,10 +717,10 @@ export const WalkthroughJobsLive = Layer.effect(
             row,
             context: at.context,
             files: at.files,
+            commits: at.commits,
             trigger: at.trigger,
             cloneInProgress: at.cloneInProgress,
             resumed: true,
-            jobStart: { pr: at.context.pr, files: at.files },
           });
           return "resumed";
         }
@@ -727,20 +732,17 @@ export const WalkthroughJobsLive = Layer.effect(
         }
         const context = yield* prContextService.forPr(row.pullRequestId);
         const { pr, repo, client } = context;
-        const files = toGitHubFileShape(
-          (yield* diffCacheService.getOrFetch(pr, repo.fullName, client)).files,
-        );
+        const diff = yield* diffCacheService.getOrFetch(pr, repo.fullName, client);
         // A clone cut off by the restart comes back `pending`; one that
         // failed ends the run through the same wait.
         const clone = yield* repoCloneService.getCloneStatus(repo.id);
         yield* launchRow({
           row,
           context,
-          files,
+          ...launchDiff(diff),
           trigger: "resume",
           cloneInProgress: clone.status !== "ready",
           resumed: true,
-          jobStart: { pr, files },
         });
         return "resumed";
       });
@@ -786,11 +788,8 @@ export const WalkthroughJobsLive = Layer.effect(
             }),
           );
         }
-        const files = toGitHubFileShape(
-          (yield* diffCacheService.getOrFetch(pr, repo.fullName, client)).files,
-        );
-        const commits = yield* github.prs.commits(client, repo.fullName, pr.externalId);
-        return { ...stored, pr, headSha: pr.headSha, files, commits };
+        const diff = yield* diffCacheService.getOrFetch(pr, repo.fullName, client);
+        return { ...stored, pr, headSha: pr.headSha, ...launchDiff(diff) };
       });
 
     type LivePr = Effect.Success<ReturnType<typeof liveContext>>;
@@ -834,6 +833,7 @@ export const WalkthroughJobsLive = Layer.effect(
         const at: RelaunchAt = {
           context: resolved,
           files,
+          commits,
           cloneInProgress: clone.status === "cloning",
           trigger: params.trigger,
         };
@@ -878,7 +878,7 @@ export const WalkthroughJobsLive = Layer.effect(
         }).pipe(Effect.provideService(WalkthroughService, walkthroughService));
         const carry = yield* findCarry({
           restack: newRow.restack,
-          repoFullName: repo.fullName,
+          repo,
           headSha,
           mode,
         });
@@ -906,10 +906,10 @@ export const WalkthroughJobsLive = Layer.effect(
             row,
             context: resolved,
             files,
+            commits,
             trigger: params.trigger,
             cloneInProgress: at.cloneInProgress,
             resumed: false,
-            jobStart: { pr, files },
           });
         }
         return { walkthroughId, reused: false };
@@ -930,7 +930,7 @@ export const WalkthroughJobsLive = Layer.effect(
           }
           const carry = yield* findCarry({
             restack: null,
-            repoFullName: repo.fullName,
+            repo,
             headSha,
             mode,
           });

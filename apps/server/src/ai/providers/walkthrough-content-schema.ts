@@ -1,9 +1,10 @@
 // The tool-input shapes of walkthrough content, shared by the generation
-// tools and the chat-edit tools so a change to a shape reaches both. Each tool
-// surface still words its own descriptions of the block variants.
+// tools and the chat-edit tools so a change to a shape, or to the guidance
+// that describes it, reaches both.
 
 import { CONFIDENCES, ISSUE_SEVERITIES, RATING_AXES, VERDICTS } from "@revv/shared";
 import { z } from "zod";
+import { PROSE_VOICE_CONTRACT } from "../prompts/review-copy-contract";
 
 export const ARTIFACT_HTML_CONTRACT =
   "A complete, self-contained HTML document with inline CSS/JS. Vanilla JS only; no external network/CDN; no localStorage; no timers/randomness. Renders in a sandboxed iframe that auto-sizes. Must carry a live state readout, something the reader can vary, and a verdict — a step-reveal with no changing state is a markdown list, not an artifact. Style with the injected Revv theme variables (`var(--color-*)`, `var(--font-*)`) so it matches the app and follows light/dark — never hardcode colors or font-family; spend the accent on the current state, not on buttons. Keep it under ~320px tall: compact rows, no placeholder rows for content not yet revealed. See 'Interactive artifacts (the craft bar)' in the system prompt for the full contract.";
@@ -32,6 +33,74 @@ export const artifactBlockField = z
   .optional()
   .describe(
     "Use for an interactive widget when prose/code/diff fall short. Mutually exclusive with markdown, code, and diff.",
+  );
+
+/**
+ * The four mutually-exclusive variants of a block after a chapter's first:
+ * `add_diff_step` takes them at the top level, `add_block` / `update_block`
+ * as their `content`.
+ */
+export const blockVariantFields = {
+  markdown: z
+    .object({
+      content: z
+        .string()
+        .describe(
+          `GitHub-flavored markdown, budget 150 WORDS. Use the toolkit for STRUCTURE, not for volume: headings (## / ###), **bold** labels, \`inline code\` for identifiers and paths, bulleted / numbered lists, tables, > blockquotes, [links](url), and \`\`\`fenced\`\`\` snippets for tiny illustrative code. Give each fact its own line or list item. A dense paragraph the reader must parse linearly is the failure mode. Over 150 words, split into two blocks or cut the weaker half. ${PROSE_VOICE_CONTRACT}`,
+        ),
+    })
+    .nullable()
+    .optional()
+    .describe(
+      "Use for narrative/explanatory content. Mutually exclusive with `code`, `diff`, and `artifact`.",
+    ),
+  code: codeBlockSchema
+    .nullable()
+    .optional()
+    .describe(
+      "Use for source-code excerpts. Mutually exclusive with `markdown`, `diff`, and `artifact`. Annotations on issue-target blocks must be LONG (multi-paragraph).",
+    ),
+  diff: diffBlockSchema
+    .nullable()
+    .optional()
+    .describe(
+      "Use for unified-diff hunks. Mutually exclusive with `markdown`, `code`, and `artifact`. Annotations on issue-target blocks must be LONG (multi-paragraph).",
+    ),
+  artifact: artifactBlockField,
+};
+
+/** A chapter's opening block, which `add_semantic_step` writes with the chapter. */
+export const chapterOpeningBlockSchema = z
+  .object({
+    markdown: z
+      .object({
+        content: z
+          .string()
+          .describe(
+            `GitHub-flavored markdown for the chapter's opening block, budget 150 WORDS. Use headings, \`inline code\`, lists, tables, blockquotes and fenced snippets for STRUCTURE; **bold** is a line-start label, never mid-sentence emphasis. This is the first thing the reader sees in the chapter, so open on the point rather than on a preamble. ${PROSE_VOICE_CONTRACT}`,
+          ),
+      })
+      .nullable()
+      .optional()
+      .describe(
+        "Use for narrative/explanatory opening content. Mutually exclusive with `code`, `diff`, and `artifact`.",
+      ),
+    code: codeBlockSchema
+      .nullable()
+      .optional()
+      .describe(
+        `Use for source-code excerpts. Mutually exclusive with \`markdown\`, \`diff\`, and \`artifact\`. Annotation REQUIRED (1–3 sentences, 45 words); code without annotation is a wall of code. ${PROSE_VOICE_CONTRACT}`,
+      ),
+    diff: diffBlockSchema
+      .nullable()
+      .optional()
+      .describe(
+        `Use for unified-diff hunks. Mutually exclusive with \`markdown\`, \`code\`, and \`artifact\`. Annotation REQUIRED (1–3 sentences, 45 words). ${PROSE_VOICE_CONTRACT}`,
+      ),
+    artifact: artifactBlockField,
+  })
+  .describe(
+    "REQUIRED. Exactly one of { markdown, code, diff, artifact }. Becomes the chapter's step_index=0 block, written atomically with the chapter itself.",
   );
 
 /** A block named by its position, the key `add_diff_step` wrote it under. */

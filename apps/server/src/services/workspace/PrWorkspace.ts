@@ -143,6 +143,8 @@ export class PrWorkspace extends Context.Service<
     readonly resolveAndPush: (
       prId: string,
     ) => Effect.Effect<ReadableStream<ResolvePushFrame>, ChatPushError>;
+    /** Stop the PR's resolve-and-push while its agent works; whether there was one to stop. */
+    readonly stopResolveAndPush: (prId: string) => Effect.Effect<boolean>;
     readonly cherryPickAndPush: (params: {
       readonly prId: string;
       readonly shas: readonly string[];
@@ -443,6 +445,7 @@ export const PrWorkspaceLive = Layer.effect(
 
       mergeAndPush: push.mergeAndPush,
       resolveAndPush: push.resolveAndPush,
+      stopResolveAndPush: push.stopResolveAndPush,
       cherryPickAndPush: push.cherryPickAndPush,
     };
   }),

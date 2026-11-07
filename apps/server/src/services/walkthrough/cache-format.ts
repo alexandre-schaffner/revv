@@ -1,7 +1,9 @@
 // Wire format for the team-shared walkthrough cache. The local server
-// gzip-encodes a `WalkthroughSnapshotV2` and uploads it to:
+// gzip-encodes a `WalkthroughSnapshotV2` and uploads it to the key
+// `cacheObjectKey` names:
 //
-//   gs://<bucket>/<owner>/<repo>/<headSha>.json.gz
+//   gs://<bucket>/<owner>/<repo>/<headSha>.json.gz               (github.com)
+//   gs://<bucket>/<githubHost>/<owner>/<repo>/<headSha>.json.gz  (Enterprise)
 //
 // On a teammate's machine, the same key is probed before kicking off the
 // agent fiber. A hit imports the snapshot in a single transaction and
@@ -12,15 +14,17 @@
 // alongside). A fetch treats a mismatched version as a miss, so the
 // teammate falls back to local generation.
 
-import type {
-  AcpAgentId,
-  Confidence,
-  RatingAxis,
-  RatingCitation,
-  RiskLevel,
-  Verdict,
-  WalkthroughBlock,
-  WalkthroughTokenUsage,
+import {
+  type AcpAgentId,
+  type Confidence,
+  isPublicGitHub,
+  normalizeGithubHost,
+  type RatingAxis,
+  type RatingCitation,
+  type RiskLevel,
+  type Verdict,
+  type WalkthroughBlock,
+  type WalkthroughTokenUsage,
 } from "@revv/shared";
 
 export const CACHE_SCHEMA_VERSION = 2 as const;
@@ -108,8 +112,7 @@ export interface WalkthroughSnapshotSemanticStep {
 }
 
 /**
- * Top-level snapshot envelope. Gzipped + uploaded to:
- *   gs://<bucket>/<owner>/<repo>/<headSha>.json.gz
+ * Top-level snapshot envelope. Gzipped + uploaded to `cacheObjectKey`.
  *
  * Excluded from the snapshot (local-only):
  *   • walkthrough id, review session id, pull request id
@@ -143,12 +146,22 @@ export interface WalkthroughSnapshotV2 {
   generatedAt: string;
 }
 
+/** A repository as the team cache addresses it: owner/name on its GitHub host. */
+export interface CacheRepo {
+  readonly githubHost: string;
+  readonly fullName: string;
+}
+
 /**
- * Build the canonical object key for the bucket. Mirrors GitHub's
- * natural addressing — same key on every teammate's machine.
+ * The object key a review of `repo` at `prHeadSha` is pushed to and read
+ * from, the same on every teammate's machine. A github.com repo keeps the
+ * key that names no host, so clients from before Enterprise repos had keys
+ * of their own still share reviews with newer ones. An Enterprise repo's key
+ * names its host: one more path segment, so it never meets a github.com key.
  */
-export function cacheObjectKey(repoFullName: string, prHeadSha: string): string {
-  return `${repoFullName}/${prHeadSha}.json.gz`;
+export function cacheObjectKey(repo: CacheRepo, prHeadSha: string): string {
+  const path = `${repo.fullName}/${prHeadSha}.json.gz`;
+  return isPublicGitHub(repo.githubHost) ? path : `${normalizeGithubHost(repo.githubHost)}/${path}`;
 }
 
 /**

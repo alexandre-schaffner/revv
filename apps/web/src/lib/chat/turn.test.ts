@@ -6,6 +6,7 @@ let chatStreams: ChatCallbacks[] = [];
 let resolveStreams: ResolvePushCallbacks[] = [];
 let historyReads = 0;
 let pushResult: unknown = { status: "remote-changed", branch: "b" };
+let stopCalls = 0;
 
 mock.module("./api", () => ({
   streamChatMessage: (_params: unknown, callbacks: ChatCallbacks) => {
@@ -34,6 +35,10 @@ mock.module("./api", () => ({
   discardProposedCommit: async () => {},
   pushProposedChanges: async () => pushResult,
   rebaseProposedCommits: async () => {},
+  stopResolveAndPush: async () => {
+    stopCalls += 1;
+    return true;
+  },
 }));
 mock.module("svelte-sonner", () => ({
   toast: { error: () => {}, success: () => {}, message: () => {} },
@@ -166,5 +171,25 @@ describe("resolving a conflicting push", () => {
     resolveStreams[0]?.onError({ code: "NETWORK_ERROR", message: "boom" });
     await settled;
     expect(proposed.isResolvingPush(PR)).toBe(false);
+  });
+
+  it("stops once, and settles when the run reports it stopped", async () => {
+    stopCalls = 0;
+    const settled = proposed.resolveAndPushProposed(PR);
+    await proposed.stopResolvingPush(PR);
+    await proposed.stopResolvingPush(PR);
+    expect(stopCalls).toBe(1);
+    expect(proposed.isStoppingResolve(PR)).toBe(true);
+
+    resolveStreams[0]?.onResult({ kind: "result", status: "stopped" });
+    resolveStreams[0]?.onDone();
+    await settled;
+    expect(proposed.isResolvingPush(PR)).toBe(false);
+    expect(proposed.isStoppingResolve(PR)).toBe(false);
+    expect(
+      timeline
+        .getChatItems(PR)
+        .some((i) => i.kind === "activity" && i.summary.startsWith("Stopped.")),
+    ).toBe(true);
   });
 });

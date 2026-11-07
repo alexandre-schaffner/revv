@@ -27,7 +27,7 @@ import {
 } from "../../domain/errors";
 import { logError } from "../../logger";
 import type { AiService } from "../Ai";
-import { runConflictResolve } from "../conflict-resolve-run";
+import { createResolveRuns, type PushedOf } from "../conflict-resolve-run";
 import type { BranchPushLock } from "../git/branch-push-lock";
 import {
   abortCherryPick,
@@ -117,6 +117,8 @@ const requireOk = (attempt: { readonly ok: boolean; readonly stderr: string }, w
     : Effect.fail(new GitOperationError({ message: `${what}: ${attempt.stderr || "git failed"}` }));
 
 export function makeAgentPush(deps: PushDeps) {
+  const resolveRuns = createResolveRuns<PushedOf<ResolvePushFrame>>();
+
   const begin = (prId: string, target?: string) =>
     Effect.gen(function* () {
       const claim = yield* deps.claim(prId, "push");
@@ -359,7 +361,9 @@ export function makeAgentPush(deps: PushDeps) {
           }),
     );
 
-  const resultFrame = (pushed: AttemptPushResult): ResolvePushFrame =>
+  const resultFrame = (
+    pushed: AttemptPushResult,
+  ): Extract<ResolvePushFrame, { readonly kind: "result" }> =>
     pushed.status === "pushed"
       ? { kind: "result", ...pushed }
       : pushed.status === "remote-changed"
@@ -400,6 +404,7 @@ export function makeAgentPush(deps: PushDeps) {
         });
       }
 
+      const abort = new AbortController();
       const agentStream = yield* deps.ai
         .resolveMergeConflict({
           cwd: branch.worktreePath,
@@ -409,10 +414,11 @@ export function makeAgentPush(deps: PushDeps) {
             sourceBranch: ctx.pr.sourceBranch,
           },
           conflictFiles: merged.files,
+          abortController: abort,
         })
         .pipe(Effect.onError(() => backOut.pipe(Effect.andThen(release))));
 
-      return yield* runConflictResolve<ResolvePushFrame>({
+      return yield* resolveRuns.start(prId, {
         opening: [
           { kind: "status", message: `Re-running merge into ${ctx.pr.sourceBranch}...` },
           { kind: "conflict-files", files: merged.files },
@@ -421,6 +427,7 @@ export function makeAgentPush(deps: PushDeps) {
             message: "Asking the agent to resolve conflicts and run git merge --continue.",
           },
         ],
+        abort,
         agent: Effect.succeed(agentStream),
         finish: (offer) =>
           Effect.gen(function* () {
@@ -438,8 +445,7 @@ export function makeAgentPush(deps: PushDeps) {
             yield* offer({ kind: "status", message: "Merge resolved. Pushing..." });
             return resultFrame(yield* pushHead(run, leaseSha, run.ahead));
           }),
-        failed: (message) =>
-          backOut.pipe(Effect.as<ResolvePushFrame>({ kind: "result", status: "failed", message })),
+        backOut,
         onProgress: run.claim.touch,
         cleanup: release,
       });
@@ -491,5 +497,10 @@ export function makeAgentPush(deps: PushDeps) {
       }),
     );
 
-  return { mergeAndPush, resolveAndPush, cherryPickAndPush };
+  return {
+    mergeAndPush,
+    resolveAndPush,
+    stopResolveAndPush: resolveRuns.stop,
+    cherryPickAndPush,
+  };
 }

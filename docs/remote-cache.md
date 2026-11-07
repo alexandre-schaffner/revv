@@ -14,7 +14,12 @@ no service-account JSON to copy around.
 
 ## Architecture in one paragraph
 
-The cache key is content-addressable on `<owner>/<repo>/<headSha>.json.gz`. The
+The cache key is content-addressable on `<owner>/<repo>/<headSha>.json.gz` for a
+github.com repo, the key every Revv version has used, so older and newer clients
+keep sharing reviews. A GitHub Enterprise repo's key names its host:
+`<githubHost>/<owner>/<repo>/<headSha>.json.gz`, one segment more, so it never
+meets a github.com repo with the same owner/name, and it never reads the
+host-less key. The
 local server gzips a `WalkthroughSnapshotV2` (see
 `apps/server/src/services/walkthrough/cache-format.ts`) and uploads it to the bucket on every
 successful generation — but only after an eligibility check (the local user
@@ -133,6 +138,9 @@ entry must clear, in order:
 1. `schemaVersion` matches `CACHE_SCHEMA_VERSION`.
 2. `contentSha256` matches a fresh hash of the gzipped body (catches silent
    corruption).
+   A `signerHost` other than the repository's GitHub host is a miss in every
+   mode, `off` included: the pusher signs as the account that owns the repo, so
+   such an entry reviews another host's repository with the same owner/name.
 3. Signature, `signerHost`, and `signerLogin` are all present (else the blob is
    "unsigned" — see modes below).
 4. `signerHost` is in the local `cache.signing.trustedSignerHosts` allow-list.
@@ -275,7 +283,8 @@ produce equivalent state.
 ### How to inspect the bucket
 
 ```bash
-gcloud storage ls gs://my-team-revv-cache/owner/repo/
+gcloud storage ls gs://my-team-revv-cache/owner/repo/            # github.com
+gcloud storage ls gs://my-team-revv-cache/ghe.example.com/owner/repo/  # Enterprise
 gcloud storage cat gs://my-team-revv-cache/owner/repo/abc1234.json.gz \
   | gunzip | jq '.schemaVersion, .modelUsed, .generatedBy.githubLogin'
 ```

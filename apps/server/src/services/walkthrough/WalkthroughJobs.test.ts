@@ -93,7 +93,6 @@ function jobsAt(db: Db, head: string, options: { readonly stored?: string } = {}
         Layer.succeed(GitHubGateway, {
           prs: {
             get: () => Effect.succeed({ ...PR, headSha: head, baseSha: "base" }),
-            commits: () => Effect.succeed([]),
           },
         } as never),
         Layer.effect(
@@ -119,7 +118,7 @@ function jobsAt(db: Db, head: string, options: { readonly stored?: string } = {}
           getOrFetch: (pr: { headSha: string }) =>
             Effect.sync(() => {
               trace.push(`diff ${pr.headSha}`);
-              return { files: [] };
+              return { files: [], commits: [] };
             }),
         } as never),
         Layer.succeed(RepoCloneService, {

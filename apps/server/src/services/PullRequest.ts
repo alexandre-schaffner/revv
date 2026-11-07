@@ -190,7 +190,7 @@ export class PullRequestService extends Context.Service<
      *     "simple" PR object without those fields, so a poll-sourced row has
      *     zeroes that must not overwrite real numbers. Real stats come from
      *     the poll's separate diff-stat read (`statsHeadSha`), a detail fetch,
-     *     or `DiffCacheService.cacheFiles`.
+     *     or `DiffCacheService.cacheDiff`.
      *   - `stack_number` / `stack_position` are only taken from a row whose
      *     `stack` is `seen` (see `StackSighting`): an `unseen` one leaves the
      *     stored ones be. A fresh insert of an `unseen` row starts unstacked.

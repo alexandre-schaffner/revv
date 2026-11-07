@@ -203,7 +203,7 @@ const prByIdRoutes = new Elysia({ prefix: "/api/prs" })
           // of that commit via a `base...at` compare, which is three-dot too
           // and returns the same fields in the same hunks-only patch format.
           // Ranged results never reach `pr_diff_files`: its PK `(prId, path)`
-          // has no range dimension and `cacheFiles` wipes the PR's rows.
+          // has no range dimension and `cacheDiff` wipes the PR's rows.
           const atSha = resolveScopedSha(ctx.query.at, pr.headSha);
           const files =
             atSha === null || pr.baseSha === null

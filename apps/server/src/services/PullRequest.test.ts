@@ -266,6 +266,7 @@ function seedDiffStats(
             patch: null,
           })),
         ),
+      commits: () => Effect.succeed([]),
     },
   } as unknown as Context.Service.Shape<typeof GitHubGateway>;
   const realtime = { toPr: () => Effect.void } as unknown as Context.Service.Shape<typeof Realtime>;

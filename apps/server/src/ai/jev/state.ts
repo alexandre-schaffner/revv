@@ -40,19 +40,34 @@ export interface FileLike {
   readonly patch: string | null;
 }
 
+export interface CommitLike {
+  readonly message: string;
+}
+
 const PR_BODY_MAX_CHARS = 4_000;
+const COMMIT_SUBJECT_MAX = 40;
+
+/** The commit subjects the job-start state carries, head first. */
+export function commitSubjects(commits: readonly CommitLike[]): string[] {
+  return commits
+    .slice(0, COMMIT_SUBJECT_MAX)
+    .map((c) => (c.message.split("\n", 1)[0] ?? "").slice(0, 200));
+}
 
 /**
  * Patches are included because the job-start questions are about the change,
  * not the description. Files past the budget still appear with stats, so the
- * change size is never understated.
+ * change size is never understated. `files` and `commits` are the PR's cached
+ * diff (`DiffCacheService`), so every caller asking about one head sends the
+ * same state.
  */
 export interface JobStartStateInput {
   readonly pr: PrLike;
   readonly files: readonly FileLike[];
+  readonly commits: readonly CommitLike[];
 }
 
-export function buildJobStartState({ pr, files }: JobStartStateInput): JevState {
+export function buildJobStartState({ pr, files, commits }: JobStartStateInput): JevState {
   const header = {
     pr: {
       number: pr.externalId,
@@ -65,6 +80,8 @@ export function buildJobStartState({ pr, files }: JobStartStateInput): JevState 
       deletions: pr.deletions,
       changed_files: pr.changedFiles,
     },
+    commits: commitSubjects(commits),
+    commit_count: commits.length,
   };
 
   let used = stateChars(header);
