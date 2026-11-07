@@ -84,8 +84,13 @@ export const LEGACY_UPGRADES = {
   },
   unpinnedBridge: {
     introducedIn: "0.35.0",
-    sites: ["integrations/external-mcp-bridge/revv-mcp.ts", "scripts/check-desktop-contract.ts"],
+    sites: [
+      "integrations/external-mcp-bridge/revv-mcp.ts",
+      "scripts/check-desktop-contract.ts",
+      "apps/server/src/services/ExternalIntegrations.ts",
+      "apps/server/src/services/external-integrations/install.ts",
+    ],
     carries:
-      "external-agent configs written before the bridge carried `REVV_API_URL`: the bridge probes both channels' ports until the boot refresh (`ExternalIntegrations.refreshInstalls`) pins the config",
+      "external-agent configs written before the bridge carried `REVV_API_URL`: the bridge probes both channels' ports until the boot refresh (`ExternalIntegrations.refreshInstalls`) of a server on one of them pins the config",
   },
 } as const satisfies Record<string, LegacyUpgrade>;

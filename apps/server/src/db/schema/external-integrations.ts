@@ -4,8 +4,9 @@ import { account, user } from "./auth";
 /**
  * Durable credentials for tools that run outside Revv's own agent lifecycle.
  *
- * Only a SHA-256 digest is persisted. The plaintext token is written once to
- * the installed client configuration and can only be recovered by rotating it.
+ * Only a SHA-256 digest is persisted. The plaintext token lives in the
+ * installed client configuration, where the boot refresh reads it back to
+ * tell this server's installs from another's (`ExternalIntegrations`).
  */
 export const externalIntegrations = sqliteTable(
   "external_integrations",

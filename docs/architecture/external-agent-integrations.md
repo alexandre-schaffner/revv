@@ -44,10 +44,20 @@ account cannot overwrite or uninstall another account's entry. Bridge copies
 live under `~/.revv/<provider>/<account>/server/revv-mcp.ts`, and for Claude
 Code inside its plugin, `~/.claude/skills/revv-<account>/server/revv-mcp.ts`.
 Every server start rewrites the files Revv owns for each active credential whose
-install still carries it (`ExternalIntegrations.refreshInstalls`): the bridge
+install is this server's (`ExternalIntegrations.refreshInstalls`): the bridge
 copy, the guide, and the entry's command, `REVV_API_URL` and `NO_PROXY`. A
-bridge or guide fix reaches users without a reconnect; unchanged files are left
-untouched.
+bridge or guide fix reaches users without a reconnect. Single files whose
+content is unchanged are left untouched; the plugin and bridge directories are
+restaged and swapped on every start.
+
+An install is this server's when it carries a credential in this server's
+database **and** its `REVV_API_URL` is this server's MCP URL (a config written
+before the bridge carried a URL counts as the server on Revv's default ports).
+A second server on a copy of the database, say a sandbox on another port, holds
+the same credential rows, so the credential alone would let it repoint the
+user's real agent configs at itself. The same rule guards removal: disconnect
+and `uninstallAccount` (forgetting an account, whose credential rows the
+cascade then deletes) leave another server's install in place.
 
 OpenCode's entry keeps opencode 1's layout (directly under `mcp`, with
 `enabled: true`, and the singular `command/` directory). opencode 2 still reads
