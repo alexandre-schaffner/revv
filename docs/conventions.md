@@ -355,8 +355,8 @@ take the PR (`getBlocks(prId)`, `getWalkthroughUiState(prId)`); a store never re
 folding lives beside it in `reducer.ts` (unit-tested), its user verbs in `actions.ts`.
 
 **Sanctioned exception.** Only one review is ever on screen. `pr-view-state.svelte.ts` owns which
-PR that is (`openPrView` / `closePrView`, called by `useOpenReview`; read with `getOpenPrId()`),
-and its tab and file accessors (`getActiveTab()`, `setActiveFilePath()`) act on it.
+PR that is (`openPrView` / `closePrView`, called by `useOpenReview`), and its tab and file
+accessors (`getActiveTab()`, `setActiveFilePath()`) act on it.
 
 **Anti-pattern.** `export function createWalkthroughStore() { ... }` returning an object with
 methods — the consumer instantiates per-component and reactive sharing across components breaks.

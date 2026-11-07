@@ -43,18 +43,6 @@ function cacheKey(prId: string, headSha: string): string {
   return [prId, headSha, s.aiAgent, s.aiModel, s.aiThinkingEffort, s.jev.enabled].join("|");
 }
 
-export function getWalkthroughSizing(
-  prId: string | null,
-  headSha: string | null,
-): WalkthroughSizing | null {
-  if (prId === null || headSha === null) return null;
-  return sizings.data(cacheKey(prId, headSha));
-}
-
-export function fetchWalkthroughSizing(prId: string, headSha: string): Promise<void> {
-  return sizings.load(cacheKey(prId, headSha), { prId, headSha }).then(() => undefined);
-}
-
 function currentHead(prId: string | null): SizingAsk | null {
   const headSha = prId ? (getPrById(prId)?.headSha ?? null) : null;
   return prId && headSha ? { prId, headSha } : null;
@@ -69,7 +57,7 @@ export function ensurePrSizing(prId: string | null): void {
   const head = currentHead(prId);
   if (!head) return;
   if (sizings.entry(cacheKey(head.prId, head.headSha)).request.status !== "idle") return;
-  void fetchWalkthroughSizing(head.prId, head.headSha);
+  void sizings.load(cacheKey(head.prId, head.headSha), head);
 }
 
 /**

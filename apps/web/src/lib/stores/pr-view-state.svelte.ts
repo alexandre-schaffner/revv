@@ -60,11 +60,6 @@ function updateState(prId: string, update: (state: PrViewState) => PrViewState):
   store.entries = next;
 }
 
-/** The PR whose review is on screen, or null off the review page. */
-export function getOpenPrId(): string | null {
-  return store.openPrId;
-}
-
 export function getActiveTab(): ReviewTab {
   if (store.openPrId === null) return FIRST_VISIT_TAB;
   return store.entries.get(store.openPrId)?.activeTab ?? FIRST_VISIT_TAB;
