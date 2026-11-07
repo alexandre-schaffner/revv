@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { StackLayer, StackReviewScope, StackReviewStarted } from "@revv/shared";
-import { isOpenLayer, stackKey } from "@revv/shared";
+import { isOpenLayer, layerNeedsReview, stackKey } from "@revv/shared";
 import { and, eq, inArray } from "drizzle-orm";
 import { Cause, Context, Duration, Effect, Layer } from "effect";
 import { stackReviews } from "../../db/schema/stack-reviews";
@@ -44,7 +44,7 @@ export function planStackReview(
         watching.push(review.walkthroughId);
         continue;
       }
-      if (review.kind === "complete" && review.reviewedHeadSha === layer.headSha) continue;
+      if (!layerNeedsReview(layer)) continue;
     }
     queue.push({ number: layer.number, prId: layer.prId });
   }

@@ -127,6 +127,27 @@ export interface StackLayer extends GitHubStackLayerFields {
   readonly restack: RestackVerdict;
 }
 
+/**
+ * Whether a layer still wants a review: none finished at its head, and its
+ * head isn't a pure restack of a reviewed one (the review carries over). A
+ * layer being reviewed right now doesn't. The one rule for the stack's
+ * "remaining" count, its next-layer jump, and what "review the remaining
+ * layers" queues.
+ */
+export function layerNeedsReview(
+  layer: Pick<StackLayer, "review" | "restack" | "headSha">,
+): boolean {
+  const { review } = layer;
+  if (review.kind === "generating") return false;
+  if (review.kind !== "complete") return true;
+  if (layer.restack.kind === "restacked") return false;
+  return (
+    review.reviewedHeadSha !== null &&
+    layer.headSha !== null &&
+    review.reviewedHeadSha !== layer.headSha
+  );
+}
+
 export interface PrStackDetail {
   readonly repositoryId: string;
   readonly number: number;

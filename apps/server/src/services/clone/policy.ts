@@ -4,7 +4,7 @@
 import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { isGitRepo, listWorktrees, originUrl, resolveRef } from "../git/ops";
+import { isGitRepo, originUrl, resolveRef } from "../git/ops";
 
 export function pathIsUnder(child: string, parent: string): boolean {
   const resolvedChild = resolve(child);
@@ -155,12 +155,4 @@ export async function readCloneDestinationState(
     return (await resolveRef(dest, "HEAD")) === null ? "broken-git-repo" : "matching-git-repo";
   }
   return readdirSync(dest).length === 0 ? "empty" : "non-empty-non-git";
-}
-
-export async function findWorktreesOnBranch(
-  clonePath: string,
-  branchName: string,
-): Promise<string[]> {
-  const ref = `refs/heads/${branchName}`;
-  return (await listWorktrees(clonePath)).filter((w) => w.branch === ref).map((w) => w.path);
 }

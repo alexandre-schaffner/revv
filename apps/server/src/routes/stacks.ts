@@ -11,7 +11,7 @@ import { StackService } from "../services/stacks/StackService";
 import { runRoute, withAccount } from "./middleware";
 import { ownedBy } from "./ownership";
 
-const mergeMethod = t.Union(MERGE_METHODS.map((method) => t.Literal(method)));
+const mergeMethod = t.UnionEnum(MERGE_METHODS);
 
 export const stackRoutes = new Elysia({ prefix: "/api/prs" })
   .use(withAccount)

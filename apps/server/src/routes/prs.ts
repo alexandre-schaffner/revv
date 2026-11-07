@@ -526,7 +526,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
       ),
     {
       body: t.Object({
-        mergeMethod: t.Union(MERGE_METHODS.map((method) => t.Literal(method))),
+        mergeMethod: t.UnionEnum(MERGE_METHODS),
       }),
     },
   )

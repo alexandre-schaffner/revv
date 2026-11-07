@@ -4,7 +4,7 @@ import { planStackReview } from "./StackReview";
 
 function layer(
   position: number,
-  over: Partial<Pick<StackLayer, "status" | "prId" | "headSha" | "review">> = {},
+  over: Partial<Pick<StackLayer, "status" | "prId" | "headSha" | "review" | "restack">> = {},
 ): StackLayer {
   return {
     position,
@@ -61,6 +61,17 @@ describe("planStackReview", () => {
     expect(plan.queue.map((l) => l.number)).toEqual([102, 107]);
     expect(plan.watching).toEqual(["wt-3"]);
     expect(plan.untracked).toEqual([105]);
+  });
+
+  it("remaining: leaves a layer whose new head is a pure restack of its review", () => {
+    const plan = planStackReview(
+      [
+        layer(1, { review: complete("old-head-1"), restack: { kind: "restacked" } }),
+        layer(2, { review: complete("old-head-2"), restack: { kind: "layer-changed", files: [] } }),
+      ],
+      "remaining",
+    );
+    expect(plan.queue.map((l) => l.number)).toEqual([102]);
   });
 
   it("all: every open tracked layer, bottom-up", () => {
