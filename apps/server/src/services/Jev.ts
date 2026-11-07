@@ -5,7 +5,7 @@
 // Two invariants: (1) off is free — disabled toggle or missing key
 // short-circuits with no network call. The switch is checked here (and, for
 // judgments memoized in the cache, in `cachedJev`), so no caller has to; one
-// may still read it to decide what to show, or snapshot it into a launch plan.
+// may still read it to decide what to show.
 // (2) never fails a walkthrough — every call site collapses failure to `null`
 // (`ai/jev/optional.ts`); `ask` fails with exactly one error type so that
 // collapse is total.

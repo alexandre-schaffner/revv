@@ -152,7 +152,13 @@ const CacheEligibilityWithDeps = CacheEligibilityLive.pipe(
 );
 const RemoteWalkthroughCacheWithDeps = RemoteWalkthroughCacheLive.pipe(
   Layer.provide(
-    Layer.mergeAll(BaseLayers, GcsBlobStoreWithDeps, SshSignerWithDeps, CacheEligibilityWithDeps),
+    Layer.mergeAll(
+      BaseLayers,
+      PrContextServiceWithDeps,
+      GcsBlobStoreWithDeps,
+      SshSignerWithDeps,
+      CacheEligibilityWithDeps,
+    ),
   ),
 );
 

@@ -19,7 +19,7 @@ import { DbService } from "../Db";
 import { Realtime } from "../Realtime";
 import { fingerprintFiles } from "../stacks/fingerprint";
 import { blockId, issueId, semanticStepId } from "./content";
-import { planNewRow, planRestackCarry } from "./launch-plan";
+import { parentFingerprintOf, planNewRow, planRestackCarry } from "./launch-plan";
 import { makeWalkthroughLifecycle } from "./lifecycle";
 import { exportWalkthroughSnapshot } from "./snapshot";
 import { WalkthroughService, WalkthroughServiceLive } from "./Walkthrough";
@@ -314,7 +314,6 @@ describe("planNewRow: stack inputs", () => {
     expect(result.stack).toEqual(STACK);
     expect(result.restack).toEqual({ fromWalkthroughId: "wt-old", generationMode: "full" });
     expect(result.generationMode).toBe("full");
-    expect(result.parentFingerprint).toBeNull();
   });
 
   it("reads the parent's fingerprint for an incremental stacked run", async () => {
@@ -329,6 +328,8 @@ describe("planNewRow: stack inputs", () => {
     expect(result.restack).toBeNull();
     expect(result.generationMode).toBe("incremental");
     expect(result.parentWalkthroughId).toBe("wt-old");
-    expect(result.parentFingerprint).toEqual({ "src/a.ts": "older" });
+    expect(
+      await run(db, parentFingerprintOf(STACK, result.generationMode, result.parentWalkthroughId)),
+    ).toEqual({ "src/a.ts": "older" });
   });
 });

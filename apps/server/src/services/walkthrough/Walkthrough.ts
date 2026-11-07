@@ -4,6 +4,7 @@
 
 import type {
   RiskLevel,
+  ThreadEventMessage,
   Walkthrough,
   WalkthroughEndReason,
   WalkthroughGenerationMode,
@@ -19,7 +20,6 @@ import type {
 import { and, asc, desc, eq, inArray, ne, type SQL } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import type { Db } from "../../db";
-import { commentThreads } from "../../db/schema/comment-threads";
 import { pullRequests } from "../../db/schema/pull-requests";
 import { avatarOfPrLogin } from "../../db/schema/remote-users";
 import { repositories } from "../../db/schema/repositories";
@@ -35,6 +35,7 @@ import { dbTry } from "../../effects/db-try";
 import { DbService } from "../Db";
 import type { PrCommit } from "../github/pulls";
 import { Realtime } from "../Realtime";
+import { threadWrites } from "../Review";
 import type { GeneratedBy, GenerationProviderConfig } from "./cache-format";
 import {
   decodeBlock,
@@ -413,12 +414,16 @@ export class WalkthroughService extends Context.Service<
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
 /**
- * The one way a row becomes `superseded`: its AI comment threads go with it
- * (Submit would otherwise post a retired review's comments), its
- * review round follows, and a run cut off mid-generation records why.
- * Returns the deleted threads' ids, for the caller to announce once committed.
+ * The one way a row becomes `superseded`: its AI comment threads are retired
+ * with it (`threadWrites.retireAiThreads`), its review round follows, and a
+ * run cut off mid-generation records why. Returns the thread envelopes, for
+ * the caller to announce once committed.
  */
-function supersedeRows(tx: Db | Tx, ids: readonly string[]): string[] {
+function supersedeRows(
+  tx: Db | Tx,
+  prId: string,
+  ids: readonly string[],
+): readonly ThreadEventMessage[] {
   if (ids.length === 0) return [];
   const issueIds = tx
     .select({ id: walkthroughIssues.id })
@@ -426,15 +431,7 @@ function supersedeRows(tx: Db | Tx, ids: readonly string[]): string[] {
     .where(inArray(walkthroughIssues.walkthroughId, [...ids]))
     .all()
     .map((r) => r.id);
-  const threadIds =
-    issueIds.length === 0
-      ? []
-      : tx
-          .delete(commentThreads)
-          .where(inArray(commentThreads.walkthroughIssueId, issueIds))
-          .returning({ id: commentThreads.id })
-          .all()
-          .map((r) => r.id);
+  const retired = threadWrites.retireAiThreads(tx, prId, issueIds);
   tx.update(walkthroughs)
     .set({ status: "superseded", endReason: "superseded" })
     .where(and(inArray(walkthroughs.id, [...ids]), eq(walkthroughs.status, "generating")))
@@ -447,7 +444,7 @@ function supersedeRows(tx: Db | Tx, ids: readonly string[]): string[] {
     .set({ status: "superseded" })
     .where(inArray(reviewRounds.walkthroughId, [...ids]))
     .run();
-  return threadIds;
+  return retired.envelopes;
 }
 
 export const WalkthroughServiceLive = Layer.effect(
@@ -455,12 +452,8 @@ export const WalkthroughServiceLive = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* DbService;
     const realtime = yield* Realtime;
-    const announceDeletedThreads = (prId: string, threadIds: readonly string[]) =>
-      Effect.forEach(
-        threadIds,
-        (threadId) => realtime.toPr(prId, { type: "thread:deleted", data: { threadId } }),
-        { discard: true },
-      );
+    const announceThreads = (prId: string, envelopes: readonly ThreadEventMessage[]) =>
+      Effect.forEach(envelopes, (envelope) => realtime.toPr(prId, envelope), { discard: true });
     return WalkthroughService.of({
       createRow: (params) =>
         dbTry("create walkthrough", () =>
@@ -481,7 +474,7 @@ export const WalkthroughServiceLive = Layer.effect(
               )
               .all()
               .map((r) => r.id);
-            const deletedThreads = supersedeRows(tx, replaced);
+            const threadEnvelopes = supersedeRows(tx, params.prId, replaced);
 
             tx.insert(walkthroughs)
               .values({
@@ -538,10 +531,10 @@ export const WalkthroughServiceLive = Layer.effect(
                 createdAt: generatedAt,
               })
               .run();
-            return { id, deletedThreads };
+            return { id, threadEnvelopes };
           }),
         ).pipe(
-          Effect.tap(({ deletedThreads }) => announceDeletedThreads(params.prId, deletedThreads)),
+          Effect.tap(({ threadEnvelopes }) => announceThreads(params.prId, threadEnvelopes)),
           Effect.map(({ id }) => id),
         ),
 
@@ -624,7 +617,7 @@ export const WalkthroughServiceLive = Layer.effect(
 
       supersedeAllForPr: (prId, exceptHeadSha, mode) =>
         dbTry("supersedeAllForPr", () =>
-          db.transaction(() => {
+          db.transaction((tx) => {
             const baseConditions = [
               eq(walkthroughs.pullRequestId, prId),
               ne(walkthroughs.status, "superseded"),
@@ -635,17 +628,17 @@ export const WalkthroughServiceLive = Layer.effect(
                 ? and(...baseConditions, ne(walkthroughs.prHeadSha, exceptHeadSha))
                 : and(...baseConditions);
 
-            const activeIds = db
+            const activeIds = tx
               .select({ id: walkthroughs.id })
               .from(walkthroughs)
               .where(condition)
               .all()
               .map((r) => r.id);
 
-            return { activeIds, deletedThreads: supersedeRows(db, activeIds) };
+            return { activeIds, threadEnvelopes: supersedeRows(tx, prId, activeIds) };
           }),
         ).pipe(
-          Effect.tap(({ deletedThreads }) => announceDeletedThreads(prId, deletedThreads)),
+          Effect.tap(({ threadEnvelopes }) => announceThreads(prId, threadEnvelopes)),
           Effect.map(({ activeIds }) => activeIds),
         ),
 

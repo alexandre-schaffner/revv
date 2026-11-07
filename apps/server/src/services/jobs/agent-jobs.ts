@@ -11,11 +11,13 @@
 //     resume. Otherwise the body's verdict stands, and a body that hands the
 //     verdict to the journal completes exactly when the pipeline's completion
 //     check passes.
-//   • Resume (on boot, or a read path finding a row whose run died) is one
-//     budgeted policy: a journal that already passes the completion check is
-//     completed without a rerun; otherwise the attempt is counted first, and a
-//     row over the budget fails (invariant 9). An attempt that can't be
-//     counted isn't run.
+//   • Resume (on boot, the user's, or a request finding a row whose run died)
+//     is one budgeted policy, `resumeDecision`: a journal that already passes
+//     the completion check is completed without a rerun; otherwise the attempt
+//     is counted first, and a row over the budget fails (invariant 9). An
+//     attempt that can't be counted isn't run. It runs under the pipeline's own
+//     lock on the row (`exclusive`), so it can't race the pipeline's other
+//     decisions about it.
 //   • The pipeline's `settle` writes the terminal status — only from
 //     `generating` — and announces it after the commit (invariant 8).
 
@@ -84,9 +86,27 @@ export interface AgentJobSpec<C, F> {
   readonly crashed: (cause: Cause.Cause<unknown>) => F;
   /** The failure recorded when a row has crashed more often than {@link MAX_RESUME_ATTEMPTS}. */
   readonly resumeExhausted: F;
-  /** Start a run of `id` from its journal row (resume, attach). */
-  readonly relaunch: (id: string) => Effect.Effect<void, unknown>;
+  /**
+   * Start a run of `id` from its journal row, once the resume decision said
+   * to. Called under {@link exclusive}.
+   */
+  readonly relaunch: (id: string) => Effect.Effect<unknown, unknown>;
+  /**
+   * Run `effect` under the lock the pipeline takes for every decision about
+   * row `id`. Defaults to a lock per row.
+   */
+  readonly exclusive?: <A, E>(
+    id: string,
+    effect: Effect.Effect<A, E>,
+  ) => Effect.Effect<A, E | DbError>;
 }
+
+/**
+ * What a resume of a row whose run isn't live decided: it was live after all,
+ * its journal passed and it completed, it was over its budget and failed, or
+ * it runs again.
+ */
+export type ResumeDecision = "live" | "completed" | "exhausted" | "run";
 
 export interface LaunchInput<C, F, E> {
   readonly id: string;
@@ -109,6 +129,12 @@ export interface AgentJobs<C, F> {
   readonly stop: (id: string, reason: StopReason) => Effect.Effect<void>;
   /** Run `id` again if its run died, under the resume budget. A no-op while it is live. */
   readonly resume: (id: string) => Effect.Effect<void>;
+  /**
+   * The resume policy alone, for a pipeline that already holds its lock on
+   * `id` and relaunches the row itself on `run`. Settles `completed` and
+   * `exhausted` rows.
+   */
+  readonly resumeDecision: (id: string) => Effect.Effect<ResumeDecision, DbError>;
   readonly resumePending: Effect.Effect<void>;
   readonly resolveToken: (token: string) => Effect.Effect<AgentRun<C> | null>;
 }
@@ -243,23 +269,35 @@ export const makeAgentJobs = <C, F>(
         if (live.fiber) yield* Fiber.interrupt(live.fiber);
       });
 
-    const resume = (id: string): Effect.Effect<void> =>
+    const exclusive =
+      spec.exclusive ??
+      (<A, E>(id: string, effect: Effect.Effect<A, E>) =>
+        Effect.flatMap(resumeMutex.acquire(id), (mutex) => mutex.withPermits(1)(effect)));
+
+    const resumeDecision = (id: string): Effect.Effect<ResumeDecision, DbError> =>
       Effect.gen(function* () {
-        const mutex = yield* resumeMutex.acquire(id);
-        yield* mutex.withPermits(1)(
-          Effect.gen(function* () {
-            if ((yield* Ref.get(registry)).has(id)) return;
-            const blocker = yield* spec.journal.completionBlocker(id);
-            if (blocker === null) return yield* settle(id, { kind: "complete" }, null);
-            const attempts = yield* spec.journal.bumpResumeAttempts(id);
-            if (attempts > MAX_RESUME_ATTEMPTS) {
-              debug(spec.name, `${id} exceeded ${MAX_RESUME_ATTEMPTS} resume attempts`);
-              return yield* settle(id, { kind: "failed", failure: spec.resumeExhausted }, null);
-            }
-            yield* spec.relaunch(id);
-          }),
-        );
-      }).pipe(
+        if ((yield* Ref.get(registry)).has(id)) return "live";
+        const blocker = yield* spec.journal.completionBlocker(id);
+        if (blocker === null) {
+          yield* settle(id, { kind: "complete" }, null);
+          return "completed";
+        }
+        const attempts = yield* spec.journal.bumpResumeAttempts(id);
+        if (attempts > MAX_RESUME_ATTEMPTS) {
+          debug(spec.name, `${id} exceeded ${MAX_RESUME_ATTEMPTS} resume attempts`);
+          yield* settle(id, { kind: "failed", failure: spec.resumeExhausted }, null);
+          return "exhausted";
+        }
+        return "run";
+      });
+
+    const resume = (id: string): Effect.Effect<void> =>
+      exclusive(
+        id,
+        Effect.gen(function* () {
+          if ((yield* resumeDecision(id)) === "run") yield* spec.relaunch(id);
+        }),
+      ).pipe(
         Effect.catchCause((cause) =>
           Effect.sync(() => logError(spec.name, `resume of ${id} failed:`, Cause.pretty(cause))),
         ),
@@ -292,6 +330,7 @@ export const makeAgentJobs = <C, F>(
       runs: Effect.map(Ref.get(registry), (map) => [...map.values()].map((live) => live.run)),
       stop,
       resume,
+      resumeDecision,
       resumePending,
       resolveToken,
     };

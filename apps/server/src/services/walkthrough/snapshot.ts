@@ -82,7 +82,7 @@ export function exportWalkthroughSnapshot(db: Db, params: ExportParams): Walkthr
     .filter((i) => i.submittedAt === null)
     .map((i) => ({
       order: i.order,
-      severity: i.severity as WalkthroughSnapshotIssue["severity"],
+      severity: i.severity,
       title: i.title,
       description: i.description,
       filePath: i.filePath ?? null,

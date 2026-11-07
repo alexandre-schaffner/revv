@@ -1,21 +1,22 @@
 // Block content for every tool that writes `walkthrough_blocks`: the
 // generation pipeline and the post-completion edit path accept the same four
-// variants (markdown | code | diff | artifact), validate them with the same
-// rules and write them through `writeBlock`.
+// variants (markdown | code | diff | artifact), check them with the same rules
+// (`prepareBlock`) and write them through `writeBlock`. Only the generation
+// tools hold an artifact to the craft bar between the two (invariant 4).
 
-import type {
-  ArtifactBlock,
-  CodeBlock,
-  DiffBlock,
-  MarkdownBlock,
-  WalkthroughBlock,
-} from "@revv/shared";
+import type { WalkthroughBlock } from "@revv/shared";
 import { parseHunkHeader } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
+import type { z } from "zod";
 import type { Db } from "../../db";
 import { walkthroughBlocks } from "../../db/schema/walkthrough-blocks";
 import { blockId, blockOrder } from "../../services/walkthrough/content";
 import { prLensDiagramError } from "./prlens-doc";
+import type {
+  artifactBlockField,
+  codeBlockSchema,
+  diffBlockSchema,
+} from "./walkthrough-content-schema";
 
 /**
  * Max serialized artifact HTML, enforced identically on both write paths. The
@@ -27,42 +28,63 @@ export const MAX_ARTIFACT_HTML_BYTES = 256 * 1024;
 /** The four mutually-exclusive block-content variants, as the tool schemas decode them. */
 export interface BlockVariantInput {
   readonly markdown?: { readonly content: string } | null | undefined;
-  readonly code?:
-    | {
-        readonly file_path: string;
-        readonly start_line: number;
-        readonly end_line: number;
-        readonly language: string;
-        readonly content: string;
-        readonly annotation: string | null;
-      }
-    | null
-    | undefined;
-  readonly diff?:
-    | {
-        readonly file_path: string;
-        readonly patch: string;
-        readonly annotation: string | null;
-      }
-    | null
-    | undefined;
-  readonly artifact?:
-    | {
-        readonly html: string;
-        readonly annotation: string | null;
-      }
-    | null
-    | undefined;
+  readonly code?: z.output<typeof codeBlockSchema> | null | undefined;
+  readonly diff?: z.output<typeof diffBlockSchema> | null | undefined;
+  readonly artifact?: z.output<typeof artifactBlockField>;
 }
 
-/** Both tool surfaces require exactly 1. */
-export function blockVariantCount(input: BlockVariantInput): number {
-  let n = 0;
-  if (input.markdown != null) n++;
-  if (input.code != null) n++;
-  if (input.diff != null) n++;
-  if (input.artifact != null) n++;
-  return n;
+type BlockPosition = "id" | "order" | "phase" | "semanticStepIndex" | "stepIndex";
+type ContentOf<B> = B extends WalkthroughBlock ? Omit<B, BlockPosition> : never;
+
+/** A block's content as it is persisted, without its position. */
+export type BlockContent = ContentOf<WalkthroughBlock>;
+
+function presentVariants(input: BlockVariantInput): BlockContent[] {
+  const present: BlockContent[] = [];
+  if (input.markdown) present.push({ type: "markdown", content: input.markdown.content });
+  if (input.code) {
+    present.push({
+      type: "code",
+      filePath: input.code.file_path,
+      startLine: input.code.start_line,
+      endLine: input.code.end_line,
+      language: input.code.language,
+      content: input.code.content,
+      annotation: input.code.annotation,
+    });
+  }
+  if (input.diff) {
+    present.push({
+      type: "diff",
+      filePath: input.diff.file_path,
+      patch: normalizeDiffPatch(input.diff.patch),
+      annotation: input.diff.annotation,
+    });
+  }
+  if (input.artifact) {
+    present.push({
+      type: "artifact",
+      html: input.artifact.html,
+      annotation: input.artifact.annotation,
+    });
+  }
+  return present;
+}
+
+/**
+ * The block a tool call describes, or why it is refused: exactly one variant
+ * (`countError` otherwise, worded by the tool), non-empty, within size, and
+ * its diagrams valid.
+ */
+export function prepareBlock(
+  input: BlockVariantInput,
+  countError: string,
+): { readonly block: BlockContent } | { readonly error: string } {
+  const [block, ...others] = presentVariants(input);
+  if (block === undefined || others.length > 0) return { error: countError };
+  const contentError = blockContentError(input);
+  if (contentError) return { error: contentError };
+  return { block };
 }
 
 function emptyBlockError(input: BlockVariantInput): string | null {
@@ -340,74 +362,6 @@ export function normalizeDiffPatch(patch: string): string {
   return out.join("\n");
 }
 
-/** Callers check {@link blockVariantCount} and {@link blockContentError} first. */
-export function buildBlock(
-  blockId: string,
-  semanticStepIndex: number,
-  stepIndex: number,
-  input: BlockVariantInput,
-): WalkthroughBlock | null {
-  const order = blockOrder(semanticStepIndex, stepIndex);
-
-  if (input.markdown) {
-    const md: MarkdownBlock = {
-      type: "markdown",
-      id: blockId,
-      order,
-      phase: "diff_analysis",
-      semanticStepIndex,
-      stepIndex,
-      content: input.markdown.content,
-    };
-    return md;
-  }
-  if (input.code) {
-    const code: CodeBlock = {
-      type: "code",
-      id: blockId,
-      order,
-      phase: "diff_analysis",
-      semanticStepIndex,
-      stepIndex,
-      filePath: input.code.file_path,
-      startLine: input.code.start_line,
-      endLine: input.code.end_line,
-      language: input.code.language,
-      content: input.code.content,
-      annotation: input.code.annotation,
-    };
-    return code;
-  }
-  if (input.diff) {
-    const diff: DiffBlock = {
-      type: "diff",
-      id: blockId,
-      order,
-      phase: "diff_analysis",
-      semanticStepIndex,
-      stepIndex,
-      filePath: input.diff.file_path,
-      patch: normalizeDiffPatch(input.diff.patch),
-      annotation: input.diff.annotation,
-    };
-    return diff;
-  }
-  if (input.artifact) {
-    const artifact: ArtifactBlock = {
-      type: "artifact",
-      id: blockId,
-      order,
-      phase: "diff_analysis",
-      semanticStepIndex,
-      stepIndex,
-      html: input.artifact.html,
-      annotation: input.artifact.annotation,
-    };
-    return artifact;
-  }
-  return null;
-}
-
 /**
  * Write the block at `(semanticStepIndex, stepIndex)` — the one block write
  * every tool shares. A replay lands on the same row. An existing row keeps
@@ -419,8 +373,8 @@ export function writeBlock(
   walkthroughId: string,
   semanticStepIndex: number,
   stepIndex: number,
-  input: BlockVariantInput,
-): WalkthroughBlock | null {
+  content: BlockContent,
+): WalkthroughBlock {
   const position = and(
     eq(walkthroughBlocks.walkthroughId, walkthroughId),
     eq(walkthroughBlocks.phase, "diff_analysis"),
@@ -432,13 +386,14 @@ export function writeBlock(
     .from(walkthroughBlocks)
     .where(position)
     .get();
-  const block = buildBlock(
-    existing?.id ?? blockId(walkthroughId, semanticStepIndex, stepIndex),
+  const block: WalkthroughBlock = {
+    ...content,
+    id: existing?.id ?? blockId(walkthroughId, semanticStepIndex, stepIndex),
+    order: blockOrder(semanticStepIndex, stepIndex),
+    phase: "diff_analysis",
     semanticStepIndex,
     stepIndex,
-    input,
-  );
-  if (!block) return null;
+  };
   const data = JSON.stringify(block);
   db.insert(walkthroughBlocks)
     .values({

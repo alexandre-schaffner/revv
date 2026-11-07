@@ -57,7 +57,7 @@ export class AiService extends Context.Service<
   {
     readonly walkthroughTurn: (
       params: WalkthroughTurnParams,
-    ) => Effect.Effect<WalkthroughTurnResult, AiError>;
+    ) => Effect.Effect<WalkthroughTurnResult>;
     readonly chat: (
       params: ChatParams,
     ) => Effect.Effect<ReadableStream<RawChatStreamFrame>, AiError>;
@@ -95,13 +95,7 @@ export const AiServiceLive = Layer.effect(
             [SPAN_ATTR.provider]: params.launch.agent,
             [SPAN_ATTR.model]: params.launch.model,
           },
-        })(
-          Effect.gen(function* () {
-            const result = yield* Effect.promise(() => runWalkthroughTurn(params));
-            if ("notConfigured" in result) return yield* Effect.fail(new AiNotConfiguredError());
-            return result;
-          }),
-        ),
+        })(Effect.promise(() => runWalkthroughTurn(params))),
 
       chat: (params: ChatParams) =>
         Effect.withSpan(spanName("ai", "chat"))(

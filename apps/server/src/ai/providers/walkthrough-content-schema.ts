@@ -1,5 +1,6 @@
 // The tool-input shapes of walkthrough content, shared by the generation
-// tools and the chat-edit tools so a change to the contract reaches both.
+// tools and the chat-edit tools so a change to a shape reaches both. Each tool
+// surface still words its own descriptions of the block variants.
 
 import { CONFIDENCES, ISSUE_SEVERITIES, RATING_AXES, VERDICTS } from "@revv/shared";
 import { z } from "zod";

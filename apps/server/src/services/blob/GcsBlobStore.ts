@@ -144,16 +144,6 @@ export const GcsBlobStoreLive = Layer.effect(
       Effect.map(resolveClient(), (c) => c.bucket.file(key));
 
     return BlobStore.of({
-      exists: (key) =>
-        Effect.gen(function* () {
-          const file = yield* fileFor(key);
-          const result = yield* Effect.tryPromise({
-            try: () => file.exists(),
-            catch: (cause) => gcsErr(`exists(${key})`, cause),
-          });
-          return result[0];
-        }),
-
       get: (key) =>
         Effect.gen(function* () {
           const file = yield* fileFor(key);

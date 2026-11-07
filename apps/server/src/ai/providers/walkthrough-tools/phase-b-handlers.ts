@@ -22,12 +22,7 @@ import {
 import { renderArtifactRejection } from "../../jev/artifact-quality";
 import { decodePlainText } from "../agent-text";
 import { fail, ok } from "../mcp-tool-gateway";
-import {
-  blockContentError,
-  blockVariantCount,
-  withArtifactWarnings,
-  writeBlock,
-} from "../walkthrough-blocks";
+import { prepareBlock, withArtifactWarnings, writeBlock } from "../walkthrough-blocks";
 import { openForWrite } from "./phases";
 import type {
   AddDiffStepInput,
@@ -53,13 +48,11 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
     );
   }
 
-  if (blockVariantCount(input.initial_block) !== 1) {
-    return fail(
-      "Error: add_semantic_step.initial_block requires exactly one of { markdown, code, diff, artifact } — not zero, not two. A chapter cannot be opened without its first block.",
-    );
-  }
-  const initialBlockErr = blockContentError(input.initial_block);
-  if (initialBlockErr) return fail(initialBlockErr);
+  const prepared = prepareBlock(
+    input.initial_block,
+    "Error: add_semantic_step.initial_block requires exactly one of { markdown, code, diff, artifact } — not zero, not two. A chapter cannot be opened without its first block.",
+  );
+  if ("error" in prepared) return fail(prepared.error);
 
   // Same craft bar as add_diff_step; rejecting here also rejects the
   // chapter, since a chapter can't exist without its first block.
@@ -71,101 +64,95 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
     if (verdict.reject) return fail(renderArtifactRejection(verdict));
   }
 
-  let result: WalkthroughToolResult | null = null;
-  let isFirstStep = false;
-  let block: WalkthroughBlock | null = null;
   const semanticStep: WalkthroughSemanticStep = {
     semanticStepIndex: input.semantic_step_index,
     title: trimmedTitle,
     summary: input.summary ?? null,
   };
-  ctx.db.transaction(() => {
-    const open = openForWrite(ctx.db, ctx.walkthroughId, "add_semantic_step");
-    if ("refusal" in open) {
-      result = open.refusal;
-      return;
-    }
-    const { phase } = open;
+  const written = ctx.db.transaction(
+    ():
+      | { readonly refusal: WalkthroughToolResult }
+      | { readonly block: WalkthroughBlock; readonly isFirstStep: boolean } => {
+      const open = openForWrite(ctx.db, ctx.walkthroughId, "add_semantic_step");
+      if ("refusal" in open) return open;
+      const { phase } = open;
 
-    const existingChapter = ctx.db
-      .select({ id: walkthroughSemanticSteps.id })
-      .from(walkthroughSemanticSteps)
-      .where(
-        and(
-          eq(walkthroughSemanticSteps.walkthroughId, ctx.walkthroughId),
-          eq(walkthroughSemanticSteps.semanticStepIndex, input.semantic_step_index),
-        ),
-      )
-      .get();
-    if (!existingChapter && input.semantic_step_index > 0) {
-      const prevIdx = input.semantic_step_index - 1;
-      const prevChapter = ctx.db
-        .select({ title: walkthroughSemanticSteps.title })
+      const existingChapter = ctx.db
+        .select({ id: walkthroughSemanticSteps.id })
         .from(walkthroughSemanticSteps)
         .where(
           and(
             eq(walkthroughSemanticSteps.walkthroughId, ctx.walkthroughId),
-            eq(walkthroughSemanticSteps.semanticStepIndex, prevIdx),
+            eq(walkthroughSemanticSteps.semanticStepIndex, input.semantic_step_index),
           ),
         )
         .get();
-      if (!prevChapter) {
-        result = fail(
-          `Error: semantic_step_index must be sequential and start at 0. Index ${prevIdx} does not exist yet — open chapter ${prevIdx} first with add_semantic_step({ semantic_step_index: ${prevIdx}, ... }), then open ${input.semantic_step_index}.`,
-        );
-        return;
+      if (!existingChapter && input.semantic_step_index > 0) {
+        const prevIdx = input.semantic_step_index - 1;
+        const prevChapter = ctx.db
+          .select({ title: walkthroughSemanticSteps.title })
+          .from(walkthroughSemanticSteps)
+          .where(
+            and(
+              eq(walkthroughSemanticSteps.walkthroughId, ctx.walkthroughId),
+              eq(walkthroughSemanticSteps.semanticStepIndex, prevIdx),
+            ),
+          )
+          .get();
+        if (!prevChapter) {
+          return {
+            refusal: fail(
+              `Error: semantic_step_index must be sequential and start at 0. Index ${prevIdx} does not exist yet — open chapter ${prevIdx} first with add_semantic_step({ semantic_step_index: ${prevIdx}, ... }), then open ${input.semantic_step_index}.`,
+            ),
+          };
+        }
       }
-    }
 
-    ctx.db
-      .insert(walkthroughSemanticSteps)
-      .values({
-        id: semanticStepId(ctx.walkthroughId, input.semantic_step_index),
-        walkthroughId: ctx.walkthroughId,
-        semanticStepIndex: input.semantic_step_index,
-        title: trimmedTitle,
-        summary: input.summary ?? null,
-        createdAt: new Date().toISOString(),
-      })
-      .onConflictDoUpdate({
-        target: [
-          walkthroughSemanticSteps.walkthroughId,
-          walkthroughSemanticSteps.semanticStepIndex,
-        ],
-        set: {
+      ctx.db
+        .insert(walkthroughSemanticSteps)
+        .values({
+          id: semanticStepId(ctx.walkthroughId, input.semantic_step_index),
+          walkthroughId: ctx.walkthroughId,
+          semanticStepIndex: input.semantic_step_index,
           title: trimmedTitle,
           summary: input.summary ?? null,
-        },
-      })
-      .run();
-
-    block = writeBlock(
-      ctx.db,
-      ctx.walkthroughId,
-      input.semantic_step_index,
-      0,
-      input.initial_block,
-    );
-
-    if (phase === "A") {
-      isFirstStep = true;
-      ctx.db
-        .update(walkthroughs)
-        .set({ lastCompletedPhase: "B" })
-        .where(eq(walkthroughs.id, ctx.walkthroughId))
+          createdAt: new Date().toISOString(),
+        })
+        .onConflictDoUpdate({
+          target: [
+            walkthroughSemanticSteps.walkthroughId,
+            walkthroughSemanticSteps.semanticStepIndex,
+          ],
+          set: {
+            title: trimmedTitle,
+            summary: input.summary ?? null,
+          },
+        })
         .run();
-    }
-  });
-  if (result) return result;
-  if (!block) {
-    return fail(
-      "Internal error: add_semantic_step reached emit without a persisted initial block.",
-    );
-  }
+
+      const block = writeBlock(
+        ctx.db,
+        ctx.walkthroughId,
+        input.semantic_step_index,
+        0,
+        prepared.block,
+      );
+
+      if (phase === "A") {
+        ctx.db
+          .update(walkthroughs)
+          .set({ lastCompletedPhase: "B" })
+          .where(eq(walkthroughs.id, ctx.walkthroughId))
+          .run();
+      }
+      return { block, isFirstStep: phase === "A" };
+    },
+  );
+  if ("refusal" in written) return written.refusal;
 
   ctx.emit({ type: "semantic-step", data: semanticStep });
-  ctx.emit({ type: "block", data: block });
-  if (isFirstStep) {
+  ctx.emit({ type: "block", data: written.block });
+  if (written.isFirstStep) {
     ctx.emit({
       type: "phase:advanced",
       data: { lastCompletedPhase: "B" },
@@ -183,19 +170,17 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
 };
 
 export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = async (ctx, input) => {
-  if (blockVariantCount(input) !== 1) {
-    return fail(
-      "Error: add_diff_step requires exactly one of { markdown, code, diff, artifact } — not zero, not two. Pick the shape that matches the step's intent.",
-    );
-  }
-  const contentErr = blockContentError(input);
-  if (contentErr) return fail(contentErr);
   const variant = {
     markdown: input.markdown,
     code: input.code,
     diff: input.diff,
     artifact: input.artifact,
   };
+  const prepared = prepareBlock(
+    variant,
+    "Error: add_diff_step requires exactly one of { markdown, code, diff, artifact } — not zero, not two. Pick the shape that matches the step's intent.",
+  );
+  if ("error" in prepared) return fail(prepared.error);
 
   // Craft bar runs before the write: rejecting after would leave a hole in
   // step_index, and there's no cheap way to undo a block already read.
@@ -208,46 +193,43 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
     if (verdict.reject) return fail(renderArtifactRejection(verdict));
   }
 
-  let result: WalkthroughToolResult | null = null;
-  let block: WalkthroughBlock | null = null;
-  ctx.db.transaction(() => {
-    const open = openForWrite(ctx.db, ctx.walkthroughId, "add_diff_step");
-    if ("refusal" in open) {
-      result = open.refusal;
-      return;
-    }
+  const written = ctx.db.transaction(
+    (): { readonly refusal: WalkthroughToolResult } | { readonly block: WalkthroughBlock } => {
+      const open = openForWrite(ctx.db, ctx.walkthroughId, "add_diff_step");
+      if ("refusal" in open) return open;
 
-    const parent = ctx.db
-      .select({ id: walkthroughSemanticSteps.id })
-      .from(walkthroughSemanticSteps)
-      .where(
-        and(
-          eq(walkthroughSemanticSteps.walkthroughId, ctx.walkthroughId),
-          eq(walkthroughSemanticSteps.semanticStepIndex, input.semantic_step_index),
+      const parent = ctx.db
+        .select({ id: walkthroughSemanticSteps.id })
+        .from(walkthroughSemanticSteps)
+        .where(
+          and(
+            eq(walkthroughSemanticSteps.walkthroughId, ctx.walkthroughId),
+            eq(walkthroughSemanticSteps.semanticStepIndex, input.semantic_step_index),
+          ),
+        )
+        .get();
+      if (!parent) {
+        return {
+          refusal: fail(
+            `Error: no semantic_step exists at semantic_step_index=${input.semantic_step_index}. Call add_semantic_step first with that index, then retry this add_diff_step.`,
+          ),
+        };
+      }
+
+      return {
+        block: writeBlock(
+          ctx.db,
+          ctx.walkthroughId,
+          input.semantic_step_index,
+          input.step_index,
+          prepared.block,
         ),
-      )
-      .get();
-    if (!parent) {
-      result = fail(
-        `Error: no semantic_step exists at semantic_step_index=${input.semantic_step_index}. Call add_semantic_step first with that index, then retry this add_diff_step.`,
-      );
-      return;
-    }
+      };
+    },
+  );
+  if ("refusal" in written) return written.refusal;
 
-    block = writeBlock(
-      ctx.db,
-      ctx.walkthroughId,
-      input.semantic_step_index,
-      input.step_index,
-      variant,
-    );
-  });
-  if (result) return result;
-  if (!block) {
-    return fail("Internal error: add_diff_step reached emit without a block variant.");
-  }
-
-  ctx.emit({ type: "block", data: block });
+  ctx.emit({ type: "block", data: written.block });
   if (input.markdown) {
     ctx.jev.scheduleProseCheck(input.markdown.content, chapterTitle);
   }

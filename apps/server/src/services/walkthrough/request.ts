@@ -104,8 +104,9 @@ export const requestWalkthroughAtHead = (params: {
       return { kind: "stopped_by_user", walkthroughId: latest.id };
     }
 
-    // A generating row is joined (or resumed) by `startJob`, which starts no
-    // new run, so it is never refused for budget.
+    // A generating row is joined by `startJob`, or, when its run died,
+    // resumed under the kernel's resume budget (invariant 9), so it is never
+    // refused for this one.
     if (latest?.status !== "generating") {
       if (runsAtHead.length >= MAX_RUNS_PER_HEAD) {
         return { kind: "budget_exhausted", scope: "head", runs: runsAtHead.length };

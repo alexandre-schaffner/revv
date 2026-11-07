@@ -48,16 +48,44 @@ const EFFORT_CRITERIA = {
 } as const;
 
 /**
- * Per-file attention rubric, lowest first; index = tier, order matters. Not a
- * size proxy: a 2000-line lockfile is tier 0, a 4-line permission check is tier 4.
+ * Per-file attention rubric, lowest first: a file's tier is its index here.
+ * The Jev question scores against the criteria, the first pass skips the
+ * generated tier, and the prompt labels each tier, all from this one table.
+ * Not a size proxy: a 2000-line lockfile is generated, a 4-line permission
+ * check is critical.
  */
-const FILE_PRIORITY_LEVELS = [
-  "Generated, vendored, or a lockfile. Do not read it — name the category and move on.",
-  "Mechanical: a rename, an import reshuffle, a formatting pass, a version bump with no behavior change.",
-  "A routine change whose blast radius stays inside this file or its immediate callers.",
-  "New or altered logic worth following: a branch, a state transition, an error path, a data transformation.",
-  "Security, authentication, payments, data migration, deletion, or a public contract other code depends on.",
+export const FILE_TIERS = [
+  {
+    label: "generated",
+    criterion:
+      "Generated, vendored, or a lockfile. Do not read it — name the category and move on.",
+  },
+  {
+    label: "mechanical",
+    criterion:
+      "Mechanical: a rename, an import reshuffle, a formatting pass, a version bump with no behavior change.",
+  },
+  {
+    label: "routine",
+    criterion:
+      "A routine change whose blast radius stays inside this file or its immediate callers.",
+  },
+  {
+    label: "logic",
+    criterion:
+      "New or altered logic worth following: a branch, a state transition, an error path, a data transformation.",
+  },
+  {
+    label: "critical",
+    criterion:
+      "Security, authentication, payments, data migration, deletion, or a public contract other code depends on.",
+  },
 ] as const;
+
+/** The tier of files nobody should read: the first pass skips them. */
+export const GENERATED_TIER = FILE_TIERS.findIndex((tier) => tier.label === "generated");
+
+const FILE_TIER_CRITERIA = FILE_TIERS.map((tier) => tier.criterion);
 
 const SPLIT_COUNT_CRITERIA = {
   two: "Two pull requests. One clean seam — typically a refactor or a migration that could land first, and the feature that builds on it.",
@@ -131,7 +159,7 @@ export function askJobStart(
         {
           type: "score" as const,
           instructions: `How much of a reviewer's attention does \`${file.filename}\` deserve in this pull request? Judge what the change to it does, not how many lines it touches.`,
-          criteria: FILE_PRIORITY_LEVELS,
+          criteria: FILE_TIER_CRITERIA,
         },
       ]),
     );

@@ -145,6 +145,8 @@ function failureWithoutContent(end: WalkthroughTurnEnd): WalkthroughFailure {
       };
     case "cancelled":
       return { reason: "agent_error", message: end.reason };
+    case "not_configured":
+      return { reason: "agent_error", message: end.message };
     case "stopped":
       return {
         reason: "no_content",
@@ -284,20 +286,11 @@ export function runWalkthrough(
       let resumed = inputs.resumed;
 
       while (true) {
-        const result = yield* turn(resumed).pipe(
-          Effect.catchTag("AiNotConfiguredError", () => Effect.succeed(null)),
-        );
-        if (result === null) {
-          return {
-            kind: "failed",
-            failure: {
-              reason: "agent_error",
-              message:
-                "The selected AI agent can't be launched — install it or pick another in Settings",
-            },
-          };
+        const { end, tokenUsage } = yield* turn(resumed);
+        // No turn ran: another would not run either.
+        if (end.kind === "not_configured") {
+          return { kind: "failed", failure: failureWithoutContent(end) };
         }
-        const { end, tokenUsage } = result;
         ctx.tokenUsage = accumulateTokenUsage(ctx.tokenUsage, tokenUsage);
         deps.publish({ type: "usage", data: { tokenUsage: ctx.tokenUsage } });
         // A Stop or a supersede: the kernel settles it.

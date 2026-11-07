@@ -251,7 +251,8 @@ agent tomorrow). Any change that violates them is wrong by construction — push
 5. **Phase preconditions are tool-level.** Out-of-order calls fail fast with a structured
    error the agent can recover from.
 6. **Resumption reads state via an MCP read tool**, not env vars. On every run start,
-   including resumes, the agent calls `get_walkthrough_state(walkthrough_id)` first.
+   including resumes, the agent calls `get_walkthrough_state` first. It takes no input:
+   the run's MCP bearer token names the walkthrough.
 7. **Walkthroughs are immutable per head SHA during generation.** The 4-phase generation
    pipeline never mutates a walkthrough row for the same head SHA — a new commit produces
    a new walkthrough row, and the old is marked `'superseded'`. `superseded_by` names the
@@ -296,8 +297,11 @@ agent tomorrow). Any change that violates them is wrong by construction — push
 9. **Bounded retries with explicit budgets.** `MAX_RESUME_ATTEMPTS = 3` (every durable
    job, `services/jobs/agent-jobs.ts`), `MAX_AUTO_CONTINUATIONS = 2`,
    `MAX_CONCURRENT_JOBS = 5`. Exceeding marks the row terminal (`error`, end reason
-   `resume_budget` / `budget_exhausted`) and stops. A read path that finds a row whose run
-   died (the recap stream, a brief's `ensure`) resumes it through the same budget.
+   `resume_budget` / `budget_exhausted`) and stops. Whoever finds a row whose run died —
+   boot, the recap stream, a brief's `ensure`, a walkthrough request at that row's head, the
+   user's Resume — goes through the kernel's one resume policy (`resumeDecision`), under
+   the pipeline's lock on the row; the user's Resume of a stopped (`error`) walkthrough
+   first revives it with a fresh budget.
 10. **Per-job resource scoping.** Each walkthrough job owns a dedicated detached git
     worktree at `head_sha` (`RepoClone.acquireReviewWorktree`, keyed on the walkthrough id),
     removed by a scope finalizer on every exit path; a resumed job clears what its killed run

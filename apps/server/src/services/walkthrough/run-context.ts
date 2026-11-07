@@ -12,8 +12,6 @@ import type {
 import { ZERO_TOKEN_USAGE } from "@revv/shared";
 import { Effect } from "effect";
 import { judgeArtifact } from "../../ai/jev/artifact-quality";
-import { judgeIssue } from "../../ai/jev/issue-relevance";
-import { applyJudgment } from "../../ai/jev/issue-relevance-persistence";
 import { type JudgmentTracker, makeJudgmentTracker } from "../../ai/jev/pending";
 import { judgeProse, makeProseMailbox } from "../../ai/jev/prose-voice";
 import type { WalkthroughToolContext } from "../../ai/providers/walkthrough-tools";
@@ -22,6 +20,7 @@ import { logError } from "../../logger";
 import type { CacheService } from "../Cache";
 import type { JevService } from "../Jev";
 import type { SettingsService } from "../Settings";
+import { gateIssue } from "./issue-gate";
 
 export type JudgmentServices = JevService | SettingsService | CacheService;
 
@@ -65,18 +64,18 @@ export function makeWalkthroughRunContext(input: {
       scheduleIssueJudgment: (issueId, candidate) => {
         judgments.track(
           runJudgment(
-            judgeIssue(db, walkthroughId, issueId, candidate).pipe(
-              Effect.flatMap((judgment) =>
-                judgment === null
-                  ? Effect.void
-                  : Effect.sync(() =>
-                      applyJudgment(db, walkthroughId, issueId, candidate, judgment, {
-                        emit,
-                        broadcastThread: (threadId) =>
-                          broadcastThreadEvent({ type: "thread:deleted", data: { threadId } }),
-                        markRetracted: judgments.markRetracted,
-                      }),
-                    ),
+            gateIssue(db, walkthroughId, issueId, candidate, {
+              emit,
+              broadcastThread: broadcastThreadEvent,
+              markRetracted: judgments.markRetracted,
+            }).pipe(
+              Effect.catchTag("DbError", (err) =>
+                Effect.sync(() =>
+                  logError(
+                    "walkthrough-run",
+                    `issue judgment for ${issueId} not applied: ${err.message}`,
+                  ),
+                ),
               ),
             ),
           ),

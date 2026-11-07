@@ -5,6 +5,7 @@
 
 import { Cause, Effect } from "effect";
 import { type AgentLaunch, resolveAgentLaunch } from "../../ai/acp/agent-launch";
+import { projectlessAgentCwd } from "../../ai/acp/package-runner-dir";
 import { makeTurnSettle, type TurnSettle } from "../../ai/acp/run-turn";
 import type { McpAgentRunError } from "../../ai/providers/mcp-agent-acp";
 import type { SettingsService } from "../Settings";
@@ -58,7 +59,7 @@ export const TOOL_GATED_FAILURES = {
 export function runToolGatedTurn<C extends ToolGate>(input: {
   readonly run: AgentRun<C>;
   readonly purpose: "recap" | "brief";
-  /** The repository's clone; the server's directory when it has none. */
+  /** The repository's clone, if it has one. */
   readonly clonePath: string | null;
   readonly turn: (agent: {
     readonly launch: AgentLaunch;
@@ -76,7 +77,7 @@ export function runToolGatedTurn<C extends ToolGate>(input: {
     const error = yield* Effect.promise(() =>
       input.turn({
         launch,
-        workingDir: input.clonePath ?? process.cwd(),
+        workingDir: input.clonePath ?? projectlessAgentCwd(),
         calledAnyTool: () => run.context.calledAnyTool,
         completion: run.context.completion,
       }),

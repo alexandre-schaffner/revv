@@ -1,8 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import type { RecapStreamEvent, ServerEventMessage } from "@revv/shared";
-import { Effect, Layer } from "effect";
+import { Effect, Exit, Layer } from "effect";
 import { createDb, type Db } from "../../db/index";
-import { account, repositories, user } from "../../db/schema";
+import { account, projectRecaps, repositories, user } from "../../db/schema";
+import { DbError } from "../../domain/errors";
 import { DbService } from "../Db";
 import { DiffCacheService } from "../DiffCache";
 import { GitHubGateway } from "../github/gateway";
@@ -11,7 +12,7 @@ import { PrMirror } from "../PrMirror";
 import { PullRequestService } from "../PullRequest";
 import { Realtime } from "../Realtime";
 import { SettingsService } from "../Settings";
-import { ProjectRecapServiceLive } from "./ProjectRecap";
+import { ProjectRecapService, ProjectRecapServiceLive } from "./ProjectRecap";
 import { ProjectRecapJobs, ProjectRecapJobsLive } from "./ProjectRecapJobs";
 
 const REPO_ID = "repo-1";
@@ -44,7 +45,7 @@ function seed(db: Db): void {
 }
 
 /** The recap orchestrator over a real journal; a run never gets past reading its repository. */
-function recapJobs(db: Db) {
+function recapJobs(db: Db, patch: Partial<ProjectRecapService["Service"]> = {}) {
   const broadcasts: ServerEventMessage[] = [];
   const unused = {} as never;
   const realtime = Layer.succeed(Realtime, {
@@ -59,7 +60,17 @@ function recapJobs(db: Db) {
       Layer.mergeAll(
         dbLayer,
         realtime,
-        ProjectRecapServiceLive.pipe(Layer.provide(Layer.merge(dbLayer, realtime))),
+        Layer.effect(
+          ProjectRecapService,
+          Effect.gen(function* () {
+            const live = yield* ProjectRecapService;
+            return { ...live, ...patch };
+          }),
+        ).pipe(
+          Layer.provide(
+            ProjectRecapServiceLive.pipe(Layer.provide(Layer.merge(dbLayer, realtime))),
+          ),
+        ),
         Layer.succeed(PrContextService, { getRepo: () => Effect.never } as never),
         Layer.succeed(PullRequestService, unused),
         Layer.succeed(SettingsService, unused),
@@ -102,5 +113,25 @@ describe("ProjectRecapJobs rerun", () => {
     );
     // Only the final cancel stops anything.
     expect(statuses).toEqual(["stopped"]);
+  });
+});
+
+describe("ProjectRecapJobs request", () => {
+  // One active recap per window: a DB error is not "the window has none".
+  it("fails, rather than opening a second recap, when the window's recap can't be read", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+    const { layer } = recapJobs(db, {
+      findActiveForPeriod: () => Effect.fail(new DbError({ message: "disk I/O error" })),
+    });
+
+    const exit = await Effect.runPromiseExit(
+      Effect.flatMap(ProjectRecapJobs, (jobs) =>
+        jobs.requestRecap({ repoId: REPO_ID, period: "daily", intent: "manual" }),
+      ).pipe(Effect.provide(layer)),
+    );
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    expect(db.select().from(projectRecaps).all()).toHaveLength(0);
   });
 });

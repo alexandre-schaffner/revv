@@ -8,7 +8,7 @@ const worthless = {
   actionable: 0.05,
   novel: 0.05,
   severity: 0,
-  declaredSeverity: "info",
+  declaredSeverity: "info" as const,
 };
 
 const solid = {
@@ -17,7 +17,7 @@ const solid = {
   actionable: 0.9,
   novel: 0.9,
   severity: 2,
-  declaredSeverity: "warning",
+  declaredSeverity: "warning" as const,
 };
 
 describe("compositeScore", () => {
@@ -54,7 +54,7 @@ describe("compositeScore", () => {
       actionable: 0.1,
       novel: 0.05,
       severity: 0,
-      declaredSeverity: "info",
+      declaredSeverity: "info" as const,
     });
     expect(isDiscardedScore(score)).toBe(false);
     expect(isLowSignalScore(score)).toBe(true);

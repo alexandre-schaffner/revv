@@ -13,7 +13,7 @@ import type {
   ThreadStatus,
 } from "@revv/shared";
 import { canUserModifyComment, isThreadResolved } from "@revv/shared";
-import { and, asc, eq, inArray, type SQL } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, type SQL } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import type { Db } from "../db/index";
 import { commentThreads } from "../db/schema/comment-threads";
@@ -523,6 +523,39 @@ export const threadWrites = {
       prId: found.prId,
       value: undefined,
       envelopes: [{ type: "thread:message:deleted", data: { threadId, messageId } }],
+    };
+  },
+
+  /**
+   * The AI threads of walkthrough issues that are going away (a superseded
+   * review, a deleted issue), before the issues go. A thread GitHub doesn't
+   * have is deleted: Submit would otherwise post a retired review's comment.
+   * One GitHub has stays, detached from its issue: the comment and its
+   * replies still exist there, and the pull would never bring them back.
+   */
+  retireAiThreads(
+    tx: Db | Tx,
+    prId: string,
+    issueIds: readonly string[],
+  ): ThreadWrite<{ readonly deletedThreadIds: readonly string[] }> {
+    if (issueIds.length === 0) {
+      return { prId, value: { deletedThreadIds: [] }, envelopes: [] };
+    }
+    const ofIssues = inArray(commentThreads.walkthroughIssueId, [...issueIds]);
+    const deletedThreadIds = tx
+      .delete(commentThreads)
+      .where(and(ofIssues, isNull(commentThreads.externalCommentId)))
+      .returning({ id: commentThreads.id })
+      .all()
+      .map((r) => r.id);
+    tx.update(commentThreads).set({ walkthroughIssueId: null }).where(ofIssues).run();
+    return {
+      prId,
+      value: { deletedThreadIds },
+      envelopes: deletedThreadIds.map((threadId) => ({
+        type: "thread:deleted",
+        data: { threadId },
+      })),
     };
   },
 

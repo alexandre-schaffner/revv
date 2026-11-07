@@ -7,12 +7,7 @@ import { walkthroughs } from "../../../db/schema/walkthroughs";
 import { semanticStepId } from "../../../services/walkthrough/content";
 import { decodePlainText } from "../agent-text";
 import { fail } from "../mcp-tool-gateway";
-import {
-  blockContentError,
-  blockVariantCount,
-  withArtifactWarnings,
-  writeBlock,
-} from "../walkthrough-blocks";
+import { prepareBlock, withArtifactWarnings, writeBlock } from "../walkthrough-blocks";
 import { unwrapJsonWrappedString } from "../walkthrough-tools/helpers";
 import { runChatEdit, scrubBlockReferences } from "./helpers";
 import type {
@@ -89,13 +84,11 @@ export const addSemanticStepEditHandler: ChatEditToolHandler<AddSemanticStepEdit
   ctx,
   input,
 ) => {
-  if (blockVariantCount(input.initial_block) !== 1) {
-    return fail(
-      "Error: add_semantic_step.initial_block requires exactly one of { markdown, code, diff, artifact }.",
-    );
-  }
-  const initialBlockErr = blockContentError(input.initial_block);
-  if (initialBlockErr) return fail(initialBlockErr);
+  const prepared = prepareBlock(
+    input.initial_block,
+    "Error: add_semantic_step.initial_block requires exactly one of { markdown, code, diff, artifact }.",
+  );
+  if ("error" in prepared) return fail(prepared.error);
   const title = decodePlainText(input.title);
   if (title.length === 0) {
     return fail("Error: add_semantic_step requires a non-empty title.");
@@ -107,10 +100,7 @@ export const addSemanticStepEditHandler: ChatEditToolHandler<AddSemanticStepEdit
         refused: `Error: a chapter already exists at semantic_step_index=${input.semantic_step_index}. Use update_semantic_step to modify it.`,
       };
     }
-    const block = writeBlock(ctx.db, wt.id, input.semantic_step_index, 0, input.initial_block);
-    if (!block) {
-      return { refused: "Internal error: add_semantic_step built an empty initial block." };
-    }
+    const block = writeBlock(ctx.db, wt.id, input.semantic_step_index, 0, prepared.block);
     const chapter = {
       semanticStepIndex: input.semantic_step_index,
       title,
@@ -222,13 +212,11 @@ export const deleteSemanticStepHandler: ChatEditToolHandler<DeleteSemanticStepIn
   });
 
 export const addBlockHandler: ChatEditToolHandler<AddBlockInput> = async (ctx, input) => {
-  if (blockVariantCount(input.content) !== 1) {
-    return fail(
-      "Error: add_block.content requires exactly one of { markdown, code, diff, artifact }.",
-    );
-  }
-  const contentErr = blockContentError(input.content);
-  if (contentErr) return fail(contentErr);
+  const prepared = prepareBlock(
+    input.content,
+    "Error: add_block.content requires exactly one of { markdown, code, diff, artifact }.",
+  );
+  if ("error" in prepared) return fail(prepared.error);
 
   return runChatEdit(ctx, (wt) => {
     if (!chapterAt(ctx.db, wt.id, input.semantic_step_index)) {
@@ -261,8 +249,7 @@ export const addBlockHandler: ChatEditToolHandler<AddBlockInput> = async (ctx, i
       stepIndex = max === null ? 0 : max + 1;
     }
 
-    const block = writeBlock(ctx.db, wt.id, input.semantic_step_index, stepIndex, input.content);
-    if (!block) return { refused: "Internal error: add_block built an empty block." };
+    const block = writeBlock(ctx.db, wt.id, input.semantic_step_index, stepIndex, prepared.block);
     return {
       message: withArtifactWarnings(
         `Block added at chapter ${input.semantic_step_index}, step ${stepIndex}.`,
@@ -274,13 +261,11 @@ export const addBlockHandler: ChatEditToolHandler<AddBlockInput> = async (ctx, i
 };
 
 export const updateBlockHandler: ChatEditToolHandler<UpdateBlockInput> = async (ctx, input) => {
-  if (blockVariantCount(input.content) !== 1) {
-    return fail(
-      "Error: update_block.content requires exactly one of { markdown, code, diff, artifact }.",
-    );
-  }
-  const contentErr = blockContentError(input.content);
-  if (contentErr) return fail(contentErr);
+  const prepared = prepareBlock(
+    input.content,
+    "Error: update_block.content requires exactly one of { markdown, code, diff, artifact }.",
+  );
+  if ("error" in prepared) return fail(prepared.error);
 
   return runChatEdit(ctx, (wt) => {
     if (!blockAt(ctx.db, wt.id, input.semantic_step_index, input.step_index)) {
@@ -293,9 +278,8 @@ export const updateBlockHandler: ChatEditToolHandler<UpdateBlockInput> = async (
       wt.id,
       input.semantic_step_index,
       input.step_index,
-      input.content,
+      prepared.block,
     );
-    if (!block) return { refused: "Internal error: update_block built an empty block." };
     return {
       message: withArtifactWarnings(
         `Block at chapter ${input.semantic_step_index}, step ${input.step_index} updated.`,

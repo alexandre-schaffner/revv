@@ -122,10 +122,10 @@ export function chapterNumbersByIndex(
 }
 
 /**
- * Consequence tier of a flagged concern. Sent by the agent, then relabelled
- * by the Jev relevance pass when Jev is on.
+ * Consequence tiers of a flagged concern, most severe first: the order every
+ * issue list renders its severity groups in. Sent by the agent, then
+ * relabelled by the Jev relevance pass when Jev is on.
  */
-/** Most severe first: the order every issue list renders its severity groups in. */
 export const ISSUE_SEVERITIES = ["critical", "warning", "info"] as const;
 export type IssueSeverity = (typeof ISSUE_SEVERITIES)[number];
 

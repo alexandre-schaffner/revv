@@ -21,7 +21,7 @@ import { type AcpConnectionHandle, getAcpConnection, peekAcpConnection } from ".
 import { type AgentTurnFailure, agentTurnFailure } from "./agent-failure";
 import type { AgentLaunch } from "./agent-launch";
 import { isAgentLaunchable } from "./launch";
-import { ensurePackageRunnerDir } from "./package-runner-dir";
+import { projectlessAgentCwd } from "./package-runner-dir";
 import { findPlanModeId, modeToExitPlan } from "./session-config";
 
 export interface TurnDeadlines {
@@ -172,7 +172,7 @@ class AgentNotLaunchable extends Error {}
 async function connectLaunchable(cwd: string, launch: AgentLaunch): Promise<AcpConnectionHandle> {
   if (!isAgentLaunchable(launch.agent)) {
     throw new AgentNotLaunchable(
-      `The configured agent ('${launch.agent}') is not available on this machine.`,
+      `The configured agent ('${launch.agent}') can't be launched on this machine — install it or pick another in Settings.`,
     );
   }
   return getAcpConnection(cwd, launch);
@@ -446,7 +446,7 @@ export async function promptOnce(input: {
   const outcome = await runAcpTurn({
     label: input.label,
     launch: input.launch,
-    cwd: ensurePackageRunnerDir() ?? process.cwd(),
+    cwd: projectlessAgentCwd(),
     prompt: () => [{ type: "text", text: input.text }],
     onUpdate: (update) => {
       for (const ev of decodeAcpSessionUpdate(update, decodeState)) {

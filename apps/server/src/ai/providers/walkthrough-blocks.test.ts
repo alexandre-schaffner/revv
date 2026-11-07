@@ -5,8 +5,8 @@ import {
   artifactThemingWarning,
   type BlockVariantInput,
   blockContentError,
-  buildBlock,
   normalizeDiffPatch,
+  prepareBlock,
 } from "./walkthrough-blocks";
 
 const VALID_HEADER = /^@@ -\d+,\d+ \+\d+,\d+ @@/m;
@@ -253,15 +253,31 @@ describe("normalizeDiffPatch", () => {
     expect(out).toContain("@@ -1,1 +1,1 @@\n-a\n+b\n@@ -1,1 +1,1 @@\n-c\n+d");
   });
 
-  it("is applied when buildBlock constructs a diff block", () => {
-    const block = buildBlock("b1", 0, 0, {
-      diff: {
-        file_path: "a.ts",
-        patch: ["@@", "-x", "+y"].join("\n"),
-        annotation: null,
-      },
-    });
-    expect(block?.type).toBe("diff");
-    if (block?.type === "diff") expect(block.patch).toMatch(VALID_HEADER);
+  it("is applied when prepareBlock builds a diff block", () => {
+    const prepared = prepareBlock(
+      { diff: { file_path: "a.ts", patch: ["@@", "-x", "+y"].join("\n"), annotation: null } },
+      "count",
+    );
+    if (!("block" in prepared) || prepared.block.type !== "diff") {
+      throw new Error("expected a diff block");
+    }
+    expect(prepared.block.patch).toMatch(VALID_HEADER);
+  });
+});
+
+describe("prepareBlock", () => {
+  it("refuses zero or two variants with the tool's own wording", () => {
+    expect(prepareBlock({}, "pick one")).toEqual({ error: "pick one" });
+    expect(
+      prepareBlock(
+        { markdown: { content: "a" }, artifact: { html: "<p/>", annotation: null } },
+        "pick one",
+      ),
+    ).toEqual({ error: "pick one" });
+  });
+
+  it("checks the content once the count passes", () => {
+    const prepared = prepareBlock({ markdown: { content: "  " } }, "pick one");
+    expect("error" in prepared && prepared.error).toContain("non-empty content");
   });
 });
