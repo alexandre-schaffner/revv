@@ -31,7 +31,6 @@
     "@revv/shared": "workspace:*",
     "@sinclair/typebox": "^0.34.52",
     "@typesafe-ai/sdk": "^0.6.0",
-    "better-auth": "^1.7.14",
     "drizzle-orm": "^0.45.4",
     "effect": "4.0.7",
     "elysia": "^1.4.30",

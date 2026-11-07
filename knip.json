@@ -32,8 +32,7 @@
         "mode-watcher",
         "svelte-sonner",
         "bun-types",
-        "@sinclair/typebox",
-        "better-auth"
+        "@sinclair/typebox"
       ]
     },
     "apps/server": {
@@ -43,7 +42,7 @@
         "src/observability/profiling-preload.ts",
         "scripts/*.ts"
       ],
-      "ignoreDependencies": ["bun-types", "drizzle-kit", "better-auth"]
+      "ignoreDependencies": ["bun-types", "drizzle-kit"]
     },
     "apps/collector": {
       "entry": ["src/index.ts", "src/**/*.test.ts"],
