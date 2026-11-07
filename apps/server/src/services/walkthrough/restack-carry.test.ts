@@ -329,10 +329,7 @@ describe("planNewRow: stack inputs", () => {
     expect(result.generationMode).toBe("incremental");
     expect(result.parentWalkthroughId).toBe("wt-old");
     expect(
-      await run(
-        db,
-        parentFingerprintOf(STACK, result.generationMode, result.parentWalkthroughId),
-      ),
+      await run(db, parentFingerprintOf(STACK, result.generationMode, result.parentWalkthroughId)),
     ).toEqual({ "src/a.ts": "older" });
   });
 });
