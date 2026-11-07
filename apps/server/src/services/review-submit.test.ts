@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import type { CommentThread, ThreadMessage } from "@revv/shared";
+import type { CommentThread, ThreadMessage, WalkthroughIssue } from "@revv/shared";
 import { GitHubApiError, GitHubNetworkError } from "../domain/errors";
 import type { CachedDiffFile } from "./DiffCache";
-import { isExistingPendingReviewError, planReviewComments } from "./review-submit";
+import { isExistingPendingReviewError, planReviewComments, reviewBody } from "./review-submit";
 
 describe("isExistingPendingReviewError", () => {
   it("matches GitHub's pending-review refusal", () => {
@@ -155,5 +155,37 @@ describe("planReviewComments", () => {
         comment: { path: "src/a.ts", body: "First.\n\nSecond.", line: 10, side: "RIGHT" },
       },
     ]);
+  });
+});
+
+describe("reviewBody", () => {
+  const issue = (overrides: Partial<WalkthroughIssue>): WalkthroughIssue => ({
+    id: "i",
+    severity: "warning",
+    title: "Title",
+    description: "Why.",
+    blockIds: [],
+    ...overrides,
+  });
+
+  it("is empty without issues", () => {
+    expect(reviewBody([])).toBe("");
+  });
+
+  it("lists issues with severity tags and locations", () => {
+    expect(
+      reviewBody([
+        issue({ severity: "critical", filePath: "a.ts", startLine: 1, endLine: 4 }),
+        issue({ severity: "info", filePath: "b.ts" }),
+        issue({}),
+      ]),
+    ).toBe(
+      [
+        "### Walkthrough issues",
+        "- `[CRITICAL]` **Title** (`a.ts:1–4`)\n  Why.",
+        "- `[INFO]` **Title** (`b.ts`)\n  Why.",
+        "- `[WARNING]` **Title**\n  Why.",
+      ].join("\n\n"),
+    );
   });
 });

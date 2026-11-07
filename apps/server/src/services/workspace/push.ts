@@ -27,7 +27,6 @@ import {
 import { logError } from "../../logger";
 import type { AiService } from "../Ai";
 import { runConflictResolve } from "../conflict-resolve-run";
-import type { DbService } from "../Db";
 import type { BranchPushLock } from "../git/branch-push-lock";
 import {
   abortCherryPick,
@@ -90,7 +89,7 @@ export type AttemptPushResult =
   | { readonly status: "remote-changed"; readonly branch: string }
   | { readonly status: "ref-exists"; readonly branch: string };
 
-type PushR = DbService | SettingsService;
+type PushR = SettingsService;
 
 interface PushDeps {
   readonly resolve: (prId: string) => Effect.Effect<PrContextBasic, PrContextError>;

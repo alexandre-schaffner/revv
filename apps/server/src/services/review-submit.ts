@@ -1,4 +1,9 @@
-import { unpublishedReplies } from "@revv/shared";
+import {
+  ISSUE_SEVERITY_TAG,
+  issueLocation,
+  unpublishedReplies,
+  type WalkthroughIssue,
+} from "@revv/shared";
 import { Effect } from "effect";
 import { GitHubApiError, GitHubNetworkError, ValidationError } from "../domain/errors";
 import { logError } from "../logger";
@@ -16,18 +21,28 @@ import { WalkthroughService } from "./walkthrough/Walkthrough";
 
 export interface SubmitReviewInput {
   action: "approve" | "request_changes" | "comment";
-  body?: string;
   /**
    * The draft threads the reviewer is posting. Each one still not on GitHub
    * becomes one review comment; any other id is ignored.
    */
   threadIds?: string[];
   /**
-   * Walkthrough issue ids included in this submission. Persisted onto the
-   * issue rows so the UI's "already posted" state survives reloads and
-   * PR-switches. Empty / missing for pure approve flows with no issue list.
+   * The walkthrough issues the review lists, in order. They make up its body,
+   * and are stamped as submitted so "already posted" survives reloads.
    */
   issueIds?: string[];
+}
+
+/** The review body: the chosen walkthrough issues as a markdown list, or empty. */
+export function reviewBody(issues: readonly WalkthroughIssue[]): string {
+  if (issues.length === 0) return "";
+  const lines = issues.map((issue) => {
+    const location = issueLocation(issue);
+    const loc = location ? ` (\`${location}\`)` : "";
+    const tag = `\`${ISSUE_SEVERITY_TAG[issue.severity]}\``;
+    return `- ${tag} **${issue.title}**${loc}\n  ${issue.description}`;
+  });
+  return ["### Walkthrough issues", ...lines].join("\n\n");
 }
 
 export interface PostedThread {
@@ -124,9 +139,10 @@ export function submitReview(prId: string, body: SubmitReviewInput) {
       viewerLogin,
     );
 
+    const issues = yield* walkthroughService.issuesOnPr(pr.id, body.issueIds ?? []);
     const reviewInput = {
       event: eventMap[body.action],
-      body: body.body ?? "",
+      body: reviewBody(issues),
       comments: posted.map((p) => p.comment),
     };
 
@@ -234,7 +250,7 @@ export function submitReview(prId: string, body: SubmitReviewInput) {
 
     // Stamped regardless of action: an approve whose body includes walkthrough
     // issues also counts as "sent to GitHub".
-    const issueIds = body.issueIds ?? [];
+    const issueIds = issues.map((issue) => issue.id);
     const issuesSubmittedAt =
       issueIds.length > 0 ? yield* walkthroughService.markIssuesSubmitted(issueIds) : null;
 

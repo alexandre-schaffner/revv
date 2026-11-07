@@ -2,7 +2,6 @@ import { Effect } from "effect";
 import type { JevUnavailable } from "../../domain/errors";
 import { debug } from "../../logger";
 import { CacheService, type CacheSetOptions } from "../../services/Cache";
-import type { DbService } from "../../services/Db";
 import { JevService } from "../../services/Jev";
 
 /** Collapse an optional Jev judgment into `null`, with one consistent log. */
@@ -30,7 +29,7 @@ export function cachedJev<A>(
   label: string,
   key: { readonly ns: string; readonly key: string; readonly options: CacheSetOptions },
   judge: () => Effect.Effect<A, JevUnavailable, JevService>,
-): Effect.Effect<A | null, never, JevService | CacheService | DbService> {
+): Effect.Effect<A | null, never, JevService | CacheService> {
   return Effect.gen(function* () {
     const jev = yield* JevService;
     if (!(yield* jev.isAvailable())) return null;

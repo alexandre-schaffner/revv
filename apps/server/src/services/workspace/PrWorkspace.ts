@@ -33,7 +33,6 @@ import {
 } from "../../domain/errors";
 import { AiService } from "../Ai";
 import { type ChatSessionRow, ChatSessionService } from "../chat/ChatSession";
-import type { DbService } from "../Db";
 import { BranchPushLock } from "../git/branch-push-lock";
 import { assertNotFlagLike, fetch, gitTry, isValidSha, resolveRef } from "../git/ops";
 import { authedRemoteUrl } from "../git/remote";
@@ -149,7 +148,7 @@ export class PrWorkspace extends Context.Service<
 export const PrWorkspaceLive = Layer.effect(
   PrWorkspace,
   Effect.gen(function* () {
-    const context = yield* Effect.context<DbService | SettingsService>();
+    const context = yield* Effect.context<SettingsService>();
     const prCtx = yield* PrContextService;
     const chatSessions = yield* ChatSessionService;
     const worktrees = yield* AgentWorktrees;

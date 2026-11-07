@@ -8,9 +8,7 @@ import type { Context } from "effect";
 import { Effect } from "effect";
 import { daysBefore, type RetentionPolicy } from "../db/retention";
 import { pullRequests } from "../db/schema/pull-requests";
-import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
-import type { DbService } from "./Db";
 import type { DiffCacheService } from "./DiffCache";
 import type { GitHubAccounts } from "./github/accounts";
 import type { AvatarCache } from "./github/avatars";
@@ -53,7 +51,6 @@ const ARCHIVE_BACKFILL_MAX_FETCHES_PER_REPO = 150;
  */
 export const refreshRepoMetadata = (
   svc: {
-    readonly db: Context.Service.Shape<typeof DbService>["db"];
     readonly github: Context.Service.Shape<typeof GitHubGateway>;
     readonly repoService: Context.Service.Shape<typeof RepositoryService>;
     readonly avatars: Context.Service.Shape<typeof AvatarCache>;
@@ -63,7 +60,7 @@ export const refreshRepoMetadata = (
   repos: readonly Repository[],
 ): Effect.Effect<boolean> =>
   Effect.gen(function* () {
-    const { db, github, repoService, avatars, realtime } = svc;
+    const { github, repoService, avatars, realtime } = svc;
     let anyRepoChanged = false;
     yield* Effect.forEach(
       repos,
@@ -75,21 +72,20 @@ export const refreshRepoMetadata = (
           if (!fresh) return;
           const avatar = yield* avatars.ensure(repo.githubHost, repo.owner, fresh.ownerAvatarUrl);
           // A repo removed mid-cycle has nothing left to update.
-          const updated = yield* withDb(
-            db,
-            repoService.updateRepoMetadata(repo.id, {
+          const updated = yield* repoService
+            .updateRepoMetadata(repo.id, {
               avatarUrl: fresh.ownerAvatarUrl,
               defaultBranch: fresh.defaultBranch,
-            }),
-          ).pipe(
-            Effect.catchTag("NotFoundError", () => Effect.succeed(null)),
-            Effect.catchTag("DbError", (err) =>
-              Effect.sync(() => {
-                logError("PollScheduler", `recording ${repo.fullName}'s metadata failed:`, err);
-                return null;
-              }),
-            ),
-          );
+            })
+            .pipe(
+              Effect.catchTag("NotFoundError", () => Effect.succeed(null)),
+              Effect.catchTag("DbError", (err) =>
+                Effect.sync(() => {
+                  logError("PollScheduler", `recording ${repo.fullName}'s metadata failed:`, err);
+                  return null;
+                }),
+              ),
+            );
           if (avatar.changed || (updated && updated.defaultBranch !== repo.defaultBranch)) {
             anyRepoChanged = true;
           }
@@ -99,7 +95,7 @@ export const refreshRepoMetadata = (
 
     if (anyRepoChanged) {
       for (const accountId of gate.accountIds) {
-        yield* withDb(db, repoService.listRepos(accountId)).pipe(
+        yield* repoService.listRepos(accountId).pipe(
           Effect.flatMap((accountRepos) =>
             realtime.toAccount(accountId, { type: "repos:updated", data: accountRepos }),
           ),
@@ -184,7 +180,6 @@ export const refetchDiffs = (
  */
 export const backfillArchive = (
   svc: {
-    readonly db: Context.Service.Shape<typeof DbService>["db"];
     readonly github: Context.Service.Shape<typeof GitHubGateway>;
     readonly prService: Context.Service.Shape<typeof PullRequestService>;
     readonly mirror: Context.Service.Shape<typeof PrMirror>;
@@ -193,11 +188,11 @@ export const backfillArchive = (
   repos: readonly Repository[],
 ): Effect.Effect<boolean> =>
   Effect.gen(function* () {
-    const { db, github, prService, mirror } = svc;
+    const { github, prService, mirror } = svc;
     const sinceIso = new Date(Date.now() - ARCHIVE_DAYS * 24 * 60 * 60 * 1000).toISOString();
     const untilIso = new Date().toISOString();
 
-    const known = yield* withDb(db, prService.externalIdsByRepo(repos.map((r) => r.id))).pipe(
+    const known = yield* prService.externalIdsByRepo(repos.map((r) => r.id)).pipe(
       Effect.catch((err) =>
         Effect.sync(() => {
           logError("PollScheduler", "archive backfill: reading mirrored PRs failed:", err);

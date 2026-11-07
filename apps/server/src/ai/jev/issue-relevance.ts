@@ -7,7 +7,6 @@ import { Effect } from "effect";
 import type { Db } from "../../db";
 import { debug } from "../../logger";
 import type { CacheService } from "../../services/Cache";
-import type { DbService } from "../../services/Db";
 import { JevService } from "../../services/Jev";
 import type { IssueCandidate, IssueJudgment } from "./contracts";
 import { collectIssueGateInput, type IssueGateInput } from "./issue-relevance-context";
@@ -100,7 +99,7 @@ export function judgeIssue(
   walkthroughId: string,
   issueId: string,
   candidate: IssueCandidate,
-): Effect.Effect<IssueJudgment | null, never, JevService | CacheService | DbService> {
+): Effect.Effect<IssueJudgment | null, never, JevService | CacheService> {
   return Effect.gen(function* () {
     const input = yield* Effect.sync(() =>
       collectIssueGateInput(db, walkthroughId, issueId, candidate),

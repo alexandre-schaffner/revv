@@ -10,10 +10,8 @@ import {
   SyncError,
 } from "../domain/errors";
 import { makeRestartableLoop } from "../effects/restartable-loop";
-import { withDb as withDbHelper } from "../effects/with-db";
 import { debug, logError } from "../logger";
 import { withGitHubOrigin } from "../observability/github-ledger/origin";
-import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
 import { GitHubAccounts } from "./github/accounts";
 import { AvatarCache } from "./github/avatars";
@@ -100,8 +98,6 @@ export const PollSchedulerLive = Layer.effect(
     const walkthroughService = yield* WalkthroughService;
     const mirror = yield* PrMirror;
     const avatars = yield* AvatarCache;
-    const { db } = yield* DbService;
-    const withDb = <A, E>(eff: Effect.Effect<A, E, DbService>) => withDbHelper(db, eff);
 
     const state = makePollState();
 
@@ -142,7 +138,7 @@ export const PollSchedulerLive = Layer.effect(
         const ctx = {
           existingMap,
           existingByRepo: Map.groupBy(existingPrs, (pr) => pr.repositoryId),
-          diffStatsHeadByPrId: yield* withDb(prService.diffStatsHeads()),
+          diffStatsHeadByPrId: yield* prService.diffStatsHeads(),
           unchangedRepoIds: probed.unchanged,
           probedSignatures: probed.signatures,
         };
@@ -165,7 +161,7 @@ export const PollSchedulerLive = Layer.effect(
       accountIds: readonly string[],
     ) =>
       Effect.gen(function* () {
-        const allRepos = yield* withDb(repoService.listRepos());
+        const allRepos = yield* repoService.listRepos();
         if (allRepos.length === 0) return;
 
         const gate = yield* openGate(accounts, repoToAccountId);
@@ -174,7 +170,7 @@ export const PollSchedulerLive = Layer.effect(
 
         // The baseline every "did this change?" below reads: which diffs to
         // re-fill, which notifications to raise, whether to broadcast.
-        const existingPrs = yield* withDb(prService.listPrs());
+        const existingPrs = yield* prService.listPrs();
         const existingMap = new Map(existingPrs.map((pr) => [pr.id, pr]));
         // Taken before the lists land: a moved PR's cached diff is stale.
         const cachedDiffPrIds = new Set(yield* diffCache.getPrIdsWithCachedDiffs());
@@ -206,7 +202,7 @@ export const PollSchedulerLive = Layer.effect(
         let reposChanged = false;
         if (state.claimDue("metadata", METADATA_REFRESH_INTERVAL_MS, Date.now())) {
           reposChanged = yield* refreshRepoMetadata(
-            { db, github, repoService, avatars, realtime },
+            { github, repoService, avatars, realtime },
             gate,
             allRepos,
           );
@@ -221,7 +217,7 @@ export const PollSchedulerLive = Layer.effect(
           const changes = collectSyncChanges(viewers, outcome);
           if (changes.length > 0) {
             yield* announceSyncChanges(
-              { db, realtime, walkthroughService, walkthroughJobs },
+              { realtime, walkthroughService, walkthroughJobs },
               viewers,
               outcome,
               changes,
@@ -244,7 +240,7 @@ export const PollSchedulerLive = Layer.effect(
           ARCHIVE_BACKFILL_INTERVAL_MS,
           Date.now(),
         )
-          ? yield* backfillArchive({ db, github, prService, mirror }, gate, allRepos)
+          ? yield* backfillArchive({ github, prService, mirror }, gate, allRepos)
           : false;
 
         // Repo avatars and backfilled archive PRs land after the list went out.
@@ -256,7 +252,7 @@ export const PollSchedulerLive = Layer.effect(
     const syncAllRepos = (trigger: SyncTrigger): Effect.Effect<void> =>
       Effect.withSpan("PollScheduler.syncAllRepos")(
         Effect.gen(function* () {
-          const repoToAccountId = yield* withDb(repoService.accountIdsByRepo());
+          const repoToAccountId = yield* repoService.accountIdsByRepo();
           const accountIds = [...new Set(repoToAccountId.values())];
           yield* broadcastPerAccount(accountIds, { type: "prs:sync-started" });
           yield* syncCycle(trigger, repoToAccountId, accountIds).pipe(
@@ -322,8 +318,8 @@ export const PollSchedulerLive = Layer.effect(
     const threadLoop = yield* makeRestartableLoop;
 
     const syncThreadsForOpenPrs: Effect.Effect<void> = Effect.gen(function* () {
-      const openPrs = (yield* withDb(prService.listPrs())).filter((p) => p.status === "open");
-      const repoToAccountId = yield* withDb(repoService.accountIdsByRepo());
+      const openPrs = (yield* prService.listPrs()).filter((p) => p.status === "open");
+      const repoToAccountId = yield* repoService.accountIdsByRepo();
       const callable = new Map<string, boolean>();
       for (const accountId of new Set(repoToAccountId.values())) {
         callable.set(accountId, (yield* accounts.backgroundClient(accountId, "core")) !== null);
@@ -341,10 +337,10 @@ export const PollSchedulerLive = Layer.effect(
         const accountId = repoToAccountId.get(pr.repositoryId);
         if (accountId === undefined || callable.get(accountId) !== true) continue;
         if (recheck) {
-          const threads = yield* withDb(reviewService.threadsForPr(pr.id)).pipe(
-            Effect.orElseSucceed(() => null),
-          );
-          if (threads !== null && threads.every((t) => isThreadResolved(t.status))) {
+          const threads = yield* reviewService
+            .threadsForPr(pr.id)
+            .pipe(Effect.orElseSucceed(() => null));
+          if (threads?.every((t) => isThreadResolved(t.status))) {
             state.noteSwept(pr, now);
             continue;
           }
@@ -361,7 +357,7 @@ export const PollSchedulerLive = Layer.effect(
       yield* Effect.forEach(
         candidates,
         (pr) =>
-          withDb(syncService.syncThreads(pr.id)).pipe(
+          syncService.syncThreads(pr.id).pipe(
             Effect.tap(() => Effect.sync(() => state.noteSwept(pr, Date.now()))),
             // A failed PR keeps its mark, so the next sweep retries it.
             Effect.catchCause((cause) =>
@@ -433,7 +429,7 @@ export const PollSchedulerLive = Layer.effect(
       refreshPr: (prId) => refreshPr(prId).pipe(withGitHubOrigin(`poll:refresh-pr`)),
 
       syncThreadsNow: (prId: string) =>
-        withDb(syncService.syncThreads(prId, { force: true })).pipe(
+        syncService.syncThreads(prId, { force: true }).pipe(
           Effect.asVoid,
           Effect.catchTag("NotFoundError", () => Effect.void),
           Effect.catch((err) =>

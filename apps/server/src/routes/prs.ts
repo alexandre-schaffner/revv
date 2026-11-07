@@ -4,8 +4,9 @@ import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { suggestionsForPr } from "../ai/providers/suggestions";
 import { pinnedPullRequests } from "../db/schema";
-import { tryDb } from "../effects/db-try";
+import { dbTry } from "../effects/db-try";
 import { RepoCloneService } from "../services/clone/RepoClone";
+import { DbService } from "../services/Db";
 import { DiffCacheService, toCachedDiffFiles } from "../services/DiffCache";
 import { GitHubGateway } from "../services/github/gateway";
 import { checkMergeEligibility } from "../services/merge-eligibility";
@@ -406,13 +407,15 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
 
   .get("/pinned", (ctx) =>
     runRoute(
-      tryDb("list pinned PRs", (db) =>
-        db
-          .select({ prId: pinnedPullRequests.prId })
-          .from(pinnedPullRequests)
-          .where(eq(pinnedPullRequests.userId, ctx.userId))
-          .orderBy(pinnedPullRequests.createdAt)
-          .all(),
+      Effect.flatMap(DbService, ({ db }) =>
+        dbTry("list pinned PRs", () =>
+          db
+            .select({ prId: pinnedPullRequests.prId })
+            .from(pinnedPullRequests)
+            .where(eq(pinnedPullRequests.userId, ctx.userId))
+            .orderBy(pinnedPullRequests.createdAt)
+            .all(),
+        ),
       ).pipe(Effect.map((rows) => rows.map((r) => r.prId))),
     ),
   )
@@ -421,8 +424,10 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     "/pinned",
     (ctx) =>
       runRoute(
-        tryDb("pin PR", (db) =>
-          db.insert(pinnedPullRequests).values({ userId: ctx.userId, prId: ctx.body.prId }).run(),
+        Effect.flatMap(DbService, ({ db }) =>
+          dbTry("pin PR", () =>
+            db.insert(pinnedPullRequests).values({ userId: ctx.userId, prId: ctx.body.prId }).run(),
+          ),
         ).pipe(Effect.as({ success: true })),
       ),
     { body: t.Object({ prId: t.String() }) },
@@ -430,16 +435,18 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
 
   .delete("/pinned/:prId", (ctx) =>
     runRoute(
-      tryDb("unpin PR", (db) =>
-        db
-          .delete(pinnedPullRequests)
-          .where(
-            and(
-              eq(pinnedPullRequests.userId, ctx.userId),
-              eq(pinnedPullRequests.prId, ctx.params.prId),
-            ),
-          )
-          .run(),
+      Effect.flatMap(DbService, ({ db }) =>
+        dbTry("unpin PR", () =>
+          db
+            .delete(pinnedPullRequests)
+            .where(
+              and(
+                eq(pinnedPullRequests.userId, ctx.userId),
+                eq(pinnedPullRequests.prId, ctx.params.prId),
+              ),
+            )
+            .run(),
+        ),
       ).pipe(Effect.as({ success: true })),
     ),
   );

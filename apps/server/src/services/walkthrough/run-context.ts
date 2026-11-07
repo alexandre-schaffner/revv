@@ -20,11 +20,10 @@ import type { WalkthroughToolContext } from "../../ai/providers/walkthrough-tool
 import type { Db } from "../../db";
 import { logError } from "../../logger";
 import type { CacheService } from "../Cache";
-import type { DbService } from "../Db";
 import type { JevService } from "../Jev";
 import type { SettingsService } from "../Settings";
 
-export type JudgmentServices = JevService | SettingsService | CacheService | DbService;
+export type JudgmentServices = JevService | SettingsService | CacheService;
 
 export interface WalkthroughRunContext {
   readonly prId: string;

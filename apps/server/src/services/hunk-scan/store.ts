@@ -16,9 +16,9 @@ import {
 } from "@revv/shared";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { Effect } from "effect";
+import type { Db } from "../../db/index";
 import { hunkScanRows, hunkScans } from "../../db/schema/hunk-scans";
 import { DbError } from "../../domain/errors";
-import { DbService } from "../Db";
 
 export type HunkScanRowRecord = typeof hunkScanRows.$inferSelect;
 
@@ -68,14 +68,10 @@ const dbError = (message: string) => (cause: unknown) => new DbError({ message, 
 
 /** The scan for one PR head, or null when it never ran. */
 export function getHunkScan(
+  db: Db,
   key: HunkScanKey,
-): Effect.Effect<
-  { readonly id: string; readonly status: HunkScanStatus } | null,
-  DbError,
-  DbService
-> {
+): Effect.Effect<{ readonly id: string; readonly status: HunkScanStatus } | null, DbError> {
   return Effect.gen(function* () {
-    const { db } = yield* DbService;
     const row = yield* Effect.try({
       try: () =>
         db
@@ -98,11 +94,11 @@ export function getHunkScan(
  * Creates the scan if it never ran. Returns the scan id.
  */
 export function seedHunkScan(
+  db: Db,
   key: HunkScanKey,
   seeds: readonly HunkScanSeed[],
-): Effect.Effect<string, DbError, DbService> {
+): Effect.Effect<string, DbError> {
   return Effect.gen(function* () {
-    const { db } = yield* DbService;
     return yield* Effect.try({
       try: () =>
         db.transaction((tx) => {
@@ -159,13 +155,13 @@ export function seedHunkScan(
 
 /** Record Jev's answer for one hunk. Returns the committed row, or null if it doesn't exist. */
 export function recordHunkSignals(
+  db: Db,
   scanId: string,
   filePath: string,
   hunkIndex: number,
   signals: Readonly<Record<HunkSmell, number>>,
-): Effect.Effect<HunkScanRow | null, DbError, DbService> {
+): Effect.Effect<HunkScanRow | null, DbError> {
   return Effect.gen(function* () {
-    const { db } = yield* DbService;
     const row = yield* Effect.try({
       try: () =>
         db
@@ -195,11 +191,11 @@ export function recordHunkSignals(
  * `unscanned`, and the status lands in the same transaction.
  */
 export function closeHunkScan(
+  db: Db,
   scanId: string,
   status: "complete" | "partial",
-): Effect.Effect<void, DbError, DbService> {
+): Effect.Effect<void, DbError> {
   return Effect.gen(function* () {
-    const { db } = yield* DbService;
     yield* Effect.try({
       try: () =>
         db.transaction((tx) => {
@@ -225,9 +221,8 @@ export function closeHunkScan(
  * exactly as if the pass had never run, and record `failed` so a walkthrough
  * resume doesn't try again. Reopening the review page does.
  */
-export function discardHunkScan(scanId: string): Effect.Effect<void, DbError, DbService> {
+export function discardHunkScan(db: Db, scanId: string): Effect.Effect<void, DbError> {
   return Effect.gen(function* () {
-    const { db } = yield* DbService;
     yield* Effect.try({
       try: () =>
         db.transaction((tx) => {
@@ -241,10 +236,10 @@ export function discardHunkScan(scanId: string): Effect.Effect<void, DbError, Db
 
 /** Every row for a scan, in seed order — which is diff order. */
 export function listHunkScanRows(
+  db: Db,
   scanId: string,
-): Effect.Effect<ReadonlyArray<HunkScanRowRecord>, DbError, DbService> {
+): Effect.Effect<ReadonlyArray<HunkScanRowRecord>, DbError> {
   return Effect.gen(function* () {
-    const { db } = yield* DbService;
     return yield* Effect.try({
       try: () =>
         db
@@ -259,11 +254,11 @@ export function listHunkScanRows(
 }
 
 /** The DTO view; a read failure degrades to no first pass rather than failing the page. */
-export function loadHunkScan(key: HunkScanKey): Effect.Effect<HunkScanSnapshot, never, DbService> {
+export function loadHunkScan(db: Db, key: HunkScanKey): Effect.Effect<HunkScanSnapshot, never> {
   return Effect.gen(function* () {
-    const scan = yield* getHunkScan(key);
+    const scan = yield* getHunkScan(db, key);
     if (scan === null) return { headSha: key.headSha, status: null, rows: [] };
-    const rows = yield* listHunkScanRows(scan.id);
+    const rows = yield* listHunkScanRows(db, scan.id);
     return { headSha: key.headSha, status: scan.status, rows: rows.map(toHunkScanRow) };
   }).pipe(Effect.orElseSucceed(() => ({ headSha: key.headSha, status: null, rows: [] })));
 }

@@ -54,7 +54,18 @@ const RealtimeWithDeps = RealtimeLive.pipe(
   Layer.provide(Layer.mergeAll(BroadcasterLive, DbServiceLive)),
 );
 
-const ReviewServiceWithDeps = ReviewServiceLive.pipe(Layer.provide(RealtimeWithDeps));
+const ReviewServiceWithDeps = ReviewServiceLive.pipe(
+  Layer.provide(Layer.mergeAll(RealtimeWithDeps, DbServiceLive)),
+);
+
+const DbBackedLayers = Layer.mergeAll(
+  RepositoryServiceLive,
+  PullRequestServiceLive,
+  WalkthroughServiceLive,
+  WalkthroughSnapshotImporterLive,
+  ProjectRecapServiceLive,
+  CacheServiceLive,
+).pipe(Layer.provide(Layer.mergeAll(DbServiceLive, RealtimeWithDeps)));
 
 const SettingsServiceWithDeps = SettingsServiceLive.pipe(Layer.provide(DbServiceLive));
 
@@ -92,16 +103,12 @@ const BaseLayers = Layer.mergeAll(
   GitHubGatewayWithDeps,
   BroadcasterLive,
   RealtimeWithDeps,
-  RepositoryServiceLive,
-  PullRequestServiceLive,
+  DbBackedLayers,
   ReviewServiceWithDeps,
   AvatarCacheWithDeps,
   SettingsServiceWithDeps,
   JevServiceWithDeps,
-  WalkthroughServiceLive,
-  ProjectRecapServiceLive,
   DiffCacheServiceWithDeps,
-  CacheServiceLive,
   OnboardingServiceLive,
   AgentLoginServiceLive,
   ChatSessionServiceWithDeps,
@@ -161,7 +168,6 @@ const WalkthroughJobsWithDeps = WalkthroughJobsLive.pipe(
       AiServiceWithDeps,
       RepoCloneServiceWithDeps,
       RemoteWalkthroughCacheWithDeps,
-      WalkthroughSnapshotImporterLive,
       HunkScanServiceWithDeps,
       StackServiceWithDeps,
     ),
@@ -295,7 +301,6 @@ export const AppLayer = Layer.mergeAll(
   // Settings routes (cache status, signing test) resolve these directly.
   GcsBlobStoreWithDeps,
   RemoteWalkthroughCacheWithDeps,
-  WalkthroughSnapshotImporterLive,
   SshSignerWithDeps,
   CacheEligibilityWithDeps,
 );

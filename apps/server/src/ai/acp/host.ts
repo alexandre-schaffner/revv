@@ -2,12 +2,16 @@
 // where CLIs actually live (nvm, Homebrew on Apple Silicon, npm global
 // prefixes, app-managed bin dirs). Every agent probe and spawn therefore runs
 // against the user's *login-shell* PATH, merged onto the process PATH, so
-// detection matches what the user sees in a terminal. The login-shell lookup is
-// expensive, so it is cached with a short TTL; `which` against it is cheap.
+// detection matches what the user sees in a terminal. The login-shell lookup
+// can take seconds, so it is cached with a short TTL and refreshed in the
+// background once stale; only a cold or invalidated cache waits for it.
 
-import { execFileSync } from "node:child_process";
-import { accessSync, constants, existsSync } from "node:fs";
+import { execFile, execFileSync } from "node:child_process";
+import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 /** TTL for the cached login-shell PATH (and the agents' cached auth probes). */
 export const HOST_PROBE_TTL_MS = 5 * 60 * 1000;
@@ -32,11 +36,32 @@ export function invalidateUserPath(): void {
   cachedPath = null;
 }
 
-/** The PATH every agent probe and spawn uses (see the module header). */
+let refreshing: Promise<void> | null = null;
+
+/**
+ * The PATH every agent probe and spawn uses (see the module header). A stale
+ * value is returned as is while a background refresh replaces it.
+ */
 export function resolveUserPath(): string {
-  if (cachedPath && Date.now() < cachedPath.expiresAt) return cachedPath.value;
+  if (cachedPath) {
+    if (Date.now() >= cachedPath.expiresAt) void refreshUserPath();
+    return cachedPath.value;
+  }
+  return storeUserPath(loginShellPathSync());
+}
+
+/** Read the login shell's PATH without blocking; boot calls it so no request pays for it. */
+export function refreshUserPath(): Promise<void> {
+  refreshing ??= loginShellPathAsync()
+    .then((login) => void storeUserPath(login))
+    .finally(() => {
+      refreshing = null;
+    });
+  return refreshing;
+}
+
+function storeUserPath(login: string | null): string {
   const base = process.env.PATH ?? "";
-  const login = loginShellPath();
   const value = Array.from(
     new Set(
       [...installedBinDirs, ...base.split(":"), ...(login?.split(":") ?? [])].filter(Boolean),
@@ -47,40 +72,76 @@ export function resolveUserPath(): string {
 }
 
 /**
- * The login shell's PATH, or `null` without a usable `$SHELL`. fish stores
- * `$PATH` as a list, so it needs `string join`; POSIX shells get `printf`.
+ * How to print the login shell's PATH, or `null` without a usable `$SHELL`.
+ * fish stores `$PATH` as a list, so it needs `string join`; POSIX shells get
+ * `printf`. `-lic`: login + interactive, so PATH set in either profile or rc
+ * is sourced. argv form: a `$SHELL` with spaces or metacharacters must not be
+ * re-parsed.
  */
-function loginShellPath(): string | null {
+function loginShellCommand(): { shell: string; args: string[] } | null {
   const shell = process.env.SHELL;
   if (!shell) return null;
   const isFish = /(^|\/)fish$/.test(shell);
-  const inner = isFish ? "string join : $PATH" : 'printf %s "$PATH"';
+  return { shell, args: ["-lic", isFish ? "string join : $PATH" : 'printf %s "$PATH"'] };
+}
+
+const LOGIN_SHELL_TIMEOUT_MS = 4000;
+
+const nonEmpty = (out: string): string | null => (out.trim().length > 0 ? out.trim() : null);
+
+function loginShellPathSync(): string | null {
+  const command = loginShellCommand();
+  if (!command) return null;
   try {
-    // `-lic`: login + interactive, so PATH set in either profile or rc is sourced.
-    // argv form: a `$SHELL` with spaces or metacharacters must not be re-parsed.
-    const out = execFileSync(shell, ["-lic", inner], {
-      encoding: "utf-8",
-      timeout: 4000,
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    return out.length > 0 ? out : null;
+    return nonEmpty(
+      execFileSync(command.shell, command.args, {
+        encoding: "utf-8",
+        timeout: LOGIN_SHELL_TIMEOUT_MS,
+        stdio: ["ignore", "pipe", "ignore"],
+      }),
+    );
   } catch {
     return null;
   }
 }
 
-/** Absolute path of `command` on the user's PATH, else null. */
-export function resolveCommandPath(command: string): string | null {
+async function loginShellPathAsync(): Promise<string | null> {
+  const command = loginShellCommand();
+  if (!command) return null;
   try {
-    const out = execFileSync("which", [command], {
+    const pending = execFileAsync(command.shell, command.args, {
       encoding: "utf-8",
-      timeout: 3000,
-      env: { ...process.env, PATH: resolveUserPath() },
-    }).trim();
-    return out.length > 0 ? (out.split("\n")[0] ?? null) : null;
+      timeout: LOGIN_SHELL_TIMEOUT_MS,
+    });
+    pending.child.stdin?.end();
+    return nonEmpty((await pending).stdout);
   } catch {
     return null;
   }
+}
+
+/** Where `command` would be looked up on `path`, in order. */
+function candidatesFor(command: string, path: string): string[] {
+  return isAbsolute(command)
+    ? [command]
+    : path
+        .split(delimiter)
+        .filter(Boolean)
+        .map((dir) => join(dir, command));
+}
+
+function isExecutableFile(candidate: string): boolean {
+  try {
+    accessSync(candidate, constants.X_OK);
+    return statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** Absolute path of `command` on the user's PATH, else null: what `which` answers. */
+export function resolveCommandPath(command: string): string | null {
+  return candidatesFor(command, resolveUserPath()).find(isExecutableFile) ?? null;
 }
 
 export function isCommandOnPath(command: string): boolean {
@@ -88,21 +149,7 @@ export function isCommandOnPath(command: string): boolean {
 }
 
 export function executableExists(command: string, path: string): boolean {
-  const candidates = isAbsolute(command)
-    ? [command]
-    : path
-        .split(delimiter)
-        .filter(Boolean)
-        .map((dir) => join(dir, command));
-
-  return candidates.some((candidate) => {
-    try {
-      accessSync(candidate, constants.X_OK);
-      return true;
-    } catch {
-      return false;
-    }
-  });
+  return candidatesFor(command, path).some(isExecutableFile);
 }
 
 export function hostEnv(

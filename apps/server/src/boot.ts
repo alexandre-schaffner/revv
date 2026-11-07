@@ -5,6 +5,7 @@
 
 import { Cause, Effect, Layer } from "effect";
 import { stopAllAcpConnections } from "./ai/acp/acp-connection";
+import { refreshUserPath } from "./ai/acp/host";
 import { logError } from "./logger";
 import { withGitHubOrigin } from "./observability/github-ledger/origin";
 import { RepoCloneService } from "./services/clone/RepoClone";
@@ -88,6 +89,11 @@ export const BootLive = Layer.effectDiscard(
         step("stack-review", stackReview.resumePending()),
         step("stack-merge", stackMerge.expireStale()),
         step("db-maintenance", dbMaintenance.start()),
+        // Warm, so the first agent probe doesn't block on the login shell.
+        step(
+          "agent-path",
+          Effect.promise(() => refreshUserPath()),
+        ),
         // Warm, so the first PR files request doesn't pay for it.
         step(
           "prerender",

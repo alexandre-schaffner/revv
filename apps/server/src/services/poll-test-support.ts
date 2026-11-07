@@ -162,7 +162,7 @@ export async function makeHarness(
     ),
     PrMirrorLive.pipe(Layer.provide(deps)),
     PullRequestServiceLive,
-  );
+  ).pipe(Layer.provide(dbLayer));
   return Effect.runPromise(
     Effect.gen(function* () {
       return {

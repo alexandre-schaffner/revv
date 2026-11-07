@@ -31,9 +31,9 @@ import {
 import { Effect } from "effect";
 import { type HunkSelection, scanHunks, selectHunks } from "../../ai/jev/hunk-scan";
 import type { FileLike } from "../../ai/jev/state";
+import type { Db } from "../../db/index";
 import { debug } from "../../logger";
 import type { CacheService } from "../Cache";
-import type { DbService } from "../Db";
 import { JevService } from "../Jev";
 import {
   closeHunkScan,
@@ -89,20 +89,21 @@ function isSettled(status: HunkScanStatus, retry: boolean): boolean {
  */
 export function runHunkScan(
   input: HunkScanKey & {
+    readonly db: Db;
     readonly selection: HunkSelection;
     readonly retry: boolean;
     readonly emit: (event: HunkScanEventMessage) => Effect.Effect<void>;
     /** Wraps the Jev calls, so the service can cap how many scans call at once. */
     readonly withCallSlot: <A, R>(effect: Effect.Effect<A, never, R>) => Effect.Effect<A, never, R>;
   },
-): Effect.Effect<HunkScanRow[], never, JevService | CacheService | DbService> {
+): Effect.Effect<HunkScanRow[], never, JevService | CacheService> {
   const startedAt = Date.now();
   const key = { prId: input.prId, headSha: input.headSha };
   const label = `${input.prId}@${input.headSha.slice(0, 7)}`;
 
   return Effect.gen(function* () {
-    const existing = yield* getHunkScan(key);
-    const rows = existing === null ? [] : yield* listHunkScanRows(existing.id);
+    const existing = yield* getHunkScan(input.db, key);
+    const rows = existing === null ? [] : yield* listHunkScanRows(input.db, existing.id);
     const fresh = matchesSeeds(rows, input.selection.seeds);
     if (existing !== null) {
       if (existing.status === "failed" && !input.retry) return [];
@@ -121,7 +122,7 @@ export function runHunkScan(
       return fresh ? rows.map(toHunkScanRow) : [];
     }
 
-    const id = yield* seedHunkScan(key, input.selection.seeds);
+    const id = yield* seedHunkScan(input.db, key, input.selection.seeds);
     return yield* scan(id).pipe(Effect.catch((e) => fail(id, String(e))));
   }).pipe(
     Effect.catch((e) =>
@@ -134,7 +135,7 @@ export function runHunkScan(
 
   function scan(id: string) {
     return Effect.gen(function* () {
-      const seeded = yield* listHunkScanRows(id);
+      const seeded = yield* listHunkScanRows(input.db, id);
       yield* input.emit({
         type: "hunk-scan:started",
         data: { ...key, rows: seeded.map(toHunkScanRow) },
@@ -143,7 +144,7 @@ export function runHunkScan(
       const targets = input.selection.targets.filter((target) => waiting.has(hunkKey(target)));
       yield* input.withCallSlot(
         scanHunks(targets, (target, signals) =>
-          recordHunkSignals(id, target.filePath, target.hunkIndex, signals).pipe(
+          recordHunkSignals(input.db, id, target.filePath, target.hunkIndex, signals).pipe(
             Effect.flatMap((row) =>
               row === null
                 ? Effect.void
@@ -161,13 +162,13 @@ export function runHunkScan(
 
   function finish(id: string, nothingAnswered: string) {
     return Effect.gen(function* () {
-      const rows = (yield* listHunkScanRows(id)).map(toHunkScanRow);
+      const rows = (yield* listHunkScanRows(input.db, id)).map(toHunkScanRow);
       const answered = rows.filter((row) => row.signals !== null).length;
       const waiting = rows.filter(isHunkRowPending).length;
       if (answered === 0 && waiting > 0) return yield* fail(id, nothingAnswered);
 
       const status = waiting > 0 ? "partial" : "complete";
-      yield* closeHunkScan(id, status);
+      yield* closeHunkScan(input.db, id, status);
       const closed = rows.map(
         (row): HunkScanRow => (isHunkRowPending(row) ? { ...row, skipReason: "unscanned" } : row),
       );
@@ -193,7 +194,7 @@ export function runHunkScan(
   function fail(id: string, reason: string) {
     return Effect.gen(function* () {
       debug("jev", `hunk-scan ${label} failed: ${reason}`);
-      const discarded = yield* discardHunkScan(id).pipe(
+      const discarded = yield* discardHunkScan(input.db, id).pipe(
         Effect.as(true),
         Effect.catch(() => Effect.succeed(false)),
       );

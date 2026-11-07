@@ -179,4 +179,6 @@ export type RecapStreamEvent =
   | { type: "theme_summary"; data: { summary: RecapThemeSummary } }
   | { type: "done"; data: { recapId: string } }
   | { type: "stopped"; data: { recapId: string } }
+  /** A rerun replaced this run, under the same id: the stream ends; attach again for the new one. */
+  | { type: "restarted"; data: { recapId: string } }
   | { type: "error"; data: { code: string; message: string } };

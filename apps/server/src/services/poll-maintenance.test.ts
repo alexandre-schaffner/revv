@@ -88,7 +88,7 @@ describe("backfillArchive", () => {
       Effect.gen(function* () {
         const gate = yield* openGate(harness.accounts, new Map([[REPO.id, ACCOUNT_ID]]));
         return yield* backfillArchive(
-          { db, github, prService: harness.prService, mirror: harness.mirror },
+          { github, prService: harness.prService, mirror: harness.mirror },
           gate,
           [REPO],
         );

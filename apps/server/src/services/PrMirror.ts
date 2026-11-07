@@ -25,7 +25,6 @@ import { pullRequests } from "../db/schema/index";
 import { type DbError, type GitHubError, GitHubNotFoundError } from "../domain/errors";
 import { asStored, type ObservedPr, STACK_UNSEEN } from "../domain/observed-pr";
 import { dbTry } from "../effects/db-try";
-import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
 import { DbService } from "./Db";
 import { GitHubGateway } from "./github/gateway";
@@ -125,7 +124,7 @@ export const PrMirrorLive = Layer.effect(
     const github = yield* GitHubGateway;
 
     const accountOf = (repoId: string) =>
-      withDb(db, repoService.getAccountIdForRepo(repoId)).pipe(
+      repoService.getAccountIdForRepo(repoId).pipe(
         Effect.map((id): string | null => id),
         Effect.catch((e) =>
           Effect.sync(() => {
@@ -139,7 +138,7 @@ export const PrMirrorLive = Layer.effect(
       Effect.forEach(
         new Set(accountIds),
         (accountId) =>
-          withDb(db, prService.listPrs(accountId)).pipe(
+          prService.listPrs(accountId).pipe(
             Effect.flatMap((prs) =>
               realtime.toAccount(accountId, { type: "prs:updated", data: prs }),
             ),
@@ -225,7 +224,7 @@ export const PrMirrorLive = Layer.effect(
         for (const id of ids) {
           const row =
             known?.get(id) ??
-            (yield* withDb(db, prService.getPr(id)).pipe(
+            (yield* prService.getPr(id).pipe(
               Effect.map((pr): PullRequest | null => pr),
               Effect.catchTag("NotFoundError", () => Effect.succeed(null)),
             ));
@@ -244,7 +243,7 @@ export const PrMirrorLive = Layer.effect(
         // A read can lag (the list endpoint is cache-fronted, an ETag replay
         // can be stale): mask before writing so it never rewinds the head.
         const masked = observed.map((pr) => preserveHeadOnStaleRead(prior.get(pr.id), pr));
-        yield* withDb(db, prService.upsertPrs(masked));
+        yield* prService.upsertPrs(masked);
         const rows = masked.map((pr) => asStored(pr, prior.get(pr.id)));
         const headMoves = new Map<string, string>();
         for (const row of rows) {
@@ -260,22 +259,19 @@ export const PrMirrorLive = Layer.effect(
 
     const recordMutation: PrMirrorService["recordMutation"] = (prId, mutation) =>
       Effect.gen(function* () {
-        const before = yield* withDb(db, prService.getPr(prId)).pipe(
-          Effect.catchTag("NotFoundError", () => Effect.succeed(null)),
-        );
+        const before = yield* prService
+          .getPr(prId)
+          .pipe(Effect.catchTag("NotFoundError", () => Effect.succeed(null)));
         if (!before) return;
         if (mutation.kind === "terminal" && before.status === mutation.status) return;
         let after: PullRequest;
         if (mutation.kind === "draft") {
-          yield* withDb(db, prService.setPrDraft(prId, mutation.isDraft));
+          yield* prService.setPrDraft(prId, mutation.isDraft);
           after = { ...before, isDraft: mutation.isDraft };
         } else {
-          yield* withDb(
-            db,
-            prService.markPrsClosed([
-              { id: prId, status: mutation.status, closedAt: mutation.closedAt },
-            ]),
-          );
+          yield* prService.markPrsClosed([
+            { id: prId, status: mutation.status, closedAt: mutation.closedAt },
+          ]);
           after = { ...before, status: mutation.status, closedAt: mutation.closedAt };
         }
         const accountIds = yield* followThrough([after], new Map([[prId, before]]), new Map());

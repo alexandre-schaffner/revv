@@ -1,11 +1,12 @@
 import type { PullRequest } from "@revv/shared";
 import { and, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
+import type { Db } from "../db/index";
 import { pullRequests, repositories, walkthroughs } from "../db/schema/index";
 import { avatarOfRepoLogin } from "../db/schema/remote-users";
 import { type DbError, NotFoundError } from "../domain/errors";
 import type { ObservedPr } from "../domain/observed-pr";
-import { dbTry, tryDb } from "../effects/db-try";
+import { dbTry } from "../effects/db-try";
 import { DbService } from "./Db";
 
 function rowToPr(
@@ -174,9 +175,9 @@ function withLatestWalkthrough(
 }
 
 /** False when `accountId` is given and doesn't own the repository. */
-function ownsRepo(repoId: string, accountId: string | undefined) {
+function ownsRepo(db: Db, repoId: string, accountId: string | undefined) {
   if (!accountId) return Effect.succeed(true);
-  return tryDb("read repository owner", (db) =>
+  return dbTry("read repository owner", () =>
     db
       .select({ accountId: repositories.accountId })
       .from(repositories)
@@ -191,11 +192,11 @@ export class PullRequestService extends Context.Service<
     readonly listPrs: (
       accountId?: string,
       repoId?: string,
-    ) => Effect.Effect<PullRequest[], DbError, DbService>;
+    ) => Effect.Effect<PullRequest[], DbError>;
     readonly getPr: (
       id: string,
       accountId?: string,
-    ) => Effect.Effect<PullRequest, NotFoundError | DbError, DbService>;
+    ) => Effect.Effect<PullRequest, NotFoundError | DbError>;
     /**
      * Upsert PR rows from GitHub.
      *
@@ -212,18 +213,18 @@ export class PullRequestService extends Context.Service<
      *     `stack` is `seen` (see `StackSighting`): an `unseen` one leaves the
      *     stored ones be. A fresh insert of an `unseen` row starts unstacked.
      */
-    readonly upsertPrs: (prs: readonly ObservedPr[]) => Effect.Effect<void, DbError, DbService>;
+    readonly upsertPrs: (prs: readonly ObservedPr[]) => Effect.Effect<void, DbError>;
     /** The PR numbers mirrored for each repository, open or archived. */
     readonly externalIdsByRepo: (
       repoIds: readonly string[],
-    ) => Effect.Effect<Map<string, Set<number>>, DbError, DbService>;
+    ) => Effect.Effect<Map<string, Set<number>>, DbError>;
     /** `diff_stats_head_sha` of every PR: the head its stored diff size describes. */
-    readonly diffStatsHeads: () => Effect.Effect<Map<string, string | null>, DbError, DbService>;
+    readonly diffStatsHeads: () => Effect.Effect<Map<string, string | null>, DbError>;
     /** Closed and merged PRs, newest `closedAt` first, paginated on `(closedAt, id)`. */
     readonly listArchivedPrs: (
       accountId?: string,
       params?: ListArchivedPrsParams,
-    ) => Effect.Effect<ListArchivedPrsResult, DbError, DbService>;
+    ) => Effect.Effect<ListArchivedPrsResult, DbError>;
     /**
      * Per-window read used by the recap pipeline. Returns every archived PR
      * for the repo whose `closedAt` falls in `[since, until)`, joined to the
@@ -236,7 +237,7 @@ export class PullRequestService extends Context.Service<
       since: string,
       until: string,
       accountId?: string,
-    ) => Effect.Effect<ReadonlyArray<ArchivedPrWithWalkthrough>, DbError, DbService>;
+    ) => Effect.Effect<ReadonlyArray<ArchivedPrWithWalkthrough>, DbError>;
     /**
      * PRs in flight *as of* `until`: created before the window closed and not
      * yet closed at that instant. Joined to their latest
@@ -257,434 +258,431 @@ export class PullRequestService extends Context.Service<
       repoId: string,
       until: string,
       accountId?: string,
-    ) => Effect.Effect<ReadonlyArray<ArchivedPrWithWalkthrough>, DbError, DbService>;
+    ) => Effect.Effect<ReadonlyArray<ArchivedPrWithWalkthrough>, DbError>;
     readonly markPrsClosed: (
       updates: Array<{ id: string; status: "closed" | "merged"; closedAt: string }>,
-    ) => Effect.Effect<void, DbError, DbService>;
-    readonly setPrDraft: (id: string, isDraft: boolean) => Effect.Effect<void, DbError, DbService>;
+    ) => Effect.Effect<void, DbError>;
+    readonly setPrDraft: (id: string, isDraft: boolean) => Effect.Effect<void, DbError>;
     /**
      * The review-comment sync watermark, sent as `?since=` on the next poll.
      * Null before the first sync.
      */
-    readonly getCommentsSyncedAt: (
-      prId: string,
-    ) => Effect.Effect<string | null, DbError, DbService>;
+    readonly getCommentsSyncedAt: (prId: string) => Effect.Effect<string | null, DbError>;
     /** Only after a successful sync. */
-    readonly setCommentsSyncedAt: (
-      prId: string,
-      timestamp: string,
-    ) => Effect.Effect<void, DbError, DbService>;
+    readonly setCommentsSyncedAt: (prId: string, timestamp: string) => Effect.Effect<void, DbError>;
     /**
      * The GraphQL review-thread fingerprint, which lets a pull skip its writes
      * and SSE events when nothing changed on GitHub. Null before the first pull.
      */
-    readonly getThreadsFingerprint: (
-      prId: string,
-    ) => Effect.Effect<string | null, DbError, DbService>;
+    readonly getThreadsFingerprint: (prId: string) => Effect.Effect<string | null, DbError>;
     readonly setThreadsFingerprint: (
       prId: string,
       fingerprint: string,
-    ) => Effect.Effect<void, DbError, DbService>;
+    ) => Effect.Effect<void, DbError>;
     /** Merge @-mentions harvested from review comments into `mentionedUsers`. Idempotent. */
-    readonly appendMentionedUsers: (
-      prId: string,
-      logins: string[],
-    ) => Effect.Effect<void, DbError, DbService>;
+    readonly appendMentionedUsers: (prId: string, logins: string[]) => Effect.Effect<void, DbError>;
   }
 >()("PullRequestService") {}
 
-export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
-  listPrs: (accountId, repoId) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
+export const PullRequestServiceLive = Layer.effect(
+  PullRequestService,
+  Effect.gen(function* () {
+    const { db } = yield* DbService;
+    return PullRequestService.of({
+      listPrs: (accountId, repoId) =>
+        Effect.gen(function* () {
+          const repoIds = accountId
+            ? yield* dbTry("listPrs repos", () =>
+                db
+                  .select({ id: repositories.id })
+                  .from(repositories)
+                  .where(eq(repositories.accountId, accountId))
+                  .all()
+                  .map((r) => r.id),
+              )
+            : null;
 
-      const repoIds = accountId
-        ? yield* dbTry("listPrs repos", () =>
-            db
-              .select({ id: repositories.id })
-              .from(repositories)
-              .where(eq(repositories.accountId, accountId))
-              .all()
-              .map((r) => r.id),
-          )
-        : null;
+          if (accountId && repoIds !== null && repoIds.length === 0) return [];
 
-      if (accountId && repoIds !== null && repoIds.length === 0) return [];
-
-      const rows = yield* dbTry("listPrs", () => {
-        const conditions: (ReturnType<typeof eq> | ReturnType<typeof inArray>)[] = [
-          eq(pullRequests.status, "open"),
-        ];
-        if (repoIds && repoIds.length > 0) {
-          conditions.push(inArray(pullRequests.repositoryId, repoIds));
-        }
-        if (repoId) conditions.push(eq(pullRequests.repositoryId, repoId));
-        return db
-          .select({
-            pr: pullRequests,
-            avatarContent: avatarOfRepoLogin(pullRequests.authorLogin, pullRequests.repositoryId),
-          })
-          .from(pullRequests)
-          .where(and(...conditions))
-          .orderBy(desc(pullRequests.updatedAt))
-          .all();
-      });
-      return rows.map((r) => rowToPr(r.pr, r.avatarContent));
-    }),
-
-  getPr: (id, accountId) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const row = yield* dbTry("getPr", () =>
-        db
-          .select({
-            pr: pullRequests,
-            avatarContent: avatarOfRepoLogin(pullRequests.authorLogin, pullRequests.repositoryId),
-          })
-          .from(pullRequests)
-          .where(eq(pullRequests.id, id))
-          .get(),
-      );
-      if (!row) {
-        return yield* Effect.fail(new NotFoundError({ resource: "pull_request", id }));
-      }
-      if (accountId) {
-        const repo = yield* dbTry("getPr owner", () =>
-          db.select().from(repositories).where(eq(repositories.id, row.pr.repositoryId)).get(),
-        );
-        if (!repo || repo.accountId !== accountId) {
-          return yield* Effect.fail(new NotFoundError({ resource: "pull_request", id }));
-        }
-      }
-      return rowToPr(row.pr, row.avatarContent);
-    }),
-
-  upsertPrs: (prs) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      if (prs.length === 0) return;
-      const bodyMentionsByPrId = new Map<string, string[]>();
-      yield* dbTry("upsertPrs", () => {
-        const withStack: (typeof pullRequests.$inferInsert)[] = [];
-        const withoutStack: (typeof pullRequests.$inferInsert)[] = [];
-        for (const pr of prs) {
-          const bodyMentions = pr.body ? extractGitHubMentions(pr.body) : [];
-          if (bodyMentions.length > 0) bodyMentionsByPrId.set(pr.id, bodyMentions);
-          const base: typeof pullRequests.$inferInsert = {
-            id: pr.id,
-            externalId: pr.externalId,
-            repositoryId: pr.repositoryId,
-            title: pr.title,
-            authorLogin: pr.authorLogin,
-            status: pr.status,
-            reviewStatus: pr.reviewStatus,
-            isDraft: pr.isDraft,
-            sourceBranch: pr.sourceBranch,
-            targetBranch: pr.targetBranch,
-            url: pr.url,
-            additions: pr.additions,
-            deletions: pr.deletions,
-            changedFiles: pr.changedFiles,
-            createdAt: pr.createdAt,
-            updatedAt: pr.updatedAt,
-            fetchedAt: pr.fetchedAt,
-            requestedReviewers: JSON.stringify(pr.requestedReviewers ?? []),
-            mentionedUsers: JSON.stringify(bodyMentions),
-          };
-          if (pr.body !== null) base.body = pr.body;
-          if (pr.headSha !== null) base.headSha = pr.headSha;
-          if (pr.baseSha !== null) base.baseSha = pr.baseSha;
-          if (pr.closedAt !== null) base.closedAt = pr.closedAt;
-          if (pr.statsHeadSha !== undefined) base.diffStatsHeadSha = pr.statsHeadSha;
-          if (pr.stack.kind === "seen" && pr.stack.place) {
-            base.stackNumber = pr.stack.place.number;
-            base.stackPosition = pr.stack.place.position;
-          }
-          (pr.stack.kind === "seen" ? withStack : withoutStack).push(base);
-        }
-        const upsert = (values: (typeof pullRequests.$inferInsert)[], takeStack: boolean) =>
-          db
-            .insert(pullRequests)
-            .values(values)
-            .onConflictDoUpdate({
-              target: pullRequests.id,
-              // Drizzle expands a bare column reference like
-              // `pullRequests.headSha` to `head_sha = head_sha`, a no-op.
-              // Every refreshed column must read `sql\`excluded.<col>\``,
-              // or the stored head never moves and PrMirror sees a head
-              // move (and supersedes the walkthrough) on every apply.
-              set: {
-                title: sql`excluded.title`,
-                body: sql`excluded.body`,
-                status: sql`excluded.status`,
-                isDraft: sql`excluded.is_draft`,
-                // Diff stats only when the source carried them (see the
-                // `upsertPrs` doc). `changed_files` is the discriminator: any
-                // PR with commits has at least one changed file, whereas
-                // additions or deletions can legitimately be 0 (pure rename,
-                // mode change). `pull_requests.<col>` names the stored row
-                // inside SQLite's DO UPDATE.
-                additions: sql`CASE WHEN excluded.changed_files > 0 THEN excluded.additions ELSE pull_requests.additions END`,
-                deletions: sql`CASE WHEN excluded.changed_files > 0 THEN excluded.deletions ELSE pull_requests.deletions END`,
-                changedFiles: sql`CASE WHEN excluded.changed_files > 0 THEN excluded.changed_files ELSE pull_requests.changed_files END`,
-                diffStatsHeadSha: sql`COALESCE(excluded.diff_stats_head_sha, pull_requests.diff_stats_head_sha)`,
-                headSha: sql`excluded.head_sha`,
-                baseSha: sql`excluded.base_sha`,
-                updatedAt: sql`excluded.updated_at`,
-                fetchedAt: sql`excluded.fetched_at`,
-                requestedReviewers: sql`excluded.requested_reviewers`,
-                closedAt: sql`excluded.closed_at`,
-                // `mentioned_users` is deliberately absent: assigning the
-                // body-only set would erase the comment-sourced mentions
-                // (see `mergeMentionedUsers`).
-                ...(takeStack
-                  ? {
-                      stackNumber: sql`excluded.stack_number`,
-                      stackPosition: sql`excluded.stack_position`,
-                    }
-                  : {}),
-              },
-            })
-            .run();
-        db.transaction(() => {
-          if (withStack.length > 0) upsert(withStack, true);
-          if (withoutStack.length > 0) upsert(withoutStack, false);
-        });
-      });
-
-      yield* dbTry("upsertPrs", () => {
-        for (const [prId, logins] of bodyMentionsByPrId) {
-          mergeMentionedUsers(db, prId, logins);
-        }
-      });
-    }),
-
-  externalIdsByRepo: (repoIds) =>
-    repoIds.length === 0
-      ? Effect.succeed(new Map())
-      : tryDb("read mirrored PR numbers", (db) =>
-          db
-            .select({
-              repositoryId: pullRequests.repositoryId,
-              externalId: pullRequests.externalId,
-            })
-            .from(pullRequests)
-            .where(inArray(pullRequests.repositoryId, [...repoIds]))
-            .all(),
-        ).pipe(
-          Effect.map((rows) => {
-            const byRepo = new Map<string, Set<number>>();
-            for (const row of rows) {
-              const set = byRepo.get(row.repositoryId) ?? new Set<number>();
-              set.add(row.externalId);
-              byRepo.set(row.repositoryId, set);
+          const rows = yield* dbTry("listPrs", () => {
+            const conditions: (ReturnType<typeof eq> | ReturnType<typeof inArray>)[] = [
+              eq(pullRequests.status, "open"),
+            ];
+            if (repoIds && repoIds.length > 0) {
+              conditions.push(inArray(pullRequests.repositoryId, repoIds));
             }
-            return byRepo;
-          }),
-        ),
+            if (repoId) conditions.push(eq(pullRequests.repositoryId, repoId));
+            return db
+              .select({
+                pr: pullRequests,
+                avatarContent: avatarOfRepoLogin(
+                  pullRequests.authorLogin,
+                  pullRequests.repositoryId,
+                ),
+              })
+              .from(pullRequests)
+              .where(and(...conditions))
+              .orderBy(desc(pullRequests.updatedAt))
+              .all();
+          });
+          return rows.map((r) => rowToPr(r.pr, r.avatarContent));
+        }),
 
-  diffStatsHeads: () =>
-    tryDb("read PR diff-stat watermarks", (db) =>
-      db
-        .select({ id: pullRequests.id, headSha: pullRequests.diffStatsHeadSha })
-        .from(pullRequests)
-        .all(),
-    ).pipe(Effect.map((rows) => new Map(rows.map((row) => [row.id, row.headSha])))),
-
-  listArchivedPrs: (accountId, params) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const repoIds = accountId
-        ? yield* dbTry("listPrs repos", () =>
+      getPr: (id, accountId) =>
+        Effect.gen(function* () {
+          const row = yield* dbTry("getPr", () =>
             db
-              .select({ id: repositories.id })
-              .from(repositories)
-              .where(eq(repositories.accountId, accountId))
-              .all()
-              .map((r) => r.id),
-          )
-        : null;
-
-      if (accountId && (!repoIds || repoIds.length === 0)) {
-        return { prs: [], nextCursor: null };
-      }
-
-      return yield* dbTry("listArchivedPrs", () => {
-        const conditions = [ne(pullRequests.status, "open")];
-        if (repoIds && repoIds.length > 0) {
-          conditions.push(inArray(pullRequests.repositoryId, repoIds));
-        }
-        if (params?.authorLogins && params.authorLogins.length > 0) {
-          conditions.push(inArray(pullRequests.authorLogin, [...params.authorLogins]));
-        }
-        const cursor = params?.cursor !== undefined ? decodeArchiveCursor(params.cursor) : null;
-        if (cursor) {
-          const after = or(
-            lt(archiveClosedAt, cursor.closedAt),
-            and(eq(archiveClosedAt, cursor.closedAt), lt(pullRequests.id, cursor.id)),
+              .select({
+                pr: pullRequests,
+                avatarContent: avatarOfRepoLogin(
+                  pullRequests.authorLogin,
+                  pullRequests.repositoryId,
+                ),
+              })
+              .from(pullRequests)
+              .where(eq(pullRequests.id, id))
+              .get(),
           );
-          if (after) conditions.push(after);
-        }
+          if (!row) {
+            return yield* Effect.fail(new NotFoundError({ resource: "pull_request", id }));
+          }
+          if (accountId) {
+            const repo = yield* dbTry("getPr owner", () =>
+              db.select().from(repositories).where(eq(repositories.id, row.pr.repositoryId)).get(),
+            );
+            if (!repo || repo.accountId !== accountId) {
+              return yield* Effect.fail(new NotFoundError({ resource: "pull_request", id }));
+            }
+          }
+          return rowToPr(row.pr, row.avatarContent);
+        }),
 
-        const rows = db
-          .select({
-            pr: pullRequests,
-            avatarContent: avatarOfRepoLogin(pullRequests.authorLogin, pullRequests.repositoryId),
-          })
-          .from(pullRequests)
-          .where(and(...conditions))
-          .orderBy(desc(archiveClosedAt), desc(pullRequests.id))
-          .limit(ARCHIVE_PAGE_LIMIT + 1)
-          .all();
+      upsertPrs: (prs) =>
+        Effect.gen(function* () {
+          if (prs.length === 0) return;
+          const bodyMentionsByPrId = new Map<string, string[]>();
+          yield* dbTry("upsertPrs", () => {
+            const withStack: (typeof pullRequests.$inferInsert)[] = [];
+            const withoutStack: (typeof pullRequests.$inferInsert)[] = [];
+            for (const pr of prs) {
+              const bodyMentions = pr.body ? extractGitHubMentions(pr.body) : [];
+              if (bodyMentions.length > 0) bodyMentionsByPrId.set(pr.id, bodyMentions);
+              const base: typeof pullRequests.$inferInsert = {
+                id: pr.id,
+                externalId: pr.externalId,
+                repositoryId: pr.repositoryId,
+                title: pr.title,
+                authorLogin: pr.authorLogin,
+                status: pr.status,
+                reviewStatus: pr.reviewStatus,
+                isDraft: pr.isDraft,
+                sourceBranch: pr.sourceBranch,
+                targetBranch: pr.targetBranch,
+                url: pr.url,
+                additions: pr.additions,
+                deletions: pr.deletions,
+                changedFiles: pr.changedFiles,
+                createdAt: pr.createdAt,
+                updatedAt: pr.updatedAt,
+                fetchedAt: pr.fetchedAt,
+                requestedReviewers: JSON.stringify(pr.requestedReviewers ?? []),
+                mentionedUsers: JSON.stringify(bodyMentions),
+              };
+              if (pr.body !== null) base.body = pr.body;
+              if (pr.headSha !== null) base.headSha = pr.headSha;
+              if (pr.baseSha !== null) base.baseSha = pr.baseSha;
+              if (pr.closedAt !== null) base.closedAt = pr.closedAt;
+              if (pr.statsHeadSha !== undefined) base.diffStatsHeadSha = pr.statsHeadSha;
+              if (pr.stack.kind === "seen" && pr.stack.place) {
+                base.stackNumber = pr.stack.place.number;
+                base.stackPosition = pr.stack.place.position;
+              }
+              (pr.stack.kind === "seen" ? withStack : withoutStack).push(base);
+            }
+            const upsert = (values: (typeof pullRequests.$inferInsert)[], takeStack: boolean) =>
+              db
+                .insert(pullRequests)
+                .values(values)
+                .onConflictDoUpdate({
+                  target: pullRequests.id,
+                  // Drizzle expands a bare column reference like
+                  // `pullRequests.headSha` to `head_sha = head_sha`, a no-op.
+                  // Every refreshed column must read `sql\`excluded.<col>\``,
+                  // or the stored head never moves and PrMirror sees a head
+                  // move (and supersedes the walkthrough) on every apply.
+                  set: {
+                    title: sql`excluded.title`,
+                    body: sql`excluded.body`,
+                    status: sql`excluded.status`,
+                    isDraft: sql`excluded.is_draft`,
+                    // Diff stats only when the source carried them (see the
+                    // `upsertPrs` doc). `changed_files` is the discriminator: any
+                    // PR with commits has at least one changed file, whereas
+                    // additions or deletions can legitimately be 0 (pure rename,
+                    // mode change). `pull_requests.<col>` names the stored row
+                    // inside SQLite's DO UPDATE.
+                    additions: sql`CASE WHEN excluded.changed_files > 0 THEN excluded.additions ELSE pull_requests.additions END`,
+                    deletions: sql`CASE WHEN excluded.changed_files > 0 THEN excluded.deletions ELSE pull_requests.deletions END`,
+                    changedFiles: sql`CASE WHEN excluded.changed_files > 0 THEN excluded.changed_files ELSE pull_requests.changed_files END`,
+                    diffStatsHeadSha: sql`COALESCE(excluded.diff_stats_head_sha, pull_requests.diff_stats_head_sha)`,
+                    headSha: sql`excluded.head_sha`,
+                    baseSha: sql`excluded.base_sha`,
+                    updatedAt: sql`excluded.updated_at`,
+                    fetchedAt: sql`excluded.fetched_at`,
+                    requestedReviewers: sql`excluded.requested_reviewers`,
+                    closedAt: sql`excluded.closed_at`,
+                    // `mentioned_users` is deliberately absent: assigning the
+                    // body-only set would erase the comment-sourced mentions
+                    // (see `mergeMentionedUsers`).
+                    ...(takeStack
+                      ? {
+                          stackNumber: sql`excluded.stack_number`,
+                          stackPosition: sql`excluded.stack_position`,
+                        }
+                      : {}),
+                  },
+                })
+                .run();
+            db.transaction(() => {
+              if (withStack.length > 0) upsert(withStack, true);
+              if (withoutStack.length > 0) upsert(withoutStack, false);
+            });
+          });
 
-        const hasMore = rows.length > ARCHIVE_PAGE_LIMIT;
-        const page = hasMore ? rows.slice(0, ARCHIVE_PAGE_LIMIT) : rows;
-        const lastRow = page[page.length - 1];
-        return {
-          prs: page.map((r) => rowToPr(r.pr, r.avatarContent)),
-          nextCursor:
-            hasMore && lastRow ? encodeArchiveCursor(lastRow.pr.closedAt, lastRow.pr.id) : null,
-        };
-      });
-    }),
+          yield* dbTry("upsertPrs", () => {
+            for (const [prId, logins] of bodyMentionsByPrId) {
+              mergeMentionedUsers(db, prId, logins);
+            }
+          });
+        }),
 
-  listArchivedPrsForWindow: (repoId, since, until, accountId) =>
-    Effect.gen(function* () {
-      if (!(yield* ownsRepo(repoId, accountId))) return [];
-      const { db } = yield* DbService;
-      return yield* dbTry("listArchivedPrsForWindow", () =>
-        withLatestWalkthrough(
-          db,
+      externalIdsByRepo: (repoIds) =>
+        repoIds.length === 0
+          ? Effect.succeed(new Map())
+          : dbTry("read mirrored PR numbers", () =>
+              db
+                .select({
+                  repositoryId: pullRequests.repositoryId,
+                  externalId: pullRequests.externalId,
+                })
+                .from(pullRequests)
+                .where(inArray(pullRequests.repositoryId, [...repoIds]))
+                .all(),
+            ).pipe(
+              Effect.map((rows) => {
+                const byRepo = new Map<string, Set<number>>();
+                for (const row of rows) {
+                  const set = byRepo.get(row.repositoryId) ?? new Set<number>();
+                  set.add(row.externalId);
+                  byRepo.set(row.repositoryId, set);
+                }
+                return byRepo;
+              }),
+            ),
+
+      diffStatsHeads: () =>
+        dbTry("read PR diff-stat watermarks", () =>
           db
-            .select({
-              pr: pullRequests,
-              avatarContent: avatarOfRepoLogin(pullRequests.authorLogin, pullRequests.repositoryId),
-            })
+            .select({ id: pullRequests.id, headSha: pullRequests.diffStatsHeadSha })
             .from(pullRequests)
-            .where(
-              and(
-                eq(pullRequests.repositoryId, repoId),
-                ne(pullRequests.status, "open"),
-                gte(pullRequests.closedAt, since),
-                lt(pullRequests.closedAt, until),
-              ),
-            )
-            .orderBy(desc(pullRequests.closedAt))
             .all(),
-        ),
-      );
-    }),
+        ).pipe(Effect.map((rows) => new Map(rows.map((row) => [row.id, row.headSha])))),
 
-  listOpenPrsAsOfWindow: (repoId, until, accountId) =>
-    Effect.gen(function* () {
-      if (!(yield* ownsRepo(repoId, accountId))) return [];
-      const { db } = yield* DbService;
-      return yield* dbTry("listOpenPrsAsOfWindow", () => {
-        const rows = withLatestWalkthrough(
-          db,
-          db
-            .select({
-              pr: pullRequests,
-              avatarContent: avatarOfRepoLogin(pullRequests.authorLogin, pullRequests.repositoryId),
-            })
-            .from(pullRequests)
-            .where(
-              and(
-                eq(pullRequests.repositoryId, repoId),
-                // "Open at `until`" reconstructed from timestamps rather than
-                // the mutable `status` column, which only ever describes now.
-                lt(pullRequests.createdAt, until),
-                or(isNull(pullRequests.closedAt), gte(pullRequests.closedAt, until)),
-              ),
-            )
-            .orderBy(desc(pullRequests.updatedAt))
-            .limit(20)
-            .all(),
-        );
-        return [
-          ...rows.filter((r) => r.walkthrough !== null),
-          ...rows.filter((r) => r.walkthrough === null),
-        ];
-      });
-    }),
+      listArchivedPrs: (accountId, params) =>
+        Effect.gen(function* () {
+          const repoIds = accountId
+            ? yield* dbTry("listPrs repos", () =>
+                db
+                  .select({ id: repositories.id })
+                  .from(repositories)
+                  .where(eq(repositories.accountId, accountId))
+                  .all()
+                  .map((r) => r.id),
+              )
+            : null;
 
-  setPrDraft: (id, isDraft) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      yield* dbTry("setPrDraft", () =>
-        db.update(pullRequests).set({ isDraft }).where(eq(pullRequests.id, id)).run(),
-      );
-    }),
+          if (accountId && (!repoIds || repoIds.length === 0)) {
+            return { prs: [], nextCursor: null };
+          }
 
-  markPrsClosed: (updates) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      if (updates.length === 0) return;
-      yield* dbTry("markPrsClosed", () => {
-        const fetchedAt = new Date().toISOString();
-        for (const { id, status, closedAt } of updates) {
-          db.update(pullRequests)
-            .set({ status, closedAt, fetchedAt })
-            .where(eq(pullRequests.id, id))
-            .run();
-        }
-      });
-    }),
+          return yield* dbTry("listArchivedPrs", () => {
+            const conditions = [ne(pullRequests.status, "open")];
+            if (repoIds && repoIds.length > 0) {
+              conditions.push(inArray(pullRequests.repositoryId, repoIds));
+            }
+            if (params?.authorLogins && params.authorLogins.length > 0) {
+              conditions.push(inArray(pullRequests.authorLogin, [...params.authorLogins]));
+            }
+            const cursor = params?.cursor !== undefined ? decodeArchiveCursor(params.cursor) : null;
+            if (cursor) {
+              const after = or(
+                lt(archiveClosedAt, cursor.closedAt),
+                and(eq(archiveClosedAt, cursor.closedAt), lt(pullRequests.id, cursor.id)),
+              );
+              if (after) conditions.push(after);
+            }
 
-  getCommentsSyncedAt: (prId) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const row = yield* dbTry("getCommentsSyncedAt", () =>
-        db
-          .select({ ts: pullRequests.commentsSyncedAt })
-          .from(pullRequests)
-          .where(eq(pullRequests.id, prId))
-          .get(),
-      );
-      return row?.ts ?? null;
-    }),
+            const rows = db
+              .select({
+                pr: pullRequests,
+                avatarContent: avatarOfRepoLogin(
+                  pullRequests.authorLogin,
+                  pullRequests.repositoryId,
+                ),
+              })
+              .from(pullRequests)
+              .where(and(...conditions))
+              .orderBy(desc(archiveClosedAt), desc(pullRequests.id))
+              .limit(ARCHIVE_PAGE_LIMIT + 1)
+              .all();
 
-  setCommentsSyncedAt: (prId, timestamp) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      yield* dbTry("setCommentsSyncedAt", () =>
-        db
-          .update(pullRequests)
-          .set({ commentsSyncedAt: timestamp })
-          .where(eq(pullRequests.id, prId))
-          .run(),
-      );
-    }),
+            const hasMore = rows.length > ARCHIVE_PAGE_LIMIT;
+            const page = hasMore ? rows.slice(0, ARCHIVE_PAGE_LIMIT) : rows;
+            const lastRow = page[page.length - 1];
+            return {
+              prs: page.map((r) => rowToPr(r.pr, r.avatarContent)),
+              nextCursor:
+                hasMore && lastRow ? encodeArchiveCursor(lastRow.pr.closedAt, lastRow.pr.id) : null,
+            };
+          });
+        }),
 
-  getThreadsFingerprint: (prId) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const row = yield* dbTry("getThreadsFingerprint", () =>
-        db
-          .select({ fp: pullRequests.threadsFingerprint })
-          .from(pullRequests)
-          .where(eq(pullRequests.id, prId))
-          .get(),
-      );
-      return row?.fp ?? null;
-    }),
+      listArchivedPrsForWindow: (repoId, since, until, accountId) =>
+        Effect.gen(function* () {
+          if (!(yield* ownsRepo(db, repoId, accountId))) return [];
+          return yield* dbTry("listArchivedPrsForWindow", () =>
+            withLatestWalkthrough(
+              db,
+              db
+                .select({
+                  pr: pullRequests,
+                  avatarContent: avatarOfRepoLogin(
+                    pullRequests.authorLogin,
+                    pullRequests.repositoryId,
+                  ),
+                })
+                .from(pullRequests)
+                .where(
+                  and(
+                    eq(pullRequests.repositoryId, repoId),
+                    ne(pullRequests.status, "open"),
+                    gte(pullRequests.closedAt, since),
+                    lt(pullRequests.closedAt, until),
+                  ),
+                )
+                .orderBy(desc(pullRequests.closedAt))
+                .all(),
+            ),
+          );
+        }),
 
-  setThreadsFingerprint: (prId, fingerprint) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      yield* dbTry("setThreadsFingerprint", () =>
-        db
-          .update(pullRequests)
-          .set({ threadsFingerprint: fingerprint })
-          .where(eq(pullRequests.id, prId))
-          .run(),
-      );
-    }),
+      listOpenPrsAsOfWindow: (repoId, until, accountId) =>
+        Effect.gen(function* () {
+          if (!(yield* ownsRepo(db, repoId, accountId))) return [];
+          return yield* dbTry("listOpenPrsAsOfWindow", () => {
+            const rows = withLatestWalkthrough(
+              db,
+              db
+                .select({
+                  pr: pullRequests,
+                  avatarContent: avatarOfRepoLogin(
+                    pullRequests.authorLogin,
+                    pullRequests.repositoryId,
+                  ),
+                })
+                .from(pullRequests)
+                .where(
+                  and(
+                    eq(pullRequests.repositoryId, repoId),
+                    // "Open at `until`" reconstructed from timestamps rather than
+                    // the mutable `status` column, which only ever describes now.
+                    lt(pullRequests.createdAt, until),
+                    or(isNull(pullRequests.closedAt), gte(pullRequests.closedAt, until)),
+                  ),
+                )
+                .orderBy(desc(pullRequests.updatedAt))
+                .limit(20)
+                .all(),
+            );
+            return [
+              ...rows.filter((r) => r.walkthrough !== null),
+              ...rows.filter((r) => r.walkthrough === null),
+            ];
+          });
+        }),
 
-  appendMentionedUsers: (prId, logins) =>
-    Effect.gen(function* () {
-      if (logins.length === 0) return;
-      const { db } = yield* DbService;
-      yield* dbTry("appendMentionedUsers", () => mergeMentionedUsers(db, prId, logins));
-    }),
-});
+      setPrDraft: (id, isDraft) =>
+        Effect.gen(function* () {
+          yield* dbTry("setPrDraft", () =>
+            db.update(pullRequests).set({ isDraft }).where(eq(pullRequests.id, id)).run(),
+          );
+        }),
+
+      markPrsClosed: (updates) =>
+        Effect.gen(function* () {
+          if (updates.length === 0) return;
+          yield* dbTry("markPrsClosed", () => {
+            const fetchedAt = new Date().toISOString();
+            for (const { id, status, closedAt } of updates) {
+              db.update(pullRequests)
+                .set({ status, closedAt, fetchedAt })
+                .where(eq(pullRequests.id, id))
+                .run();
+            }
+          });
+        }),
+
+      getCommentsSyncedAt: (prId) =>
+        Effect.gen(function* () {
+          const row = yield* dbTry("getCommentsSyncedAt", () =>
+            db
+              .select({ ts: pullRequests.commentsSyncedAt })
+              .from(pullRequests)
+              .where(eq(pullRequests.id, prId))
+              .get(),
+          );
+          return row?.ts ?? null;
+        }),
+
+      setCommentsSyncedAt: (prId, timestamp) =>
+        Effect.gen(function* () {
+          yield* dbTry("setCommentsSyncedAt", () =>
+            db
+              .update(pullRequests)
+              .set({ commentsSyncedAt: timestamp })
+              .where(eq(pullRequests.id, prId))
+              .run(),
+          );
+        }),
+
+      getThreadsFingerprint: (prId) =>
+        Effect.gen(function* () {
+          const row = yield* dbTry("getThreadsFingerprint", () =>
+            db
+              .select({ fp: pullRequests.threadsFingerprint })
+              .from(pullRequests)
+              .where(eq(pullRequests.id, prId))
+              .get(),
+          );
+          return row?.fp ?? null;
+        }),
+
+      setThreadsFingerprint: (prId, fingerprint) =>
+        Effect.gen(function* () {
+          yield* dbTry("setThreadsFingerprint", () =>
+            db
+              .update(pullRequests)
+              .set({ threadsFingerprint: fingerprint })
+              .where(eq(pullRequests.id, prId))
+              .run(),
+          );
+        }),
+
+      appendMentionedUsers: (prId, logins) =>
+        Effect.gen(function* () {
+          if (logins.length === 0) return;
+          yield* dbTry("appendMentionedUsers", () => mergeMentionedUsers(db, prId, logins));
+        }),
+    });
+  }),
+);

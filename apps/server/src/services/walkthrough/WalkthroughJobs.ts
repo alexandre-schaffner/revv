@@ -41,7 +41,6 @@ import {
   HeadShaMismatchError,
 } from "../../domain/errors";
 import { dbTry } from "../../effects/db-try";
-import { withDb } from "../../effects/with-db";
 import { debug, logError } from "../../logger";
 import { withGitHubOrigin } from "../../observability/github-ledger/origin";
 import { withTraceAnchor } from "../../observability/span-graft";
@@ -264,8 +263,6 @@ export const WalkthroughJobsLive = Layer.effect(
     const underPrLock = <A, E>(prId: string, effect: Effect.Effect<A, E>) =>
       Effect.flatMap(prLocks.acquire(prId), (lock) => lock.withPermits(1)(effect));
 
-    const provideDb = <A, E>(eff: Effect.Effect<A, E, DbService>): Effect.Effect<A, E> =>
-      withDb(db, eff);
     const readRow = (walkthroughId: string) =>
       dbTry("read walkthrough", () => loadWalkthroughRow(db, walkthroughId));
 
@@ -310,7 +307,7 @@ export const WalkthroughJobsLive = Layer.effect(
           // The seq is bumped in the DB, so it survives kill -9, resumes and
           // chat edits after completion. An event whose seq didn't commit isn't
           // sent; clients reconcile from the DB.
-          const seq = yield* provideDb(walkthroughService.bumpSeq(walkthroughId)).pipe(
+          const seq = yield* walkthroughService.bumpSeq(walkthroughId).pipe(
             Effect.catchTag("DbError", (err) =>
               Effect.sync(() => {
                 logError("walkthrough-jobs", `emitEvent ${event.type} not sequenced:`, err.message);
@@ -324,7 +321,6 @@ export const WalkthroughJobsLive = Layer.effect(
       );
 
     const lifecycle = makeWalkthroughLifecycle({
-      db,
       walkthroughs: walkthroughService,
       remoteCache,
       emit: emitEvent,
@@ -350,11 +346,11 @@ export const WalkthroughJobsLive = Layer.effect(
       concurrency: MAX_CONCURRENT_JOBS,
       turnsPerRun: 1 + MAX_AUTO_CONTINUATIONS,
       journal: {
-        generating: Effect.map(provideDb(walkthroughService.listGenerating()), (rows) =>
+        generating: Effect.map(walkthroughService.listGenerating(), (rows) =>
           rows.map((row) => row.id),
         ),
         bumpResumeAttempts: (walkthroughId) =>
-          provideDb(walkthroughService.incrementResumeAttempts(walkthroughId)),
+          walkthroughService.incrementResumeAttempts(walkthroughId),
         completionBlocker: (walkthroughId) =>
           dbTry("walkthrough completion check", () =>
             orchestratorCompletionBlocker(db, walkthroughId),
@@ -454,26 +450,23 @@ export const WalkthroughJobsLive = Layer.effect(
           }).pipe(
             Effect.provideService(JevService, jevService),
             Effect.provideService(CacheService, cacheService),
-            Effect.provideService(DbService, { db }),
           );
-          yield* provideDb(
-            walkthroughService.recordLaunch(
-              walkthroughId,
-              planned.plan,
-              providerConfigFor(planned.plan, settings.aiMaxTurns),
-              planned.risk,
-            ),
+          yield* walkthroughService.recordLaunch(
+            walkthroughId,
+            planned.plan,
+            providerConfigFor(planned.plan, settings.aiMaxTurns),
+            planned.risk,
           );
           plan = planned.plan;
           assignedRisk = planned.risk?.level ?? assignedRisk;
         }
         const generationMode: WalkthroughGenerationMode =
           row.generationMode === "incremental" ? "incremental" : "full";
-        const parentFingerprint = yield* provideDb(
-          parentFingerprintOf(row.stackContext, generationMode, row.parentWalkthroughId).pipe(
-            Effect.provideService(WalkthroughService, walkthroughService),
-          ),
-        );
+        const parentFingerprint = yield* parentFingerprintOf(
+          row.stackContext,
+          generationMode,
+          row.parentWalkthroughId,
+        ).pipe(Effect.provideService(WalkthroughService, walkthroughService));
 
         const services = yield* Effect.context<never>();
         const runSync = Effect.runSyncWith(services);
@@ -497,7 +490,6 @@ export const WalkthroughJobsLive = Layer.effect(
               Effect.provideService(JevService, jevService),
               Effect.provideService(SettingsService, settingsService),
               Effect.provideService(CacheService, cacheService),
-              Effect.provideService(DbService, { db }),
             ),
           );
 
@@ -635,9 +627,9 @@ export const WalkthroughJobsLive = Layer.effect(
     /** Import a carried review into the new row and complete it, or false to fall through. */
     const takeOver = (walkthroughId: string, carry: Carry): Effect.Effect<boolean, DbError> =>
       Effect.gen(function* () {
-        const imported = yield* provideDb(
-          snapshotImporter.import({ walkthroughId, snapshot: carry.snapshot }),
-        ).pipe(Effect.result);
+        const imported = yield* snapshotImporter
+          .import({ walkthroughId, snapshot: carry.snapshot })
+          .pipe(Effect.result);
         if (imported._tag === "Failure") {
           logError(
             "walkthrough-jobs",
@@ -646,9 +638,7 @@ export const WalkthroughJobsLive = Layer.effect(
           return false;
         }
         if (carry.fromWalkthroughId !== undefined) {
-          yield* provideDb(
-            walkthroughService.markCarriedFrom(walkthroughId, carry.fromWalkthroughId),
-          );
+          yield* walkthroughService.markCarriedFrom(walkthroughId, carry.fromWalkthroughId);
         }
         yield* lifecycle.complete(walkthroughId, ZERO_TOKEN_USAGE, carry.source);
         return true;
@@ -710,8 +700,11 @@ export const WalkthroughJobsLive = Layer.effect(
           if (params.replace === "finished") {
             yield* supersedeForPr(pr.id, undefined, otherWalkthroughMode(mode));
           }
-          const atHead = yield* provideDb(
-            walkthroughService.activeAt(pr.id, headSha, mode, requestedGenerationMode),
+          const atHead = yield* walkthroughService.activeAt(
+            pr.id,
+            headSha,
+            mode,
+            requestedGenerationMode,
           );
           if (atHead?.status === "generating") {
             // Its run died before anything resumed it: run it again.
@@ -731,16 +724,8 @@ export const WalkthroughJobsLive = Layer.effect(
           files,
           mode,
           requestedGenerationMode,
-          snapshotStack: stackService
-            .snapshot(resolved)
-            .pipe(
-              Effect.provideService(DbService, { db }),
-              Effect.provideService(CacheService, cacheService),
-            ),
-        }).pipe(
-          Effect.provideService(WalkthroughService, walkthroughService),
-          Effect.provideService(DbService, { db }),
-        );
+          snapshotStack: stackService.snapshot(resolved),
+        }).pipe(Effect.provideService(WalkthroughService, walkthroughService));
         const carry = yield* findCarry({
           restack: newRow.restack,
           repoFullName: repo.fullName,
@@ -749,21 +734,19 @@ export const WalkthroughJobsLive = Layer.effect(
         });
         // Only the orchestrator creates walkthrough rows; MCP handlers only
         // update them.
-        const walkthroughId = yield* provideDb(
-          walkthroughService.createRow({
-            reviewSessionId: yield* provideDb(reviewService.sessionIdFor(pr.id)),
-            prId: pr.id,
-            prHeadSha: headSha,
-            mode,
-            generationMode: newRow.generationMode,
-            parentWalkthroughId: newRow.parentWalkthroughId,
-            baseHeadSha: newRow.baseHeadSha,
-            prCommits: commits,
-            generatedBy: generatedByOf(db, { ...repo, accountId: resolved.accountId }) ?? null,
-            stackContext: newRow.stack,
-            diffFingerprint: newRow.diffFingerprint,
-          }),
-        );
+        const walkthroughId = yield* walkthroughService.createRow({
+          reviewSessionId: yield* reviewService.sessionIdFor(pr.id),
+          prId: pr.id,
+          prHeadSha: headSha,
+          mode,
+          generationMode: newRow.generationMode,
+          parentWalkthroughId: newRow.parentWalkthroughId,
+          baseHeadSha: newRow.baseHeadSha,
+          prCommits: commits,
+          generatedBy: generatedByOf(db, { ...repo, accountId: resolved.accountId }) ?? null,
+          stackContext: newRow.stack,
+          diffFingerprint: newRow.diffFingerprint,
+        });
         if (carry !== null && (yield* takeOver(walkthroughId, carry))) {
           return { walkthroughId, reused: false };
         }
@@ -782,9 +765,7 @@ export const WalkthroughJobsLive = Layer.effect(
           if (headSha === null) return false;
           // Settled under the lock: a request may have created one since `/current` looked.
           for (const generationMode of ["full", "incremental"] as const) {
-            if (
-              yield* provideDb(walkthroughService.activeAt(pr.id, headSha, mode, generationMode))
-            ) {
+            if (yield* walkthroughService.activeAt(pr.id, headSha, mode, generationMode)) {
               return false;
             }
           }
@@ -795,17 +776,15 @@ export const WalkthroughJobsLive = Layer.effect(
             mode,
           });
           if (carry === null) return false;
-          const walkthroughId = yield* provideDb(
-            walkthroughService.createRow({
-              reviewSessionId: yield* provideDb(reviewService.sessionIdFor(pr.id)),
-              prId: pr.id,
-              prHeadSha: headSha,
-              mode,
-              generationMode: "full",
-              parentWalkthroughId: null,
-              baseHeadSha: null,
-            }),
-          );
+          const walkthroughId = yield* walkthroughService.createRow({
+            reviewSessionId: yield* reviewService.sessionIdFor(pr.id),
+            prId: pr.id,
+            prHeadSha: headSha,
+            mode,
+            generationMode: "full",
+            parentWalkthroughId: null,
+            baseHeadSha: null,
+          });
           if (yield* takeOver(walkthroughId, carry)) return true;
           yield* lifecycle.fail(walkthroughId, IMPORT_FAILED);
           return false;
@@ -826,7 +805,7 @@ export const WalkthroughJobsLive = Layer.effect(
     /** Back to `generating` with the launch re-resolved from today's settings; false when the row isn't in `error`. */
     const revive = (row: WalkthroughRow): Effect.Effect<boolean, DbError> =>
       Effect.gen(function* () {
-        if (!(yield* provideDb(walkthroughService.revive(row.id)))) return false;
+        if (!(yield* walkthroughService.revive(row.id))) return false;
         if (!row.launchPlan) return true;
         const settings = yield* settingsService.getSettings();
         const agent = yield* settingsService.resolveAgent();
@@ -834,12 +813,10 @@ export const WalkthroughJobsLive = Layer.effect(
           ...row.launchPlan,
           ...launchFor(settings, agent, row.launchPlan.sizing),
         };
-        yield* provideDb(
-          walkthroughService.recordLaunch(
-            row.id,
-            plan,
-            providerConfigFor(plan, settings.aiMaxTurns),
-          ),
+        yield* walkthroughService.recordLaunch(
+          row.id,
+          plan,
+          providerConfigFor(plan, settings.aiMaxTurns),
         );
         return true;
       });

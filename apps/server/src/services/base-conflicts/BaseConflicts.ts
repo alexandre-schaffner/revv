@@ -24,7 +24,6 @@ import { logError } from "../../logger";
 import { AiService } from "../Ai";
 import { RepoCloneService } from "../clone/RepoClone";
 import { runConflictResolve } from "../conflict-resolve-run";
-import type { DbService } from "../Db";
 import { BranchPushLock, type PushTarget } from "../git/branch-push-lock";
 import { assertNotFlagLike, gitTry, isAncestor } from "../git/ops";
 import { lsRemoteHead } from "../git/push";
@@ -59,7 +58,7 @@ export class BaseConflictsService extends Context.Service<
       readonly prId: string;
       readonly accountId: string;
       readonly force?: boolean;
-    }) => Effect.Effect<BaseConflictsCheck, BaseConflictsError, DbService>;
+    }) => Effect.Effect<BaseConflictsCheck, BaseConflictsError>;
     /**
      * Start bringing the PR up to date with its base, as long as its branch is
      * still at `expectedHeadSha`. Refusals fail before anything runs; once the
@@ -69,11 +68,7 @@ export class BaseConflictsService extends Context.Service<
       readonly prId: string;
       readonly accountId: string;
       readonly expectedHeadSha: string;
-    }) => Effect.Effect<
-      ReadableStream<BaseConflictFrame>,
-      BaseConflictsError,
-      DbService | SettingsService
-    >;
+    }) => Effect.Effect<ReadableStream<BaseConflictFrame>, BaseConflictsError, SettingsService>;
   }
 >()("BaseConflictsService") {}
 

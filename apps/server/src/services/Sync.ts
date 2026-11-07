@@ -10,7 +10,6 @@ import {
 } from "../domain/errors";
 import { keyedSingleFlight } from "../effects/keyed-single-flight";
 import { logError } from "../logger";
-import type { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
 import { GitHubAccounts } from "./github/accounts";
 import { AvatarCache } from "./github/avatars";
@@ -46,13 +45,11 @@ export class SyncService extends Context.Service<
      * drafts the PR's owning account publishes (see `planThreadComment`).
      * Refuses a thread with none, and one GitHub can't take.
      */
-    readonly pushThread: (
-      threadId: string,
-    ) => Effect.Effect<void, SyncFailure | ForbiddenError, DbService>;
+    readonly pushThread: (threadId: string) => Effect.Effect<void, SyncFailure | ForbiddenError>;
     /** Post one reply, its thread first when that isn't on GitHub yet. */
-    readonly pushReply: (messageId: string) => Effect.Effect<void, SyncFailure, DbService>;
+    readonly pushReply: (messageId: string) => Effect.Effect<void, SyncFailure>;
     /** Push a thread's status to GitHub, for a thread GitHub knows. */
-    readonly pushStatus: (threadId: string) => Effect.Effect<void, SyncFailure, DbService>;
+    readonly pushStatus: (threadId: string) => Effect.Effect<void, SyncFailure>;
     /**
      * Reconcile one PR's threads against GitHub. One pull per PR at a time: a
      * call while one is in flight for the same PR joins it.
@@ -68,7 +65,7 @@ export class SyncService extends Context.Service<
     readonly syncThreads: (
       prId: string,
       opts?: { readonly force?: boolean },
-    ) => Effect.Effect<PullResult, SyncFailure, DbService>;
+    ) => Effect.Effect<PullResult, SyncFailure>;
   }
 >()("SyncService") {}
 
@@ -192,9 +189,7 @@ export const SyncServiceLive = Layer.effect(
         yield* reviewService.statusPushed(threadId, thread.status);
       });
 
-    const pullCommentsFromGitHub = (
-      prId: string,
-    ): Effect.Effect<PullResult, SyncFailure, DbService> =>
+    const pullCommentsFromGitHub = (prId: string): Effect.Effect<PullResult, SyncFailure> =>
       Effect.gen(function* () {
         const { pr, repo, accountId } = yield* prContext.forPr(prId);
         const client = yield* accounts.backgroundClient(accountId, "core");
@@ -385,7 +380,7 @@ export const SyncServiceLive = Layer.effect(
     const syncThreads = (
       prId: string,
       opts?: { readonly force?: boolean },
-    ): Effect.Effect<PullResult, SyncFailure, DbService> =>
+    ): Effect.Effect<PullResult, SyncFailure> =>
       Effect.gen(function* () {
         const pulled = yield* pullOnce(prId, pullCommentsFromGitHub(prId));
         if (pulled.changed || opts?.force === true) {

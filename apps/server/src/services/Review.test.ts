@@ -70,13 +70,10 @@ function harness() {
     toPr: (prId, msg) => Effect.sync(() => void events.push({ prId, msg })),
     toAll: () => Effect.void,
   });
-  const layer = Layer.merge(
-    ReviewServiceLive.pipe(Layer.provide(realtime)),
-    Layer.succeed(DbService, { db }),
+  const layer = ReviewServiceLive.pipe(
+    Layer.provide(Layer.merge(realtime, Layer.succeed(DbService, { db }))),
   );
-  const run = <A, E>(
-    body: (review: ReviewService["Service"]) => Effect.Effect<A, E, DbService>,
-  ): Promise<A> =>
+  const run = <A, E>(body: (review: ReviewService["Service"]) => Effect.Effect<A, E>): Promise<A> =>
     Effect.runPromise(Effect.flatMap(ReviewService, body).pipe(Effect.provide(layer)));
   const types = () => events.map((e) => e.msg.type);
   return { db, events, run, types };

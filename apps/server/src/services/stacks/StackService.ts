@@ -1,13 +1,13 @@
 import type { PrStackDetail, RiskLevel, StackBrief, WalkthroughStackSnapshot } from "@revv/shared";
 import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
+import type { Db } from "../../db/index";
 import { pullRequests } from "../../db/schema/pull-requests";
 import { stackBriefs } from "../../db/schema/stack-briefs";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
 import { walkthroughs } from "../../db/schema/walkthroughs";
 import { type DbError, type GitHubError, isGitHubUnreachable } from "../../domain/errors";
 import { dbTry } from "../../effects/db-try";
-import { withDb } from "../../effects/with-db";
 import { logError } from "../../logger";
 import { withGitHubOrigin } from "../../observability/github-ledger/origin";
 import { CacheService } from "../Cache";
@@ -89,11 +89,11 @@ export function toSnapshot(stack: GitHubStack, position: number): WalkthroughSta
 }
 
 export function readStackFacts(
+  db: Db,
   repositoryId: string,
   stack: GitHubStack,
-): Effect.Effect<RevvStackFacts, DbError, DbService> {
+): Effect.Effect<RevvStackFacts, DbError> {
   return Effect.gen(function* () {
-    const { db } = yield* DbService;
     return yield* dbTry("stack facts read", (): RevvStackFacts => {
       const numbers = stack.layers.map((l) => l.number);
       const prRows = db
@@ -200,11 +200,11 @@ export function readStackFacts(
 }
 
 function readMirror(
+  db: Db,
   repositoryId: string,
   stackNumber: number,
-): Effect.Effect<MirroredLayer[], DbError, DbService> {
+): Effect.Effect<MirroredLayer[], DbError> {
   return Effect.gen(function* () {
-    const { db } = yield* DbService;
     return yield* dbTry("stack mirror read", () =>
       db
         .select({
@@ -267,8 +267,6 @@ export function chooseStackSource(args: {
   };
 }
 
-type Db = Context.Service.Shape<typeof DbService>["db"];
-
 function readBrief(db: Db, repositoryId: string, stack: GitHubStack): StackBrief | null {
   const row = db
     .select()
@@ -312,12 +310,9 @@ export const StackServiceLive = Layer.effect(
       Effect.gen(function* () {
         const stack = yield* github.stacks.ofPr(client, repo.fullName, prNumber);
         if (stack) {
-          yield* withDb(
-            db,
-            cache.set(CACHE_NS, cacheKey(repo.id, stack.number), stack, {
-              ttlMs: CACHE_TTL_MS,
-            }),
-          );
+          yield* cache.set(CACHE_NS, cacheKey(repo.id, stack.number), stack, {
+            ttlMs: CACHE_TTL_MS,
+          });
         }
         return stack;
       });
@@ -351,11 +346,8 @@ export const StackServiceLive = Layer.effect(
       revalidateFor: string | null = null,
     ) =>
       Effect.gen(function* () {
-        const mirror = yield* withDb(db, readMirror(ctx.repo.id, stackNumber));
-        const cached = yield* withDb(
-          db,
-          cache.get<GitHubStack>(CACHE_NS, cacheKey(ctx.repo.id, stackNumber)),
-        );
+        const mirror = yield* readMirror(db, ctx.repo.id, stackNumber);
+        const cached = yield* cache.get<GitHubStack>(CACHE_NS, cacheKey(ctx.repo.id, stackNumber));
         const source = chooseStackSource({
           cached,
           mirror,
@@ -385,11 +377,11 @@ export const StackServiceLive = Layer.effect(
 
     const detail = (prId: string, accountId: string) =>
       Effect.gen(function* () {
-        const ctx = yield* withDb(db, prContext.forPr(prId, accountId));
+        const ctx = yield* prContext.forPr(prId, accountId);
         if (!ctx.pr.stack) return null;
         const { stack, stale } = yield* githubStack(ctx, ctx.pr.stack.number, accountId);
         if (!stack) return null;
-        const facts = yield* withDb(db, readStackFacts(ctx.repo.id, stack));
+        const facts = yield* readStackFacts(db, ctx.repo.id, stack);
         return overlayStack(stack, facts, ctx.pr.externalId, stale);
       });
 
@@ -410,7 +402,7 @@ export const StackServiceLive = Layer.effect(
       );
 
     const moved = (accountId: string, repositoryId: string, stackNumber: number) =>
-      withDb(db, cache.invalidate(CACHE_NS, cacheKey(repositoryId, stackNumber))).pipe(
+      cache.invalidate(CACHE_NS, cacheKey(repositoryId, stackNumber)).pipe(
         Effect.catch((err) =>
           Effect.sync(() =>
             logError("stacks", `dropping the cached read of stack #${stackNumber}:`, err),

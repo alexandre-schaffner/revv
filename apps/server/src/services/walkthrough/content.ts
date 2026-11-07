@@ -139,13 +139,25 @@ export function decodeCitations(raw: string | null): RatingCitation[] {
   );
 }
 
-/** The stored block payload, or null when its JSON is corrupt. */
-export function decodeBlock(row: Pick<BlockRow, "data">): WalkthroughBlock | null {
+/**
+ * The stored block payload, or null when its JSON is corrupt. Its identity
+ * comes from the row's columns: older payloads lack it.
+ */
+export function decodeBlock(
+  row: Pick<BlockRow, "data" | "phase" | "semanticStepIndex" | "stepIndex">,
+): WalkthroughBlock | null {
+  let data: WalkthroughBlock;
   try {
-    return JSON.parse(row.data) as WalkthroughBlock;
+    data = JSON.parse(row.data) as WalkthroughBlock;
   } catch {
     return null;
   }
+  return {
+    ...data,
+    phase: row.phase,
+    semanticStepIndex: row.semanticStepIndex,
+    stepIndex: row.stepIndex,
+  };
 }
 
 export function decodeSemanticStep(row: SemanticStepRow): WalkthroughSemanticStep {

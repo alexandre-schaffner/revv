@@ -20,8 +20,8 @@ import { avatarOfThreadLogin } from "../db/schema/remote-users";
 import { reviewSessions } from "../db/schema/review-sessions";
 import { threadMessages } from "../db/schema/thread-messages";
 import { type DbError, ForbiddenError, NotFoundError } from "../domain/errors";
-import { tryDb } from "../effects/db-try";
-import type { DbService } from "./Db";
+import { dbTry } from "../effects/db-try";
+import { DbService } from "./Db";
 import { Realtime } from "./Realtime";
 
 export interface ThreadAnchor {
@@ -64,31 +64,29 @@ export class ReviewService extends Context.Service<
   ReviewService,
   {
     /** The PR's review session, created the first time something hangs off it. */
-    readonly sessionIdFor: (prId: string) => Effect.Effect<string, DbError, DbService>;
+    readonly sessionIdFor: (prId: string) => Effect.Effect<string, DbError>;
     /** Every thread on the PR, with its messages. Creates nothing. */
-    readonly getConversation: (prId: string) => Effect.Effect<Conversation, DbError, DbService>;
-    readonly threadsForPr: (prId: string) => Effect.Effect<CommentThread[], DbError, DbService>;
-    readonly getThread: (
-      threadId: string,
-    ) => Effect.Effect<ThreadOnPr, NotFoundError | DbError, DbService>;
+    readonly getConversation: (prId: string) => Effect.Effect<Conversation, DbError>;
+    readonly threadsForPr: (prId: string) => Effect.Effect<CommentThread[], DbError>;
+    readonly getThread: (threadId: string) => Effect.Effect<ThreadOnPr, NotFoundError | DbError>;
     readonly findThreadByExternalCommentId: (
       prId: string,
       externalCommentId: string,
-    ) => Effect.Effect<CommentThread | null, DbError, DbService>;
-    readonly getMessages: (threadId: string) => Effect.Effect<ThreadMessage[], DbError, DbService>;
+    ) => Effect.Effect<CommentThread | null, DbError>;
+    readonly getMessages: (threadId: string) => Effect.Effect<ThreadMessage[], DbError>;
     readonly getMessage: (
       messageId: string,
-    ) => Effect.Effect<ThreadMessage, NotFoundError | DbError, DbService>;
+    ) => Effect.Effect<ThreadMessage, NotFoundError | DbError>;
     readonly findMessageByExternalId: (
       externalId: string,
-    ) => Effect.Effect<ThreadMessage | null, DbError, DbService>;
+    ) => Effect.Effect<ThreadMessage | null, DbError>;
 
     /** A thread with its first message. Announces `thread:created`. */
     readonly startThread: (
       prId: string,
       anchor: ThreadAnchor & Partial<ThreadGitHubLink>,
       message: NewMessage,
-    ) => Effect.Effect<{ thread: CommentThread; message: ThreadMessage }, DbError, DbService>;
+    ) => Effect.Effect<{ thread: CommentThread; message: ThreadMessage }, DbError>;
     /**
      * A message on a thread, which moves the thread's status (see
      * `statusAfterMessage`). Announces `thread:message`, then `thread:updated`
@@ -97,11 +95,7 @@ export class ReviewService extends Context.Service<
     readonly reply: (
       threadId: string,
       message: NewMessage,
-    ) => Effect.Effect<
-      { thread: CommentThread; message: ThreadMessage },
-      NotFoundError | DbError,
-      DbService
-    >;
+    ) => Effect.Effect<{ thread: CommentThread; message: ThreadMessage }, NotFoundError | DbError>;
     /**
      * A status set in Revv. On a thread that is on GitHub it stays pending
      * until `statusPushed`. Announces `thread:updated`.
@@ -109,12 +103,9 @@ export class ReviewService extends Context.Service<
     readonly setStatus: (
       threadId: string,
       status: ThreadStatus,
-    ) => Effect.Effect<CommentThread, NotFoundError | DbError, DbService>;
+    ) => Effect.Effect<CommentThread, NotFoundError | DbError>;
     /** GitHub took `status`; a status set since stays pending. */
-    readonly statusPushed: (
-      threadId: string,
-      status: ThreadStatus,
-    ) => Effect.Effect<void, DbError, DbService>;
+    readonly statusPushed: (threadId: string, status: ThreadStatus) => Effect.Effect<void, DbError>;
     /**
      * Bring a thread's status in line with GitHub's resolved flag, unless a
      * status set in Revv is still waiting to be pushed (`pending`). Announces
@@ -123,25 +114,25 @@ export class ReviewService extends Context.Service<
     readonly applyRemoteResolved: (
       threadId: string,
       resolved: boolean,
-    ) => Effect.Effect<"changed" | "unchanged" | "pending", NotFoundError | DbError, DbService>;
+    ) => Effect.Effect<"changed" | "unchanged" | "pending", NotFoundError | DbError>;
     /** A local draft on `threadId` edited in Revv. Announces `thread:message:edited`. */
     readonly editDraft: (
       threadId: string,
       messageId: string,
       body: string,
       actorLogin: string | null,
-    ) => Effect.Effect<ThreadMessage, Refusal | DbError, DbService>;
+    ) => Effect.Effect<ThreadMessage, Refusal | DbError>;
     /** A message edited on GitHub. Announces `thread:message:edited`. */
     readonly applyRemoteEdit: (
       messageId: string,
       body: string,
       editedAt: string,
-    ) => Effect.Effect<void, NotFoundError | DbError, DbService>;
+    ) => Effect.Effect<void, NotFoundError | DbError>;
     /** A thread not yet on GitHub, discarded by its author. Announces `thread:deleted`. */
     readonly discardThread: (
       threadId: string,
       actorLogin: string | null,
-    ) => Effect.Effect<void, Refusal | DbError, DbService>;
+    ) => Effect.Effect<void, Refusal | DbError>;
     /**
      * A reply on `threadId` not yet on GitHub, discarded by its author. A
      * thread's first message goes with its thread instead. Announces
@@ -151,20 +142,17 @@ export class ReviewService extends Context.Service<
       threadId: string,
       messageId: string,
       actorLogin: string | null,
-    ) => Effect.Effect<void, Refusal | DbError, DbService>;
+    ) => Effect.Effect<void, Refusal | DbError>;
     /** Drop a thread unconditionally. Announces `thread:deleted`. */
-    readonly dropThread: (threadId: string) => Effect.Effect<void, DbError, DbService>;
+    readonly dropThread: (threadId: string) => Effect.Effect<void, DbError>;
 
     // GitHub bookkeeping: announces nothing; readers reconcile on their next read.
 
     readonly linkThread: (
       threadId: string,
       ids: { externalThreadId?: string; externalCommentId?: string; lastSyncedAt?: string },
-    ) => Effect.Effect<void, DbError, DbService>;
-    readonly linkMessage: (
-      messageId: string,
-      externalId: string,
-    ) => Effect.Effect<void, DbError, DbService>;
+    ) => Effect.Effect<void, DbError>;
+    readonly linkMessage: (messageId: string, externalId: string) => Effect.Effect<void, DbError>;
     /**
      * A thread's drafts went up to GitHub as the one comment `externalCommentId`
      * whose text is `body`. The first draft becomes that comment and the
@@ -175,7 +163,7 @@ export class ReviewService extends Context.Service<
       draftIds: readonly string[],
       externalCommentId: string,
       body: string,
-    ) => Effect.Effect<void, DbError, DbService>;
+    ) => Effect.Effect<void, DbError>;
   }
 >()("ReviewService") {}
 
@@ -549,32 +537,33 @@ export const threadWrites = {
   },
 };
 
-/**
- * Run `body` in one transaction. A refusal it returns fails the effect; bodies
- * return one before any write, so nothing needs undoing.
- */
-const transact = <T>(
-  label: string,
-  body: (tx: Tx) => T,
-): Effect.Effect<Exclude<T, Refusal>, DbError | Extract<T, Refusal>, DbService> =>
-  tryDb(label, (db) => db.transaction((tx) => body(tx))).pipe(
-    Effect.flatMap((result) =>
-      isRefusal(result)
-        ? Effect.fail(result as Extract<T, Refusal>)
-        : Effect.succeed(result as Exclude<T, Refusal>),
-    ),
-  );
-
 export const ReviewServiceLive = Layer.effect(
   ReviewService,
   Effect.gen(function* () {
+    const { db } = yield* DbService;
     const realtime = yield* Realtime;
+    /**
+     * Run `body` in one transaction. A refusal it returns fails the effect; bodies
+     * return one before any write, so nothing needs undoing.
+     */
+    const transact = <T>(
+      label: string,
+      body: (tx: Tx) => T,
+    ): Effect.Effect<Exclude<T, Refusal>, DbError | Extract<T, Refusal>> =>
+      dbTry(label, () => db.transaction((tx) => body(tx))).pipe(
+        Effect.flatMap((result) =>
+          isRefusal(result)
+            ? Effect.fail(result as Extract<T, Refusal>)
+            : Effect.succeed(result as Exclude<T, Refusal>),
+        ),
+      );
+
     /** Commit `write` in one transaction, then announce what it did. */
     const commit = <T, R extends Refusal = never>(
       label: string,
       write: (tx: Tx) => ThreadWrite<T> | R,
-    ): Effect.Effect<T, DbError | R, DbService> =>
-      tryDb(label, (db) => db.transaction((tx) => write(tx))).pipe(
+    ): Effect.Effect<T, DbError | R> =>
+      dbTry(label, () => db.transaction((tx) => write(tx))).pipe(
         Effect.flatMap((done) => {
           if (isRefusal(done)) return Effect.fail(done as R);
           const { prId, value, envelopes } = done as ThreadWrite<T>;
@@ -611,10 +600,10 @@ export const ReviewServiceLive = Layer.effect(
     };
 
     return {
-      sessionIdFor: (prId) => tryDb("find the review session", (db) => sessionIdIn(db, prId)),
+      sessionIdFor: (prId) => dbTry("find the review session", () => sessionIdIn(db, prId)),
 
       getConversation: (prId) =>
-        tryDb("read the conversation", (db) => {
+        dbTry("read the conversation", () => {
           const threads = readThreadsForPr(db, prId).map(toThread);
           const messages: Record<string, ThreadMessage[]> = {};
           for (const thread of threads) messages[thread.id] = [];
@@ -632,10 +621,10 @@ export const ReviewServiceLive = Layer.effect(
         }),
 
       threadsForPr: (prId) =>
-        tryDb("list the PR's threads", (db) => readThreadsForPr(db, prId).map(toThread)),
+        dbTry("list the PR's threads", () => readThreadsForPr(db, prId).map(toThread)),
 
       getThread: (threadId) =>
-        tryDb("find thread", (db) => readThreadOnPr(db, threadId)).pipe(
+        dbTry("find thread", () => readThreadOnPr(db, threadId)).pipe(
           Effect.flatMap((found) =>
             found
               ? Effect.succeed({ thread: toThread(found.row), prId: found.prId })
@@ -644,7 +633,7 @@ export const ReviewServiceLive = Layer.effect(
         ),
 
       findThreadByExternalCommentId: (prId, externalCommentId) =>
-        tryDb("find thread by external comment", (db) => {
+        dbTry("find thread by external comment", () => {
           const found = db
             .select({ row: commentThreads })
             .from(commentThreads)
@@ -660,19 +649,19 @@ export const ReviewServiceLive = Layer.effect(
         }),
 
       getMessages: (threadId) =>
-        tryDb("list messages", (db) => readMessages(db, eq(threadMessages.threadId, threadId))),
+        dbTry("list messages", () => readMessages(db, eq(threadMessages.threadId, threadId))),
 
       getMessage: (messageId) =>
-        tryDb("find message", (db) => readMessage(db, messageId)).pipe(
+        dbTry("find message", () => readMessage(db, messageId)).pipe(
           Effect.flatMap((message) =>
             message ? Effect.succeed(message) : Effect.fail(messageNotFound(messageId)),
           ),
         ),
 
       findMessageByExternalId: (externalId) =>
-        tryDb(
+        dbTry(
           "find message by externalId",
-          (db) => readMessages(db, eq(threadMessages.externalId, externalId))[0] ?? null,
+          () => readMessages(db, eq(threadMessages.externalId, externalId))[0] ?? null,
         ),
 
       startThread: (prId, anchor, message) =>
@@ -687,7 +676,7 @@ export const ReviewServiceLive = Layer.effect(
         commit("set thread status", (tx) => threadWrites.setStatus(tx, threadId, status)),
 
       statusPushed: (threadId, status) =>
-        tryDb("mark a thread status pushed", (db) => {
+        dbTry("mark a thread status pushed", () => {
           db.update(commentThreads)
             .set({ statusPushPending: false })
             .where(and(eq(commentThreads.id, threadId), eq(commentThreads.status, status)))
@@ -759,7 +748,7 @@ export const ReviewServiceLive = Layer.effect(
         ),
 
       linkThread: (threadId, ids) =>
-        tryDb("link a thread to GitHub", (db) => {
+        dbTry("link a thread to GitHub", () => {
           const set: Partial<typeof commentThreads.$inferInsert> = {};
           if (ids.externalThreadId !== undefined) set.externalThreadId = ids.externalThreadId;
           if (ids.externalCommentId !== undefined) set.externalCommentId = ids.externalCommentId;
@@ -769,7 +758,7 @@ export const ReviewServiceLive = Layer.effect(
         }),
 
       linkMessage: (messageId, externalId) =>
-        tryDb("link a message to GitHub", (db) =>
+        dbTry("link a message to GitHub", () =>
           db
             .update(threadMessages)
             .set({ externalId })
@@ -778,7 +767,7 @@ export const ReviewServiceLive = Layer.effect(
         ).pipe(Effect.asVoid),
 
       linkPostedDrafts: (threadId, draftIds, externalCommentId, body) =>
-        tryDb("link posted drafts", (db) =>
+        dbTry("link posted drafts", () =>
           db.transaction((tx) => {
             const [first, ...rest] = draftIds;
             tx.update(commentThreads)

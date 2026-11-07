@@ -175,29 +175,27 @@ export class ProjectRecapService extends Context.Service<
      */
     readonly createPartial: (
       params: CreatePartialRecapParams,
-    ) => Effect.Effect<ProjectRecap, DbError, DbService>;
+    ) => Effect.Effect<ProjectRecap, DbError>;
 
-    readonly getById: (
-      id: string,
-    ) => Effect.Effect<ProjectRecap, RecapNotFoundError | DbError, DbService>;
+    readonly getById: (id: string) => Effect.Effect<ProjectRecap, RecapNotFoundError | DbError>;
 
     /** The period's current (non-superseded) recap, whatever its status. */
     readonly findActiveForPeriod: (
       repoId: string,
       period: RecapPeriod,
       periodStart: string,
-    ) => Effect.Effect<ProjectRecap | null, DbError, DbService>;
+    ) => Effect.Effect<ProjectRecap | null, DbError>;
 
     readonly listForRepo: (
       repoId: string,
       params: ListForRepoParams,
-    ) => Effect.Effect<ListForRepoResult, DbError, DbService>;
+    ) => Effect.Effect<ListForRepoResult, DbError>;
 
     /** Most-recent complete recaps for a repo, newest first, at most `limit`. */
     readonly getLatestForRepo: (
       repoId: string,
       params: { period?: RecapPeriod; limit?: number },
-    ) => Effect.Effect<ReadonlyArray<ProjectRecap>, DbError, DbService>;
+    ) => Effect.Effect<ReadonlyArray<ProjectRecap>, DbError>;
 
     /**
      * The orchestrator's terminal transition, from `generating` only
@@ -208,18 +206,16 @@ export class ProjectRecapService extends Context.Service<
       recapId: string,
       status: "complete" | "error" | "stopped",
       options?: { modelUsed?: string; errorMessage?: string },
-    ) => Effect.Effect<boolean, DbError, DbService>;
+    ) => Effect.Effect<boolean, DbError>;
 
     /** Record the window's source bundle once the first run has assembled it. */
     readonly saveSourceBundle: (
       recapId: string,
       bundle: RecapSourceBundle,
-    ) => Effect.Effect<void, DbError, DbService>;
+    ) => Effect.Effect<void, DbError>;
 
     /** The source bundle an earlier run of this recap assembled, if any. */
-    readonly getSourceBundle: (
-      recapId: string,
-    ) => Effect.Effect<RecapSourceBundle | null, DbError, DbService>;
+    readonly getSourceBundle: (recapId: string) => Effect.Effect<RecapSourceBundle | null, DbError>;
 
     /**
      * Fill in a recap for a historical window that held no activity at all.
@@ -231,13 +227,13 @@ export class ProjectRecapService extends Context.Service<
      * through. The orchestrator short-circuits precisely to avoid spending
      * tokens on an empty window.
      */
-    readonly markEmptyWindow: (recapId: string) => Effect.Effect<void, DbError, DbService>;
+    readonly markEmptyWindow: (recapId: string) => Effect.Effect<void, DbError>;
 
     /** Reruns happen in place: a window holds at most one active recap. */
     readonly resetForRerun: (
       recapId: string,
       newBoundaries?: { readonly periodStart?: string; readonly periodEnd?: string },
-    ) => Effect.Effect<void, RecapNotFoundError | DbError, DbService>;
+    ) => Effect.Effect<void, RecapNotFoundError | DbError>;
 
     /** For boot-time resume. */
     readonly listGenerating: () => Effect.Effect<
@@ -249,327 +245,318 @@ export class ProjectRecapService extends Context.Service<
         readonly periodEnd: string;
         readonly resumeAttempts: number;
       }>,
-      DbError,
-      DbService
+      DbError
     >;
 
-    readonly incrementResumeAttempts: (
-      recapId: string,
-    ) => Effect.Effect<number, DbError, DbService>;
+    readonly incrementResumeAttempts: (recapId: string) => Effect.Effect<number, DbError>;
   }
 >()("ProjectRecapService") {}
 
-export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
-  createPartial: (params) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const id = crypto.randomUUID();
-      const generatedAt = new Date().toISOString();
+export const ProjectRecapServiceLive = Layer.effect(
+  ProjectRecapService,
+  Effect.gen(function* () {
+    const { db } = yield* DbService;
+    return ProjectRecapService.of({
+      createPartial: (params) =>
+        Effect.gen(function* () {
+          const id = crypto.randomUUID();
+          const generatedAt = new Date().toISOString();
 
-      const inserted = yield* dbTry("createPartial", () => {
-        const values: typeof projectRecaps.$inferInsert = {
-          id,
-          repositoryId: params.repositoryId,
-          period: params.period,
-          periodStart: params.periodStart,
-          periodEnd: params.periodEnd,
-          status: "generating",
-          generatedAt,
-          tokenUsage: "{}",
-          sourcePrIds: "[]",
-          sourceWalkthroughIds: "[]",
-          summaryStats: "{}",
-          resumeAttempts: 0,
-        };
-        db.insert(projectRecaps).values(values).run();
-        const row = db.select().from(projectRecaps).where(eq(projectRecaps.id, id)).get();
-        if (!row) {
-          throw new Error(`Failed to read back inserted recap ${id}`);
-        }
-        return rowToRecap(row);
-      });
+          const inserted = yield* dbTry("createPartial", () => {
+            const values: typeof projectRecaps.$inferInsert = {
+              id,
+              repositoryId: params.repositoryId,
+              period: params.period,
+              periodStart: params.periodStart,
+              periodEnd: params.periodEnd,
+              status: "generating",
+              generatedAt,
+              tokenUsage: "{}",
+              sourcePrIds: "[]",
+              sourceWalkthroughIds: "[]",
+              summaryStats: "{}",
+              resumeAttempts: 0,
+            };
+            db.insert(projectRecaps).values(values).run();
+            const row = db.select().from(projectRecaps).where(eq(projectRecaps.id, id)).get();
+            if (!row) {
+              throw new Error(`Failed to read back inserted recap ${id}`);
+            }
+            return rowToRecap(row);
+          });
 
-      return inserted;
-    }),
+          return inserted;
+        }),
 
-  getById: (id) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const row = yield* dbTry("getById", () =>
-        db.select().from(projectRecaps).where(eq(projectRecaps.id, id)).get(),
-      );
-      if (!row) {
-        return yield* Effect.fail(new RecapNotFoundError({ recapId: id }));
-      }
-      const entryRows = yield* dbTry("getById entries", () =>
-        db
-          .select({
-            entry: recapPrEntries,
-            avatarContent: avatarOfRepoLogin(recapPrEntries.prAuthorLogin, row.repositoryId),
-          })
-          .from(recapPrEntries)
-          .where(eq(recapPrEntries.recapId, id))
-          .orderBy(asc(recapPrEntries.position))
-          .all(),
-      );
-      const themeSummaryRows = yield* dbTry("getById theme summaries", () =>
-        db.select().from(recapThemeSummaries).where(eq(recapThemeSummaries.recapId, id)).all(),
-      );
-      return rowToRecap(
-        row,
-        entryRows.map((r) => entryRowToEntry(r.entry, r.avatarContent)),
-        themeSummaryRows.map(themeSummaryRowToSummary),
-      );
-    }),
+      getById: (id) =>
+        Effect.gen(function* () {
+          const row = yield* dbTry("getById", () =>
+            db.select().from(projectRecaps).where(eq(projectRecaps.id, id)).get(),
+          );
+          if (!row) {
+            return yield* Effect.fail(new RecapNotFoundError({ recapId: id }));
+          }
+          const entryRows = yield* dbTry("getById entries", () =>
+            db
+              .select({
+                entry: recapPrEntries,
+                avatarContent: avatarOfRepoLogin(recapPrEntries.prAuthorLogin, row.repositoryId),
+              })
+              .from(recapPrEntries)
+              .where(eq(recapPrEntries.recapId, id))
+              .orderBy(asc(recapPrEntries.position))
+              .all(),
+          );
+          const themeSummaryRows = yield* dbTry("getById theme summaries", () =>
+            db.select().from(recapThemeSummaries).where(eq(recapThemeSummaries.recapId, id)).all(),
+          );
+          return rowToRecap(
+            row,
+            entryRows.map((r) => entryRowToEntry(r.entry, r.avatarContent)),
+            themeSummaryRows.map(themeSummaryRowToSummary),
+          );
+        }),
 
-  findActiveForPeriod: (repoId, period, periodStart) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      return yield* dbTry("findActiveForPeriod", () => {
-        const row = db
-          .select()
-          .from(projectRecaps)
-          .where(
-            and(
+      findActiveForPeriod: (repoId, period, periodStart) =>
+        Effect.gen(function* () {
+          return yield* dbTry("findActiveForPeriod", () => {
+            const row = db
+              .select()
+              .from(projectRecaps)
+              .where(
+                and(
+                  eq(projectRecaps.repositoryId, repoId),
+                  eq(projectRecaps.period, period),
+                  eq(projectRecaps.periodStart, periodStart),
+                  // Active = anything that hasn't been superseded. Even an
+                  // `error` row counts as active here — the scheduler should
+                  // not silently retry it on the next tick, since
+                  // `resumePending` handles bounded retries.
+                ),
+              )
+              .orderBy(desc(projectRecaps.generatedAt))
+              .all();
+            // Prefer rows whose `supersededBy` is null. There can be many
+            // historical rows if the user regenerated repeatedly; only one
+            // is the "current" one.
+            const current = row.find((r) => r.supersededBy === null);
+            return current ? rowToRecap(current) : null;
+          });
+        }),
+
+      listForRepo: (repoId, params) =>
+        Effect.gen(function* () {
+          const limit = Math.min(
+            Math.max(1, params.limit ?? DEFAULT_RECAP_PAGE_LIMIT),
+            MAX_RECAP_PAGE_LIMIT,
+          );
+
+          return yield* dbTry("listForRepo", () => {
+            const conditions = [eq(projectRecaps.repositoryId, repoId)];
+            if (params.period !== undefined) {
+              conditions.push(eq(projectRecaps.period, params.period));
+            }
+            if (params.cursor !== undefined) {
+              conditions.push(lt(projectRecaps.generatedAt, params.cursor));
+            }
+            // String comparison is valid here because `period_start` is always
+            // stored as a normalised ISO UTC instant (`…T00:00:00.000Z`), so
+            // lexicographic order *is* chronological order. Load-bearing: swap
+            // in a local-offset or non-padded format and these predicates go
+            // quietly wrong. The `(repository_id, period, period_start)` index
+            // covers them.
+            if (params.from !== undefined) {
+              conditions.push(gte(projectRecaps.periodStart, params.from));
+            }
+            if (params.to !== undefined) {
+              conditions.push(lt(projectRecaps.periodStart, params.to));
+            }
+            if (!params.includeSuperseded) {
+              conditions.push(isNull(projectRecaps.supersededBy));
+            }
+
+            const rows = db
+              .select()
+              .from(projectRecaps)
+              .where(and(...conditions))
+              .orderBy(desc(projectRecaps.generatedAt))
+              .limit(limit + 1)
+              .all();
+
+            const hasMore = rows.length > limit;
+            const trimmed = hasMore ? rows.slice(0, limit) : rows;
+            const lastRow = trimmed[trimmed.length - 1];
+            const nextCursor = hasMore && lastRow ? lastRow.generatedAt : null;
+            return {
+              recaps: trimmed.map(rowToSummary),
+              nextCursor,
+            };
+          });
+        }),
+
+      getLatestForRepo: (repoId, params) =>
+        Effect.gen(function* () {
+          const limit = Math.min(Math.max(1, params.limit ?? 3), 10);
+          return yield* dbTry("getLatestForRepo", () => {
+            const conditions = [
               eq(projectRecaps.repositoryId, repoId),
-              eq(projectRecaps.period, period),
-              eq(projectRecaps.periodStart, periodStart),
-              // Active = anything that hasn't been superseded. Even an
-              // `error` row counts as active here — the scheduler should
-              // not silently retry it on the next tick, since
-              // `resumePending` handles bounded retries.
-            ),
-          )
-          .orderBy(desc(projectRecaps.generatedAt))
-          .all();
-        // Prefer rows whose `supersededBy` is null. There can be many
-        // historical rows if the user regenerated repeatedly; only one
-        // is the "current" one.
-        const current = row.find((r) => r.supersededBy === null);
-        return current ? rowToRecap(current) : null;
-      });
-    }),
+              eq(projectRecaps.status, "complete"),
+            ];
+            if (params.period !== undefined) {
+              conditions.push(eq(projectRecaps.period, params.period));
+            }
+            const rows = db
+              .select()
+              .from(projectRecaps)
+              .where(and(...conditions))
+              .orderBy(desc(projectRecaps.completedAt))
+              .limit(limit)
+              .all();
+            // `.map(rowToRecap)` would pass the index as the optional `entries` arg.
+            return rows.map((r) => rowToRecap(r));
+          });
+        }),
 
-  listForRepo: (repoId, params) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const limit = Math.min(
-        Math.max(1, params.limit ?? DEFAULT_RECAP_PAGE_LIMIT),
-        MAX_RECAP_PAGE_LIMIT,
-      );
+      finish: (recapId, status, options) =>
+        Effect.gen(function* () {
+          const moved = yield* dbTry("finish", () =>
+            db
+              .update(projectRecaps)
+              .set({
+                status,
+                completedAt: status === "complete" ? new Date().toISOString() : null,
+                ...(options?.modelUsed !== undefined ? { modelUsed: options.modelUsed } : {}),
+                errorMessage: options?.errorMessage ?? null,
+              })
+              .where(and(eq(projectRecaps.id, recapId), eq(projectRecaps.status, "generating")))
+              .returning({ id: projectRecaps.id })
+              .all(),
+          );
+          return moved.length > 0;
+        }),
 
-      return yield* dbTry("listForRepo", () => {
-        const conditions = [eq(projectRecaps.repositoryId, repoId)];
-        if (params.period !== undefined) {
-          conditions.push(eq(projectRecaps.period, params.period));
-        }
-        if (params.cursor !== undefined) {
-          conditions.push(lt(projectRecaps.generatedAt, params.cursor));
-        }
-        // String comparison is valid here because `period_start` is always
-        // stored as a normalised ISO UTC instant (`…T00:00:00.000Z`), so
-        // lexicographic order *is* chronological order. Load-bearing: swap
-        // in a local-offset or non-padded format and these predicates go
-        // quietly wrong. The `(repository_id, period, period_start)` index
-        // covers them.
-        if (params.from !== undefined) {
-          conditions.push(gte(projectRecaps.periodStart, params.from));
-        }
-        if (params.to !== undefined) {
-          conditions.push(lt(projectRecaps.periodStart, params.to));
-        }
-        if (!params.includeSuperseded) {
-          conditions.push(isNull(projectRecaps.supersededBy));
-        }
+      saveSourceBundle: (recapId, bundle) =>
+        Effect.gen(function* () {
+          yield* dbTry("saveSourceBundle", () =>
+            db
+              .update(projectRecaps)
+              .set({ sourceBundle: bundle })
+              .where(eq(projectRecaps.id, recapId))
+              .run(),
+          );
+        }),
 
-        const rows = db
-          .select()
-          .from(projectRecaps)
-          .where(and(...conditions))
-          .orderBy(desc(projectRecaps.generatedAt))
-          .limit(limit + 1)
-          .all();
+      getSourceBundle: (recapId) =>
+        Effect.gen(function* () {
+          const row = yield* dbTry("getSourceBundle", () =>
+            db
+              .select({ sourceBundle: projectRecaps.sourceBundle })
+              .from(projectRecaps)
+              .where(eq(projectRecaps.id, recapId))
+              .get(),
+          );
+          return row?.sourceBundle ?? null;
+        }),
 
-        const hasMore = rows.length > limit;
-        const trimmed = hasMore ? rows.slice(0, limit) : rows;
-        const lastRow = trimmed[trimmed.length - 1];
-        const nextCursor = hasMore && lastRow ? lastRow.generatedAt : null;
-        return {
-          recaps: trimmed.map(rowToSummary),
-          nextCursor,
-        };
-      });
-    }),
+      markEmptyWindow: (recapId) =>
+        Effect.gen(function* () {
+          yield* dbTry("markEmptyWindow", () =>
+            db
+              .update(projectRecaps)
+              .set({
+                lede: RECAP_EMPTY_WINDOW_LEDE,
+                summaryStats: JSON.stringify(EMPTY_RECAP_STATS),
+                sourcePrIds: "[]",
+                sourceWalkthroughIds: "[]",
+                errorMessage: null,
+              })
+              .where(eq(projectRecaps.id, recapId))
+              .run(),
+          );
+        }),
 
-  getLatestForRepo: (repoId, params) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const limit = Math.min(Math.max(1, params.limit ?? 3), 10);
-      return yield* dbTry("getLatestForRepo", () => {
-        const conditions = [
-          eq(projectRecaps.repositoryId, repoId),
-          eq(projectRecaps.status, "complete"),
-        ];
-        if (params.period !== undefined) {
-          conditions.push(eq(projectRecaps.period, params.period));
-        }
-        const rows = db
-          .select()
-          .from(projectRecaps)
-          .where(and(...conditions))
-          .orderBy(desc(projectRecaps.completedAt))
-          .limit(limit)
-          .all();
-        // `.map(rowToRecap)` would pass the index as the optional `entries` arg.
-        return rows.map((r) => rowToRecap(r));
-      });
-    }),
-
-  finish: (recapId, status, options) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const moved = yield* dbTry("finish", () =>
-        db
-          .update(projectRecaps)
-          .set({
-            status,
-            completedAt: status === "complete" ? new Date().toISOString() : null,
-            ...(options?.modelUsed !== undefined ? { modelUsed: options.modelUsed } : {}),
-            errorMessage: options?.errorMessage ?? null,
-          })
-          .where(and(eq(projectRecaps.id, recapId), eq(projectRecaps.status, "generating")))
-          .returning({ id: projectRecaps.id })
-          .all(),
-      );
-      return moved.length > 0;
-    }),
-
-  saveSourceBundle: (recapId, bundle) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      yield* dbTry("saveSourceBundle", () =>
-        db
-          .update(projectRecaps)
-          .set({ sourceBundle: bundle })
-          .where(eq(projectRecaps.id, recapId))
-          .run(),
-      );
-    }),
-
-  getSourceBundle: (recapId) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const row = yield* dbTry("getSourceBundle", () =>
-        db
-          .select({ sourceBundle: projectRecaps.sourceBundle })
-          .from(projectRecaps)
-          .where(eq(projectRecaps.id, recapId))
-          .get(),
-      );
-      return row?.sourceBundle ?? null;
-    }),
-
-  markEmptyWindow: (recapId) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      yield* dbTry("markEmptyWindow", () =>
-        db
-          .update(projectRecaps)
-          .set({
-            lede: RECAP_EMPTY_WINDOW_LEDE,
-            summaryStats: JSON.stringify(EMPTY_RECAP_STATS),
+      resetForRerun: (recapId, newBoundaries) =>
+        Effect.gen(function* () {
+          const exists = yield* dbTry("resetForRerun lookup", () =>
+            db
+              .select({ id: projectRecaps.id })
+              .from(projectRecaps)
+              .where(eq(projectRecaps.id, recapId))
+              .get(),
+          );
+          if (!exists) return yield* Effect.fail(new RecapNotFoundError({ recapId }));
+          const patch: Record<string, unknown> = {
+            lede: "",
+            status: "generating",
+            completedAt: null,
+            errorMessage: null,
+            resumeAttempts: 0,
+            generatedAt: new Date().toISOString(),
             sourcePrIds: "[]",
             sourceWalkthroughIds: "[]",
-            errorMessage: null,
-          })
-          .where(eq(projectRecaps.id, recapId))
-          .run(),
-      );
-    }),
-
-  resetForRerun: (recapId, newBoundaries) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const exists = yield* dbTry("resetForRerun lookup", () =>
-        db
-          .select({ id: projectRecaps.id })
-          .from(projectRecaps)
-          .where(eq(projectRecaps.id, recapId))
-          .get(),
-      );
-      if (!exists) return yield* Effect.fail(new RecapNotFoundError({ recapId }));
-      const patch: Record<string, unknown> = {
-        lede: "",
-        status: "generating",
-        completedAt: null,
-        errorMessage: null,
-        resumeAttempts: 0,
-        generatedAt: new Date().toISOString(),
-        sourcePrIds: "[]",
-        sourceWalkthroughIds: "[]",
-        summaryStats: "{}",
-        tokenUsage: "{}",
-        sourceBundle: null,
-      };
-      if (newBoundaries?.periodStart !== undefined) {
-        patch.periodStart = newBoundaries.periodStart;
-      }
-      if (newBoundaries?.periodEnd !== undefined) {
-        patch.periodEnd = newBoundaries.periodEnd;
-      }
-      // Atomic so a crash can't strand the row in 'generating' with stale entries (invariant #1).
-      yield* dbTry("resetForRerun", () =>
-        db.transaction(() => {
-          db.update(projectRecaps).set(patch).where(eq(projectRecaps.id, recapId)).run();
-          db.delete(recapPrEntries).where(eq(recapPrEntries.recapId, recapId)).run();
-          db.delete(recapThemeSummaries).where(eq(recapThemeSummaries.recapId, recapId)).run();
+            summaryStats: "{}",
+            tokenUsage: "{}",
+            sourceBundle: null,
+          };
+          if (newBoundaries?.periodStart !== undefined) {
+            patch.periodStart = newBoundaries.periodStart;
+          }
+          if (newBoundaries?.periodEnd !== undefined) {
+            patch.periodEnd = newBoundaries.periodEnd;
+          }
+          // Atomic so a crash can't strand the row in 'generating' with stale entries (invariant #1).
+          yield* dbTry("resetForRerun", () =>
+            db.transaction(() => {
+              db.update(projectRecaps).set(patch).where(eq(projectRecaps.id, recapId)).run();
+              db.delete(recapPrEntries).where(eq(recapPrEntries.recapId, recapId)).run();
+              db.delete(recapThemeSummaries).where(eq(recapThemeSummaries.recapId, recapId)).run();
+            }),
+          );
         }),
-      );
-    }),
 
-  listGenerating: () =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const rows = yield* dbTry("listGenerating", () =>
-        db
-          .select({
-            id: projectRecaps.id,
-            repositoryId: projectRecaps.repositoryId,
-            period: projectRecaps.period,
-            periodStart: projectRecaps.periodStart,
-            periodEnd: projectRecaps.periodEnd,
-            resumeAttempts: projectRecaps.resumeAttempts,
-          })
-          .from(projectRecaps)
-          .where(eq(projectRecaps.status, "generating"))
-          .all(),
-      );
-      return rows.map((r) => ({
-        id: r.id,
-        repositoryId: r.repositoryId,
-        period: r.period as RecapPeriod,
-        periodStart: r.periodStart,
-        periodEnd: r.periodEnd,
-        resumeAttempts: r.resumeAttempts,
-      }));
-    }),
+      listGenerating: () =>
+        Effect.gen(function* () {
+          const rows = yield* dbTry("listGenerating", () =>
+            db
+              .select({
+                id: projectRecaps.id,
+                repositoryId: projectRecaps.repositoryId,
+                period: projectRecaps.period,
+                periodStart: projectRecaps.periodStart,
+                periodEnd: projectRecaps.periodEnd,
+                resumeAttempts: projectRecaps.resumeAttempts,
+              })
+              .from(projectRecaps)
+              .where(eq(projectRecaps.status, "generating"))
+              .all(),
+          );
+          return rows.map((r) => ({
+            id: r.id,
+            repositoryId: r.repositoryId,
+            period: r.period as RecapPeriod,
+            periodStart: r.periodStart,
+            periodEnd: r.periodEnd,
+            resumeAttempts: r.resumeAttempts,
+          }));
+        }),
 
-  incrementResumeAttempts: (recapId) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const next = yield* dbTry("incrementResumeAttempts", () => {
-        const row = db
-          .select({ resumeAttempts: projectRecaps.resumeAttempts })
-          .from(projectRecaps)
-          .where(eq(projectRecaps.id, recapId))
-          .get();
-        const value = (row?.resumeAttempts ?? 0) + 1;
-        db.update(projectRecaps)
-          .set({ resumeAttempts: value })
-          .where(eq(projectRecaps.id, recapId))
-          .run();
-        return value;
-      });
-      return next;
-    }),
-});
+      incrementResumeAttempts: (recapId) =>
+        Effect.gen(function* () {
+          const next = yield* dbTry("incrementResumeAttempts", () => {
+            const row = db
+              .select({ resumeAttempts: projectRecaps.resumeAttempts })
+              .from(projectRecaps)
+              .where(eq(projectRecaps.id, recapId))
+              .get();
+            const value = (row?.resumeAttempts ?? 0) + 1;
+            db.update(projectRecaps)
+              .set({ resumeAttempts: value })
+              .where(eq(projectRecaps.id, recapId))
+              .run();
+            return value;
+          });
+          return next;
+        }),
+    });
+  }),
+);

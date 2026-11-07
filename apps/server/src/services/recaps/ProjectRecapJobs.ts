@@ -26,7 +26,6 @@ import { runRecapAgentViaAcp } from "../../ai/providers/recap-acp";
 import { type RecapToolContext, recapCompletionBlocker } from "../../ai/providers/recap-tools";
 import type { DbError, RecapNotFoundError } from "../../domain/errors";
 import { dbTry } from "../../effects/db-try";
-import { withDb } from "../../effects/with-db";
 import { debug } from "../../logger";
 import { withGitHubOrigin } from "../../observability/github-ledger/origin";
 import { withTraceAnchor } from "../../observability/span-graft";
@@ -135,7 +134,6 @@ export const ProjectRecapJobsLive = Layer.effect(
     const mirror = yield* PrMirror;
 
     const sources = makeRecapSources({
-      db,
       prs: prService,
       prContext: prCtx,
       diffCache,
@@ -149,9 +147,6 @@ export const ProjectRecapJobsLive = Layer.effect(
       idLabel: "recap",
       handleIdPrefix: "",
     });
-
-    const provideDb = <A, E>(eff: Effect.Effect<A, E, DbService>): Effect.Effect<A, E> =>
-      withDb(db, eff);
 
     const terminalEvent = (recapId: string, outcome: RunOutcome<string>): RecapStreamEvent =>
       outcome.kind === "complete"
@@ -168,17 +163,15 @@ export const ProjectRecapJobsLive = Layer.effect(
       Effect.gen(function* () {
         const status: ProjectRecapStatus =
           outcome.kind === "failed" ? "error" : outcome.kind === "stopped" ? "stopped" : "complete";
-        const moved = yield* provideDb(
-          recapService.finish(recapId, status, {
-            ...(run?.context.modelUsed ? { modelUsed: run.context.modelUsed } : {}),
-            ...(outcome.kind === "failed" ? { errorMessage: outcome.failure } : {}),
-          }),
-        );
+        const moved = yield* recapService.finish(recapId, status, {
+          ...(run?.context.modelUsed ? { modelUsed: run.context.modelUsed } : {}),
+          ...(outcome.kind === "failed" ? { errorMessage: outcome.failure } : {}),
+        });
         if (run) subscribers.fanOut(recapId, run.context, terminalEvent(recapId, outcome));
         if (!moved) return;
-        const fresh = yield* provideDb(recapService.getById(recapId)).pipe(
-          Effect.catch(() => Effect.succeed(null)),
-        );
+        const fresh = yield* recapService
+          .getById(recapId)
+          .pipe(Effect.catch(() => Effect.succeed(null)));
         if (!fresh) return;
         // completedAt and errorMessage go out even when null, so a client
         // cache drops the values of an earlier status.
@@ -206,10 +199,8 @@ export const ProjectRecapJobsLive = Layer.effect(
       concurrency: MAX_CONCURRENT_RECAP_JOBS,
       turnsPerRun: 1,
       journal: {
-        generating: Effect.map(provideDb(recapService.listGenerating()), (rows) =>
-          rows.map((row) => row.id),
-        ),
-        bumpResumeAttempts: (recapId) => provideDb(recapService.incrementResumeAttempts(recapId)),
+        generating: Effect.map(recapService.listGenerating(), (rows) => rows.map((row) => row.id)),
+        bumpResumeAttempts: (recapId) => recapService.incrementResumeAttempts(recapId),
         completionBlocker: (recapId) =>
           dbTry("recap completion check", () => recapCompletionBlocker(db, recapId)),
       },
@@ -235,26 +226,26 @@ export const ProjectRecapJobsLive = Layer.effect(
           }
           subscribers.fanOut(run.id, run.context, event);
         };
-        const recap = yield* provideDb(recapService.getById(run.id)).pipe(
-          Effect.catch(() => Effect.succeed(null)),
-        );
+        const recap = yield* recapService
+          .getById(run.id)
+          .pipe(Effect.catch(() => Effect.succeed(null)));
         if (!recap) return { kind: "failed", failure: "Recap row not found" };
-        const repo = yield* provideDb(prCtx.getRepo(recap.repositoryId)).pipe(
-          Effect.catch(() => Effect.succeed(null)),
-        );
+        const repo = yield* prCtx
+          .getRepo(recap.repositoryId)
+          .pipe(Effect.catch(() => Effect.succeed(null)));
         if (!repo) {
           return { kind: "failed", failure: "Repository not found — cannot build source bundle" };
         }
 
         const assembled =
-          (yield* provideDb(recapService.getSourceBundle(run.id))) ??
+          (yield* recapService.getSourceBundle(run.id)) ??
           (yield* sources
             .assemble(recap, repo.fullName)
             .pipe(
               Effect.tap((bundle) =>
                 typeof bundle === "string"
                   ? Effect.void
-                  : provideDb(recapService.saveSourceBundle(run.id, bundle)),
+                  : recapService.saveSourceBundle(run.id, bundle),
               ),
             ));
         if (assembled === "nothing-yet") {
@@ -266,13 +257,13 @@ export const ProjectRecapJobsLive = Layer.effect(
           // A closed window: "nothing shipped" is final, not a failure, and
           // costs no tokens.
           debug("recap-jobs", `empty historical window for recap ${run.id} — no agent run`);
-          yield* provideDb(recapService.markEmptyWindow(run.id));
+          yield* recapService.markEmptyWindow(run.id);
           return { kind: "complete" };
         }
 
-        const priorRecaps: ReadonlyArray<ProjectRecap> = yield* provideDb(
-          recapService.getLatestForRepo(recap.repositoryId, { limit: 5 }),
-        ).pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<ProjectRecap>)));
+        const priorRecaps: ReadonlyArray<ProjectRecap> = yield* recapService
+          .getLatestForRepo(recap.repositoryId, { limit: 5 })
+          .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<ProjectRecap>)));
 
         const repoClient = yield* Effect.cached(sources.repoClient(recap.repositoryId));
         const runContext = yield* Effect.context<never>();
@@ -282,7 +273,7 @@ export const ProjectRecapJobsLive = Layer.effect(
           sourceBundle: assembled,
           priorRecaps,
           getPrDiff: (prId) =>
-            provideDb(prService.getPr(prId)).pipe(
+            prService.getPr(prId).pipe(
               Effect.flatMap((pr) =>
                 Effect.flatMap(repoClient, (client) => sources.loadDiff(pr, repo.fullName, client)),
               ),
@@ -351,9 +342,9 @@ export const ProjectRecapJobsLive = Layer.effect(
         const mutex = yield* windowMutex.acquire(`${repoId}:${period}:${window.periodStart}`);
         return yield* mutex.withPermits(1)(
           Effect.gen(function* () {
-            const existing = yield* provideDb(
-              recapService.findActiveForPeriod(repoId, period, window.periodStart),
-            ).pipe(Effect.catch(() => Effect.succeed(null)));
+            const existing = yield* recapService
+              .findActiveForPeriod(repoId, period, window.periodStart)
+              .pipe(Effect.catch(() => Effect.succeed(null)));
             const plan = planRecapRequest({
               intent: request.intent,
               period,
@@ -369,11 +360,18 @@ export const ProjectRecapJobsLive = Layer.effect(
             }
 
             if (existing && plan === "rerun") {
-              yield* jobs.stop(existing.id, "user");
-              yield* provideDb(recapService.resetForRerun(existing.id, window));
-              const refreshed = yield* provideDb(recapService.getById(existing.id)).pipe(
-                Effect.catch(() => Effect.succeed(null)),
-              );
+              const replaced = yield* jobs.running(existing.id);
+              yield* jobs.stop(existing.id, "superseded");
+              yield* recapService.resetForRerun(existing.id, window);
+              if (replaced) {
+                subscribers.fanOut(existing.id, replaced.context, {
+                  type: "restarted",
+                  data: { recapId: existing.id },
+                });
+              }
+              const refreshed = yield* recapService
+                .getById(existing.id)
+                .pipe(Effect.catch(() => Effect.succeed(null)));
               if (refreshed) {
                 yield* realtime.toRepo(repoId, {
                   type: "recap:added",
@@ -389,9 +387,11 @@ export const ProjectRecapJobsLive = Layer.effect(
             if (request.intent === "scheduled" && (yield* sources.windowIsSilent(repoId, window))) {
               return null;
             }
-            const created = yield* provideDb(
-              recapService.createPartial({ repositoryId: repoId, period, ...window }),
-            );
+            const created = yield* recapService.createPartial({
+              repositoryId: repoId,
+              period,
+              ...window,
+            });
             yield* realtime.toRepo(repoId, {
               type: "recap:added",
               data: { recap: created },

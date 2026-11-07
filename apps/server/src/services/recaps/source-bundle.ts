@@ -7,7 +7,6 @@ import type { ProjectRecap, RecapPeriod, RecapSummaryStats, RecapWindowBounds } 
 import { windowIsCurrent } from "@revv/shared";
 import { type Context, Effect } from "effect";
 import type { RecapSourcePrDiff, RecapSourcePrDiffFile } from "../../ai/providers/recap-tools";
-import type { Db } from "../../db";
 import type {
   RecapSourceBundle,
   RecapSourcePr,
@@ -15,7 +14,6 @@ import type {
 } from "../../db/schema/project-recaps";
 import type { DbError } from "../../domain/errors";
 import type { ObservedPr } from "../../domain/observed-pr";
-import { withDb } from "../../effects/with-db";
 import { debug, logError } from "../../logger";
 import type { DiffCacheService } from "../DiffCache";
 import type { GitHubGateway } from "../github/gateway";
@@ -242,19 +240,18 @@ export interface RecapSources {
 }
 
 export function makeRecapSources(deps: {
-  readonly db: Db;
   readonly prs: Context.Service.Shape<typeof PullRequestService>;
   readonly prContext: Context.Service.Shape<typeof PrContextService>;
   readonly diffCache: Context.Service.Shape<typeof DiffCacheService>;
   readonly github: Context.Service.Shape<typeof GitHubGateway>;
   readonly mirror: Context.Service.Shape<typeof PrMirror>;
 }): RecapSources {
-  const { db, prs, diffCache, github, mirror } = deps;
+  const { prs, diffCache, github, mirror } = deps;
 
   const archivedIn = (repoId: string, periodStart: string, periodEnd: string) =>
-    withDb(db, prs.listArchivedPrsForWindow(repoId, periodStart, periodEnd));
+    prs.listArchivedPrsForWindow(repoId, periodStart, periodEnd);
   const openAsOf = (repoId: string, periodEnd: string) =>
-    withDb(db, prs.listOpenPrsAsOfWindow(repoId, periodEnd));
+    prs.listOpenPrsAsOfWindow(repoId, periodEnd);
 
   const repoClient = (repoId: string): Effect.Effect<GitHubClient | null> =>
     deps.prContext.forRepo(repoId).pipe(
