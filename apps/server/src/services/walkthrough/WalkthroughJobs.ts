@@ -215,6 +215,11 @@ export class WalkthroughJobs extends Context.Service<
     /** The user's Stop: the row ends `error` with end reason `cancelled`, still resumable. */
     readonly cancel: (walkthroughId: string) => Effect.Effect<void>;
 
+    /**
+     * Boot: supersede the rows at heads their PR has moved past (a head move
+     * whose supersede a shutdown cut off), then resume the rows still
+     * `generating`.
+     */
     readonly resumePending: () => Effect.Effect<void>;
 
     /**
@@ -1018,6 +1023,18 @@ export const WalkthroughJobsLive = Layer.effect(
       ),
     );
 
+    // A head move whose listener a shutdown cut off left the old head's rows
+    // un-superseded; the stored head is the move's journal.
+    const supersedeStaleHeads = Effect.gen(function* () {
+      for (const { prId, headSha } of yield* walkthroughService.staleHeads()) {
+        yield* supersedeForPr(prId, headSha);
+      }
+    }).pipe(
+      Effect.catch((err) =>
+        Effect.sync(() => logError("walkthrough-jobs", "superseding stale heads failed:", err)),
+      ),
+    );
+
     return {
       startJob: (params) =>
         underPrLock(
@@ -1028,7 +1045,7 @@ export const WalkthroughJobsLive = Layer.effect(
       resume,
       findActiveByPr,
       cancel: (walkthroughId) => jobs.stop(walkthroughId, "user"),
-      resumePending: () => jobs.resumePending,
+      resumePending: () => Effect.andThen(supersedeStaleHeads, jobs.resumePending),
       supersedeForPr,
       emitEvent,
       resolveSessionToken: jobs.resolveToken,

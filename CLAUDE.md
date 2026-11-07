@@ -263,7 +263,9 @@ agent tomorrow). Any change that violates them is wrong by construction — push
    replacing row only when that row was created at the old one's key (a do-over at the same
    head); a head move or a Regenerate retires rows before any replacement exists, so it
    stays NULL by design. A resume runs a row at its own head, never the PR's current one: a
-   row whose PR has moved on is superseded instead.
+   row whose PR has moved on is superseded instead. The stored PR head is the head move's
+   journal: boot supersedes any row not at it (`WalkthroughJobs.resumePending`), so a
+   head-move supersede a shutdown cut off still lands.
 
    The snapshot importer that hydrates team-cache hits also carries a review over a pure
    restack: when a stacked layer's new head has a fingerprint identical to a finished review's
