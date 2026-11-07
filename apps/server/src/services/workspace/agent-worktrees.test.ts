@@ -1,10 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isWorktreeHealthy } from "./RepoClone";
+import { Effect } from "effect";
+import {
+  addWorktree,
+  cloneServices,
+  git as fixtureGit,
+  makeClone,
+  seedDb,
+  seedPr,
+} from "../clone/clone-test-support";
+import { cloneLayout } from "../clone/layout";
+import { AgentWorktrees, isWorktreeHealthy } from "./agent-worktrees";
 
 // Real git repos on disk, no mocks: the healthy case must leave every file
 // under `.git` untouched.
@@ -200,4 +210,92 @@ describe("isWorktreeHealthy", () => {
       GIT_CASE_TIMEOUT_MS,
     );
   });
+});
+
+describe("AgentWorktrees", () => {
+  let root: string;
+  let base: string;
+  let clonePath: string;
+  let head: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "revv-agent-worktrees-"));
+    base = join(root, "base");
+    clonePath = join(base, "octo", "repo");
+    head = makeClone(clonePath);
+  }, GIT_CASE_TIMEOUT_MS);
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  }, GIT_CASE_TIMEOUT_MS);
+
+  it(
+    "won't prune the worktree of a PR someone is working in, and prunes it once they let go",
+    async () => {
+      const db = seedDb([{ id: "repo-a", accountId: "acc-a", clonePath, cloneStatus: "ready" }]);
+      const prId = seedPr(db, "repo-a", 9, head);
+      const worktree = cloneLayout(base).agentWorktree("repo-a", 9);
+      addWorktree(clonePath, worktree, "revv/pr-9", head);
+      writeFileSync(join(worktree, "draft.ts"), "unsaved work\n");
+      const { run, dispose } = cloneServices(db, base);
+      try {
+        const busy = await run(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const worktrees = yield* AgentWorktrees;
+              yield* worktrees.claim(prId, "chat-turn");
+              return yield* worktrees.prune({ repoId: "repo-a", prId, prNumber: 9 });
+            }),
+          ),
+        );
+        expect(busy).toEqual({ pruned: false, reason: "busy" });
+        expect(existsSync(join(worktree, "draft.ts"))).toBe(true);
+
+        const pruned = await run(
+          Effect.flatMap(AgentWorktrees, (w) => w.prune({ repoId: "repo-a", prId, prNumber: 9 })),
+        );
+        expect(pruned).toEqual({ pruned: true });
+        expect(existsSync(worktree)).toBe(false);
+      } finally {
+        await dispose();
+      }
+    },
+    GIT_CASE_TIMEOUT_MS,
+  );
+
+  it(
+    "moves the agent branch's worktree into place instead of deleting it",
+    async () => {
+      const db = seedDb([{ id: "repo-a", accountId: "acc-a", clonePath, cloneStatus: "ready" }]);
+      const prId = seedPr(db, "repo-a", 4, head);
+      const stray = join(base, "octo", "repo", "worktrees", "pr-4");
+      addWorktree(clonePath, stray, "revv/pr-4", head);
+      writeFileSync(join(stray, "draft.ts"), "unsaved work\n");
+      const { run, dispose } = cloneServices(db, base);
+      try {
+        const branch = await run(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const worktrees = yield* AgentWorktrees;
+              const held = yield* worktrees.claim(prId, "chat-turn");
+              return yield* worktrees.ensure(held, {
+                repoId: "repo-a",
+                prNumber: 4,
+                prHeadSha: head,
+                githubToken: "token",
+              });
+            }),
+          ),
+        );
+        expect(branch.worktreePath).toBe(cloneLayout(base).agentWorktree("repo-a", 4));
+        expect(readFileSync(join(branch.worktreePath, "draft.ts"), "utf8")).toBe("unsaved work\n");
+        expect(fixtureGit(branch.worktreePath, ["symbolic-ref", "--short", "HEAD"])).toBe(
+          "revv/pr-4",
+        );
+      } finally {
+        await dispose();
+      }
+    },
+    GIT_CASE_TIMEOUT_MS,
+  );
 });

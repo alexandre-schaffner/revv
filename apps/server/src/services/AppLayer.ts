@@ -5,11 +5,12 @@ import { BroadcasterLive } from "./Broadcaster";
 import { BaseConflictsServiceLive } from "./base-conflicts/BaseConflicts";
 import { GcsBlobStoreLive } from "./blob/GcsBlobStore";
 import { CacheServiceLive } from "./Cache";
-import { ChatMcpTokensLive } from "./ChatMcpTokens";
-import { ChatSessionServiceLive } from "./ChatSession";
 import { CacheEligibilityLive } from "./cache-eligibility";
 import { SshSignerLive } from "./cache-signing/index";
+import { ChatMcpTokensLive } from "./chat/ChatMcpTokens";
+import { ChatSessionServiceLive } from "./chat/ChatSession";
 import { ChatTurnServiceLive } from "./chat/ChatTurn";
+import { RepoCloneServiceLive } from "./clone/RepoClone";
 import { DbServiceLive } from "./Db";
 import { DbMaintenanceLive } from "./DbMaintenance";
 import { DiffCacheServiceLive } from "./DiffCache";
@@ -28,7 +29,6 @@ import { PrConversationServiceLive } from "./PrConversation";
 import { PrMirrorLive } from "./PrMirror";
 import { PullRequestServiceLive } from "./PullRequest";
 import { RealtimeLive } from "./Realtime";
-import { RepoCloneServiceLive } from "./RepoClone";
 import { RepositoryServiceLive } from "./Repository";
 import { ReviewServiceLive } from "./Review";
 import { ProjectRecapServiceLive } from "./recaps/ProjectRecap";
@@ -47,6 +47,7 @@ import { RemoteWalkthroughCacheLive } from "./walkthrough/RemoteWalkthroughCache
 import { WalkthroughServiceLive } from "./walkthrough/Walkthrough";
 import { WalkthroughJobsLive } from "./walkthrough/WalkthroughJobs";
 import { WalkthroughSnapshotImporterLive } from "./walkthrough/WalkthroughSnapshotImporter";
+import { AgentWorktreesLive } from "./workspace/agent-worktrees";
 import { PrWorkspaceLive } from "./workspace/PrWorkspace";
 
 const RealtimeWithDeps = RealtimeLive.pipe(
@@ -129,6 +130,10 @@ const AiServiceWithDeps = AiServiceLive.pipe(Layer.provide(BaseLayers));
 
 const RepoCloneServiceWithDeps = RepoCloneServiceLive.pipe(Layer.provide(BaseLayers));
 
+const AgentWorktreesWithDeps = AgentWorktreesLive.pipe(
+  Layer.provide(Layer.mergeAll(BaseLayers, RepoCloneServiceWithDeps)),
+);
+
 const DbMaintenanceWithDeps = DbMaintenanceLive.pipe(Layer.provide(DbServiceLive));
 
 const GcsBlobStoreWithDeps = GcsBlobStoreLive.pipe(Layer.provide(SettingsServiceWithDeps));
@@ -168,7 +173,7 @@ const PrMirrorWithDeps = PrMirrorLive.pipe(
     Layer.mergeAll(
       BaseLayers,
       WalkthroughJobsWithDeps,
-      RepoCloneServiceWithDeps,
+      AgentWorktreesWithDeps,
       StackServiceWithDeps,
     ),
   ),
@@ -209,7 +214,15 @@ const StackReviewServiceWithDeps = StackReviewServiceLive.pipe(
 );
 
 const StackRebaseServiceWithDeps = StackRebaseServiceLive.pipe(
-  Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps, StackServiceWithDeps)),
+  Layer.provide(
+    Layer.mergeAll(
+      BaseLayers,
+      PrContextServiceWithDeps,
+      StackServiceWithDeps,
+      RepoCloneServiceWithDeps,
+      PrMirrorWithDeps,
+    ),
+  ),
 );
 
 const StackMergeServiceWithDeps = StackMergeServiceLive.pipe(
@@ -219,6 +232,7 @@ const StackMergeServiceWithDeps = StackMergeServiceLive.pipe(
       PrContextServiceWithDeps,
       StackServiceWithDeps,
       StackRebaseServiceWithDeps,
+      PrMirrorWithDeps,
     ),
   ),
 );
@@ -229,7 +243,7 @@ const PrWorkspaceWithDeps = PrWorkspaceLive.pipe(
       BaseLayers,
       PrContextServiceWithDeps,
       AiServiceWithDeps,
-      RepoCloneServiceWithDeps,
+      AgentWorktreesWithDeps,
       PrMirrorWithDeps,
     ),
   ),
@@ -249,6 +263,7 @@ const BaseConflictsServiceWithDeps = BaseConflictsServiceLive.pipe(
       AiServiceWithDeps,
       PrWorkspaceWithDeps,
       PrMirrorWithDeps,
+      RepoCloneServiceWithDeps,
     ),
   ),
 );
@@ -264,6 +279,7 @@ export const AppLayer = Layer.mergeAll(
   PrMirrorWithDeps,
   AiServiceWithDeps,
   RepoCloneServiceWithDeps,
+  AgentWorktreesWithDeps,
   WalkthroughJobsWithDeps,
   HunkScanServiceWithDeps,
   ProjectRecapJobsWithDeps,

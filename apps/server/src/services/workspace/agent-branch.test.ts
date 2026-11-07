@@ -3,9 +3,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isWorktreeHealthy } from "../RepoClone";
 import {
-  type AgentBranch,
   commitsStrandedBy,
   countProposed,
   dropProposedCommits,
@@ -15,6 +13,7 @@ import {
   resetToBase,
   resolveBaseSha,
 } from "./agent-branch";
+import { type AgentBranch, isWorktreeHealthy } from "./agent-worktrees";
 
 // git processes start slowly on a loaded machine; a test here runs a dozen.
 setDefaultTimeout(60_000);
@@ -214,11 +213,20 @@ describe("resetToBase", () => {
     git(worktree, ["checkout", "-q", "--detach", oldHead]);
     writeFileSync(join(worktree, "stray.txt"), "left by the agent\n");
 
-    await resetToBase(branch, prHead);
+    expect(await resetToBase(branch, prHead)).toBeNull();
 
     expect(git(worktree, ["rev-parse", "revv/pr-1"])).toBe(prHead);
     expect(git(worktree, ["symbolic-ref", "--short", "HEAD"])).toBe("revv/pr-1");
     expect(git(worktree, ["status", "--porcelain"])).toBe("");
+  });
+
+  it("says why when the rewind can't land, so the clear fails instead of reporting success", async () => {
+    const tip = commitFile(worktree, "c.ts", "c\n", "agent: add c");
+
+    const failed = await resetToBase(branch, "0".repeat(40));
+
+    expect(failed).toContain("reset --hard failed");
+    expect(git(worktree, ["rev-parse", "revv/pr-1"])).toBe(tip);
   });
 });
 

@@ -54,21 +54,6 @@ function statusFor(provider: ExternalAgentProvider) {
   return statuses.find((entry) => entry.provider === provider) ?? null;
 }
 
-/** What the user still has to do in the agent itself after a connect. */
-function activation(status: ExternalIntegrationStatus): string {
-  const { clientName, command } = status;
-  switch (status.provider) {
-    case "claude-code":
-      return `Run /reload-plugins in an open session, or restart Claude Code. Server: ${clientName}.`;
-    case "codex":
-      return `Restart Codex, then use /${command}.`;
-    case "opencode":
-      return `Restart opencode, then use /${command}.`;
-    case "cursor":
-      return `Reload the Cursor window, then enable “${clientName}” under Settings → MCP.`;
-  }
-}
-
 function formatTimestamp(value: string | null): string | null {
   if (!value) return null;
   const date = new Date(value);
@@ -137,7 +122,7 @@ function metaLine(lastUsedAt: string | null, expiresAt: string | null): string |
 					</Button>
 				{/snippet}
 				{#if status?.connected}
-					<p class="integration-activation">{activation(status)}</p>
+					<p class="integration-activation">{status.activation}</p>
 				{/if}
 			</SettingsRow>
 		{/each}

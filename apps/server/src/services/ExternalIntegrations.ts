@@ -8,32 +8,28 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   EXTERNAL_AGENT_PROVIDERS,
+  EXTERNAL_AGENT_SCOPES,
   type ExternalAgentProvider,
+  type ExternalAgentScope,
   type ExternalIntegrationConnectResult,
   type ExternalIntegrationStatus,
+  isExternalAgentProvider,
+  SHA_PATTERN,
 } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
+import { serverEnv } from "../config";
 import { externalIntegrations } from "../db/schema/external-integrations";
 import { pullRequests } from "../db/schema/pull-requests";
 import { repositories } from "../db/schema/repositories";
 import { ExternalIntegrationError } from "../domain/errors";
+import { logError } from "../logger";
 import { DbService } from "./Db";
 import {
   externalIntegrationError,
   externalIntegrationInstaller,
   findIntegrationsDirectory,
 } from "./external-integrations/install";
-
-export const EXTERNAL_AGENT_SCOPES = [
-  "context:read",
-  "walkthrough:edit",
-  "walkthrough:generate",
-  "issues:resolve",
-  "comments:write",
-] as const;
-
-export type ExternalAgentScope = (typeof EXTERNAL_AGENT_SCOPES)[number];
 
 /** Short, provider-identifying token prefixes so a leaked value is traceable. */
 const TOKEN_PREFIX: Readonly<Record<ExternalAgentProvider, string>> = {
@@ -53,7 +49,6 @@ export interface ExternalResolvedContext {
   readonly provider: ExternalAgentProvider;
   readonly integrationId: string;
   readonly accountId: string;
-  readonly userId: string;
   readonly prId: string;
   readonly prHeadSha: string | null;
   readonly scopes: readonly ExternalAgentScope[];
@@ -63,7 +58,6 @@ export interface ExternalAuthorizedContext {
   readonly provider: ExternalAgentProvider;
   readonly integrationId: string;
   readonly accountId: string;
-  readonly userId: string;
   readonly scopes: readonly ExternalAgentScope[];
 }
 
@@ -100,28 +94,6 @@ export function selectPullRequestForCheckout<T extends ExternalPullRequestCandid
 
 function tokenHash(token: string): string {
   return createHash("sha256").update(token).digest("hex");
-}
-
-function parseScopes(raw: string): readonly ExternalAgentScope[] {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((value): value is ExternalAgentScope =>
-      EXTERNAL_AGENT_SCOPES.some((scope) => scope === value),
-    );
-  } catch {
-    return [];
-  }
-}
-
-function isProvider(value: string): value is ExternalAgentProvider {
-  return (EXTERNAL_AGENT_PROVIDERS as readonly string[]).includes(value);
-}
-
-export const SHA_PATTERN = /^[0-9a-f]{40}$/i;
-
-function isSha(value: string): boolean {
-  return SHA_PATTERN.test(value);
 }
 
 export function isIntegrationCredentialActive(
@@ -194,16 +166,26 @@ export const ExternalIntegrationsLive = Layer.effect(
       });
       const byProvider = new Map(rows.map((row) => [row.provider, row]));
       const now = Date.now();
+      const integrationsDirectory = yield* Effect.try(findIntegrationsDirectory).pipe(
+        Effect.orElseSucceed(() => null),
+      );
       return EXTERNAL_AGENT_PROVIDERS.map((provider): ExternalIntegrationStatus => {
         const row = byProvider.get(provider);
         const active = row ? isIntegrationCredentialActive(row, now) : false;
         const installer = externalIntegrationInstaller(provider, accountId);
+        if (integrationsDirectory !== null) {
+          try {
+            installer.refreshBridge(integrationsDirectory);
+          } catch (err) {
+            logError("external-integrations", `refreshing the ${provider} bridge failed:`, err);
+          }
+        }
         return {
           provider,
           connected: Boolean(row && active),
           clientConfigured: installer.installed(),
           clientName: installer.clientName,
-          command: installer.command,
+          activation: installer.activation,
           createdAt: row?.createdAt ?? null,
           lastUsedAt: row?.lastUsedAt ?? null,
           expiresAt: row?.expiresAt ?? null,
@@ -236,6 +218,7 @@ export const ExternalIntegrationsLive = Layer.effect(
             runtimeExecutable: process.execPath,
             token,
             integrationsDirectory,
+            apiUrl: `http://${serverEnv.host}:${serverEnv.port}/mcp/external`,
           }),
         catch: asIntegrationError("INSTALL_FAILED", "Could not install the Revv integration."),
       });
@@ -250,6 +233,7 @@ export const ExternalIntegrationsLive = Layer.effect(
               userId: args.userId,
               accountId: args.accountId,
               tokenHash: tokenHash(token),
+              // Read only by older Revv versions; this one grants every scope.
               scopes: JSON.stringify(EXTERNAL_AGENT_SCOPES),
               createdAt: now,
               expiresAt,
@@ -282,7 +266,7 @@ export const ExternalIntegrationsLive = Layer.effect(
         connected: true,
         clientConfigured: true,
         clientName: installer.clientName,
-        command: installer.command,
+        activation: installer.activation,
         createdAt: now,
         lastUsedAt: null,
         expiresAt,
@@ -337,7 +321,7 @@ export const ExternalIntegrationsLive = Layer.effect(
       if (
         !integration ||
         !isIntegrationCredentialActive(integration) ||
-        !isProvider(integration.provider)
+        !isExternalAgentProvider(integration.provider)
       ) {
         return yield* Effect.fail(
           externalIntegrationError(
@@ -363,8 +347,7 @@ export const ExternalIntegrationsLive = Layer.effect(
         provider: integration.provider,
         integrationId: integration.id,
         accountId: integration.accountId,
-        userId: integration.userId,
-        scopes: parseScopes(integration.scopes),
+        scopes: EXTERNAL_AGENT_SCOPES,
       };
     });
 
@@ -374,7 +357,9 @@ export const ExternalIntegrationsLive = Layer.effect(
     ) {
       const authorized = yield* authenticate(token);
       const cleanRepository = project.repositoryFullName.trim();
-      const headCandidates = project.headCandidates.filter(isSha).slice(0, 64);
+      const headCandidates = project.headCandidates
+        .filter((sha) => SHA_PATTERN.test(sha))
+        .slice(0, 64);
       if (!/^[^/\s]+\/[^/\s]+$/.test(cleanRepository) || headCandidates.length === 0) {
         return yield* Effect.fail(
           externalIntegrationError("INVALID_PROJECT", "The agent checkout identity is invalid."),

@@ -58,6 +58,7 @@ const repo: SyncRepo = {
   remoteUrl: `file://${origin}`,
   prNumber: 7,
   baseBranch: "main",
+  refs: "base-conflicts",
 };
 
 function moveMain(opts: { conflicting: boolean; workflow?: boolean }) {

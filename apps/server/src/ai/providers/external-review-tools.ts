@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import type {
   ExternalAgentProvider,
+  ExternalAgentScope,
   WalkthroughGenerationMode,
   WalkthroughStatus,
 } from "@revv/shared";
+import { SHA_PATTERN } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { commentThreads } from "../../db/schema/comment-threads";
@@ -12,7 +14,6 @@ import { threadMessages } from "../../db/schema/thread-messages";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
 import { walkthroughs } from "../../db/schema/walkthroughs";
 import { NotFoundError } from "../../domain/errors";
-import { type ExternalAgentScope, SHA_PATTERN } from "../../services/ExternalIntegrations";
 import { threadWrites } from "../../services/Review";
 import {
   decodeIssue,

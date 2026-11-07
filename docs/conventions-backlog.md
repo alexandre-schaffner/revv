@@ -47,7 +47,6 @@ every caller; scheduled as one change.
 
 **Where** (`apps/server/src/services/`):
 
-- chat: `ChatSession.ts`, `ChatMcpTokens.ts`
 - external integrations: `ExternalIntegrations.ts`
 - jobs: `job-mutex.ts`, `job-subscribers.ts`, `session-token-store.ts`
 - no folder yet: poll (`PollScheduler.ts`, `poll-{gate,maintenance,notifications,open-prs,state}.ts`)

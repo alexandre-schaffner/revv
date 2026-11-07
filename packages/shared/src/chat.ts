@@ -95,7 +95,7 @@ export interface ChatSessionContext {
 }
 
 import type { Activity } from "./activity";
-import type { AgentProgressFrame } from "./base-conflicts";
+import type { ResolveFrame } from "./base-conflicts";
 
 /**
  * Streamed during a chat turn. Each frame is one flat JSON object on the
@@ -148,17 +148,8 @@ export interface ProposedCommit {
   readonly files: readonly string[];
 }
 
-/** Frames streamed by `POST /api/chat/:prId/proposed-changes/resolve-and-push`; ends with one `result`. */
-export type ResolvePushFrame =
-  | { readonly kind: "status"; readonly message: string }
-  | { readonly kind: "conflict-files"; readonly files: readonly string[] }
-  | AgentProgressFrame
-  | {
-      readonly kind: "result";
-      readonly status: "pushed";
-      readonly newSha: string;
-      readonly pushedCommits: number;
-      readonly branch: string;
-    }
-  | { readonly kind: "result"; readonly status: "remote-changed"; readonly branch: string }
-  | { readonly kind: "result"; readonly status: "failed"; readonly message: string };
+/** Frames streamed by `POST /api/chat/:prId/proposed-changes/resolve-and-push`. */
+export type ResolvePushFrame = ResolveFrame<{
+  readonly pushedCommits: number;
+  readonly branch: string;
+}>;

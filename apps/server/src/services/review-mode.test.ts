@@ -1,5 +1,4 @@
 import { describe, expect, it } from "bun:test";
-import { eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { createDb, type Db } from "../db";
 import { account, pullRequests, repositories, user } from "../db/schema";

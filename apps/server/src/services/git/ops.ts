@@ -1,11 +1,20 @@
-// The git command surface: every git command Revv runs is one of these. They
-// share one convention: a command whose failure is an outcome the caller acts
-// on (a merge that conflicts, a fetch that can't reach the remote) returns a
-// `GitAttempt`; a read returns its parsed answer, or `null` / `[]` when git
-// can't give one. Nothing here decides what a failure means for a feature.
+// The git command surface (with `push.ts` and `scratch.ts`, the only callers
+// of the runner). One convention:
+//
+//   - a command whose failure is an outcome the caller acts on (a merge that
+//     conflicts, a fetch that can't reach the remote) returns a `GitAttempt`;
+//   - a probe or lookup whose "nothing" is an answer (no such ref, not a
+//     repository, no merge base) returns `null`, `[]` or `false`;
+//   - a read whose caller needs the data (a commit list, a diff, a blob)
+//     throws `GitCommandError` when git can't give it. Effect code calls these
+//     through `gitTry`, which types the failure as `GitOperationError`.
+//
+// Nothing here decides what a failure means for a feature.
 
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { Effect } from "effect";
+import { GitOperationError } from "../../domain/errors";
 import {
   type LineCounts,
   type NameStatusEntry,
@@ -15,14 +24,36 @@ import {
   type WorktreeEntry,
 } from "./parse";
 import {
-  ensureSignalHandlersInstalled,
   type GitAttempt,
+  GitCommandError,
   type GitPolicy,
   gitAttempt,
   gitSucceeds,
-  killStaleCloneProcesses,
+  killStaleGitTransfers,
   runGit,
 } from "./runner";
+
+export { killRunningGitProcesses } from "./runner";
+
+/**
+ * Run git work from Effect code, failing with a typed {@link GitOperationError}
+ * (git's redacted stderr and the command, when a command failed) instead of a
+ * defect. `what` prefixes the message.
+ */
+export const gitTry = <A>(run: () => Promise<A>, what?: string) =>
+  Effect.tryPromise({
+    try: run,
+    catch: (cause) => {
+      const reason = cause instanceof Error ? cause.message : String(cause);
+      return new GitOperationError({
+        message: what ? `${what}: ${reason}` : reason,
+        cause,
+        ...(cause instanceof GitCommandError
+          ? { args: cause.args, stderr: cause.attempt.stderr }
+          : {}),
+      });
+    },
+  });
 
 /**
  * Traversal flags that define an agent branch's *proposed commits*, the
@@ -255,11 +286,6 @@ export async function commitChanges(
       15_000,
     ),
   );
-}
-
-/** A commit's patch against its first parent. Throws when git can't read it. */
-export async function commitPatch(cwd: string, sha: string): Promise<string> {
-  return runGit(cwd, ["show", "--patch", "--pretty=format:", sha], 15_000);
 }
 
 export async function showFile(cwd: string, rev: string, path: string): Promise<string | null> {
@@ -526,6 +552,15 @@ export async function addDetachedWorktree(
   return gitAttempt(clonePath, ["worktree", "add", "--detach", path, sha], timeoutMs);
 }
 
+/** Move a worktree, uncommitted changes and all. Refused for a locked worktree or one with submodules. */
+export async function moveWorktree(
+  clonePath: string,
+  from: string,
+  to: string,
+): Promise<GitAttempt> {
+  return gitAttempt(clonePath, ["worktree", "move", from, to], 60_000);
+}
+
 /**
  * Best-effort: remove the worktree at `path`, including its registration when
  * the directory is already gone. This is the only way Revv drops a worktree:
@@ -545,12 +580,7 @@ export async function shallowClone(
   return gitAttempt(undefined, [...authConfig, "clone", "--depth=1", url, dest], timeoutMs);
 }
 
-/**
- * Called once at boot, before the first clone: kill git processes a previous
- * server lifetime orphaned in the clone directory, and make sure this
- * lifetime's are killed when it exits.
- */
-export async function reapOrphanedGitProcesses(): Promise<void> {
-  ensureSignalHandlersInstalled();
-  await killStaleCloneProcesses();
+/** Kill the clones and fetches an earlier server lifetime left running in `dir`. */
+export async function reapOrphanedGitProcesses(dir: string): Promise<void> {
+  await killStaleGitTransfers(dir);
 }

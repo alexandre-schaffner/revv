@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { Effect, Layer } from "effect";
-import { createDb, type Db } from "../db/index";
-import { chatSessions } from "../db/schema";
+import { createDb, type Db } from "../../db/index";
+import { chatSessions } from "../../db/schema";
+import { DbService } from "../Db";
 import { ChatSessionService, ChatSessionServiceLive } from "./ChatSession";
-import { DbService } from "./Db";
 
 const SESSION_ID = "chat-session-1";
 const TURN_ID = "turn-1";

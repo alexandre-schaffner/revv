@@ -15,7 +15,13 @@ import { DbService } from "../Db";
 import { readCurrentHeadFiles, toGitHubFileShape } from "../DiffCache";
 import { GitHubGateway } from "../github/gateway";
 import type { GitHubStack } from "../github/stacks";
-import { type PrContextBasic, type PrContextError, PrContextService } from "../PrContext";
+import type { GitHubClient } from "../github/transport";
+import {
+  type PrContextBasic,
+  type PrContextError,
+  PrContextService,
+  type RepoContext,
+} from "../PrContext";
 import { Realtime } from "../Realtime";
 import { fingerprintFiles, stackSignature } from "./fingerprint";
 import { type MirroredLayer, membershipSupersededByPoll, stackFromMirror } from "./map";
@@ -45,11 +51,23 @@ export class StackService extends Context.Service<
      */
     readonly detail: (
       prId: string,
-      accountId?: string,
+      accountId: string,
     ) => Effect.Effect<PrStackDetail | null, StackError>;
-    readonly fetchFresh: (ctx: PrContextBasic) => Effect.Effect<GitHubStack | null, StackError>;
+    /** PR #`prNumber`'s stack as GitHub reports it now, cached for the next read. */
+    readonly fetchFresh: (
+      at: { readonly client: GitHubClient; readonly repo: RepoContext["repo"] },
+      prNumber: number,
+    ) => Effect.Effect<GitHubStack | null, StackError>;
     readonly snapshot: (ctx: PrContextBasic) => Effect.Effect<WalkthroughStackSnapshot | null>;
-    readonly markStale: (repositoryId: string, stackNumber: number) => Effect.Effect<void, DbError>;
+    /**
+     * Revv or GitHub moved the stack (a push, a retarget, a merge): drop the
+     * cached read, so the next one asks GitHub, and tell the account.
+     */
+    readonly moved: (
+      accountId: string,
+      repositoryId: string,
+      stackNumber: number,
+    ) => Effect.Effect<void>;
   }
 >()("StackService") {}
 
@@ -287,13 +305,16 @@ export const StackServiceLive = Layer.effect(
     const realtime = yield* Realtime;
     const revalidating = new Set<string>();
 
-    const fetchFresh = (ctx: PrContextBasic) =>
+    const fetchFresh = (
+      { client, repo }: { readonly client: GitHubClient; readonly repo: RepoContext["repo"] },
+      prNumber: number,
+    ) =>
       Effect.gen(function* () {
-        const stack = yield* github.stacks.ofPr(ctx.client, ctx.repo.fullName, ctx.pr.externalId);
+        const stack = yield* github.stacks.ofPr(client, repo.fullName, prNumber);
         if (stack) {
           yield* withDb(
             db,
-            cache.set(CACHE_NS, cacheKey(ctx.repo.id, stack.number), stack, {
+            cache.set(CACHE_NS, cacheKey(repo.id, stack.number), stack, {
               ttlMs: CACHE_TTL_MS,
             }),
           );
@@ -305,7 +326,7 @@ export const StackServiceLive = Layer.effect(
       const key = cacheKey(ctx.repo.id, stackNumber);
       if (revalidating.has(key)) return Effect.void;
       revalidating.add(key);
-      return fetchFresh(ctx).pipe(
+      return fetchFresh(ctx, ctx.pr.externalId).pipe(
         Effect.flatMap((stack) =>
           stack
             ? realtime.toAccount(accountId, {
@@ -350,7 +371,7 @@ export const StackServiceLive = Layer.effect(
             return { stack: source.stack, stale: false };
           case "github": {
             const { ifUnreachable } = source;
-            return yield* fetchFresh(ctx).pipe(
+            return yield* fetchFresh(ctx, ctx.pr.externalId).pipe(
               Effect.map((stack) => ({ stack, stale: false })),
               Effect.catchIf(isGitHubUnreachable, (err) =>
                 ifUnreachable
@@ -362,11 +383,11 @@ export const StackServiceLive = Layer.effect(
         }
       });
 
-    const detail = (prId: string, accountId?: string) =>
+    const detail = (prId: string, accountId: string) =>
       Effect.gen(function* () {
         const ctx = yield* withDb(db, prContext.forPr(prId, accountId));
         if (!ctx.pr.stack) return null;
-        const { stack, stale } = yield* githubStack(ctx, ctx.pr.stack.number, accountId ?? null);
+        const { stack, stale } = yield* githubStack(ctx, ctx.pr.stack.number, accountId);
         if (!stack) return null;
         const facts = yield* withDb(db, readStackFacts(ctx.repo.id, stack));
         return overlayStack(stack, facts, ctx.pr.externalId, stale);
@@ -388,15 +409,21 @@ export const StackServiceLive = Layer.effect(
         ),
       );
 
-    const markStale = (repositoryId: string, stackNumber: number) =>
-      Effect.gen(function* () {
-        const key = cacheKey(repositoryId, stackNumber);
-        const cached = yield* cache.get<GitHubStack>(CACHE_NS, key);
-        if (!cached) return;
-        const aged: GitHubStack = { ...cached, fetchedAt: new Date(0).toISOString() };
-        yield* cache.set(CACHE_NS, key, aged, { ttlMs: CACHE_TTL_MS });
-      }).pipe((eff) => withDb(db, eff));
+    const moved = (accountId: string, repositoryId: string, stackNumber: number) =>
+      withDb(db, cache.invalidate(CACHE_NS, cacheKey(repositoryId, stackNumber))).pipe(
+        Effect.catch((err) =>
+          Effect.sync(() =>
+            logError("stacks", `dropping the cached read of stack #${stackNumber}:`, err),
+          ),
+        ),
+        Effect.andThen(
+          realtime.toAccount(accountId, {
+            type: "stack:updated",
+            data: { repositoryId, stackNumber },
+          }),
+        ),
+      );
 
-    return { detail, fetchFresh, snapshot, markStale };
+    return { detail, fetchFresh, snapshot, moved };
   }),
 );

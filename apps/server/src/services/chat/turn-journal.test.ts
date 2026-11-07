@@ -5,8 +5,8 @@ import type { RawChatStreamFrame } from "../../ai/providers/chat-types";
 import { createDb, type Db } from "../../db/index";
 import { chatSessions } from "../../db/schema";
 import { DbError } from "../../domain/errors";
-import { ChatSessionService, ChatSessionServiceLive } from "../ChatSession";
 import { DbService } from "../Db";
+import { ChatSessionService, ChatSessionServiceLive } from "./ChatSession";
 import { journalTurn } from "./turn-journal";
 
 const SESSION_ID = "chat-session-1";

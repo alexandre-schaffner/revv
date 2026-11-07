@@ -8,8 +8,17 @@ import { AppRuntime } from "../../runtime";
 import { Realtime } from "../../services/Realtime";
 import { publishWalkthroughEdit } from "../../services/walkthrough/edits";
 
+/** Push a thread event to the PR's owning account, resolved per event (`Realtime.toPr`). */
 export function fireAndForgetThreadEventBroadcast(prId: string, msg: ThreadEventMessage): void {
-  void AppRuntime.runPromise(Effect.flatMap(Realtime, (realtime) => realtime.toPr(prId, msg)));
+  AppRuntime.runPromise(Effect.flatMap(Realtime, (realtime) => realtime.toPr(prId, msg))).catch(
+    (err: unknown) => {
+      logError(
+        "mcp-thread",
+        `broadcasting ${msg.type} for ${prId} failed:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    },
+  );
 }
 
 export function fireAndForgetWalkthroughEdit(

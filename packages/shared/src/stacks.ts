@@ -54,7 +54,9 @@ export type StackLayerReview =
  *   layer-changed  — the layer's own changes differ in `files`.
  *   needs-rebase   — a layer below merged and this one still carries its
  *                    changes (squash-merged base); the author has to restack.
- *   unknown        — no review, or one written before Revv tracked stacks.
+ *   unknown        — no review, or a re-pushed layer whose reviewed and
+ *                    current diffs can't be compared. A review written before
+ *                    Revv tracked stacks reads `current`.
  */
 export type RestackVerdict =
   | { readonly kind: "current" }
@@ -239,7 +241,8 @@ export interface StackReviewStarted {
  * auto-merge, which finishes even with Revv closed. `driven`: Revv merges
  * each layer itself, bottom-up, and has to stay open until it's done.
  */
-export type StackMergeMode = "auto" | "driven";
+export const STACK_MERGE_MODES = ["auto", "driven"] as const;
+export type StackMergeMode = (typeof STACK_MERGE_MODES)[number];
 
 export type StackMergeReadiness = "merged" | "ready" | "blocked";
 
@@ -273,13 +276,25 @@ export interface StackMergePlan {
   readonly latestRun: StackMergeRun | null;
 }
 
-export type StackMergeRunStatus =
-  | "running"
-  | "waiting"
-  | "complete"
-  | "failed"
-  | "cancelled"
-  | "expired";
+export const STACK_MERGE_RUN_STATUSES = [
+  "running",
+  "waiting",
+  "complete",
+  "failed",
+  "cancelled",
+  "expired",
+] as const;
+export type StackMergeRunStatus = (typeof STACK_MERGE_RUN_STATUSES)[number];
+
+/** Statuses of a run that is still going: at most one per stack. */
+export const LIVE_STACK_MERGE_RUN_STATUSES = [
+  "running",
+  "waiting",
+] as const satisfies readonly StackMergeRunStatus[];
+
+export function isLiveStackMergeRun(status: StackMergeRunStatus): boolean {
+  return LIVE_STACK_MERGE_RUN_STATUSES.some((live) => live === status);
+}
 
 export type StackMergeLayerState =
   | "pending"

@@ -5,8 +5,8 @@ import type { ChatSessionContext } from "@revv/shared";
 import { Effect } from "effect";
 import { resolveAgentLaunch } from "../../ai/acp/agent-launch";
 import { agentSessionContext } from "../../ai/acp/run-turn";
-import { listTrackedFiles } from "../git/ops";
-import { GitHubGateway } from "../github/gateway";
+import { logError } from "../../logger";
+import { gitTry, listTrackedFiles } from "../git/ops";
 import { PrContextService } from "../PrContext";
 import { PrWorkspace } from "../workspace/PrWorkspace";
 
@@ -41,30 +41,27 @@ export const resolveChatSessionContext = (prId: string, warm: boolean) =>
     const cacheKey = `${launch.agent}::${ctx.repo.id}`;
     const cachedCommands = slashCommandCache.get(cacheKey) ?? EMPTY.commands;
 
-    const headSha =
-      ctx.pr.headSha ??
-      (warm
-        ? (yield* (yield* GitHubGateway).prs.get(
-            ctx.client,
-            ctx.repo.fullName,
-            ctx.repo.id,
-            ctx.pr.externalId,
-          )).headSha
-        : null);
-    if (headSha === null) return { ...EMPTY, commands: cachedCommands };
-
     let worktreePath = workspace.agentBranch(ctx)?.worktreePath ?? null;
-    if (warm && worktreePath === null) {
-      // A turn already working there will bring the worktree up itself.
-      worktreePath = yield* Effect.scoped(workspace.open(ctx, headSha, "chat-turn")).pipe(
-        Effect.map(({ branch }) => branch.worktreePath),
+    let headSha = ctx.pr.headSha;
+    if (warm && (worktreePath === null || headSha === null)) {
+      // A turn or push already working there will bring the worktree up itself.
+      const opened = yield* Effect.scoped(workspace.open(ctx, "warm-up")).pipe(
         Effect.catchTag("WorkspaceBusyError", () => Effect.succeed(null)),
       );
+      worktreePath = opened?.branch.worktreePath ?? worktreePath;
+      headSha = opened?.headSha ?? headSha;
     }
-    if (worktreePath === null) return { ...EMPTY, commands: cachedCommands };
+    if (worktreePath === null || headSha === null) return { ...EMPTY, commands: cachedCommands };
     const cwd = worktreePath;
 
-    const repoFiles = yield* Effect.promise(() => listTrackedFiles(cwd).catch(() => []));
+    const repoFiles = yield* gitTry(() => listTrackedFiles(cwd)).pipe(
+      Effect.catch((err) =>
+        Effect.sync(() => {
+          logError("chat-context", "listing the repository's files failed:", err.message);
+          return [];
+        }),
+      ),
+    );
     const session = yield* workspace.session({ id: ctx.pr.id, headSha });
     const live = yield* Effect.promise(() =>
       agentSessionContext({ launch, cwd, warm, sessionId: session?.sessionId ?? null }),

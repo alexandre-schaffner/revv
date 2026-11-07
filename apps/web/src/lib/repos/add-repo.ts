@@ -49,7 +49,12 @@ export function groupByOwner<T extends Pick<Repository, "owner">>(
   return groups;
 }
 
-/** Where the server puts a clone of `fullName` under `base` (`services/RepoClone.ts`). */
+/**
+ * Where the server puts a clone of `fullName` under `base`
+ * (`services/clone/layout.ts` `clonePath`). When another repository row
+ * already holds that folder the server picks `<name>.<row id>` instead, which
+ * the preview can't know before the row exists.
+ */
 export function clonePathPreview(base: string, fullName: string): string {
   return `${base.replace(/\/$/, "")}/${fullName}`;
 }

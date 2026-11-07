@@ -1,11 +1,10 @@
+// Rules for the folders a clone may live in: which destination a clone takes,
+// and which managed clone may be deleted.
+
 import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { serverEnv } from "../config";
-import { CloneError } from "../domain/errors";
-import { isGitRepo, listWorktrees, originUrl } from "./git/ops";
-
-export const CLONE_BASE_DIR = serverEnv.cloneDir;
+import { isGitRepo, originUrl, resolveRef } from "../git/ops";
 
 export function pathIsUnder(child: string, parent: string): boolean {
   const resolvedChild = resolve(child);
@@ -23,23 +22,31 @@ export function existingPathIsUnder(child: string, parent: string): boolean {
   }
 }
 
-export function assertSafeManagedClonePath(clonePath: string): void {
-  const resolvedPath = resolve(clonePath);
-  const home = resolve(homedir());
+/**
+ * Why Revv must not `rm -rf` the managed clone at `clonePath`, or null when it
+ * may. Never the home directory, the root, or anything holding them. Under
+ * Revv's base the folder is Revv's. Elsewhere (a base the user picked), only a
+ * clone of this repository is removed: that one Revv made, since a matching
+ * checkout found there is linked, never managed.
+ */
+export async function managedCloneRemovalRefusal(
+  clonePath: string,
+  base: string,
+  repo: { readonly githubHost: string; readonly fullName: string },
+): Promise<string | null> {
+  const target = resolve(clonePath);
   if (
     !clonePath.trim() ||
-    resolvedPath === "/" ||
-    resolvedPath === home ||
-    !pathIsUnder(resolvedPath, CLONE_BASE_DIR)
+    target === "/" ||
+    target === resolve(base) ||
+    pathIsUnder(homedir(), target)
   ) {
-    throw new CloneError({
-      message: `Refusing to delete unsafe managed clone path: ${clonePath}`,
-    });
+    return `Refusing to delete ${clonePath}`;
   }
-}
-
-export function worktreeHolderPath(owner: string, name: string): string {
-  return join(CLONE_BASE_DIR, owner, name, "worktrees");
+  if (pathIsUnder(target, base)) return null;
+  if (!existsSync(target)) return null;
+  if (await remoteMatches(target, repo.githubHost, repo.fullName)) return null;
+  return `Refusing to delete ${clonePath}: it isn't a clone of ${repo.fullName}`;
 }
 
 export function expandUserPath(path: string): string {
@@ -81,6 +88,8 @@ export type CloneDestinationState =
   | "missing"
   | "empty"
   | "matching-git-repo"
+  /** A clone of the repository with no commit checked out: a clone killed mid-fetch. */
+  | "broken-git-repo"
   | "different-git-repo"
   | "non-empty-non-git";
 
@@ -104,6 +113,13 @@ export function decideCloneDestination(
       // forever. Outside the base it's the user's checkout: link it
       // (`managed: false`) so it is never deleted.
       return underDefaultBase ? { action: "adopt" } : { action: "link" };
+    case "broken-git-repo":
+      return underDefaultBase
+        ? { action: "clone", removeExisting: true }
+        : {
+            action: "fail",
+            message: "The clone at that location is incomplete; delete it or choose another.",
+          };
     case "different-git-repo":
       return {
         action: "fail",
@@ -135,17 +151,8 @@ export async function readCloneDestinationState(
 ): Promise<CloneDestinationState> {
   if (!existsSync(dest)) return "missing";
   if (await isGitRepo(dest)) {
-    return (await remoteMatches(dest, gitHost, fullName))
-      ? "matching-git-repo"
-      : "different-git-repo";
+    if (!(await remoteMatches(dest, gitHost, fullName))) return "different-git-repo";
+    return (await resolveRef(dest, "HEAD")) === null ? "broken-git-repo" : "matching-git-repo";
   }
   return readdirSync(dest).length === 0 ? "empty" : "non-empty-non-git";
-}
-
-export async function findWorktreesOnBranch(
-  clonePath: string,
-  branchName: string,
-): Promise<string[]> {
-  const ref = `refs/heads/${branchName}`;
-  return (await listWorktrees(clonePath)).filter((w) => w.branch === ref).map((w) => w.path);
 }

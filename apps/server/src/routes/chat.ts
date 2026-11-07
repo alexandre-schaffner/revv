@@ -12,7 +12,7 @@ import {
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { AttachmentRejectedError } from "../domain/errors";
-import { ChatSessionService } from "../services/ChatSession";
+import { ChatSessionService } from "../services/chat/ChatSession";
 import { ChatTurnService } from "../services/chat/ChatTurn";
 import { PrContextService } from "../services/PrContext";
 import { PrWorkspace } from "../services/workspace/PrWorkspace";
@@ -113,7 +113,6 @@ export const chatRoute = new Elysia()
           const turns = yield* ChatTurnService;
           return yield* turns.start({
             prId: ctx.body.prId,
-            userId: ctx.userId,
             message: ctx.body.message,
             attachments,
             attachmentMetadata,

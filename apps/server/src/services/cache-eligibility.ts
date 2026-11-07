@@ -7,14 +7,16 @@
 // access also revokes their cache authority on next verification.
 //
 // Permissions are asked as the account that tracks the repository, on the
-// repository's own host. Results are TTL-cached in memory to avoid hammering
-// the GitHub API on every cache hit.
+// repository's own host. GitHub's answers are TTL-cached in memory to avoid
+// hammering the API on every cache hit; a failure to ask is never cached, so
+// a rate limit or a dropped connection costs one check, not five minutes.
 
 import { and, eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { repositories } from "../db/schema";
+import type { GitHubError } from "../domain/errors";
 import { dbTry } from "../effects/db-try";
-import { debug } from "../logger";
+import { debug, logError } from "../logger";
 import { DbService } from "./Db";
 import { GitHubAccounts } from "./github/accounts";
 import { GitHubGateway } from "./github/gateway";
@@ -38,17 +40,18 @@ export class CacheEligibility extends Context.Service<
   CacheEligibility,
   {
     /**
-     * Returns `true` iff the account tracking the repository currently has
-     * at least `write` permission on it. Never raises — any failure → `false`.
+     * Whether the account tracking the repository currently has at least
+     * `write` permission on it; fails when GitHub couldn't be asked.
      *
      * Used on push to gate whether this machine is allowed to publish to
      * the shared cache. A read-only contributor still receives cache hits;
      * they simply don't push.
      */
-    readonly canPush: (repoId: string) => Effect.Effect<boolean>;
+    readonly canPush: (repoId: string) => Effect.Effect<boolean, GitHubError>;
     /**
      * Returns `true` iff `signerLogin` on `signerHost` currently has at
-     * least `write` permission on `repoFullName`. Never raises — failure → `false`.
+     * least `write` permission on `repoFullName`. Never raises: a signer whose
+     * permission can't be read is not trusted, this time.
      *
      * Used on fetch after signature verification succeeds. Asked as the
      * account that tracks `repoFullName` on `signerHost`; with none (the
@@ -85,12 +88,13 @@ export const CacheEligibilityLive = Layer.effect(
       client: GitHubClient,
       fullName: string,
       login: string,
-    ): Effect.Effect<PermLevel> => {
+    ): Effect.Effect<PermLevel, GitHubError> => {
       const key = `${client.host}:${fullName}:${login}`;
       const cached = getCached(key);
       if (cached !== null) return Effect.succeed(cached);
       return github.repos.collaboratorPermission(client, fullName, login).pipe(
-        Effect.catch(() => Effect.succeed("none" as PermLevel)),
+        // GitHub refusing to show the permission is its answer: no write access.
+        Effect.catchTag("GitHubAccessDeniedError", () => Effect.succeed<PermLevel>("none")),
         Effect.tap((perm) =>
           Effect.sync(() => {
             permCache.set(key, { permission: perm, fetchedAt: Date.now() });
@@ -115,7 +119,12 @@ export const CacheEligibilityLive = Layer.effect(
           if (!githubLogin) return false;
           const client = yield* accounts.clientFor(repo.accountId);
           return isEligible(yield* resolvePermission(client, repo.fullName, githubLogin));
-        }).pipe(Effect.catch(() => Effect.succeed(false))),
+        }).pipe(
+          Effect.catchTags({
+            DbError: () => Effect.succeed(false),
+            NotFoundError: () => Effect.succeed(false),
+          }),
+        ),
 
       isSignerEligible: (repoFullName, signerHost, signerLogin) =>
         Effect.gen(function* () {
@@ -134,7 +143,18 @@ export const CacheEligibilityLive = Layer.effect(
           if (!repo) return false;
           const client = yield* accounts.clientFor(repo.accountId);
           return isEligible(yield* resolvePermission(client, repoFullName, signerLogin));
-        }).pipe(Effect.catch(() => Effect.succeed(false))),
+        }).pipe(
+          Effect.catch((err) =>
+            Effect.sync(() => {
+              logError(
+                "cache-eligibility",
+                `couldn't read ${signerLogin}@${signerHost}'s permission on ${repoFullName}:`,
+                err,
+              );
+              return false;
+            }),
+          ),
+        ),
     });
   }),
 );

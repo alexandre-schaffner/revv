@@ -13,7 +13,6 @@ import type {
 } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Exit, Layer, Scope } from "effect";
-import { resolveAgentLaunch } from "../../ai/acp/agent-launch";
 import type { ChatHistoryEntry, ChatWalkthroughContext } from "../../ai/prompts/chat";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
 import {
@@ -22,6 +21,7 @@ import {
   type CloneNotReadyError,
   type DbError,
   type GitHubError,
+  type GitOperationError,
   PlanGateError,
   type WorkspaceBusyError,
   type WorktreeBlockedByUnpushedCommits,
@@ -29,18 +29,16 @@ import {
 import { dbTry } from "../../effects/db-try";
 import { logError } from "../../logger";
 import { AiService } from "../Ai";
-import { ChatSessionService } from "../ChatSession";
 import { DbService } from "../Db";
-import { GitHubGateway } from "../github/gateway";
 import { type PrContextError, PrContextService } from "../PrContext";
 import type { SettingsService } from "../Settings";
 import { latestCompleteWalkthrough } from "../walkthrough/content";
 import { PrWorkspace } from "../workspace/PrWorkspace";
+import { ChatSessionService } from "./ChatSession";
 import { journalTurn } from "./turn-journal";
 
 export interface ChatTurnParams {
   readonly prId: string;
-  readonly userId: string;
   readonly message: string;
   readonly attachments: ReadonlyArray<ChatAttachment>;
   readonly attachmentMetadata: ReadonlyArray<ChatAttachmentMetadata>;
@@ -57,6 +55,7 @@ export type ChatTurnError =
   | GitHubError
   | CloneError
   | CloneNotReadyError
+  | GitOperationError
   | AiError
   | DbError;
 
@@ -81,7 +80,6 @@ export const ChatTurnServiceLive = Layer.effect(
     const context = yield* Effect.context<DbService | SettingsService>();
     const { db } = yield* DbService;
     const prCtx = yield* PrContextService;
-    const github = yield* GitHubGateway;
     const workspace = yield* PrWorkspace;
     const chatSessions = yield* ChatSessionService;
     const ai = yield* AiService;
@@ -124,27 +122,10 @@ export const ChatTurnServiceLive = Layer.effect(
       Effect.gen(function* () {
         const ctx = yield* prCtx.forPr(params.prId);
         const { pr } = ctx;
-        const headSha =
-          pr.headSha ??
-          (yield* github.prs.get(ctx.client, ctx.repo.fullName, ctx.repo.id, pr.externalId))
-            .headSha;
-        if (headSha === null) {
-          // GitHub always reports a head for a PR it serves; this narrows the type.
-          return yield* Effect.die(new Error(`chat turn: no head SHA for ${pr.id}`));
-        }
-        const launch = yield* resolveAgentLaunch("chat");
-        const { claim, branch } = yield* workspace
-          .open(ctx, headSha, "chat-turn")
+        const { claim, branch, headSha } = yield* workspace
+          .open(ctx, "chat-turn")
           .pipe(Scope.provide(scope));
-
-        const session = yield* chatSessions.findOrCreate({
-          prId: pr.id,
-          agent: launch.agent,
-          model: launch.model,
-          prHeadSha: headSha,
-          worktreePath: branch.worktreePath,
-          branchName: branch.branchName,
-        });
+        const { session, launch } = yield* workspace.openSession(ctx, headSha, branch);
 
         const pendingPlan = yield* chatSessions.findPendingPlan(session.id);
         if (pendingPlan && pendingPlan.id !== params.approvedPlanId) {
@@ -223,7 +204,6 @@ export const ChatTurnServiceLive = Layer.effect(
               }),
             ),
           prId: pr.id,
-          userId: params.userId,
           interactionMode: mode,
           abortController: abort,
         });

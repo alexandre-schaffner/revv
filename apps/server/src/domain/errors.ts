@@ -94,7 +94,6 @@ export class ExternalIntegrationError extends Data.TaggedError("ExternalIntegrat
     | "INVALID_PROJECT"
     | "PR_NOT_FOUND"
     | "INSTALL_FAILED"
-    | "NOT_CONNECTED"
     | "INTERNAL";
   readonly cause?: unknown;
 }> {}
@@ -195,7 +194,7 @@ export class ConcurrentPushError extends Data.TaggedError("ConcurrentPushError")
 }> {}
 
 /** What holds a PR's agent workspace (see `PrWorkspace`). */
-export type WorkspaceHolder = "chat-turn" | "push" | "branch-edit";
+export type WorkspaceHolder = "chat-turn" | "warm-up" | "push" | "branch-edit" | "prune";
 
 export class WorkspaceBusyError extends Data.TaggedError("WorkspaceBusyError")<{
   readonly prId: string;
@@ -231,9 +230,12 @@ export class AgentBranchConflictError extends Data.TaggedError("AgentBranchConfl
   readonly message: string;
 }> {}
 
+/** Git couldn't do what was asked. `args` and the redacted `stderr` are set when a command failed. */
 export class GitOperationError extends Data.TaggedError("GitOperationError")<{
   readonly message: string;
   readonly cause?: unknown;
+  readonly args?: readonly string[];
+  readonly stderr?: string;
 }> {}
 
 export class PushRejectedError extends Data.TaggedError("PushRejectedError")<{
@@ -308,16 +310,6 @@ export class DbError extends Data.TaggedError("DbError")<{
 export class BlobStoreUnavailable extends Data.TaggedError("BlobStoreUnavailable")<{
   readonly message: string;
   readonly cause?: unknown;
-}> {}
-
-/**
- * The blob exists but its metadata or body is unusable (missing
- * `schemaVersion`, `contentSha256` mismatch, gunzip failure). Cache hit
- * is downgraded to a miss; no row mutation.
- */
-export class BlobCorrupt extends Data.TaggedError("BlobCorrupt")<{
-  readonly key: string;
-  readonly reason: string;
 }> {}
 
 /**
@@ -428,7 +420,6 @@ type AppError =
   | RecapNotFoundError
   | DbError
   | BlobStoreUnavailable
-  | BlobCorrupt
   | CacheUnavailable
   | CacheSerialization
   | ImportError
@@ -470,7 +461,6 @@ const EXTERNAL_INTEGRATION_HTTP = {
   INVALID_CREDENTIAL: [403, "FORBIDDEN"],
   INVALID_PROJECT: [404, "NOT_FOUND"],
   PR_NOT_FOUND: [404, "NOT_FOUND"],
-  NOT_CONNECTED: [409, "NOT_CONNECTED"],
   INSTALL_FAILED: [400, "FAILED"],
   INTERNAL: [500, "INTERNAL_ERROR"],
 } as const satisfies Record<
@@ -584,7 +574,11 @@ const HTTP_ERRORS: {
       ? http(409, "CHAT_STREAMING", "Wait for the chat agent to finish")
       : e.heldBy === "push"
         ? http(409, "CONCURRENT_PUSH", "A push of the agent's commits is already running")
-        : http(409, "BUSY", "Revv is still rewriting the agent's commits"),
+        : e.heldBy === "prune"
+          ? http(409, "BUSY", "Revv is removing this PR's worktree")
+          : e.heldBy === "warm-up"
+            ? http(409, "BUSY", "Revv is preparing the chat agent's worktree")
+            : http(409, "BUSY", "Revv is still rewriting the agent's commits"),
   DirtyWorktreeError: (e) => http(409, "DIRTY_WORKTREE", e.message),
   NoChangesError: () => http(422, "NO_CHANGES", "No agent commits to push"),
   NoChatSessionError: () =>
@@ -596,7 +590,6 @@ const HTTP_ERRORS: {
   DbError: (e) => internal(e.message),
   ProfilingError: (e) => internal(String(e.cause)),
   BlobStoreUnavailable: (e) => internal(e.message),
-  BlobCorrupt: (e) => internal(e.reason),
   CacheUnavailable: (e) => internal(e.message),
   CacheSerialization: (e) => internal(e.message),
   ImportError: (e) => internal(e.reason),

@@ -9,8 +9,8 @@
  *   one statement;
  * - a trusted head move supersedes walkthroughs pinned to the old head
  *   (invariant 7), keeping one generating at the new head;
- * - a PR that went terminal is announced (`pr:archived`), its review worktree
- *   reaped, and its stack marked stale;
+ * - a PR that went terminal is announced (`pr:archived`), its agent worktree
+ *   reaped (unless someone works in it), and its stack marked stale;
  * - the account's clients hear `prs:updated`, after the commit (invariant 8).
  */
 import {
@@ -19,9 +19,12 @@ import {
   type ServerEventMessage,
   sameStack,
 } from "@revv/shared";
+import { and, eq, inArray } from "drizzle-orm";
 import { Context, Effect, Layer, Option } from "effect";
-import type { DbError } from "../domain/errors";
+import { pullRequests } from "../db/schema/index";
+import { type DbError, type GitHubError, GitHubNotFoundError } from "../domain/errors";
 import { asStored, type ObservedPr, STACK_UNSEEN } from "../domain/observed-pr";
+import { dbTry } from "../effects/db-try";
 import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
 import { DbService } from "./Db";
@@ -30,10 +33,10 @@ import type { GitHubClient } from "./github/transport";
 import { PullRequestService } from "./PullRequest";
 import { isTrustedHeadShaMove, preserveHeadOnStaleRead } from "./pr-head-move";
 import { Realtime } from "./Realtime";
-import { RepoCloneService } from "./RepoClone";
 import { RepositoryService } from "./Repository";
 import { StackService } from "./stacks/StackService";
 import { WalkthroughJobs } from "./walkthrough/WalkthroughJobs";
+import { AgentWorktrees } from "./workspace/agent-worktrees";
 
 export interface MirrorOptions {
   /**
@@ -67,13 +70,24 @@ export interface PrMirrorService {
   ) => Effect.Effect<MirrorOutcome, DbError>;
   readonly recordMutation: (prId: string, mutation: PrMutation) => Effect.Effect<void, DbError>;
   /**
-   * Revv pushed `newTip` to the PR's source branch: record the head before the
-   * next poll would, from GitHub's detail when it already shows the push.
+   * Revv pushed these tips to the source branches of the repo's PRs (a chat
+   * push, a base sync, a stack rebase): record each head before the next poll
+   * would, from GitHub's detail when it already shows the push. The push
+   * happened either way, so a failure here is logged, never returned.
    */
-  readonly recordPushedHead: (
-    ctx: { readonly pr: PullRequest; readonly repo: Repository; readonly client: GitHubClient },
-    newTip: string,
-  ) => Effect.Effect<void, DbError>;
+  readonly recordPushes: (
+    at: { readonly repo: Repository; readonly client: GitHubClient },
+    pushes: ReadonlyArray<{ readonly prNumber: number; readonly newTip: string }>,
+  ) => Effect.Effect<void>;
+  /**
+   * The PR's head: the mirror's, or GitHub's when the mirror has none yet,
+   * recorded first so every reader agrees on it.
+   */
+  readonly headOf: (ctx: {
+    readonly pr: PullRequest;
+    readonly repo: Repository;
+    readonly client: GitHubClient;
+  }) => Effect.Effect<string, GitHubError | DbError>;
   /** Send each account its full open-PR list (`prs:updated`). */
   readonly announce: (accountIds: Iterable<string>) => Effect.Effect<void>;
 }
@@ -105,7 +119,7 @@ export const PrMirrorLive = Layer.effect(
     const prService = yield* PullRequestService;
     const repoService = yield* RepositoryService;
     const walkthroughJobs = yield* WalkthroughJobs;
-    const repoClone = yield* RepoCloneService;
+    const agentWorktrees = yield* AgentWorktrees;
     const stackService = yield* StackService;
     const realtime = yield* Realtime;
     const github = yield* GitHubGateway;
@@ -148,22 +162,11 @@ export const PrMirrorLive = Layer.effect(
     const markStacksStale = (accountId: string, repositoryId: string, stacks: Iterable<number>) =>
       Effect.forEach(
         new Set(stacks),
-        (stackNumber) =>
-          withDb(db, stackService.markStale(repositoryId, stackNumber)).pipe(
-            Effect.catch((e) =>
-              Effect.sync(() => logError("PrMirror", `stack #${stackNumber} stale mark:`, e)),
-            ),
-            Effect.andThen(
-              realtime.toAccount(accountId, {
-                type: "stack:updated",
-                data: { repositoryId, stackNumber },
-              }),
-            ),
-          ),
+        (stackNumber) => stackService.moved(accountId, repositoryId, stackNumber),
         { discard: true },
       );
 
-    /** A PR that left the open list: announce it and reap its review worktree. */
+    /** A PR that left the open list: announce it and reap its agent worktree. */
     const wentTerminal = (accountId: string, pr: PullRequest) =>
       Effect.gen(function* () {
         const message: ServerEventMessage = {
@@ -176,12 +179,16 @@ export const PrMirrorLive = Layer.effect(
           },
         };
         yield* realtime.toAccount(accountId, message);
-        // `pruneWorktree` refuses while a generation runs or review commits are
-        // unpushed, so it can run detached.
+        // The prune takes the PR's workspace claim, and leaves a worktree
+        // someone works in or with unpushed commits for the next sweep.
         yield* Effect.forkDetach(
-          repoClone
-            .pruneWorktree({ repoId: pr.repositoryId, prNumber: pr.externalId })
-            .pipe(Effect.catch(() => Effect.void)),
+          agentWorktrees
+            .prune({ repoId: pr.repositoryId, prId: pr.id, prNumber: pr.externalId })
+            .pipe(
+              Effect.catch((err) =>
+                Effect.sync(() => logError("PrMirror", `pruning ${pr.id}'s worktree:`, err)),
+              ),
+            ),
         );
       });
 
@@ -257,6 +264,7 @@ export const PrMirrorLive = Layer.effect(
           Effect.catchTag("NotFoundError", () => Effect.succeed(null)),
         );
         if (!before) return;
+        if (mutation.kind === "terminal" && before.status === mutation.status) return;
         let after: PullRequest;
         if (mutation.kind === "draft") {
           yield* withDb(db, prService.setPrDraft(prId, mutation.isDraft));
@@ -274,21 +282,66 @@ export const PrMirrorLive = Layer.effect(
         yield* announce(accountIds);
       });
 
-    const recordPushedHead: PrMirrorService["recordPushedHead"] = ({ pr, repo, client }, newTip) =>
+    const recordPushes: PrMirrorService["recordPushes"] = ({ repo, client }, pushes) =>
       Effect.gen(function* () {
-        const live = yield* github.prs
-          .get(client, repo.fullName, repo.id, pr.externalId)
-          .pipe(Effect.option);
+        if (pushes.length === 0) return;
+        const ids = yield* dbTry("pushed PRs read", () =>
+          db
+            .select({ id: pullRequests.id, number: pullRequests.externalId })
+            .from(pullRequests)
+            .where(
+              and(
+                eq(pullRequests.repositoryId, repo.id),
+                inArray(
+                  pullRequests.externalId,
+                  pushes.map((p) => p.prNumber),
+                ),
+              ),
+            )
+            .all(),
+        );
+        const prior = yield* readPrior(ids.map((row) => row.id));
         const now = new Date().toISOString();
-        // Until GitHub's detail shows the push, its `updated_at` would make the
-        // new head read as stale: stamp the push time with it instead.
-        const observed: ObservedPr =
-          Option.isSome(live) && live.value.headSha === newTip
-            ? live.value
-            : { ...pr, stack: STACK_UNSEEN, headSha: newTip, updatedAt: now, fetchedAt: now };
-        yield* apply([observed], { prior: new Map([[pr.id, pr]]) });
+        const observed: ObservedPr[] = [];
+        for (const { prNumber, newTip } of pushes) {
+          const pr = [...prior.values()].find((row) => row.externalId === prNumber);
+          if (!pr) continue;
+          const live = yield* github.prs
+            .get(client, repo.fullName, repo.id, prNumber)
+            .pipe(Effect.option);
+          // Until GitHub's detail shows the push, its `updated_at` would make
+          // the new head read as stale: stamp the push time with it instead.
+          observed.push(
+            Option.isSome(live) && live.value.headSha === newTip
+              ? live.value
+              : { ...pr, stack: STACK_UNSEEN, headSha: newTip, updatedAt: now, fetchedAt: now },
+          );
+        }
+        yield* apply(observed, { prior });
+      }).pipe(
+        Effect.catch((err) =>
+          Effect.sync(() =>
+            logError("PrMirror", `recording Revv's push to ${repo.fullName}:`, err),
+          ),
+        ),
+      );
+
+    const headOf: PrMirrorService["headOf"] = ({ pr, repo, client }) =>
+      Effect.gen(function* () {
+        if (pr.headSha) return pr.headSha;
+        const live = yield* github.prs.get(client, repo.fullName, repo.id, pr.externalId);
+        if (live.headSha === null) {
+          return yield* Effect.fail(
+            new GitHubNotFoundError({
+              resource: "pull_request",
+              id: `${repo.fullName}#${pr.externalId}`,
+            }),
+          );
+        }
+        yield* apply([live], { prior: new Map([[pr.id, pr]]) });
+        return live.headSha;
       });
 
-    return { apply, recordMutation, recordPushedHead, announce };
+    return { apply, recordMutation, recordPushes, headOf, announce };
   }),
 );

@@ -69,7 +69,6 @@ function seed(status: StackBriefStatus = "generating"): Db {
       signature: "sig",
       stackSnapshot: SNAPSHOT,
       status,
-      userId: "u",
       createdAt: new Date().toISOString(),
     })
     .run();

@@ -35,11 +35,7 @@ import {
   unmergedPaths,
   unstagedOutsideMerge,
 } from "../git/ops";
-
-export interface AgentBranch {
-  readonly worktreePath: string;
-  readonly branchName: string;
-}
+import type { AgentBranch } from "./agent-worktrees";
 
 const range = (branch: AgentBranch, baseSha: string) => `${baseSha}..${branch.branchName}`;
 
@@ -270,17 +266,14 @@ export async function dropProposedCommits(
  * Rewind the agent branch to `baseSha`, discarding its commits and any
  * uncommitted work: what clearing the conversation means. Clears what a killed
  * agent turn or push leaves in the way (lock files, a merge, rebase or
- * cherry-pick in progress, a detached HEAD) and logs loudly if the rewind
- * still doesn't land, since the next turn would otherwise resurrect the
- * discarded commits.
+ * cherry-pick in progress, a detached HEAD). Null once the branch is at
+ * `baseSha`, else why it isn't: a rewind that didn't land must fail the clear,
+ * or the next turn resurrects the commits it was meant to discard.
  */
-export async function resetToBase(branch: AgentBranch, baseSha: string): Promise<void> {
+export async function resetToBase(branch: AgentBranch, baseSha: string): Promise<string | null> {
   const { worktreePath, branchName } = branch;
   const dirs = await gitDirs(worktreePath);
-  if (!dirs) {
-    logError("chat-clear", `${worktreePath} is not a readable worktree`);
-    return;
-  }
+  if (!dirs) return `${worktreePath} is not a readable worktree`;
   for (const lock of ["index.lock", "HEAD.lock"]) {
     const lockPath = join(dirs.gitDir, lock);
     if (existsSync(lockPath)) await rm(lockPath, { force: true }).catch(() => {});
@@ -293,14 +286,10 @@ export async function resetToBase(branch: AgentBranch, baseSha: string): Promise
     await attachHead(worktreePath, branchName);
   }
   const reset = await resetHard(worktreePath, baseSha);
-  if (!reset.ok)
-    logError("chat-clear", `reset --hard ${baseSha} failed in ${worktreePath}:`, reset.stderr);
+  if (!reset.ok) return `git reset --hard failed: ${reset.stderr || "git failed"}`;
   await cleanUntracked(worktreePath);
   const finalSha = await resolveRef(worktreePath, "HEAD");
-  if (finalSha !== baseSha) {
-    logError(
-      "chat-clear",
-      `worktree rewind did not land: expected=${baseSha} got=${finalSha} worktree=${worktreePath}`,
-    );
-  }
+  return finalSha === baseSha
+    ? null
+    : `the agent branch is at ${finalSha ?? "nothing"}, not ${baseSha}`;
 }

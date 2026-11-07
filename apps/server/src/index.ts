@@ -164,9 +164,7 @@ enterOrigin("boot", "boot");
 // SIGTERM arrives on bun --watch restarts and desktop shutdown; SIGINT on
 // Ctrl-C.
 //
-// Registered before the first `await`: the server already answers requests,
-// and building the runtime installs other SIGTERM listeners (the git runner) that
-// suppress Bun's default exit, so a signal landing earlier would be swallowed.
+// Registered before the first `await`: the server already answers requests.
 let isShuttingDown = false;
 
 async function gracefulShutdown(signal: string): Promise<void> {

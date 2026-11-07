@@ -2,7 +2,7 @@ import { getAgentCapabilities, INTERACTION_MODES } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { PlanGateError } from "../domain/errors";
-import { ChatSessionService } from "../services/ChatSession";
+import { ChatSessionService } from "../services/chat/ChatSession";
 import { resolveChatSessionContext } from "../services/chat/session-context";
 import { PrContextService } from "../services/PrContext";
 import { SettingsService } from "../services/Settings";

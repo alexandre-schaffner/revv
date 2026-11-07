@@ -63,6 +63,19 @@ describe("planStackReview", () => {
     expect(plan.untracked).toEqual([105]);
   });
 
+  // A queued pure restack costs no agent run: the walkthrough start carries the
+  // finished review onto the new head (invariant 7), so the layer ends reviewed at its head.
+  it("remaining: queues a layer whose new head is a pure restack of its review", () => {
+    const plan = planStackReview(
+      [
+        layer(1, { review: complete("old-head-1"), restack: { kind: "restacked" } }),
+        layer(2, { review: complete("old-head-2"), restack: { kind: "layer-changed", files: [] } }),
+      ],
+      "remaining",
+    );
+    expect(plan.queue.map((l) => l.number)).toEqual([101, 102]);
+  });
+
   it("all: every open tracked layer, bottom-up", () => {
     const plan = planStackReview(stack, "all");
     expect(plan.queue.map((l) => l.number)).toEqual([102, 103, 104, 107]);

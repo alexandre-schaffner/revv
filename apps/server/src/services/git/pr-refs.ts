@@ -1,6 +1,7 @@
-// Every name Revv gives to a ref, branch or worktree in a clone. The clone may
-// be the user's own repository, so all of them live in namespaces the user
-// doesn't write to, and each has exactly one writer.
+// Every name Revv gives to a ref or branch in a clone. The clone may be the
+// user's own repository, so all of them live in namespaces the user doesn't
+// write to, and each has exactly one writer. Folders are named in
+// `services/clone/layout.ts`.
 
 /**
  * The PR's agent branch, checked out in its worktree. Its name must stay
@@ -9,7 +10,12 @@
  */
 export const agentBranch = (prNumber: number) => `revv/pr-${prNumber}`;
 
-export const agentWorktreeDir = (prNumber: number) => `pr-${prNumber}`;
+/** The PR number of an agent branch (`revv/pr-N` or `refs/heads/revv/pr-N`), else null. */
+export function agentBranchPr(ref: string): number | null {
+  const name = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
+  const match = /^revv\/pr-(\d+)$/.exec(name);
+  return match?.[1] ? Number.parseInt(match[1], 10) : null;
+}
 
 /** Where the PR head is fetched, in a namespace that shares no name with a branch. */
 export const prFetchRef = (prNumber: number) => `refs/revv-pull/${prNumber}`;
@@ -21,19 +27,16 @@ export const prFetchRef = (prNumber: number) => `refs/revv-pull/${prNumber}`;
  */
 export const legacyPrRef = (prNumber: number) => `refs/revv/pr-${prNumber}`;
 
-export const scratchRef = (feature: "base-conflicts" | "stack-rebase", key: number, name: string) =>
-  `refs/revv/${feature}/${key}/${name}`;
+/**
+ * A ref one run fetches into and deletes when done. Each feature has its own
+ * namespace, so a run never deletes another's refs: the base-conflicts check
+ * and the base sync of one PR may overlap.
+ */
+export const scratchRef = (
+  feature: "base-conflicts" | "base-sync" | "stack-rebase" | "chat-push",
+  key: number,
+  name: string,
+) => `refs/revv/${feature}/${key}/${name}`;
 
 /** Every namespace above, for tearing a repository down. */
 export const REVV_REF_NAMESPACES = ["refs/revv", "refs/revv-pull"] as const;
-
-/** Scratch worktrees: detached, one per run, cleared by the next run of the same key. */
-export const scratchWorktreeDir = {
-  baseSync: (prNumber: number) => `base-sync-pr-${prNumber}`,
-  stackRebase: (stackNumber: number) => `stack-${stackNumber}-rebase`,
-  review: (walkthroughId: string) => `review-${walkthroughId}`,
-} as const;
-
-export function reviewWorktreeId(dir: string): string | null {
-  return dir.startsWith("review-") ? dir.slice("review-".length) : null;
-}

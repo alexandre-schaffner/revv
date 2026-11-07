@@ -70,7 +70,7 @@ export const stackRoutes = new Elysia({ prefix: "/api/prs" })
     (ctx) =>
       runRoute(
         Effect.flatMap(StackMergeService, (s) =>
-          s.start(ctx.params.id, ctx.userId, ctx.account.accountId, ctx.body),
+          s.start(ctx.params.id, ctx.account.accountId, ctx.body),
         ),
       ),
     {

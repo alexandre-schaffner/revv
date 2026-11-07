@@ -40,6 +40,8 @@ export interface SyncRepo {
   readonly remoteUrl: string;
   readonly prNumber: number;
   readonly baseBranch: string;
+  /** The check's and the sync's tips live apart: a check may run while a sync does. */
+  readonly refs: "base-conflicts" | "base-sync";
 }
 
 export interface Tips {
@@ -48,9 +50,9 @@ export interface Tips {
   readonly mergeBase: string;
 }
 
-const refsFor = (prNumber: number) => ({
-  base: scratchRef("base-conflicts", prNumber, "base"),
-  head: scratchRef("base-conflicts", prNumber, "head"),
+const refsFor = (repo: SyncRepo) => ({
+  base: scratchRef(repo.refs, repo.prNumber, "base"),
+  head: scratchRef(repo.refs, repo.prNumber, "head"),
 });
 
 /**
@@ -63,7 +65,7 @@ export async function fetchTips(
   repo: SyncRepo,
   headSource: string,
 ): Promise<({ readonly kind: "ok" } & Tips) | Failed> {
-  const refs = refsFor(repo.prNumber);
+  const refs = refsFor(repo);
   const refspecs = [`+refs/heads/${repo.baseBranch}:${refs.base}`, `+${headSource}:${refs.head}`];
   const fetch = (deepen: boolean) =>
     fetchForScratch(repo.clonePath, repo.remoteUrl, refspecs, deepen);
@@ -90,7 +92,7 @@ export async function fetchTips(
 }
 
 export async function deleteTipRefs(repo: SyncRepo): Promise<void> {
-  const refs = refsFor(repo.prNumber);
+  const refs = refsFor(repo);
   await deleteRef(repo.clonePath, refs.base);
   await deleteRef(repo.clonePath, refs.head);
 }
@@ -178,7 +180,7 @@ export async function verifyResolution(
   if (await isRebaseInProgress(scratchPath)) {
     return { kind: "failed", message: "The rebase is still in progress" };
   }
-  const clean = await workingTreeIsClean(scratchPath).catch(() => ({ clean: false, output: "" }));
+  const clean = await workingTreeIsClean(scratchPath);
   if (!clean.clean) {
     return { kind: "failed", message: "The agent left changes uncommitted" };
   }

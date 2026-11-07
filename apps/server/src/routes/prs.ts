@@ -5,6 +5,7 @@ import { Elysia, t } from "elysia";
 import { suggestionsForPr } from "../ai/providers/suggestions";
 import { pinnedPullRequests } from "../db/schema";
 import { tryDb } from "../effects/db-try";
+import { RepoCloneService } from "../services/clone/RepoClone";
 import { DiffCacheService, toCachedDiffFiles } from "../services/DiffCache";
 import { GitHubGateway } from "../services/github/gateway";
 import { checkMergeEligibility } from "../services/merge-eligibility";
@@ -18,7 +19,6 @@ import {
   SSR_PATCH_BYTE_LIMIT,
   SSR_PATCH_LINE_LIMIT,
 } from "../services/pr-file-prerender";
-import { RepoCloneService } from "../services/RepoClone";
 import { RepositoryService } from "../services/Repository";
 import { ReviewService } from "../services/Review";
 import { runRoute, withAccount } from "./middleware";

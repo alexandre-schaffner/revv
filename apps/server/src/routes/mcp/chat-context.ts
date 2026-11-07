@@ -2,7 +2,7 @@ import { Effect } from "effect";
 import type { ChatWalkthroughEditContext } from "../../ai/providers/chat-edit-tools";
 import { CHAT_TOOL_BUNDLE } from "../../ai/providers/chat-mcp-tools";
 import type { Db } from "../../db";
-import { ChatMcpTokens, type ChatTokenResolved } from "../../services/ChatMcpTokens";
+import { ChatMcpTokens, type ChatTokenResolved } from "../../services/chat/ChatMcpTokens";
 import { fireAndForgetThreadEventBroadcast, fireAndForgetWalkthroughEdit } from "./publish";
 import { bindTokenMcpRoute } from "./utils";
 

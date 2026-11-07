@@ -51,7 +51,6 @@ function seedBrief(db: Db, id: string, resumeAttempts = 0): StackBriefToolContex
       signature: `sig-${id}`,
       stackSnapshot: SNAPSHOT,
       status: "generating",
-      userId: "u",
       createdAt: new Date().toISOString(),
       resumeAttempts,
     })

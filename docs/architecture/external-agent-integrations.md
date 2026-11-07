@@ -41,7 +41,10 @@ mechanics differ, because each agent reads a different config file.
 `<account>` is a non-reversible 12-character digest of the local account id.
 Every provider uses `revv-<account>` as its MCP entry name, so connecting one
 account cannot overwrite or uninstall another account's entry. Bridge copies
-live under `~/.revv/<provider>/<account>/server/revv-mcp.ts`.
+live under `~/.revv/<provider>/<account>/server/revv-mcp.ts`, and for Claude
+Code inside its plugin, `~/.claude/skills/revv-<account>/server/revv-mcp.ts`.
+Reading the integrations' status rewrites any copy that differs from the
+bundled bridge, so a bridge fix reaches users without a reconnect.
 
 OpenCode's entry keeps opencode 1's layout (directly under `mcp`, with
 `enabled: true`, and the singular `command/` directory). opencode 2 still reads
@@ -58,8 +61,11 @@ configs get an account-scoped key that is recognized by the
 
 Single-file config updates use a same-directory staged file followed by an
 atomic rename and force mode `0600`, including when the config already exists.
-The bridge probes both stable and development loopback ports, so the config is
-not tied to the channel that wrote it.
+The bridge talks only to the server that installed it: the config carries that
+server's MCP URL in `REVV_API_URL`, and `NO_PROXY` for loopback (Bun otherwise
+sends loopback requests through `HTTP_PROXY`). Copies installed before the URL
+was written probe the production then the development port; the first answer
+Revv gives, a refused credential included, is what the agent sees.
 
 ## Type sketch
 
@@ -223,8 +229,8 @@ regardless of which provider issued it.
 2. A remote/HTTP MCP entry per provider. Rejected: HTTP servers do not receive
    the active project directory, so PR resolution becomes manual.
 3. One bridge process per provider with provider-specific logic. Rejected:
-   agent-path parity (CLAUDE.md #13) is easiest to guarantee when there is
-   literally one bridge, one route, and one tool bundle.
+   parity across the four agents (CLAUDE.md #7) is easiest to guarantee when
+   there is literally one bridge, one route, and one tool bundle.
 4. Let the bridge mutate SQLite or GitHub directly. Rejected: it would bypass
    Revv's lifecycle, authorization, broadcast, and sync ownership.
 

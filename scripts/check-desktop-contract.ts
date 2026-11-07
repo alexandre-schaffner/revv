@@ -82,8 +82,9 @@ const copies: readonly Copy[] = [
   },
   {
     file: "integrations/external-mcp-bridge/revv-mcp.ts",
-    what: "default server endpoints",
-    pattern: /"http:\/\/127\.0\.0\.1:(\d+)\/mcp\/external"/g,
+    // Pinned installs read REVV_API_URL; older copies probe these ports.
+    what: "legacy server ports (LEGACY_PORTS)",
+    pattern: /(?<=LEGACY_PORTS = \[[^\]]*?)\b(\d{4,5})\b/g,
     expected: [apiPort, devApiPort],
   },
   {

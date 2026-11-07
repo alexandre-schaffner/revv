@@ -6,7 +6,7 @@
 // flow is refused up front.
 
 import { isValidBranchName, type ResolvePushFrame } from "@revv/shared";
-import { type Context, Effect, Exit, Queue, Scope } from "effect";
+import { type Context, Effect, Exit, Scope } from "effect";
 import {
   type AiError,
   type CloneError,
@@ -26,8 +26,7 @@ import {
 } from "../../domain/errors";
 import { logError } from "../../logger";
 import type { AiService } from "../Ai";
-import { pumpAgentFrames, queueToStream } from "../agent-frame-pump";
-import type { ChatSessionRow, ChatSessionService } from "../ChatSession";
+import { runConflictResolve } from "../conflict-resolve-run";
 import type { DbService } from "../Db";
 import type { BranchPushLock } from "../git/branch-push-lock";
 import {
@@ -37,6 +36,7 @@ import {
   checkoutDetached,
   cherryPick,
   fetch,
+  gitTry,
   isMergeInProgress,
   isValidSha,
   merge,
@@ -44,19 +44,13 @@ import {
   unmergedPaths,
   workingTreeIsClean,
 } from "../git/ops";
-import {
-  classifyPushFailure,
-  describePushRejection,
-  lsRemoteHead,
-  pushLeased,
-  pushNewBranch,
-} from "../git/push";
+import { scratchRef } from "../git/pr-refs";
+import { lsRemoteHead, pushLeased, pushNewBranch, pushOutcome } from "../git/push";
 import { authedRemoteUrl } from "../git/remote";
 import type { PrContextBasic, PrContextError } from "../PrContext";
 import type { PrMirror } from "../PrMirror";
 import type { SettingsService } from "../Settings";
 import {
-  type AgentBranch,
   countProposed,
   healAbandonedMerge,
   moveAgentBranch,
@@ -64,6 +58,7 @@ import {
   replayAgentCommits,
   restoreAgentBranch,
 } from "./agent-branch";
+import type { AgentBranch } from "./agent-worktrees";
 import type { WorkspaceClaim } from "./claims";
 
 export type ChatPushError =
@@ -108,25 +103,11 @@ interface PushDeps {
   readonly baselineOf: (
     ctx: PrContextBasic,
     branch: AgentBranch,
-  ) => Effect.Effect<string | null, DbError>;
-  readonly sessionOf: (pr: {
-    readonly id: string;
-    readonly headSha: string | null;
-  }) => Effect.Effect<ChatSessionRow | null, DbError>;
-  readonly chatSessions: Context.Service.Shape<typeof ChatSessionService>;
+  ) => Effect.Effect<string | null, DbError | GitOperationError>;
+  readonly moveSession: (prId: string, newHeadSha: string) => Effect.Effect<void, DbError>;
   readonly ai: Context.Service.Shape<typeof AiService>;
   readonly mirror: Context.Service.Shape<typeof PrMirror>;
 }
-
-const gitStep = <A>(run: () => Promise<A>) =>
-  Effect.tryPromise({
-    try: run,
-    catch: (err) =>
-      new GitOperationError({
-        message: err instanceof Error ? err.message : String(err),
-        cause: err,
-      }),
-  });
 
 const requireOk = (attempt: { readonly ok: boolean; readonly stderr: string }, what: string) =>
   attempt.ok
@@ -162,9 +143,9 @@ export function makeAgentPush(deps: PushDeps) {
         catch: (err) => new GitOperationError({ message: String(err) }),
       });
 
-      const checkClean = gitStep(() => workingTreeIsClean(branch.worktreePath));
+      const checkClean = gitTry(() => workingTreeIsClean(branch.worktreePath));
       let clean = yield* checkClean;
-      if (!clean.clean && (yield* Effect.promise(() => healAbandonedMerge(branch)))) {
+      if (!clean.clean && (yield* gitTry(() => healAbandonedMerge(branch)))) {
         clean = yield* checkClean;
       }
       if (!clean.clean) {
@@ -174,7 +155,7 @@ export function makeAgentPush(deps: PushDeps) {
       }
 
       const baseSha = yield* deps.baselineOf(ctx, branch);
-      const ahead = baseSha ? yield* Effect.promise(() => countProposed(branch, baseSha)) : 0;
+      const ahead = baseSha ? yield* gitTry(() => countProposed(branch, baseSha)) : 0;
       if (!baseSha || ahead <= 0) return yield* Effect.fail(new NoChangesError({ prId: pr.id }));
 
       return {
@@ -183,23 +164,27 @@ export function makeAgentPush(deps: PushDeps) {
         branch,
         baseSha,
         ahead,
-        session: yield* deps.sessionOf(pr),
         url: authedRemoteUrl({ host: repo.githubHost, fullName: repo.fullName, token }),
       };
     });
 
   type Begun = Effect.Success<ReturnType<typeof begin>>;
 
+  /**
+   * The source branch's tip, fetched into Revv's own ref: an adopted clone's
+   * `refs/remotes/origin/*` is the user's. Returns the lease and the ref.
+   */
   const fetchSource = (run: Begun) =>
     Effect.gen(function* () {
       const { branch, ctx, url } = run;
       const source = ctx.pr.sourceBranch;
-      const leaseSha = yield* gitStep(() => lsRemoteHead(branch.worktreePath, url, source));
-      const fetched = yield* Effect.promise(() =>
-        fetch(branch.worktreePath, url, [`+refs/heads/${source}:refs/remotes/origin/${source}`]),
+      const ref = scratchRef("chat-push", ctx.pr.externalId, "source");
+      const leaseSha = yield* gitTry(() => lsRemoteHead(branch.worktreePath, url, source));
+      const fetched = yield* gitTry(() =>
+        fetch(branch.worktreePath, url, [`+refs/heads/${source}:${ref}`]),
       );
       yield* requireOk(fetched, `failed to fetch ${source}`);
-      return leaseSha;
+      return { leaseSha, ref };
     });
 
   const pushFailed = (run: Begun, stderr: string) =>
@@ -209,19 +194,15 @@ export function makeAgentPush(deps: PushDeps) {
         `push to ${run.ctx.pr.sourceBranch} failed (pr=${run.ctx.pr.id}): ${stderr}`,
       );
       yield* Effect.promise(() => restoreAgentBranch(run.branch));
-      switch (classifyPushFailure(stderr)) {
-        case "remote-moved":
+      const outcome = pushOutcome({ ok: false, stderr });
+      switch (outcome.kind) {
+        case "moved":
+        case "pushed":
           return { status: "remote-changed" as const, branch: run.ctx.pr.sourceBranch };
         case "auth":
-          return yield* Effect.fail(
-            new GitHubAuthError({
-              message: "git push rejected: token expired or insufficient scope",
-            }),
-          );
+          return yield* Effect.fail(new GitHubAuthError({ message: outcome.message }));
         case "rejected":
-          return yield* Effect.fail(
-            new PushRejectedError({ message: describePushRejection(stderr) }),
-          );
+          return yield* Effect.fail(new PushRejectedError({ message: outcome.message }));
       }
     });
 
@@ -270,13 +251,8 @@ export function makeAgentPush(deps: PushDeps) {
         logError("chat-push", `moving ${branch.branchName} to the pushed tip ${newTip} failed`);
       }
 
-      yield* deps.mirror.recordPushedHead(ctx, newTip);
-      if (run.session) {
-        yield* deps.chatSessions.updatePrHeadSha({
-          chatSessionId: run.session.id,
-          prHeadSha: newTip,
-        });
-      }
+      yield* deps.mirror.recordPushes(ctx, [{ prNumber: ctx.pr.externalId, newTip }]);
+      yield* deps.moveSession(ctx.pr.id, newTip);
       return {
         status: "pushed" as const,
         newSha: newTip,
@@ -285,12 +261,12 @@ export function makeAgentPush(deps: PushDeps) {
       };
     });
 
-  const mergeOntoSource = (run: Begun, abortOnConflict: boolean) =>
+  const mergeOntoSource = (run: Begun, sourceRef: string, abortOnConflict: boolean) =>
     Effect.gen(function* () {
       const { branch, ctx } = run;
       const source = ctx.pr.sourceBranch;
       const detached = yield* Effect.promise(() =>
-        checkoutDetached(branch.worktreePath, `refs/remotes/origin/${source}`),
+        checkoutDetached(branch.worktreePath, sourceRef),
       );
       yield* requireOk(detached, "git checkout failed");
       const merged = yield* Effect.promise(() =>
@@ -300,7 +276,7 @@ export function makeAgentPush(deps: PushDeps) {
       );
       if (merged.ok) return { status: "merged" as const };
       const inProgress = yield* Effect.promise(() => isMergeInProgress(branch.worktreePath));
-      const files = inProgress ? yield* gitStep(() => unmergedPaths(branch.worktreePath)) : [];
+      const files = inProgress ? yield* gitTry(() => unmergedPaths(branch.worktreePath)) : [];
       // No conflict, yet no merge commit: git or the user's signer refused it.
       if (files.length === 0) {
         if (inProgress) yield* Effect.promise(() => abortMerge(branch.worktreePath));
@@ -330,32 +306,25 @@ export function makeAgentPush(deps: PushDeps) {
       }
       const run = yield* begin(prId, name);
       const { branch, url } = run;
-      if (!force && (yield* gitStep(() => lsRemoteHead(branch.worktreePath, url, name)))) {
+      if (!force && (yield* gitTry(() => lsRemoteHead(branch.worktreePath, url, name)))) {
         return { status: "ref-exists" as const, branch: name };
       }
       const pushed = yield* Effect.promise(() =>
         pushNewBranch(branch.worktreePath, url, branch.branchName, name, force),
       );
-      if (!pushed.ok) {
+      const outcome = pushOutcome(pushed);
+      if (outcome.kind !== "pushed") {
         logError("chat-push", `push to new branch ${name} failed: ${pushed.stderr}`);
-        const kind = classifyPushFailure(pushed.stderr);
-        if (kind === "auth") {
-          return yield* Effect.fail(
-            new GitHubAuthError({
-              message: "git push rejected: token expired or insufficient scope",
-            }),
-          );
+        switch (outcome.kind) {
+          case "auth":
+            return yield* Effect.fail(new GitHubAuthError({ message: outcome.message }));
+          // The one refusal this path recovers from: the UI offers to overwrite.
+          case "moved":
+            if (!force) return { status: "ref-exists" as const, branch: name };
+            return yield* Effect.fail(new PushRejectedError({ message: pushed.stderr }));
+          case "rejected":
+            return yield* Effect.fail(new PushRejectedError({ message: outcome.message }));
         }
-        // The one rejection this path recovers from: the UI offers to overwrite.
-        if (
-          !force &&
-          (pushed.stderr.toLowerCase().includes("already exists") || kind === "remote-moved")
-        ) {
-          return { status: "ref-exists" as const, branch: name };
-        }
-        return yield* Effect.fail(
-          new PushRejectedError({ message: describePushRejection(pushed.stderr) }),
-        );
       }
       const newTip = yield* Effect.promise(() =>
         resolveRef(branch.worktreePath, branch.branchName),
@@ -378,8 +347,8 @@ export function makeAgentPush(deps: PushDeps) {
         ? pushToNewBranch(params.prId, params.newBranchName, params.force ?? false)
         : Effect.gen(function* () {
             const run = yield* begin(params.prId);
-            const leaseSha = yield* fetchSource(run);
-            const merged = yield* mergeOntoSource(run, true);
+            const { leaseSha, ref } = yield* fetchSource(run);
+            const merged = yield* mergeOntoSource(run, ref, true);
             if (merged.status === "conflict") {
               return {
                 status: "conflict" as const,
@@ -407,8 +376,8 @@ export function makeAgentPush(deps: PushDeps) {
       const release = Scope.close(scope, Exit.void);
       const setup = Effect.gen(function* () {
         const run = yield* begin(prId);
-        const leaseSha = yield* fetchSource(run);
-        const merged = yield* mergeOntoSource(run, false);
+        const { leaseSha, ref } = yield* fetchSource(run);
+        const merged = yield* mergeOntoSource(run, ref, false);
         return { run, leaseSha, merged };
       }).pipe(
         Scope.provide(scope),
@@ -444,52 +413,37 @@ export function makeAgentPush(deps: PushDeps) {
         })
         .pipe(Effect.onError(() => backOut.pipe(Effect.andThen(release))));
 
-      const queue = yield* Queue.unbounded<ResolvePushFrame>();
-      const offer = (frame: ResolvePushFrame) =>
-        Effect.sync(() => run.claim.touch()).pipe(Effect.andThen(Queue.offer(queue, frame)));
-      const fail = (message: string) =>
-        backOut.pipe(Effect.andThen(offer({ kind: "result", status: "failed", message })));
-
-      yield* Effect.forkDetach(
-        Effect.gen(function* () {
-          yield* offer({
-            kind: "status",
-            message: `Re-running merge into ${ctx.pr.sourceBranch}...`,
-          });
-          yield* offer({ kind: "conflict-files", files: merged.files });
-          yield* offer({
+      return yield* runConflictResolve<ResolvePushFrame, PushR>({
+        opening: [
+          { kind: "status", message: `Re-running merge into ${ctx.pr.sourceBranch}...` },
+          { kind: "conflict-files", files: merged.files },
+          {
             kind: "status",
             message: "Asking the agent to resolve conflicts and run git merge --continue.",
-          });
-          yield* pumpAgentFrames(agentStream, offer);
-
-          if (yield* Effect.promise(() => isMergeInProgress(branch.worktreePath))) {
-            return yield* fail("Agent finished but the merge is still in conflict. Aborting.");
-          }
-          const clean = yield* Effect.promise(() =>
-            workingTreeIsClean(branch.worktreePath).catch((err) => ({
-              clean: false,
-              output: String(err),
-            })),
-          );
-          if (!clean.clean) {
-            return yield* fail(
-              `Worktree has uncommitted changes after agent run:\n${clean.output}`,
-            );
-          }
-          yield* offer({ kind: "status", message: "Merge resolved. Pushing..." });
-          yield* offer(resultFrame(yield* pushHead(run, leaseSha, run.ahead)));
-        }).pipe(
-          Effect.catch((err) => fail(err instanceof Error ? err.message : String(err))),
-          Effect.ensuring(
-            Queue.shutdown(queue).pipe(
-              Effect.catch(() => Effect.void),
-              Effect.andThen(release),
-            ),
-          ),
-        ),
-      );
-      return queueToStream(queue);
+          },
+        ],
+        agent: Effect.succeed(agentStream),
+        finish: (offer) =>
+          Effect.gen(function* () {
+            if (yield* Effect.promise(() => isMergeInProgress(branch.worktreePath))) {
+              return yield* Effect.fail(
+                new Error("Agent finished but the merge is still in conflict. Aborting."),
+              );
+            }
+            const clean = yield* gitTry(() => workingTreeIsClean(branch.worktreePath));
+            if (!clean.clean) {
+              return yield* Effect.fail(
+                new Error(`Worktree has uncommitted changes after agent run:\n${clean.output}`),
+              );
+            }
+            yield* offer({ kind: "status", message: "Merge resolved. Pushing..." });
+            return resultFrame(yield* pushHead(run, leaseSha, run.ahead));
+          }),
+        failed: (message) =>
+          backOut.pipe(Effect.as<ResolvePushFrame>({ kind: "result", status: "failed", message })),
+        onProgress: run.claim.touch,
+        cleanup: release,
+      });
     });
 
   /** Push the chosen proposed commits, oldest first, onto the source branch; the rest stay proposed. */
@@ -516,12 +470,12 @@ export function makeAgentPush(deps: PushDeps) {
             );
           requested.add(full);
         }
-        const all = yield* gitStep(() => proposedShas(branch, run.baseSha));
+        const all = yield* gitTry(() => proposedShas(branch, run.baseSha));
         const picked = all.filter((sha) => requested.has(sha));
         if (picked.length === 0)
           return yield* Effect.fail(new NoChangesError({ prId: params.prId }));
 
-        const leaseSha = yield* fetchSource(run);
+        const { leaseSha, ref } = yield* fetchSource(run);
         const oldTip = yield* Effect.promise(() =>
           resolveRef(branch.worktreePath, branch.branchName),
         );
@@ -529,9 +483,7 @@ export function makeAgentPush(deps: PushDeps) {
           return yield* Effect.fail(
             new GitOperationError({ message: "Couldn't read the agent branch" }),
           );
-        const detached = yield* Effect.promise(() =>
-          checkoutDetached(branch.worktreePath, `refs/remotes/origin/${run.ctx.pr.sourceBranch}`),
-        );
+        const detached = yield* Effect.promise(() => checkoutDetached(branch.worktreePath, ref));
         yield* requireOk(detached, "git checkout failed");
         for (const sha of picked) {
           const result = yield* Effect.promise(() => cherryPick(branch.worktreePath, sha));

@@ -176,6 +176,9 @@ export const CACHE_METADATA_KEYS = {
  * (repo + head SHA + content hash) without streaming MB through a child
  * process — `contentSha256` already covers the body bytes.
  */
+/** The SSHSIG namespace a signer on `signerHost` signs and is verified under. */
+export const cacheSigningNamespace = (signerHost: string) => `revv-cache@${signerHost}`;
+
 export function cacheSigningMessage(
   repoFullName: string,
   prHeadSha: string,

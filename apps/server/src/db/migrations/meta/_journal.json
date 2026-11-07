@@ -400,6 +400,13 @@
       "when": 1794900000000,
       "tag": "0530_account_client_id",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "6",
+      "when": 1795000000000,
+      "tag": "0540_drop_stack_user_id",
+      "breakpoints": true
     }
   ]
 }

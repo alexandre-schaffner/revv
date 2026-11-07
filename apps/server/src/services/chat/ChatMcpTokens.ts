@@ -1,16 +1,14 @@
 // Bearer tokens for `/mcp/chat-context`: each chat turn's agent reaches the
-// chat tools with the PR, the user and the interaction mode its token was
-// issued for. Ephemeral (invariant #1): a restart wipes them, and the next
+// chat tools with the PR and the interaction mode its token was issued for. Ephemeral (invariant #1): a restart wipes them, and the next
 // turn issues a new one.
 
 import type { InteractionMode } from "@revv/shared";
 import { Context, Layer } from "effect";
-import { CHAT_TURN } from "../ai/acp/run-turn";
-import { makeSessionTokenStore, type SessionTokenStore } from "./session-token-store";
+import { CHAT_TURN } from "../../ai/acp/run-turn";
+import { makeSessionTokenStore, type SessionTokenStore } from "../session-token-store";
 
 export interface ChatTokenResolved {
   readonly prId: string;
-  readonly userId: string;
   readonly interactionMode: InteractionMode;
 }
 

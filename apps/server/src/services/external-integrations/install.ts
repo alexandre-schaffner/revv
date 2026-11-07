@@ -77,16 +77,27 @@ export interface BridgeInstallInput {
   readonly runtimeExecutable: string;
   readonly token: string;
   readonly integrationsDirectory: string;
+  /** The installing server's own MCP route: the bridge talks to it and nothing else. */
+  readonly apiUrl: string;
 }
+
+const LOOPBACK = "127.0.0.1,localhost";
 
 /**
  * Environment for the bridge process. `runtimeExecutable` is the server's own
  * executable; in the desktop app that is the compiled Revv server, which only
  * runs `run <file>` like the Bun CLI when `BUN_BE_BUN` is set. Plain Bun
- * ignores the variable.
+ * ignores the variable. Bun routes even loopback requests through
+ * `HTTP_PROXY` unless `NO_PROXY` names the host.
  */
 function bridgeEnvironment(input: BridgeInstallInput): Record<string, string> {
-  return { REVV_INTEGRATION_TOKEN: input.token, BUN_BE_BUN: "1" };
+  return {
+    REVV_INTEGRATION_TOKEN: input.token,
+    REVV_API_URL: input.apiUrl,
+    NO_PROXY: LOOPBACK,
+    no_proxy: LOOPBACK,
+    BUN_BE_BUN: "1",
+  };
 }
 
 /** Filesystem/config key that reveals no raw account identifier. */
@@ -161,6 +172,19 @@ function stageBridge(staged: string, integrationsDirectory: string): void {
 
 function bridgeFile(installDirectory: string): string {
   return join(installDirectory, "server", "revv-mcp.ts");
+}
+
+/**
+ * Bring an installed bridge copy up to this Revv's: a fix to the bridge would
+ * otherwise reach a user only when they reconnect. Only Revv's own install
+ * directory is touched.
+ */
+function refreshBridge(installDirectory: string, integrationsDirectory: string): void {
+  const installed = bridgeFile(installDirectory);
+  if (!existsSync(join(installDirectory, MANAGED_MARKER)) || !existsSync(installed)) return;
+  const bundled = readFileSync(bridgeSourceFile(integrationsDirectory));
+  if (readFileSync(installed).equals(bundled)) return;
+  writeFileSync(installed, bundled, { mode: 0o600 });
 }
 
 function readTextIfExists(file: string): string | null {
@@ -591,13 +615,15 @@ function uninstallCursor(paths: CursorPaths, serverName: string): void {
 export interface ExternalIntegrationInstaller {
   /** Account-scoped name shown in the agent's MCP configuration. */
   readonly clientName: string;
-  /** The slash command the install adds to the agent, or null when it adds none. */
-  readonly command: string | null;
+  /** What the user still has to do in the agent itself after connecting. */
+  readonly activation: string;
   /** Files and directories this install owns, shown to the user on connect. */
   readonly locations: readonly string[];
   readonly install: (input: BridgeInstallInput) => void;
   readonly uninstall: () => void;
   readonly installed: () => boolean;
+  /** Rewrite the installed bridge copy if it differs from the bundled one. */
+  readonly refreshBridge: (integrationsDirectory: string) => void;
 }
 
 export function externalIntegrationInstaller(
@@ -612,44 +638,48 @@ export function externalIntegrationInstaller(
       const paths = claudeCodePaths(accountKey, home);
       return {
         clientName: serverName,
-        command: null,
+        activation: `Run /reload-plugins in an open session, or restart Claude Code. Server: ${serverName}.`,
         locations: [paths.installDir],
         install: (input) => installClaudeCode(input, paths, serverName),
         uninstall: () => removeManagedDirectory(paths.installDir),
         installed: () => existsSync(join(paths.installDir, MANAGED_MARKER)),
+        refreshBridge: (dir) => refreshBridge(paths.installDir, dir),
       };
     }
     case "codex": {
       const paths = codexPaths(accountKey, home);
       return {
         clientName: serverName,
-        command: addressFeedbackCommand(accountKey),
+        activation: `Restart Codex, then use /${addressFeedbackCommand(accountKey)}.`,
         locations: [paths.configFile, paths.promptFile],
         install: (input) => installCodex(input, paths, serverName),
         uninstall: () => uninstallCodex(paths, serverName),
         installed: () => codexInstalled(paths, serverName),
+        refreshBridge: (dir) => refreshBridge(paths.installDir, dir),
       };
     }
     case "opencode": {
       const paths = openCodePaths(accountKey, home);
       return {
         clientName: serverName,
-        command: addressFeedbackCommand(accountKey),
+        activation: `Restart opencode, then use /${addressFeedbackCommand(accountKey)}.`,
         locations: [paths.configFile, paths.commandFile],
         install: (input) => installOpenCode(input, paths, serverName),
         uninstall: () => uninstallOpenCode(paths, serverName),
         installed: () => jsonMcpEntryInstalled(paths.configFile, "mcp", serverName),
+        refreshBridge: (dir) => refreshBridge(paths.installDir, dir),
       };
     }
     case "cursor": {
       const paths = cursorPaths(accountKey, home);
       return {
         clientName: serverName,
-        command: null,
+        activation: `Reload the Cursor window, then enable “${serverName}” under Settings → MCP.`,
         locations: [paths.configFile],
         install: (input) => installCursor(input, paths, serverName),
         uninstall: () => uninstallCursor(paths, serverName),
         installed: () => jsonMcpEntryInstalled(paths.configFile, "mcpServers", serverName),
+        refreshBridge: (dir) => refreshBridge(paths.installDir, dir),
       };
     }
   }

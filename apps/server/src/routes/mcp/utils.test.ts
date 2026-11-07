@@ -82,6 +82,22 @@ describe("bindHttp connection resolution", () => {
     });
   });
 
+  it("refuses a tools/call whose credential doesn't resolve with the HTTP status", async () => {
+    const app = bindHttp({
+      logScope: "mcp-test",
+      bundle: echoProject,
+      resolveConnection: async () => ({ ok: true, meta: null }),
+      resolveContext: async () => ({ ok: false, status: 403, message: "Invalid credential" }),
+    });
+
+    const response = await app.handle(
+      request({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "echo" } }),
+    );
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { message: "Invalid credential" } });
+  });
+
   it("keeps handshake responses when project resolution fails in a mixed batch", async () => {
     const app = bindHttp({
       logScope: "mcp-test",

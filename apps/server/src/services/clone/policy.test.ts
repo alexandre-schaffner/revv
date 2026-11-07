@@ -1,11 +1,14 @@
 import { describe, expect, it } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import {
-  assertSafeManagedClonePath,
-  CLONE_BASE_DIR,
   decideCloneDestination,
+  managedCloneRemovalRefusal,
   parseRemoteFullName,
   remoteUrlMatches,
-} from "./clone-policy";
+} from "./policy";
 
 describe("parseRemoteFullName", () => {
   it("parses HTTPS and SSH GitHub remotes for the configured host", () => {
@@ -83,20 +86,40 @@ describe("decideCloneDestination", () => {
   });
 });
 
-describe("assertSafeManagedClonePath", () => {
-  it("accepts paths under the managed clone base", () => {
-    expect(() => assertSafeManagedClonePath(`${CLONE_BASE_DIR}/owner/repo`)).not.toThrow();
+describe("managedCloneRemovalRefusal", () => {
+  const repo = { githubHost: "github.com", fullName: "octo/repo" };
+  const base = "/srv/revv-clones";
+
+  it("allows a folder under Revv's base", async () => {
+    expect(await managedCloneRemovalRefusal(`${base}/octo/repo`, base, repo)).toBeNull();
   });
 
-  it("rejects paths outside the managed clone base", () => {
-    expect(() => assertSafeManagedClonePath("/tmp/owner/repo")).toThrow();
-    expect(() => assertSafeManagedClonePath("/etc/passwd")).toThrow();
-    expect(() => assertSafeManagedClonePath("/usr/local/src")).toThrow();
+  it("refuses the base itself, the root, and anything holding the home directory", async () => {
+    expect(await managedCloneRemovalRefusal(base, base, repo)).not.toBeNull();
+    expect(await managedCloneRemovalRefusal("/", base, repo)).not.toBeNull();
+    expect(await managedCloneRemovalRefusal("   ", base, repo)).not.toBeNull();
+    expect(await managedCloneRemovalRefusal(homedir(), base, repo)).not.toBeNull();
+    expect(await managedCloneRemovalRefusal(dirname(homedir()), base, repo)).not.toBeNull();
   });
 
-  it("rejects empty and root paths", () => {
-    expect(() => assertSafeManagedClonePath("")).toThrow();
-    expect(() => assertSafeManagedClonePath("   ")).toThrow();
-    expect(() => assertSafeManagedClonePath("/")).toThrow();
+  it("outside the base, removes only a clone of the repository", async () => {
+    const root = mkdtempSync(join(tmpdir(), "revv-removal-"));
+    try {
+      const clone = join(root, "octo", "repo");
+      const other = join(root, "octo", "other");
+      for (const [dir, url] of [
+        [clone, "https://github.com/octo/repo.git"],
+        [other, "https://github.com/octo/other.git"],
+      ] as const) {
+        mkdirSync(dir, { recursive: true });
+        execFileSync("git", ["init", "-q", dir]);
+        execFileSync("git", ["-C", dir, "remote", "add", "origin", url]);
+      }
+      expect(await managedCloneRemovalRefusal(clone, base, repo)).toBeNull();
+      expect(await managedCloneRemovalRefusal(other, base, repo)).not.toBeNull();
+      expect(await managedCloneRemovalRefusal(join(root, "octo"), base, repo)).not.toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

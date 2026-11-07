@@ -15,7 +15,7 @@ export const stackReviewRoutes = new Elysia({ prefix: "/api/prs" })
     (ctx) =>
       runRoute(
         Effect.flatMap(StackReviewService, (s) =>
-          s.start(ctx.params.id, ctx.userId, ctx.account.accountId, ctx.body.scope),
+          s.start(ctx.params.id, ctx.account.accountId, ctx.body.scope),
         ),
       ),
     { body: t.Object({ scope: literalUnion(STACK_REVIEW_SCOPES) }) },
@@ -23,7 +23,7 @@ export const stackReviewRoutes = new Elysia({ prefix: "/api/prs" })
   .post("/:id/stack/brief", (ctx) =>
     runRoute(
       Effect.flatMap(StackBriefJobs, (jobs) =>
-        jobs.ensure(ctx.params.id, ctx.userId, ctx.account.accountId),
+        jobs.ensure(ctx.params.id, ctx.account.accountId),
       ).pipe(Effect.map((briefId) => ({ briefId }))),
     ),
   );
