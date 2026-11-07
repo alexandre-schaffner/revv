@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { Cause, Deferred, Effect, type Scope } from "effect";
+import { Cause, Deferred, Effect, Fiber, type Scope, Semaphore } from "effect";
 import { DbError } from "../../domain/errors";
 import {
   type AgentJobs,
@@ -28,7 +28,10 @@ interface Harness {
   failBump: boolean;
 }
 
-const makeHarness = (rows: Record<string, Partial<Row>> = {}) =>
+const makeHarness = (
+  rows: Record<string, Partial<Row>> = {},
+  exclusive?: <A, E>(id: string, effect: Effect.Effect<A, E>) => Effect.Effect<A, E>,
+) =>
   Effect.gen(function* () {
     const harness = {
       rows: new Map(
@@ -78,6 +81,7 @@ const makeHarness = (rows: Record<string, Partial<Row>> = {}) =>
       crashed: (cause) => `crashed: ${Cause.pretty(cause).split("\n")[0]}`,
       resumeExhausted: "too many resumes",
       relaunch: (id) => Effect.sync(() => void harness.relaunched.push(id)),
+      ...(exclusive ? { exclusive } : {}),
     });
     (harness as { jobs: AgentJobs<{ note: string }, string> }).jobs = jobs;
     return harness;
@@ -163,6 +167,36 @@ describe("agent job kernel", () => {
         const h = yield* makeHarness({ a: {} });
         yield* h.jobs.stop("a", "user");
         expect(h.rows.get("a")?.status).toBe("stopped");
+      }),
+    ));
+
+  it("settles a Stop with no live run under the pipeline's lock, stopping a run launched meanwhile", () =>
+    scoped(
+      Effect.gen(function* () {
+        const lock = yield* Semaphore.make(1);
+        const h = yield* makeHarness({ a: {} }, (_id, effect) => lock.withPermits(1)(effect));
+        // A rerun holds the lock across its decision and its launch.
+        const held = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const rerun = yield* Effect.forkChild(
+          lock.withPermits(1)(
+            Effect.gen(function* () {
+              yield* Deferred.succeed(held, undefined);
+              yield* Deferred.await(release);
+              yield* launch(h, "a", () => Effect.never);
+            }),
+          ),
+        );
+        yield* Deferred.await(held);
+        const stopping = yield* Effect.forkChild(h.jobs.stop("a", "user"));
+        yield* Effect.sleep(5);
+        expect(h.rows.get("a")?.status).toBe("generating");
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(rerun);
+        yield* Fiber.join(stopping);
+        expect(h.rows.get("a")?.status).toBe("stopped");
+        expect(h.settled).toEqual([{ id: "a", outcome: { kind: "stopped" }, live: true }]);
+        expect(yield* h.jobs.running("a")).toBeNull();
       }),
     ));
 
