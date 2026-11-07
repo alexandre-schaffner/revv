@@ -171,7 +171,7 @@ class AgentNotLaunchable extends Error {}
 async function connectLaunchable(cwd: string, launch: AgentLaunch): Promise<AcpConnectionHandle> {
   if (!isAgentLaunchable(launch.agent)) {
     throw new AgentNotLaunchable(
-      `The configured agent ('${launch.agent}') is not available on this machine.`,
+      `The configured agent ('${launch.agent}') can't be launched on this machine — install it or pick another in Settings.`,
     );
   }
   return getAcpConnection(cwd, launch);

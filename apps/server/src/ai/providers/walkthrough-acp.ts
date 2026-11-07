@@ -77,7 +77,9 @@ export type WalkthroughTurnEnd =
   | { readonly kind: "stopped"; readonly refused: boolean }
   | { readonly kind: "timeout"; readonly reason: string }
   | { readonly kind: "cancelled"; readonly reason: string }
-  | { readonly kind: "failed"; readonly message: string; readonly auth: boolean };
+  | { readonly kind: "failed"; readonly message: string; readonly auth: boolean }
+  /** The agent can't be launched on this machine; no turn ran. */
+  | { readonly kind: "not_configured"; readonly message: string };
 
 export interface WalkthroughTurnResult {
   readonly end: WalkthroughTurnEnd;
@@ -92,7 +94,7 @@ export interface WalkthroughTurnResult {
  */
 export async function runWalkthroughTurn(
   params: WalkthroughTurnParams,
-): Promise<WalkthroughTurnResult | { readonly notConfigured: true }> {
+): Promise<WalkthroughTurnResult> {
   const push = params.onLive;
   let finished = false;
   const activity = params.activity;
@@ -257,6 +259,6 @@ export async function runWalkthroughTurn(
         tokenUsage,
       };
     case "not_configured":
-      return { notConfigured: true };
+      return { end, tokenUsage };
   }
 }
