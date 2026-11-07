@@ -329,7 +329,9 @@ invariant #8.
 
 **Rule.** Features send through `Realtime` (`services/Realtime.ts`), never `Broadcaster`
 (enforced by `check:import-boundaries`). Every event is addressed to an account,
-repository or PR: `toAccount(accountId, msg)`, `toRepo(repoId, msg)` or `toPr(prId, msg)`.
+repository or PR: `toAccount(accountId, msg)`, `toRepo(repoId, msg)` or `toPr(prId, msg)`;
+or, for a signal about the user rather than one account's data (the PR sync's `prs:sync-*`),
+to the users owning those accounts: `toUsers({ userIds, ownersOf }, msg)`, once per user.
 `Realtime` resolves the local user who owns it in one place, and every client of that user
 hears it: one stream carries all of the user's accounts. A full-state envelope that describes
 one account's list (`prs:updated`, `repos:updated`, `user:updated`) names that account's
