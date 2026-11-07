@@ -23,7 +23,7 @@ import * as prs from "./prs.svelte";
 import * as repoActivity from "./repo-activity.svelte";
 import * as repos from "./repos.svelte";
 import * as review from "./review.svelte";
-import { getGithubHost } from "./settings.svelte";
+import { getGithubHost, isSettingsLoaded } from "./settings.svelte";
 import * as stackHeadlines from "./stack-headlines.svelte";
 import { onStackMergeProgress } from "./stack-merge.svelte";
 import * as stacks from "./stacks.svelte";
@@ -257,7 +257,9 @@ function startWatchdog(): void {
 function open(): void {
   const token = getToken();
   if (!token) return;
-  const host = activeHostOverride ?? getGithubHost();
+  // Before settings load, the server's own saved host picks the account; the
+  // client's default would point a GHE install at github.com.
+  const host = activeHostOverride ?? (isSettingsLoaded() ? getGithubHost() : null);
   const hostParam = host ? `&host=${encodeURIComponent(host)}` : "";
   const es = new EventSource(
     `${API_BASE_URL}/api/events?token=${encodeURIComponent(token)}${hostParam}`,

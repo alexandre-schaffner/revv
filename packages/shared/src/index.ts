@@ -12,6 +12,7 @@ export * from "./diff-hunks";
 export * from "./events";
 export * from "./external-integrations";
 export * from "./github-client-id";
+export * from "./github-host";
 export * from "./health";
 export * from "./hunk-scan";
 export * from "./identity";

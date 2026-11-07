@@ -5,6 +5,7 @@
 // Sync cadence is the server's PollScheduler alone (it restarts itself when
 // `autoFetchInterval` changes); the client never polls GitHub on a timer.
 
+import { sameGithubHost } from "@revv/shared";
 import { goto } from "$app/navigation";
 import { reset as resetChat } from "$lib/chat/turn.svelte";
 import { reset as resetHunkScan } from "$lib/hunk-scan/store.svelte";
@@ -13,11 +14,13 @@ import { reset as resetRecapStream } from "$lib/recaps/stream.svelte";
 import { reset as resetRepoCatalog } from "$lib/repos/catalog.svelte";
 import { reset as resetPulls } from "$lib/review/pull-latest";
 import {
+  cancelSignIn,
   clearIdentity,
   deleteAccount,
   dismissAccountPicker,
   fetchLocalAccounts,
   getError,
+  getIsAuthenticated,
   getIsSwitching,
   getUser,
   loadUser,
@@ -38,7 +41,12 @@ import { fetchRepos, reset as resetRepos } from "$lib/stores/repos.svelte";
 import { reset as resetReview } from "$lib/stores/review.svelte";
 import { reset as resetReviewNav } from "$lib/stores/review-nav.svelte";
 import { isOnAccountPage } from "$lib/stores/route.svelte";
-import { fetchSettings, updateSettings } from "$lib/stores/settings.svelte";
+import {
+  fetchSettings,
+  getGithubHost,
+  setGithubConfig,
+  updateSettings,
+} from "$lib/stores/settings.svelte";
 import { reset as resetStackHeadlines } from "$lib/stores/stack-headlines.svelte";
 import { reset as resetStackMerge } from "$lib/stores/stack-merge.svelte";
 import { reset as resetStackRebase } from "$lib/stores/stack-rebase.svelte";
@@ -46,10 +54,12 @@ import { reset as resetStacks } from "$lib/stores/stacks.svelte";
 import { reset as resetSync } from "$lib/stores/sync.svelte";
 import { reset as resetWalkthroughSizings } from "$lib/walkthrough/sizing.svelte";
 import { reset as resetWalkthrough } from "$lib/walkthrough/store.svelte";
+import { accountEntryKey } from "./account-entries";
 import { heldToken, releaseSession } from "./held-sessions";
 import { getToken, setToken } from "./token.svelte";
 
 let sessionUserId: string | null = null;
+let switchingTo = $state<string | null>(null);
 /**
  * The GitHub host an account switch targets. The settings store may not hold
  * it yet, so the realtime stream is told the host explicitly and binds to the
@@ -138,31 +148,43 @@ export function detachSession(): void {
  * read. Resolves `false` when the switch failed; the reason is the auth
  * store's sign-in error.
  */
-export function switchSession(userId: string, host?: string): Promise<boolean> {
-  return runAccountSwitch(async () => {
-    const token = getToken() ? await requestAccountSwitch(userId) : heldToken(userId);
-    if (token === null) throw new Error("This account is signed out. Sign in again.");
-    stopSession();
-    setToken(token);
-    sessionHost = host;
-    // Not awaited: `goto` waits on SvelteKit's load/render cycle, and the
-    // session below starts the same way whichever route ends up showing.
-    if (isOnAccountPage()) {
-      void goto("/", { replaceState: true });
-    }
-    // The switch blocks only on the identity round-trip (and the host write
-    // the settings read depends on); the lists load in the background.
-    const [hostWrite] = await Promise.allSettled([
-      host ? updateSettings({ githubHost: host }, { strict: true }) : undefined,
-      loadUser(),
-    ]);
-    const user = getUser();
-    if (!user) {
-      throw new Error(getError() ?? "This account's session has ended. Sign in again.");
-    }
-    beginSession(user.id);
-    if (hostWrite.status === "rejected") throw hostWrite.reason;
-  });
+export async function switchSession(userId: string, host?: string): Promise<boolean> {
+  switchingTo = accountEntryKey(userId, host ?? "");
+  try {
+    return await runAccountSwitch(() => runSwitch(userId, host));
+  } finally {
+    switchingTo = null;
+  }
+}
+
+async function runSwitch(userId: string, host: string | undefined): Promise<void> {
+  const token = getToken() ? await requestAccountSwitch(userId) : heldToken(userId);
+  if (token === null) throw new Error("This account is signed out. Sign in again.");
+  stopSession();
+  setToken(token);
+  sessionHost = host;
+  // Not awaited: `goto` waits on SvelteKit's load/render cycle, and the
+  // session below starts the same way whichever route ends up showing.
+  if (isOnAccountPage()) {
+    void goto("/", { replaceState: true });
+  }
+  // The switch blocks only on the identity round-trip (and the host write
+  // the settings read depends on); the lists load in the background.
+  const [hostWrite] = await Promise.allSettled([
+    host ? updateSettings({ githubHost: host }, { strict: true }) : undefined,
+    loadUser(),
+  ]);
+  const user = getUser();
+  if (!user) {
+    throw new Error(getError() ?? "This account's session has ended. Sign in again.");
+  }
+  beginSession(user.id);
+  if (hostWrite.status === "rejected") throw hostWrite.reason;
+}
+
+/** The {@link accountEntryKey} of the account a switch is running to. */
+export function getSwitchingTo(): string | null {
+  return switchingTo;
 }
 
 /**
@@ -172,6 +194,19 @@ export function switchSession(userId: string, host?: string): Promise<boolean> {
 export function endSession(): void {
   stopSession();
   clearIdentity();
+}
+
+/**
+ * Point Revv at another GitHub host. A session belongs to its host, so a
+ * signed-in one ends first and the caller signs in on the new host.
+ */
+export async function changeGithubHost(host: string, clientId: string): Promise<void> {
+  if (getIsAuthenticated() && !sameGithubHost(getGithubHost(), host)) {
+    dismissAccountPicker();
+    cancelSignIn();
+    endSession();
+  }
+  await setGithubConfig(host, clientId);
 }
 
 /**

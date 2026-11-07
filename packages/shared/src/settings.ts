@@ -23,6 +23,7 @@ import {
   UPDATE_CHANNELS,
   type UpdateChannel,
 } from "./constants";
+import { DEFAULT_GITHUB_HOST } from "./github-host";
 
 export const DIFF_VIEW_MODES = ["unified", "split"] as const;
 export type DiffViewMode = (typeof DIFF_VIEW_MODES)[number];
@@ -247,7 +248,7 @@ export const SETTINGS_SPEC: SettingsSpec<UserSettings> = {
     weeklyEnabled: flag(true),
     agent: oneOf(RECAP_AGENT_CHOICES, "auto", LEGACY_AGENT_ALIASES),
   },
-  githubHost: text("github.com", { nonEmpty: true }),
+  githubHost: text(DEFAULT_GITHUB_HOST, { nonEmpty: true }),
   githubClientId: text(""),
   cache: {
     enabled: flag(false),

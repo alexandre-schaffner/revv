@@ -1,13 +1,17 @@
 <script lang="ts">
-import { GITHUB_CLIENT_ID_HINT, isLikelyGitHubClientId } from "@revv/shared";
+import {
+  DEFAULT_GITHUB_HOST,
+  GITHUB_CLIENT_ID_HINT,
+  isLikelyGitHubClientId,
+  isPublicGitHub,
+  normalizeGithubHost,
+} from "@revv/shared";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import CaretLeft from "phosphor-svelte/lib/CaretLeft";
 import GithubLogo from "phosphor-svelte/lib/GithubLogo";
 import { gsapEnter, tokens } from "$lib/motion";
-import { normalizeGithubHost } from "$lib/session/github-host";
-import { endSession } from "$lib/session/lifecycle.svelte";
-import { cancelSignIn, dismissAccountPicker, getIsAuthenticated } from "$lib/stores/auth.svelte";
-import { getGithubClientId, getGithubHost, setGithubConfig } from "$lib/stores/settings.svelte";
+import { changeGithubHost } from "$lib/session/lifecycle.svelte";
+import { getGithubClientId, getGithubHost } from "$lib/stores/settings.svelte";
 import ContinueArrow from "./ContinueArrow.svelte";
 import { ACTIONS_IN, MARK_POP, OPTION_IN } from "./motion";
 
@@ -20,7 +24,7 @@ const DROP_IN = { y: -4, duration: tokens.smooth } as const;
 
 let { onContinue, onBack }: Props = $props();
 
-const PUBLIC = "github.com";
+const PUBLIC = DEFAULT_GITHUB_HOST;
 // Sentinel for the radio group — the actual host comes from `customHost`.
 const CUSTOM = "custom";
 
@@ -28,10 +32,10 @@ const CUSTOM = "custom";
 // bundled client ID is github.com; anything else is a user-added GitHub
 // Enterprise instance and goes through the custom path.
 const storedHost = getGithubHost();
-const isStoredCustom = storedHost !== null && storedHost !== PUBLIC;
+const isStoredCustom = !isPublicGitHub(storedHost);
 
 let selected = $state<string>(isStoredCustom ? CUSTOM : PUBLIC);
-let customHost = $state<string>(isStoredCustom ? (storedHost ?? "") : "");
+let customHost = $state<string>(isStoredCustom ? storedHost : "");
 let customClientId = $state<string>(isStoredCustom ? getGithubClientId() : "");
 let showInstructions = $state(isStoredCustom);
 let isSaving = $state(false);
@@ -50,21 +54,10 @@ const canContinue = $derived(
 
 async function handleContinue() {
   if (!canContinue) return;
-
-  const previousHost = getGithubHost();
-  const hostChanged = previousHost !== null && previousHost !== resolvedHost;
-
-  if (hostChanged && getIsAuthenticated()) {
-    // Still inside the flow, about to sign in on the new host.
-    dismissAccountPicker();
-    cancelSignIn();
-    endSession();
-  }
-
   isSaving = true;
   try {
     // Bundled hosts carry no client ID; clear any previously-saved custom one.
-    await setGithubConfig(resolvedHost, resolvedClientId);
+    await changeGithubHost(resolvedHost, resolvedClientId);
     onContinue();
   } finally {
     isSaving = false;

@@ -6,8 +6,8 @@ import Avatar from "$lib/components/shared/Avatar.svelte";
 import ThemeIcon from "$lib/components/shared/ThemeIcon.svelte";
 import { cycleThemePreference, themePreferenceLabel } from "$lib/components/shared/theme-cycle";
 import { gsapFade, tokens } from "$lib/motion";
-import { githubHostLabel } from "$lib/session/github-host";
-import { switchSession } from "$lib/session/lifecycle.svelte";
+import { accountEntries } from "$lib/session/account-entries";
+import { getSwitchingTo, switchSession } from "$lib/session/lifecycle.svelte";
 import { getError, getIsSwitching, getLocalAccounts } from "$lib/stores/auth.svelte";
 
 interface Props {
@@ -16,22 +16,15 @@ interface Props {
 
 let { onNewAccount }: Props = $props();
 
-const localAccounts = $derived(getLocalAccounts());
+const entries = $derived(accountEntries(getLocalAccounts()));
 const isSwitching = $derived(getIsSwitching());
+const switchingTo = $derived(getSwitchingTo());
 const switchError = $derived(getError());
 
-let switchingId = $state<string | null>(null);
-
-async function handlePick(userId: string, host: string): Promise<void> {
+// On success, OnboardingGate swaps to the app shell.
+function handlePick(userId: string, host: string): void {
   if (isSwitching) return;
-  switchingId = `${userId}:${host}`;
-  try {
-    await switchSession(userId, host);
-  } finally {
-    // Clear local state in case it fails. On success, OnboardingGate
-    // swaps to the app shell automatically.
-    switchingId = null;
-  }
+  void switchSession(userId, host);
 }
 </script>
 
@@ -50,25 +43,23 @@ async function handlePick(userId: string, host: string): Promise<void> {
     </div>
 
     <div class="picker-accounts">
-        {#each localAccounts as la (la.id)}
-            {#each la.accounts as acct (`${la.id}:${acct.host}`)}
-                {@const key = `${la.id}:${acct.host}`}
-                {@const switching = switchingId === key}
+        {#each entries as entry (entry.key)}
+                {@const switching = switchingTo === entry.key}
                 <button
                     class="picker-card"
-                    onclick={() => handlePick(la.id, acct.host)}
+                    onclick={() => handlePick(entry.userId, entry.host)}
                     disabled={isSwitching}
                 >
                     <span class="picker-card-avatar">
-                        <Avatar src={acct.avatarUrl ?? la.image} size={36}>
+                        <Avatar src={entry.avatarUrl} size={36}>
                             {#snippet fallback()}
                                 <User size={18} class="picker-card-icon" />
                             {/snippet}
                         </Avatar>
                     </span>
                     <span class="picker-card-body">
-                        <span class="picker-card-login">{acct.githubLogin ?? la.name}</span>
-                        <span class="picker-card-host">{la.email} · {githubHostLabel(acct.host)}</span>
+                        <span class="picker-card-login">{entry.login}</span>
+                        <span class="picker-card-host">{entry.email} · {entry.hostLabel}</span>
                     </span>
                     <span class="picker-card-action">
                         {#if switching}
@@ -78,7 +69,6 @@ async function handlePick(userId: string, host: string): Promise<void> {
                         {/if}
                     </span>
                 </button>
-            {/each}
         {/each}
     </div>
 

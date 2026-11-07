@@ -1,8 +1,10 @@
 import {
   GITHUB_CLIENT_ID_HINT,
   isLikelyGitHubClientId,
+  isPublicGitHub,
   type PullRequestLocator,
   parsePullRequestDeepLink,
+  sameGithubHost,
   savedClientIdForHost,
 } from "@revv/shared";
 import { toast } from "svelte-sonner";
@@ -10,6 +12,7 @@ import { goto } from "$app/navigation";
 import { api } from "$lib/api/client";
 import { bodyMessage } from "$lib/api/errors";
 import { fetchDefaultCloneBaseDir, getDefaultCloneBaseDir } from "$lib/repos/catalog.svelte";
+import { type AccountEntry, accountEntries } from "$lib/session/account-entries";
 import { switchSession } from "$lib/session/lifecycle.svelte";
 import {
   cancelSignIn,
@@ -32,14 +35,6 @@ import {
 } from "$lib/stores/settings.svelte";
 import { surfaceWindow } from "$lib/utils/surface-window";
 
-export interface AccountChoice {
-  readonly userId: string;
-  readonly host: string;
-  readonly login: string;
-  readonly email: string;
-  readonly avatarUrl: string | null;
-}
-
 export type PrDeepLinkState =
   | { readonly kind: "idle" }
   | {
@@ -51,7 +46,7 @@ export type PrDeepLinkState =
   | {
       readonly kind: "choose-account";
       readonly locator: PullRequestLocator;
-      readonly accounts: AccountChoice[];
+      readonly accounts: AccountEntry[];
     }
   | {
       readonly kind: "connect-account";
@@ -100,30 +95,19 @@ function pendingResolution(locator: PullRequestLocator): PrDeepLinkState {
   return { kind: "resolving", locator, phase: "pending", loadingVisible: false };
 }
 
-export function matchingAccountsFor(host: string): AccountChoice[] {
-  const normalized = host.toLowerCase();
-  return getLocalAccounts().flatMap((localAccount) =>
-    localAccount.accounts
-      .filter((account) => account.host.toLowerCase() === normalized)
-      .map((account) => ({
-        userId: localAccount.id,
-        host: account.host,
-        login: account.githubLogin ?? localAccount.name,
-        email: localAccount.email,
-        avatarUrl: account.avatarUrl ?? localAccount.image,
-      })),
-  );
+export function matchingAccountsFor(host: string): AccountEntry[] {
+  return accountEntries(getLocalAccounts()).filter((entry) => sameGithubHost(entry.host, host));
 }
 
 function savedClientId(locator: PullRequestLocator): string | null {
   return savedClientIdForHost(locator.githubHost, {
-    githubHost: getGithubHost() ?? "",
+    githubHost: getGithubHost(),
     githubClientId: getGithubClientId(),
   });
 }
 
 export function deepLinkNeedsClientId(locator: PullRequestLocator): boolean {
-  return locator.githubHost !== "github.com" && savedClientId(locator) === null;
+  return !isPublicGitHub(locator.githubHost) && savedClientId(locator) === null;
 }
 
 export function getDeepLinkClientId(locator: PullRequestLocator): string {
@@ -142,7 +126,7 @@ function cancelResolution(): void {
   clearLoadingTimer();
 }
 
-async function switchTo(account: AccountChoice): Promise<void> {
+async function switchTo(account: AccountEntry): Promise<void> {
   if (!(await switchSession(account.userId, account.host))) {
     throw new Error(getError() ?? "Revv could not switch accounts.");
   }
@@ -289,7 +273,7 @@ export function resumePendingPrDeepLink(): void {
   void resolveActiveLocator(state.locator);
 }
 
-export async function choosePrDeepLinkAccount(account: AccountChoice): Promise<void> {
+export async function choosePrDeepLinkAccount(account: AccountEntry): Promise<void> {
   if (state.kind !== "choose-account") return;
   const locator = state.locator;
   state = pendingResolution(locator);
@@ -310,13 +294,13 @@ export async function connectPrDeepLinkAccount(clientId: string): Promise<string
   if (state.kind !== "connect-account") return null;
   const locator = state.locator;
   const trimmedClientId = clientId.trim();
-  if (locator.githubHost !== "github.com" && !isLikelyGitHubClientId(trimmedClientId)) {
+  if (!isPublicGitHub(locator.githubHost) && !isLikelyGitHubClientId(trimmedClientId)) {
     return GITHUB_CLIENT_ID_HINT;
   }
 
   clearError();
   try {
-    const clientId = locator.githubHost === "github.com" ? "" : trimmedClientId;
+    const clientId = isPublicGitHub(locator.githubHost) ? "" : trimmedClientId;
     const started = await signIn(locator.githubHost, clientId);
     if (!started) return getError() ?? "Failed to start authorization.";
     state = { kind: "connect-account", locator, phase: "device-code", clientId };

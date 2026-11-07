@@ -1,3 +1,5 @@
+import { isPublicGitHub, sameGithubHost } from "./github-host";
+
 export const GITHUB_CLIENT_ID_HINT =
   "GitHub client IDs start with Iv for GitHub Apps or Ov for OAuth Apps.";
 
@@ -19,9 +21,7 @@ export function savedClientIdForHost(
   host: string,
   saved: { readonly githubHost: string; readonly githubClientId: string },
 ): string | null {
-  const target = host.trim().toLowerCase();
-  if (target === "github.com") return null;
-  if (saved.githubHost.trim().toLowerCase() !== target) return null;
+  if (isPublicGitHub(host) || !sameGithubHost(saved.githubHost, host)) return null;
   const clientId = saved.githubClientId.trim();
   return clientId === "" ? null : clientId;
 }

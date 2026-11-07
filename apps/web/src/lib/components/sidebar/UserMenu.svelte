@@ -1,4 +1,5 @@
 <script lang="ts">
+import { sameGithubHost } from "@revv/shared";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import Check from "phosphor-svelte/lib/Check";
 import Gear from "phosphor-svelte/lib/Gear";
@@ -11,8 +12,8 @@ import {
   Root as PopoverRoot,
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
-import { githubHostLabel } from "$lib/session/github-host";
-import { signOut, switchSession } from "$lib/session/lifecycle.svelte";
+import { type AccountEntry, accountEntries } from "$lib/session/account-entries";
+import { getSwitchingTo, signOut, switchSession } from "$lib/session/lifecycle.svelte";
 import { getIsSwitching, getLocalAccounts, getUser } from "$lib/stores/auth.svelte";
 import { getGithubHost } from "$lib/stores/settings.svelte";
 import { toggleSettings } from "$lib/stores/settingsModal.svelte";
@@ -23,59 +24,23 @@ interface Props {
 
 let { collapsed = false }: Props = $props();
 
-type SwitcherEntry = {
-  userId: string;
-  host: string;
-  githubLogin: string | null;
-  avatarUrl: string | null;
-  userImage: string | null;
-  userName: string;
-  userEmail: string;
-};
-
 let open = $state(false);
-let switchingId = $state<string | null>(null);
 
 const user = $derived(getUser());
-const localAccounts = $derived(getLocalAccounts());
+const entries = $derived(accountEntries(getLocalAccounts()));
 const isSwitching = $derived(getIsSwitching());
+const switchingTo = $derived(getSwitchingTo());
 
 const displayAvatar = $derived(user?.image ?? null);
 
-const _switchingActive = $derived(isSwitching ? switchingId : null);
-
-const switcherEntries = $derived(
-  localAccounts.flatMap((la) =>
-    la.accounts.map((acct) => ({
-      userId: la.id,
-      host: acct.host,
-      githubLogin: acct.githubLogin,
-      avatarUrl: acct.avatarUrl,
-      userImage: la.image,
-      userName: la.name,
-      userEmail: la.email,
-    })),
-  ),
-);
-
-function isEntryActive(entry: SwitcherEntry): boolean {
-  const currentHost = getGithubHost();
-  return entry.host === currentHost && entry.githubLogin === user?.githubLogin;
+function isEntryActive(entry: AccountEntry): boolean {
+  return sameGithubHost(entry.host, getGithubHost()) && entry.githubLogin === user?.githubLogin;
 }
 
-function entryKey(entry: SwitcherEntry): string {
-  return `${entry.userId}:${entry.host}`;
-}
-
-async function handleSwitchEntry(entry: SwitcherEntry): Promise<void> {
+async function handleSwitchEntry(entry: AccountEntry): Promise<void> {
   if (isEntryActive(entry) || isSwitching) return;
-  switchingId = entryKey(entry);
-  try {
-    await switchSession(entry.userId, entry.host);
-    open = false;
-  } finally {
-    switchingId = null;
-  }
+  await switchSession(entry.userId, entry.host);
+  open = false;
 }
 
 function handleSettings(): void {
@@ -83,13 +48,9 @@ function handleSettings(): void {
   toggleSettings();
 }
 
-async function handleSignOut(): Promise<void> {
+function handleSignOut(): void {
   open = false;
-  try {
-    await signOut();
-  } catch {
-    // Best-effort — the UI will reflect auth state regardless
-  }
+  void signOut();
 }
 </script>
 
@@ -123,10 +84,9 @@ async function handleSignOut(): Promise<void> {
 		align="start"
 		side="top"
 	>
-		{#each switcherEntries as entry (entryKey(entry))}
+		{#each entries as entry (entry.key)}
 			{@const active = isEntryActive(entry)}
-			{@const switching = _switchingActive === entryKey(entry)}
-			{@const avatar = entry.avatarUrl ?? entry.userImage}
+			{@const switching = switchingTo === entry.key}
 
 			<button
 				class="acct-row"
@@ -136,7 +96,7 @@ async function handleSignOut(): Promise<void> {
 				aria-pressed={active}
 			>
 				<span class="acct-avatar-wrap">
-					<Avatar src={avatar} size={18}>
+					<Avatar src={entry.avatarUrl} size={18}>
 						{#snippet fallback()}
 							<User size={13} class="acct-icon" />
 						{/snippet}
@@ -144,8 +104,8 @@ async function handleSignOut(): Promise<void> {
 				</span>
 
 				<span class="acct-body">
-					<span class="acct-login">{entry.githubLogin ?? entry.userName}</span>
-					<span class="acct-host">{entry.githubLogin ?? entry.userEmail} · {githubHostLabel(entry.host)}</span>
+					<span class="acct-login">{entry.login}</span>
+					<span class="acct-host">{entry.githubLogin ?? entry.email} · {entry.hostLabel}</span>
 				</span>
 
 				<span class="acct-status-slot">

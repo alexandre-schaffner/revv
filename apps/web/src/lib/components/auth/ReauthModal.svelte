@@ -1,5 +1,5 @@
 <script lang="ts">
-import { GITHUB_CLIENT_ID_HINT, isLikelyGitHubClientId } from "@revv/shared";
+import { GITHUB_CLIENT_ID_HINT, isLikelyGitHubClientId, isPublicGitHub } from "@revv/shared";
 import GithubLogo from "phosphor-svelte/lib/GithubLogo";
 import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
@@ -27,7 +27,7 @@ let isSavingClientId = $state(false);
 const needsClientId = $derived(
   Boolean(
     reauth?.host &&
-      reauth.host !== "github.com" &&
+      !isPublicGitHub(reauth.host) &&
       (signInErrorCode === "missing_github_client_id" ||
         signInErrorCode === "invalid_github_client_id" ||
         clientIdError),

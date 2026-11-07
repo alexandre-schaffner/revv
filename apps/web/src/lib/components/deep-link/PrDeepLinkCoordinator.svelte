@@ -192,14 +192,14 @@ async function handleConnect(): Promise<void> {
             </div>
           {:else if workflow.kind === "choose-account"}
             <div class="account-list" aria-label="Accounts">
-              {#each workflow.accounts as account, index (`${account.userId}:${account.host}`)}
+              {#each workflow.accounts as account, index (account.key)}
                 <button
                   bind:this={accountButtons[index]}
                   class="account-row"
                   data-pr-deep-link-autofocus={index === 0 ? "" : undefined}
                   onclick={() => void choosePrDeepLinkAccount(account)}
                   onkeydown={(event) => handleAccountKeydown(event, index)}
-                  aria-label={`${account.login}, ${account.email}, ${account.host}`}
+                  aria-label={`${account.login}, ${account.email}, ${account.hostLabel}`}
                 >
                   <span class="account-avatar">
                     <Avatar src={account.avatarUrl} size={24}>
@@ -208,7 +208,7 @@ async function handleConnect(): Promise<void> {
                   </span>
                   <span class="account-copy">
                     <span class="account-login">{account.login}</span>
-                    <span class="account-meta">{account.email} · {account.host}</span>
+                    <span class="account-meta">{account.email} · {account.hostLabel}</span>
                   </span>
                 </button>
               {/each}

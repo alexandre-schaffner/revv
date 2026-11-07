@@ -1,6 +1,10 @@
-import { GITHUB_CLIENT_ID_HINT, isLikelyGitHubClientId, savedClientIdForHost } from "@revv/shared";
+import {
+  GITHUB_CLIENT_ID_HINT,
+  isLikelyGitHubClientId,
+  isPublicGitHub,
+  savedClientIdForHost,
+} from "@revv/shared";
 import { serverEnv } from "./config";
-import { isPublicGitHub } from "./domain/github-host";
 
 /**
  * Per-host GitHub OAuth wiring shared by the device-code sign-in flow
