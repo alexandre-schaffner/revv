@@ -3,13 +3,10 @@ import { projectRecaps } from "./project-recaps";
 import { pullRequests } from "./pull-requests";
 
 /**
- * Compact, durable per-PR context for project recap generation.
- *
- * Raw diffs can be very large and cannot be removed from an LLM session once a
- * tool returns them. Recap generation therefore compacts each raw PR diff into
- * this table before the final recap agent runs. The final agent reads these
- * bounded digests instead of raw patches, so context grows with digest size
- * rather than raw diff size.
+ * Retired: nothing reads or writes this table. The per-PR diff digests travel
+ * in `project_recaps.source_bundle`. It stays in users' databases (no drop
+ * migration) and stays declared here because the migration snapshot still
+ * lists it, so `drizzle-kit generate` would otherwise emit a DROP TABLE.
  */
 export const recapPrDigests = sqliteTable(
   "recap_pr_digests",

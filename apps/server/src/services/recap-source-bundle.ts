@@ -1,11 +1,28 @@
-import type { RecapPeriod, RecapSummaryStats } from "@revv/shared";
+// What a recap is written from: the window's archived pull requests (the
+// local mirror, backfilled from GitHub's search for what it missed), the work
+// still open as the window closed, and a compact digest of each diff that has
+// no finished walkthrough to describe it.
+
+import type { ProjectRecap, RecapPeriod, RecapSummaryStats, RecapWindowBounds } from "@revv/shared";
+import { windowIsCurrent } from "@revv/shared";
+import { type Context, Effect } from "effect";
 import type { RecapSourcePrDiff, RecapSourcePrDiffFile } from "../ai/providers/recap-tools";
+import type { Db } from "../db";
 import type {
   RecapSourceBundle,
   RecapSourcePr,
   RecapSourcePrDigest,
 } from "../db/schema/project-recaps";
-import type { ArchivedPrWithWalkthrough } from "./PullRequest";
+import type { DbError } from "../domain/errors";
+import type { ObservedPr } from "../domain/observed-pr";
+import { withDb } from "../effects/with-db";
+import { debug, logError } from "../logger";
+import type { DiffCacheService } from "./DiffCache";
+import type { GitHubGateway } from "./github/gateway";
+import type { GitHubClient } from "./github/transport";
+import type { PrContextService } from "./PrContext";
+import type { PrMirror } from "./PrMirror";
+import type { ArchivedPrWithWalkthrough, PullRequestService } from "./PullRequest";
 import { truncatePatchToChars } from "./patch-truncate";
 
 export const RECAP_DIFF_MAX_FILES_PER_PR = 25;
@@ -188,4 +205,303 @@ function truncateBody(body: string): string {
   const MAX = 2000;
   if (body.length <= MAX) return body;
   return `${body.slice(0, MAX)}\n\n[…truncated…]`;
+}
+
+/** Cap on per-PR GitHub fetches during one backfill pass — defends against a
+ *  misconfigured search returning thousands of PRs. */
+const RECAP_BACKFILL_MAX_FETCHES = 50;
+
+export interface RecapSources {
+  /** The repo owner's client, or null: the recap then reads diffs from the cache only. */
+  readonly repoClient: (repoId: string) => Effect.Effect<GitHubClient | null>;
+  /**
+   * A PR's diff, capped per file and per PR so one PR can't blow up the
+   * agent's context window. Any failure degrades to a metadata-only PR.
+   */
+  readonly loadDiff: (
+    pr: ArchivedPrWithWalkthrough["pr"],
+    repoFullName: string,
+    client: GitHubClient | null,
+  ) => Effect.Effect<RecapSourcePrDiff>;
+  /**
+   * The window's pull requests, open work and digests. A window with nothing
+   * in it is final once closed (`empty`), and "nothing yet" while open.
+   */
+  readonly assemble: (
+    recap: ProjectRecap,
+    repoFullName: string,
+  ) => Effect.Effect<RecapSourceBundle | "empty" | "nothing-yet", DbError>;
+  /**
+   * No pull request closed in the window or was open as it closed, as far as
+   * the local mirror knows: the same boundary as `assemble`'s empty check.
+   */
+  readonly windowIsSilent: (
+    repoId: string,
+    window: RecapWindowBounds,
+  ) => Effect.Effect<boolean, DbError>;
+}
+
+export function makeRecapSources(deps: {
+  readonly db: Db;
+  readonly prs: Context.Service.Shape<typeof PullRequestService>;
+  readonly prContext: Context.Service.Shape<typeof PrContextService>;
+  readonly diffCache: Context.Service.Shape<typeof DiffCacheService>;
+  readonly github: Context.Service.Shape<typeof GitHubGateway>;
+  readonly mirror: Context.Service.Shape<typeof PrMirror>;
+}): RecapSources {
+  const { db, prs, diffCache, github, mirror } = deps;
+
+  const archivedIn = (repoId: string, periodStart: string, periodEnd: string) =>
+    withDb(db, prs.listArchivedPrsForWindow(repoId, periodStart, periodEnd));
+  const openAsOf = (repoId: string, periodEnd: string) =>
+    withDb(db, prs.listOpenPrsAsOfWindow(repoId, periodEnd));
+
+  const repoClient = (repoId: string): Effect.Effect<GitHubClient | null> =>
+    deps.prContext.forRepo(repoId).pipe(
+      Effect.map((ctx): GitHubClient | null => ctx.client),
+      Effect.catch((err) =>
+        Effect.sync(() => {
+          debug(
+            "recap-jobs",
+            `no GitHub client for repo ${repoId} — recap will fall back to cache-only diffs:`,
+            err instanceof Error ? err.message : String(err),
+          );
+          return null;
+        }),
+      ),
+    );
+
+  const loadDiff = (
+    pr: ArchivedPrWithWalkthrough["pr"],
+    repoFullName: string,
+    client: GitHubClient | null,
+  ): Effect.Effect<RecapSourcePrDiff> =>
+    Effect.gen(function* () {
+      const loaded =
+        client === null
+          ? yield* diffCache
+              .getCachedFiles(pr.id)
+              .pipe(
+                Effect.map((files) =>
+                  files === null ? null : { files, source: "cache" as const },
+                ),
+              )
+          : yield* diffCache.getOrFetch(pr, repoFullName, client);
+      if (loaded === null) {
+        return {
+          files: [],
+          totalFiles: 0,
+          filesTruncated: false,
+          source: "unavailable",
+          note: "No diff cached locally and no GitHub token available — describe this PR from title/body/+/- counts only.",
+        } satisfies RecapSourcePrDiff;
+      }
+
+      const totalFiles = loaded.files.length;
+      const trimmed = loaded.files.slice(0, RECAP_DIFF_MAX_FILES_PER_PR);
+      const filesTruncated = trimmed.length < totalFiles;
+      const recapFiles: RecapSourcePrDiffFile[] = trimmed.map((f) => {
+        const { patch, truncated } = truncatePatch(f.patch);
+        return {
+          path: f.path,
+          oldPath: f.oldPath,
+          status: f.status,
+          additions: f.additions,
+          deletions: f.deletions,
+          patch,
+          patchTruncated: truncated,
+        };
+      });
+      const notes: string[] = [];
+      if (filesTruncated) {
+        notes.push(
+          `Showing ${trimmed.length} of ${totalFiles} files — only the first ${RECAP_DIFF_MAX_FILES_PER_PR} were included.`,
+        );
+      }
+      const truncatedPatchCount = recapFiles.filter((f) => f.patchTruncated).length;
+      if (truncatedPatchCount > 0) {
+        notes.push(
+          `${truncatedPatchCount} patch(es) clipped to ${RECAP_DIFF_MAX_PATCH_CHARS} chars.`,
+        );
+      }
+      return {
+        files: recapFiles,
+        totalFiles,
+        filesTruncated,
+        source: loaded.source,
+        note: notes.length > 0 ? notes.join(" ") : null,
+      } satisfies RecapSourcePrDiff;
+    }).pipe(
+      Effect.catch((err) =>
+        Effect.sync(() => {
+          debug(
+            "recap-jobs",
+            `diff load failed for pr ${pr.id} (#${pr.externalId}) — recap will skip diff:`,
+            err instanceof Error ? err.message : String(err),
+          );
+          return {
+            files: [],
+            totalFiles: 0,
+            filesTruncated: false,
+            source: "unavailable",
+            note: "Diff fetch from GitHub failed — describe this PR from title/body/+/- counts only.",
+          } satisfies RecapSourcePrDiff;
+        }),
+      ),
+    );
+
+  // The local mirror is populated by the poll scheduler, which only fetches
+  // *open* PRs. A PR that closes between two poll cycles, or closed before the
+  // user added the repo, never lands in `pull_requests`, so the window query
+  // misses it — silent data loss for a recap whose whole job is "what
+  // shipped". GitHub's issue search fills in what the mirror is missing.
+  // Failure is non-fatal: the recap goes ahead on the local mirror.
+  const backfillMissingPrs = (
+    repoId: string,
+    repoFullName: string,
+    periodStart: string,
+    periodEnd: string,
+    windowed: ReadonlyArray<ArchivedPrWithWalkthrough>,
+  ): Effect.Effect<{ readonly addedCount: number }> =>
+    Effect.gen(function* () {
+      const client = yield* repoClient(repoId);
+      if (client === null) {
+        debug("recap-jobs", `backfill skipped for repo ${repoId} — no GitHub token resolvable`);
+        return { addedCount: 0 };
+      }
+
+      const searched = yield* github.prs
+        .searchClosedInWindow(client, repoFullName, periodStart, periodEnd)
+        .pipe(
+          Effect.catch((err) =>
+            Effect.sync(() => {
+              debug(
+                "recap-jobs",
+                `searchClosedPrsInWindow failed for ${repoFullName} — proceeding with local data only:`,
+                err instanceof Error ? err.message : String(err),
+              );
+              return [] as ReadonlyArray<{
+                readonly number: number;
+                readonly closedAt: string;
+                readonly merged: boolean;
+              }>;
+            }),
+          ),
+        );
+
+      if (searched.length === 0) return { addedCount: 0 };
+
+      const knownNumbers = new Set(windowed.map((row) => row.pr.externalId));
+      const missing = searched
+        .filter((s) => !knownNumbers.has(s.number))
+        .slice(0, RECAP_BACKFILL_MAX_FETCHES);
+
+      if (missing.length === 0) return { addedCount: 0 };
+
+      debug(
+        "recap-jobs",
+        `backfilling ${missing.length} closed PR(s) for ${repoFullName} window ${periodStart}..${periodEnd}`,
+      );
+
+      const fetched = yield* github.prs
+        .getMany(
+          client,
+          repoFullName,
+          repoId,
+          missing.map((m) => m.number),
+        )
+        .pipe(
+          Effect.catch((err) =>
+            Effect.sync(() => {
+              debug(
+                "recap-jobs",
+                `PR read failed during backfill for ${repoFullName}:`,
+                err instanceof Error ? err.message : String(err),
+              );
+              return new Map<number, ObservedPr>();
+            }),
+          ),
+        );
+      const upsertable = [...fetched.values()];
+
+      if (upsertable.length === 0) return { addedCount: 0 };
+
+      yield* mirror.apply(upsertable).pipe(
+        Effect.catch((err) =>
+          Effect.sync(() => {
+            logError(
+              "recap-jobs",
+              `upsertPrs failed during recap backfill for ${repoFullName}:`,
+              err instanceof Error ? err.message : String(err),
+            );
+          }),
+        ),
+      );
+
+      return { addedCount: upsertable.length };
+    });
+
+  const assemble = (
+    recap: ProjectRecap,
+    repoFullName: string,
+  ): Effect.Effect<RecapSourceBundle | "empty" | "nothing-yet", DbError> =>
+    Effect.gen(function* () {
+      const { repositoryId, periodStart, periodEnd } = recap;
+      let windowed = yield* archivedIn(repositoryId, periodStart, periodEnd);
+      const backfill = yield* backfillMissingPrs(
+        repositoryId,
+        repoFullName,
+        periodStart,
+        periodEnd,
+        windowed,
+      );
+      if (backfill.addedCount > 0)
+        windowed = yield* archivedIn(repositoryId, periodStart, periodEnd);
+
+      // As of the window's close, so a historical recap doesn't describe
+      // today's open PRs. Read before the empty-window check so a window
+      // with only open PRs still gets an "active work" recap.
+      const openPrs = yield* openAsOf(repositoryId, periodEnd);
+
+      if (windowed.length === 0 && openPrs.length === 0) {
+        return windowIsCurrent(recap.period, periodStart) ? "nothing-yet" : "empty";
+      }
+
+      // Every PR without a completed walkthrough gets its diff compacted into
+      // a digest, so the agent session scales with many PRs without holding
+      // every raw diff.
+      const client = yield* Effect.cached(repoClient(repositoryId));
+      const digests = yield* Effect.forEach(
+        [...windowed, ...openPrs].filter((row) => row.walkthrough === null),
+        (row) =>
+          Effect.map(
+            Effect.flatMap(client, (c) => loadDiff(row.pr, repoFullName, c)),
+            (diff) => [row.pr.id, buildDigestForRecapPr(row.pr, diff)] as const,
+          ),
+        { concurrency: 3 },
+      );
+
+      return attachRecapDigests(
+        buildSourceBundle(
+          repoFullName,
+          { repoId: repositoryId, period: recap.period, periodStart, periodEnd },
+          windowed,
+          openPrs,
+        ),
+        new Map<string, RecapSourcePrDigest>(digests),
+      );
+    });
+
+  const windowIsSilent = (
+    repoId: string,
+    window: RecapWindowBounds,
+  ): Effect.Effect<boolean, DbError> =>
+    Effect.gen(function* () {
+      if ((yield* archivedIn(repoId, window.periodStart, window.periodEnd)).length > 0) {
+        return false;
+      }
+      return (yield* openAsOf(repoId, window.periodEnd)).length === 0;
+    });
+
+  return { repoClient, loadDiff, assemble, windowIsSilent };
 }

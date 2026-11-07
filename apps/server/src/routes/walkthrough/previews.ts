@@ -7,17 +7,14 @@
 
 import type { HunkScanEnsureResult, WalkthroughSizing } from "@revv/shared";
 import { Effect } from "effect";
-import {
-  filePriorityOrder,
-  resolveJobStartAnswers,
-  routeFromAnswers,
-} from "../../ai/jev/job-start";
+import { resolveJobStartAnswers } from "../../ai/jev/job-start";
 import type { AppServices } from "../../runtime";
 import { DiffCacheService, toGitHubFileShape } from "../../services/DiffCache";
 import { HunkScanService } from "../../services/HunkScan";
 import { JevService } from "../../services/Jev";
 import { PrContextService } from "../../services/PrContext";
 import { SettingsService } from "../../services/Settings";
+import { buildJobStartPlan, launchFor } from "../../services/walkthrough/launch-plan";
 
 /** The PR, its head, and its cached diff, or null until the diff lands. */
 function loadCachedPrDiff(prId: string) {
@@ -32,6 +29,24 @@ function loadCachedPrDiff(prId: string) {
   });
 }
 
+/** The cached job-start answer for the PR's head, projected as the launch would. */
+function jobStartPlanFor(diff: NonNullable<Effect.Success<ReturnType<typeof loadCachedPrDiff>>>) {
+  return Effect.gen(function* () {
+    const answers = yield* resolveJobStartAnswers(diff.pr.id, diff.headSha, {
+      pr: diff.pr,
+      files: diff.files,
+      // Commit subjects are a sizing nicety, not load-bearing; skipping
+      // them keeps this off the GitHub path.
+      commits: [],
+    });
+    const settingsService = yield* SettingsService;
+    const settings = yield* settingsService.getSettings();
+    const agent = yield* settingsService.resolveAgent();
+    const plan = buildJobStartPlan({ settings, agent, files: diff.files, answers });
+    return { answers, plan, launch: launchFor(settings, agent, plan.launchOverride) };
+  });
+}
+
 /** Risk tier for the review page, and what "Auto" would pick for the model. */
 export function walkthroughSizing(
   prId: string,
@@ -43,27 +58,15 @@ export function walkthroughSizing(
     const diff = yield* loadCachedPrDiff(prId);
     if (diff === null) return { status: "pending" as const };
 
-    const answers = yield* resolveJobStartAnswers(diff.pr.id, diff.headSha, {
-      pr: diff.pr,
-      files: diff.files,
-      // Commit subjects are a sizing nicety, not load-bearing; skipping
-      // them keeps this off the GitHub path.
-      commits: [],
-    });
+    const { answers, plan, launch } = yield* jobStartPlanFor(diff);
     if (answers === null) return { status: "pending" as const };
-
-    const settingsSvc = yield* SettingsService;
-    const settings = yield* settingsSvc.getSettings();
-    const override = routeFromAnswers(answers, {
-      agent: yield* settingsSvc.resolveAgent(),
-      configuredModel: settings.aiModel,
-      configuredEffort: settings.aiThinkingEffort,
-    });
+    // What the launch runs with, for the halves the judgment sized.
+    const sized = plan.launchOverride;
     return {
       status: "ready" as const,
-      riskLevel: answers.riskLevel,
-      model: override?.model ?? null,
-      thinkingEffort: override?.thinkingEffort ?? null,
+      riskLevel: plan.assignedRisk,
+      model: sized?.model !== undefined ? launch.model : null,
+      thinkingEffort: sized?.thinkingEffort !== undefined ? launch.thinkingEffort : null,
     };
   });
 }
@@ -87,14 +90,9 @@ export function ensureHunkScan(
     if (diff === null) return { status: "pending" as const };
     const { pr, headSha, files } = diff;
 
-    const answers = yield* resolveJobStartAnswers(pr.id, headSha, { pr, files, commits: [] });
+    const { plan } = yield* jobStartPlanFor(diff);
     const hunkScan = yield* HunkScanService;
-    yield* hunkScan.start({
-      prId: pr.id,
-      headSha,
-      files,
-      filePriorities: answers === null ? null : filePriorityOrder(answers, files),
-    });
+    yield* hunkScan.start({ prId: pr.id, headSha, files, filePriorities: plan.filePriorities });
     return { status: "ready" as const, scan: yield* hunkScan.snapshot(pr.id, headSha) };
   });
 }
