@@ -12,7 +12,6 @@ export interface RunStackBriefAcpParams {
   readonly snapshot: StackBriefSnapshot;
   readonly sessionToken: string;
   readonly launch: AgentLaunch;
-  readonly workingDir: string;
   readonly abortController: AbortController;
   readonly activity: ActivityBeacon;
   readonly calledAnyTool: () => boolean;
@@ -25,7 +24,6 @@ export function runStackBriefAgentViaAcp(
 ): Promise<McpAgentRunError> {
   return runMcpAgentViaAcp({
     launch: params.launch,
-    workingDir: params.workingDir,
     abortController: params.abortController,
     activity: params.activity,
     settle: params.completion,

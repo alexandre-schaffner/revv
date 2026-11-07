@@ -7,6 +7,7 @@ import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import type { AgentFailureKind } from "../../domain/errors";
 import { logError } from "../../logger";
 import type { AgentLaunch } from "../acp/agent-launch";
+import { projectlessAgentCwd } from "../acp/package-runner-dir";
 import {
   type ActivityBeacon,
   JOB_TURN,
@@ -17,7 +18,6 @@ import {
 
 export interface RunMcpAgentAcpParams {
   readonly launch: AgentLaunch;
-  readonly workingDir: string;
   readonly abortController: AbortController;
   /** The job's liveness beacon; its MCP route notes every call it authenticates. */
   readonly activity: ActivityBeacon;
@@ -44,7 +44,7 @@ export async function runMcpAgentViaAcp(params: RunMcpAgentAcpParams): Promise<M
   const end = await runAcpTurn({
     label: params.debugLabel,
     launch,
-    cwd: params.workingDir,
+    cwd: projectlessAgentCwd(),
     mcp: params.mcp,
     deadlines: JOB_TURN,
     activity: params.activity,

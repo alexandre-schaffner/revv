@@ -8,6 +8,7 @@ import type { RecapStreamEvent } from "@revv/shared";
 import { SPAN_ATTR } from "@revv/shared/telemetry";
 import { logError } from "../../logger";
 import type { AgentLaunch } from "../acp/agent-launch";
+import { projectlessAgentCwd } from "../acp/package-runner-dir";
 import type { ActivityBeacon, TurnSettle } from "../acp/run-turn";
 import { decodeAcpSessionUpdate, makeAcpDecodeState } from "../agent-stream/acp-decoders";
 import type { NormalizedAgentEvent } from "../agent-stream/normalized-events";
@@ -23,8 +24,6 @@ export interface RunRecapAgentAcpParams {
   /** Bearer token the orchestrator issued for `ctx` on `/mcp/recap`. */
   readonly sessionToken: string;
   readonly launch: AgentLaunch;
-  /** Working dir the ACP connection is pooled under: Revv's runner directory. */
-  readonly workingDir: string;
   readonly abortController: AbortController;
   readonly activity: ActivityBeacon;
   readonly calledAnyTool: () => boolean;
@@ -64,7 +63,7 @@ export async function runRecapAgentViaAcp(
     else if (ev.kind === "tool-call" && isExplorationTool(ev.toolName)) {
       fanOut({
         type: "activity",
-        data: buildActivity(ev.toolName, ev.input, params.workingDir, ev.callId),
+        data: buildActivity(ev.toolName, ev.input, projectlessAgentCwd(), ev.callId),
       });
     }
   };
@@ -72,7 +71,6 @@ export async function runRecapAgentViaAcp(
 
   const error = await runMcpAgentViaAcp({
     launch: params.launch,
-    workingDir: params.workingDir,
     abortController: params.abortController,
     activity: params.activity,
     settle: params.completion,
