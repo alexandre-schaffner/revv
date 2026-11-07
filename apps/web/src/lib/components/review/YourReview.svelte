@@ -4,6 +4,7 @@ import { toast } from "svelte-sonner";
 import { submitChatMessage } from "$lib/chat/turn.svelte";
 import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import ReviewActionBar from "$lib/components/review/chrome/ReviewActionBar.svelte";
+import { buildAddressIssuesPrompt } from "$lib/review/address-issues-prompt";
 import { IssueSelection } from "$lib/review/issue-selection.svelte";
 import { type ReviewAction, submitReview } from "$lib/review/submit-review";
 import { postableThreadCount } from "$lib/review/threads";
@@ -13,7 +14,6 @@ import { setRightPanelOpen } from "$lib/stores/sidebar.svelte";
 import { outstandingItemsPhrase } from "$lib/walkthrough/issues";
 import { getIssueSignal } from "$lib/walkthrough/store.svelte";
 import ApproveWithIssuesDialog from "./ApproveWithIssuesDialog.svelte";
-import { buildAddressIssuesPrompt } from "./address-issues-prompt";
 import CommentsPanel from "./spec-panel/CommentsPanel.svelte";
 import IssuesPanel from "./spec-panel/IssuesPanel.svelte";
 
