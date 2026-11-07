@@ -153,6 +153,35 @@ class Installer(unittest.TestCase):
         self.assertEqual(self.logged("launchctl"), [f"unload {plist}"])
         self.assertTrue(plist.exists(), "write_desktop_server_config migrates it later")
 
+    def github_conf(self, env_file="", **overrides):
+        support = self.root / "support"
+        env = {"REVV_SUPPORT_DIR": str(support), "REVV_INSTALLED_APP": "", **overrides}
+        result = self.run_installer(f'save_github_overrides "{env_file}"', env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        conf = support / "github.conf"
+        return conf.read_text() if conf.exists() else None
+
+    def test_github_overrides_persist_and_clear(self):
+        self.assertEqual(
+            self.github_conf(REVV_GITHUB_HOST="ghe.example.com", REVV_GITHUB_CLIENT_ID="Iv23li1234567890"),
+            "GITHUB_HOST=ghe.example.com\nGITHUB_CLIENT_ID=Iv23li1234567890\n",
+        )
+        self.assertEqual(self.github_conf(REVV_GITHUB_HOST="ghe2.example.com"), "GITHUB_HOST=ghe2.example.com\n")
+        self.assertIsNone(self.github_conf())
+
+    def test_a_checkout_env_file_is_read_only_when_asked(self):
+        dotenv = self.root / "checkout/apps/server/.env"
+        dotenv.parent.mkdir(parents=True)
+        dotenv.write_text('GITHUB_HOST="ghe.dev.test"\nGITHUB_CLIENT_ID=Ov23li1234567890\n')
+        self.assertIsNone(self.github_conf())
+        self.assertEqual(
+            self.github_conf(str(dotenv)), "GITHUB_HOST=ghe.dev.test\nGITHUB_CLIENT_ID=Ov23li1234567890\n"
+        )
+        self.assertEqual(
+            self.github_conf(str(dotenv), REVV_GITHUB_HOST="ghe.example.com"),
+            "GITHUB_HOST=ghe.example.com\nGITHUB_CLIENT_ID=Ov23li1234567890\n",
+        )
+
     def release(self, digest=None):
         stage = self.root / "stage"
         make_app(stage / "Revv.app", "release")

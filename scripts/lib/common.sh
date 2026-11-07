@@ -479,6 +479,32 @@ _revv_dotenv_get() {
   done < "$env_file"
 }
 
+# Persist the GitHub override (REVV_GITHUB_HOST / REVV_GITHUB_CLIENT_ID) to
+# $REVV_SUPPORT_DIR/github.conf, where `revv update` finds it again, or remove
+# the file when there is none. With a .env path, values the environment lacks
+# come from it.
+save_github_overrides() {
+  local env_file="${1:-}"
+  local host="${REVV_GITHUB_HOST:-}" client_id="${REVV_GITHUB_CLIENT_ID:-}"
+  if [[ -n "$env_file" ]]; then
+    [[ -f "$env_file" ]] || fail "No .env file at $env_file"
+    [[ -n "$host" ]] || host="$(_revv_dotenv_get GITHUB_HOST "$env_file")"
+    [[ -n "$client_id" ]] || client_id="$(_revv_dotenv_get GITHUB_CLIENT_ID "$env_file")"
+  fi
+  local conf="$REVV_SUPPORT_DIR/github.conf"
+  mkdir -p "$REVV_SUPPORT_DIR"
+  if [[ -z "$host" && -z "$client_id" ]]; then
+    rm -f "$conf"
+    return 0
+  fi
+  {
+    if [[ -n "$host" ]]; then printf 'GITHUB_HOST=%s\n' "$host"; fi
+    if [[ -n "$client_id" ]]; then printf 'GITHUB_CLIENT_ID=%s\n' "$client_id"; fi
+  } > "$conf"
+  chmod 600 "$conf"
+  success "GitHub overrides persisted → $conf (host: ${host:-<bundled>})"
+}
+
 # Record the user's tool locations for Finder/login launches, which lack shell setup.
 write_desktop_server_config() {
   local config_path="$1" bun_bin="$2" project_root="$3" log_dir="$4"
@@ -497,8 +523,6 @@ write_desktop_server_config() {
   local github_host="${REVV_GITHUB_HOST:-}" github_client_id="${REVV_GITHUB_CLIENT_ID:-}"
   [[ -n "$github_host" ]] || github_host="$(_revv_dotenv_get GITHUB_HOST "$REVV_SUPPORT_DIR/github.conf")"
   [[ -n "$github_client_id" ]] || github_client_id="$(_revv_dotenv_get GITHUB_CLIENT_ID "$REVV_SUPPORT_DIR/github.conf")"
-  [[ -n "$github_host" ]] || github_host="$(_revv_dotenv_get GITHUB_HOST "$project_root/apps/server/.env")"
-  [[ -n "$github_client_id" ]] || github_client_id="$(_revv_dotenv_get GITHUB_CLIENT_ID "$project_root/apps/server/.env")"
 
   "$bun_bin" --no-env-file -e '
     const fs = require("node:fs");
@@ -524,6 +548,9 @@ write_desktop_server_config() {
       REVV_OPENCODE_BIN: opencode || previousEnv.REVV_OPENCODE_BIN || "",
       REVV_CODEX_BIN: codex || previousEnv.REVV_CODEX_BIN || "",
     };
+    // github.conf holds the override: one an earlier install wrote here goes with it.
+    delete env.GITHUB_HOST;
+    delete env.GITHUB_CLIENT_ID;
     if (host) env.GITHUB_HOST = host;
     if (clientId) env.GITHUB_CLIENT_ID = clientId;
     fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });

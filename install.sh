@@ -15,6 +15,9 @@
 #   --dev            Install the dev toolchain and project deps, nothing more.
 #                    Use this before running `make dev`.
 #   --yes, -y        Non-interactive: auto-approve every prompt.
+#   --github-from-dotenv
+#                    Take GITHUB_HOST / GITHUB_CLIENT_ID from this checkout's
+#                    apps/server/.env when REVV_GITHUB_* don't set them.
 #   --help, -h       This message.
 #
 # Environment overrides:
@@ -38,19 +41,21 @@ REVV_RELEASE_TAG="${REVV_RELEASE_TAG:-}"
 REVV_APP_DIR="${REVV_APP_DIR:-/Applications}"
 REVV_AUTO_YES="${REVV_AUTO_YES:-0}"
 MODE="user"
+GITHUB_FROM_DOTENV=0
 REVV_GITHUB_REPO="alexandre-schaffner/revv"
 
 for arg in "$@"; do
   case "$arg" in
     --dev)       MODE="dev" ;;
     --yes|-y)    REVV_AUTO_YES=1 ;;
+    --github-from-dotenv) GITHUB_FROM_DOTENV=1 ;;
     --help|-h)
-      sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
       printf '[FAIL]  Unknown argument: %s\n\n' "$arg" >&2
-      sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//' >&2
+      sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//' >&2
       exit 2
       ;;
   esac
@@ -292,22 +297,17 @@ success "Installed → $dest_app"
 #     REVV_GITHUB_CLIENT_ID=<your-oauth-app-client-id> bash
 #
 # They persist to $REVV_SUPPORT_DIR/github.conf so `revv update` rewrites the
-# desktop server configuration with the same overrides. When unset, the conf
-# is removed, but an override an earlier install wrote into
-# desktop-server.json stays (its env is carried over); remove GITHUB_HOST /
-# GITHUB_CLIENT_ID there to go back to the bundled defaults.
-mkdir -p "$REVV_SUPPORT_DIR"
-if [[ -n "${REVV_GITHUB_HOST:-}" || -n "${REVV_GITHUB_CLIENT_ID:-}" ]]; then
-  {
-    [[ -n "${REVV_GITHUB_HOST:-}"      ]] && printf 'GITHUB_HOST=%s\n'      "$REVV_GITHUB_HOST"
-    [[ -n "${REVV_GITHUB_CLIENT_ID:-}" ]] && printf 'GITHUB_CLIENT_ID=%s\n' "$REVV_GITHUB_CLIENT_ID"
-  } > "$REVV_SUPPORT_DIR/github.conf"
-  chmod 600 "$REVV_SUPPORT_DIR/github.conf"
-  success "GitHub overrides persisted → $REVV_SUPPORT_DIR/github.conf (host: ${REVV_GITHUB_HOST:-<bundled>})"
-  export REVV_GITHUB_HOST="${REVV_GITHUB_HOST:-}"
-  export REVV_GITHUB_CLIENT_ID="${REVV_GITHUB_CLIENT_ID:-}"
+# desktop server configuration with the same overrides. Re-installing without
+# them removes the conf and the override from desktop-server.json, back to the
+# bundled defaults. A checkout's apps/server/.env is read only with
+# --github-from-dotenv.
+#
+# GITHUB_HOST is the host a fresh install starts on; an existing install keeps
+# the host chosen in its settings.
+if [[ "$GITHUB_FROM_DOTENV" == 1 ]]; then
+  save_github_overrides "$PROJECT_ROOT/apps/server/.env"
 else
-  rm -f "$REVV_SUPPORT_DIR/github.conf" 2>/dev/null || true
+  save_github_overrides
 fi
 
 step "Configuring the Revv server"
