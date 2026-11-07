@@ -26,8 +26,14 @@ default sort.
 **Where** (`apps/server/src/services/`):
 
 - external integrations: `ExternalIntegrations.ts`
-- jobs: `job-mutex.ts`, `job-subscribers.ts`, `session-token-store.ts`
-- no folder yet: poll (`PollScheduler.ts`, `poll-{gate,maintenance,notifications,open-prs,state}.ts`)
+- jobs: `job-mutex.ts`, `session-token-store.ts`
+- recaps: `job-subscribers.ts` (only `recaps/ProjectRecapJobs.ts` uses it)
+- base conflicts: `conflict-resolve-run.ts`
+- team cache: `Cache.ts`, `cache-eligibility.ts`, beside `cache-signing/` and `blob/`
+- no folder yet:
+  - poll: `PollScheduler.ts`, `poll-{gate,maintenance,notifications,open-prs,state}.ts`
+  - review: `Review.ts`, `review-submit.ts`, `review-mode.ts`, `github-review-comment.ts`, `Sync.ts`
+  - onboarding: `Onboarding.ts`, `AgentLogin.ts`, `EventJobRegistry.ts` (which only those two use)
 
 **Fix shape.** Moves plus import rewrites, one feature per PR, with the feature roots in
 `scripts/check-import-boundaries.ts` following. Mechanical, but it touches every importer, so

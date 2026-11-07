@@ -88,9 +88,10 @@ of the promise that yields back into the owning fiber.
 
 **Allowed boundary.** Bridging Effect into a plain-JS callback contract (e.g. SDK options that
 take `(value: string) => void` rather than `(value: string) => Effect<...>`) is the one
-legitimate place `Effect.runPromise` belongs. See `WalkthroughJobs.launchRun`, which hands
-the MCP tool handlers plain callbacks (`emit`, `broadcastThreadEvent`, `runJudgment`) built
-with `Effect.runSyncWith` / `Effect.runPromiseWith` over the run's captured context. These
+legitimate place `Effect.runPromise` belongs. See `WalkthroughJobs`' job body, which builds
+plain callbacks (`emit`, `broadcastThreadEvent`, `runJudgment`) with `Effect.runSyncWith` /
+`Effect.runPromiseWith` over the run's captured context, and `makeWalkthroughRunContext`
+(`services/walkthrough/run-context.ts`), which hands them to the MCP tool handlers. These
 are NOT violations — they are the interop boundary with Promise-based handlers. The rule is "no `runPromise` inside an Effect-returning
 method" — wrapping a callback that the caller will invoke later is fine.
 
@@ -272,8 +273,8 @@ so the frontend can reuse the walkthrough reducer code path — this is consiste
 ### 3.2 Type names are `namespace:action`, lowercase, kebab-cased
 
 **Rule.** Message type strings use colon-separated namespace and action segments. Segments are
-lowercase ASCII letters with hyphens between words. The namespace is the entity (`prs`, `thread`,
-`threads`, `walkthrough`, `repos`, `user`, `chat`, `recap`, `auth`, `error`);
+lowercase ASCII letters with hyphens between words. The namespace is the entity (`prs`, `pr`,
+`thread`, `threads`, `walkthrough`, `hunk-scan`, `repos`, `user`, `recap`, `auth`, `stack`, …);
 the action is the verb (`updated`, `created`, `sync-started`, `clone-status`, `status-changed`).
 
 **Why.** Easy to grep, easy to scan, no Ambiguity-About-Casing arguments. Bonus: `:` is illegal

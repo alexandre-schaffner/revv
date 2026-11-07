@@ -53,9 +53,7 @@ export interface WalkthroughLaunchPlan {
  *
  * Immutability: a walkthrough is pinned to one `pr_head_sha`. A new commit on
  * the PR never mutates an existing row — the old row is marked `'superseded'`
- * with `superseded_by` pointing at the replacement, and a fresh row is
- * inserted. This preserves audit trail and guarantees clients see a
- * consistent view even mid-regeneration.
+ * and a fresh row is inserted for the new head (CLAUDE.md invariant 7).
  */
 export const walkthroughs = sqliteTable(
   "walkthroughs",
@@ -114,8 +112,9 @@ export const walkthroughs = sqliteTable(
      */
     lastCompletedPhase: text("last_completed_phase").notNull().default("none"),
     /**
-     * Self-FK set when `status='superseded'`: points at the walkthrough row
-     * that replaces this one (always same PR, newer head SHA).
+     * The row that replaced this one, set only for a do-over at the same head.
+     * NULL after a head move or a Regenerate, which retire the row before any
+     * replacement exists.
      */
     supersededBy: text("superseded_by").references((): AnySQLiteColumn => walkthroughs.id, {
       onDelete: "set null",
