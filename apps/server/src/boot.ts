@@ -12,7 +12,6 @@ import { RepoCloneService } from "./services/clone/RepoClone";
 import { DbMaintenance } from "./services/DbMaintenance";
 import { ExternalIntegrations } from "./services/ExternalIntegrations";
 import { killRunningGitProcesses } from "./services/git/ops";
-import { GitHubAccounts } from "./services/github/accounts";
 import { PollScheduler } from "./services/PollScheduler";
 import { ensureHighlighter } from "./services/pr-file-prerender";
 import { ProjectRecapJobs } from "./services/recaps/ProjectRecapJobs";
@@ -36,7 +35,6 @@ const step = <R>(
 
 export const BootLive = Layer.effectDiscard(
   Effect.gen(function* () {
-    const accounts = yield* GitHubAccounts;
     const pollScheduler = yield* PollScheduler;
     const walkthroughJobs = yield* WalkthroughJobs;
     const recapJobs = yield* ProjectRecapJobs;
@@ -56,19 +54,7 @@ export const BootLive = Layer.effectDiscard(
 
     const sequence = Effect.all(
       [
-        // Plaintext GitHub tokens move into the OS secure store before the
-        // first poll reads them.
-        step(
-          "secret-store",
-          accounts.migrateLegacyTokens.pipe(
-            Effect.tap((n) =>
-              Effect.sync(() => {
-                if (n > 0)
-                  logError("secret-store", `migrated ${n} GitHub token(s) into secure storage`);
-              }),
-            ),
-          ),
-        ).pipe(Effect.andThen(step("poll-scheduler", pollScheduler.start()))),
+        step("poll-scheduler", pollScheduler.start()),
 
         // Clones cut off by the last shutdown restart before walkthroughs
         // resume (a resumed run waits on its clone). The worktree sweeps run

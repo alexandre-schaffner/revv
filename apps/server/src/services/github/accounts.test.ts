@@ -497,10 +497,10 @@ describe("GitHubAccounts.sessionUser", () => {
   });
 });
 
-describe("GitHubAccounts.migrateLegacyTokens", () => {
-  it("moves plaintext tokens into the store, nulls the columns, and is idempotent", async () => {
+describe("GitHubAccounts: plaintext tokens", () => {
+  it("moves them into the store while the layer is built, before any read", async () => {
     const db = createDb(":memory:");
-    seedAccount(db, { id: "acc-1" });
+    seedAccount(db, { id: "acc-1", accessTokenExpiresAt: new Date(Date.now() + HOUR) });
     seedAccount(db, { id: "acc-2" });
     db.update(account)
       .set({ accessToken: "gho_plain", refreshToken: "ghr_plain" })
@@ -508,11 +508,9 @@ describe("GitHubAccounts.migrateLegacyTokens", () => {
       .run();
     const store = makeFakeStore();
 
-    const [migrated, again] = await run(db, store, makeFakeHub(), (a) =>
-      Effect.all([a.migrateLegacyTokens, a.migrateLegacyTokens]),
-    );
+    const client = await run(db, store, makeFakeHub(), (a) => a.clientFor("acc-1"));
 
-    expect([migrated, again]).toEqual([1, 0]);
+    expect(client.token).toBe("gho_plain");
     expect(store.map.get("acc-1")).toEqual({ accessToken: "gho_plain", refreshToken: "ghr_plain" });
     expect(store.map.has("acc-2")).toBe(false);
     expect(db.select().from(account).where(eq(account.id, "acc-1")).get()).toMatchObject({
