@@ -2,7 +2,12 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "workspaces": {
     ".": {
-      "entry": ["scripts/**/*.ts", "integrations/external-mcp-bridge/*.ts"],
+      "entry": [
+        "scripts/export-telemetry.ts",
+        "scripts/generate-grafana-dashboards.ts",
+        "scripts/performance/*.test.ts",
+        "integrations/external-mcp-bridge/*.ts"
+      ],
       "ignoreDependencies": ["@tauri-apps/cli", "concurrently"]
     },
     "apps/web": {
