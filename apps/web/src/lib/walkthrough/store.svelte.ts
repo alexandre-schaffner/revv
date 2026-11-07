@@ -4,7 +4,6 @@
 import type {
   PullRequest,
   RiskLevel,
-  WalkthroughBlock,
   WalkthroughEventEnvelope,
   WalkthroughIssue,
   WalkthroughLead,
@@ -105,10 +104,6 @@ export function getWalkthroughUiState(prId: string): WalkthroughUiState {
 
 export function getIsHydrating(prId: string): boolean {
   return hydrating.has(prId);
-}
-
-export function getBlocks(prId: string): WalkthroughBlock[] {
-  return entries.get(prId)?.blocks ?? [];
 }
 
 const stepLabelsByEntry = new WeakMap<WalkthroughEntry, Map<string, string>>();
