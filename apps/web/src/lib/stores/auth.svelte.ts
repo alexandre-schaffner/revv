@@ -7,7 +7,7 @@ import { isMaintainerLogin, type UserUpdatedEnvelope } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
 import { ApiError, call } from "$lib/api/errors";
-import type { EdenData } from "$lib/api/wire";
+import { type EdenData, thrownMessage } from "$lib/api/wire";
 import { authClient } from "$lib/auth-client";
 import { getHeldSessions, holdSession, releaseSession } from "$lib/session/held-sessions";
 import { clearToken, getToken, setToken } from "$lib/session/token.svelte";
@@ -593,7 +593,7 @@ export async function runAccountSwitch(run: () => Promise<void>): Promise<boolea
     await run();
     return true;
   } catch (e) {
-    error = `Failed to switch account: ${e instanceof Error ? e.message : String(e)}`;
+    error = `Failed to switch account: ${thrownMessage(e)}`;
     return false;
   } finally {
     isLoading = false;

@@ -1,6 +1,7 @@
 import type { ActivityKind, ProposedCommit } from "@revv/shared";
 import { SvelteMap } from "svelte/reactivity";
 import { toast } from "svelte-sonner";
+import { thrownMessage } from "$lib/api/wire";
 import { createResource } from "$lib/stores/resource";
 import {
   advanceWorktree,
@@ -342,7 +343,7 @@ export async function discardProposedCommitAction(prId: string, sha: string): Pr
     }
     toast.success("Commit discarded");
   } catch (err) {
-    toast.error(err instanceof Error ? err.message : "Failed to discard commit");
+    toast.error(thrownMessage(err));
   } finally {
     setCommitOp(prId, sha, null);
   }
@@ -356,7 +357,7 @@ export async function cherryPickProposedCommitAction(prId: string, sha: string):
     await refreshProposedChanges(prId);
     toast.success("Commit pushed to PR branch");
   } catch (err) {
-    toast.error(err instanceof Error ? err.message : "Failed to push commit");
+    toast.error(thrownMessage(err));
   } finally {
     setCommitOp(prId, sha, null);
   }
@@ -373,7 +374,7 @@ export async function rebaseAllProposedAction(prId: string): Promise<void> {
     await refreshProposedChanges(prId);
     toast.success("Commits rebased onto new PR head");
   } catch (err) {
-    toast.error(err instanceof Error ? err.message : "Failed to rebase commits");
+    toast.error(thrownMessage(err));
   } finally {
     setBusy(prId, "rebase", false);
   }

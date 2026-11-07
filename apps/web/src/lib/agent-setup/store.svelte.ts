@@ -5,6 +5,7 @@
 // the installer. Reopening the pane picks the running log back up.
 
 import type { AcpAgentId, InstallEvent } from "@revv/shared";
+import { thrownMessage } from "$lib/api/wire";
 import { fetchAgentStatus } from "$lib/stores/settings.svelte";
 import {
   type AgentInstallState,
@@ -54,7 +55,7 @@ export async function startAgentInstall(agent: AcpAgentId): Promise<void> {
       kind: "failed",
       agent,
       log: agentInstallLog(install),
-      error: err instanceof Error ? err.message : "Install failed",
+      error: thrownMessage(err),
     };
   } finally {
     installAbort = null;

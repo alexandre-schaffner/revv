@@ -2,6 +2,7 @@ import type { Repository } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { call } from "$lib/api/errors";
+import { thrownMessage } from "$lib/api/wire";
 import {
   fetchAvailableRepos,
   getAvailableRepos,
@@ -70,7 +71,7 @@ export async function pickDirectory(): Promise<string | null> {
     const selected = await open({ directory: true });
     return typeof selected === "string" ? selected : null;
   } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to open folder picker");
+    toast.error(thrownMessage(e));
     return null;
   }
 }
@@ -138,7 +139,7 @@ export class LocalClone {
       if (!data.isGitRepo) toast.error("Choose a folder that contains a git repository");
     } catch (e) {
       this.#inspection = null;
-      toast.error(e instanceof Error ? e.message : "Failed to inspect local repository");
+      toast.error(thrownMessage(e));
     } finally {
       this.inspecting = false;
     }

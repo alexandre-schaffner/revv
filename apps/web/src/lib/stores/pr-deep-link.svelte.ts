@@ -292,7 +292,7 @@ export async function choosePrDeepLinkAccount(account: AccountChoice): Promise<v
       kind: "error",
       locator,
       reason: "network",
-      message: error instanceof Error ? error.message : "Revv could not switch accounts.",
+      message: thrownMessage(error),
     };
   }
 }
@@ -313,7 +313,7 @@ export async function connectPrDeepLinkAccount(clientId: string): Promise<string
     state = { kind: "connect-account", locator, phase: "device-code", clientId };
     return null;
   } catch (error) {
-    return error instanceof Error ? error.message : String(error);
+    return thrownMessage(error);
   }
 }
 
@@ -352,7 +352,7 @@ export async function settlePrDeepLinkAuthorization(authError: string | null): P
       kind: "error",
       locator,
       reason: "network",
-      message: error instanceof Error ? error.message : "Revv could not activate this account.",
+      message: thrownMessage(error),
     };
   }
 }
@@ -370,7 +370,7 @@ export async function addPrDeepLinkRepository(): Promise<void> {
       kind: "error",
       locator,
       reason: refusalReason(error),
-      message: error instanceof Error ? error.message : "Revv could not add this repository.",
+      message: thrownMessage(error),
     };
   }
 }

@@ -1,6 +1,7 @@
 import type { ProjectRecap, RecapPeriod, RecapPrEntry, RecapSummaryStats } from "@revv/shared";
 import { prefersReducedMotion } from "$lib/motion";
 import { formatRecapTitle, openSpan, recapSpan } from "$lib/recaps/period-window";
+import { hash32 } from "$lib/utils/hash";
 
 function relativeFromNow(iso: string): string {
   const t = new Date(iso).getTime();
@@ -112,15 +113,6 @@ export function buildRecapHeader(recap: ProjectRecap | null, period: RecapPeriod
   };
 }
 
-function fnv1a(input: string): number {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i);
-    hash = (hash * 0x01000193) >>> 0;
-  }
-  return hash >>> 0;
-}
-
 /**
  * Every theme visually distinct: hues evenly spaced around the wheel from a
  * per-recap rotation, lightness alternating between two levels. Same themes
@@ -130,7 +122,7 @@ export function buildThemePalette(themes: ReadonlyArray<string>): Map<string, st
   const unique = Array.from(new Set(themes.map((t) => t.toLowerCase()))).sort();
   const palette = new Map<string, string>();
   if (unique.length === 0) return palette;
-  const offset = (fnv1a(unique.join("|")) / 0xffffffff) * 360;
+  const offset = (hash32(unique.join("|")) / 0xffffffff) * 360;
   const step = 360 / unique.length;
   unique.forEach((theme, i) => {
     const hue = (offset + i * step) % 360;

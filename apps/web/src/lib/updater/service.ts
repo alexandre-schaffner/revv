@@ -15,6 +15,7 @@
 import { UPDATE_STABLE_COOLDOWN_MS } from "@revv/shared";
 import Download from "phosphor-svelte/lib/Download";
 import { toast } from "svelte-sonner";
+import { thrownMessage } from "$lib/api/wire";
 import { getIsMaintainer } from "$lib/stores/auth.svelte";
 import { readStored, STORAGE_KEYS, textCodec, writeStored } from "$lib/stores/persisted.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
@@ -100,7 +101,7 @@ async function check(options: { manual?: boolean }): Promise<void> {
     if (options.manual) {
       toast.error("Update check failed", {
         id: TOAST_ID,
-        description: err instanceof Error ? err.message : String(err),
+        description: thrownMessage(err),
       });
     }
   }
@@ -180,7 +181,7 @@ async function installWithProgress(update: UpdateInfo): Promise<void> {
   } catch (err) {
     toast.error("Update failed", {
       id: TOAST_ID,
-      description: err instanceof Error ? err.message : String(err),
+      description: thrownMessage(err),
     });
     return;
   }
@@ -219,7 +220,7 @@ async function relaunchNow(): Promise<void> {
   } catch (err) {
     toast.error("Failed to restart", {
       id: TOAST_ID,
-      description: err instanceof Error ? err.message : String(err),
+      description: thrownMessage(err),
     });
   }
 }

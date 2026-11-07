@@ -19,6 +19,7 @@ import { SvelteMap, SvelteSet } from "svelte/reactivity";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { call } from "$lib/api/errors";
+import { thrownMessage } from "$lib/api/wire";
 import { getReviewModeForPr } from "$lib/stores/prs.svelte";
 import { createResource } from "$lib/stores/resource";
 import { getSettings } from "$lib/stores/settings.svelte";
@@ -317,10 +318,7 @@ async function readSnapshot(prId: string, options?: HydrateOptions): Promise<boo
     }
     return true;
   } catch (e) {
-    wtTrace(
-      "lifecycle",
-      `hydrateFromCache prId=${prId} error=${e instanceof Error ? e.message : String(e)}`,
-    );
+    wtTrace("lifecycle", `hydrateFromCache prId=${prId} error=${thrownMessage(e)}`);
     return false;
   }
 }
@@ -482,10 +480,7 @@ async function hydrateActiveWalkthroughs(): Promise<void> {
       }
     }
   } catch (e) {
-    wtTrace(
-      "lifecycle",
-      `hydrateActiveWalkthroughs failed: ${e instanceof Error ? e.message : String(e)}`,
-    );
+    wtTrace("lifecycle", `hydrateActiveWalkthroughs failed: ${thrownMessage(e)}`);
   }
 }
 
