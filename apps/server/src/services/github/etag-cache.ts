@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { eq, lt } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import { daysBefore, type RetentionPolicy } from "../db/retention";
-import { githubEtagCache } from "../db/schema/index";
-import { dbTry } from "../effects/db-try";
-import { logError } from "../logger";
-import { DbService } from "./Db";
+import { daysBefore, type RetentionPolicy } from "../../db/retention";
+import { githubEtagCache } from "../../db/schema/index";
+import { dbTry } from "../../effects/db-try";
+import { logError } from "../../logger";
+import { DbService } from "../Db";
 
 /**
  * Rows here carry no expiry (an ETag stays valid indefinitely), and two things

@@ -21,18 +21,12 @@ import type {
   ReviewerOptions,
 } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
-import {
-  type DbError,
-  type GitHubError,
-  GitHubNotFoundError,
-  isGitHubUnreachable,
-} from "../domain/errors";
+import { type DbError, type GitHubError, isGitHubUnreachable } from "../domain/errors";
 import { logError } from "../logger";
 import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { CacheService } from "./Cache";
 import type { DbService } from "./Db";
 import { AvatarCache } from "./github/avatars";
-import type { RepoRef } from "./github/conversation";
 import { GitHubGateway } from "./github/gateway";
 import { type PrContextBasic, type PrContextError, PrContextService } from "./PrContext";
 import { Realtime } from "./Realtime";
@@ -118,13 +112,6 @@ export class PrConversationService extends Context.Service<
   }
 >()("PrConversationService") {}
 
-function repoRef(ctx: PrContextBasic): Effect.Effect<RepoRef, GitHubNotFoundError> {
-  const [owner, repo, ...rest] = ctx.repo.fullName.split("/");
-  return owner && repo && rest.length === 0
-    ? Effect.succeed({ owner, repo })
-    : Effect.fail(new GitHubNotFoundError({ resource: "repo", id: ctx.repo.fullName }));
-}
-
 function loginsOf(conversation: PrConversation): Set<string> {
   const logins = new Set<string>([conversation.author.login]);
   for (const a of [...conversation.assignees, ...conversation.participants]) logins.add(a.login);
@@ -159,11 +146,11 @@ export const PrConversationServiceLive = Layer.effect(
         { concurrency: 4, discard: true },
       ).pipe(withGitHubOrigin("conversation:avatars"), Effect.forkDetach, Effect.asVoid);
 
-    const codeownersFor = (ctx: PrContextBasic, ref: RepoRef) =>
+    const codeownersFor = (ctx: PrContextBasic) =>
       cache.getOrFetch(
         CODEOWNERS_NS,
         `${ctx.repo.fullName}:${ctx.pr.targetBranch}`,
-        () => github.conversation.codeowners(ctx.client, ref, ctx.pr.targetBranch),
+        () => github.conversation.codeowners(ctx.client, ctx.repo.fullName, ctx.pr.targetBranch),
         { ttlMs: CODEOWNERS_TTL_MS },
       );
 
@@ -176,11 +163,10 @@ export const PrConversationServiceLive = Layer.effect(
 
     const fetchFresh = (ctx: PrContextBasic, prId: string) =>
       Effect.gen(function* () {
-        const ref = yield* repoRef(ctx);
         const [{ conversation: mapped, avatarUrls }, codeowners] = yield* Effect.all(
           [
-            github.conversation.fetch(ctx.client, ref, ctx.pr.externalId, prId),
-            codeownersFor(ctx, ref),
+            github.conversation.fetch(ctx.client, ctx.repo.fullName, ctx.pr.externalId, prId),
+            codeownersFor(ctx),
           ],
           { concurrency: 2 },
         );
@@ -226,7 +212,7 @@ export const PrConversationServiceLive = Layer.effect(
         const ctx = yield* prContext.forPr(prId, accountId);
         const answer = yield* github.conversation.ciRollup(
           ctx.client,
-          yield* repoRef(ctx),
+          ctx.repo.fullName,
           ctx.pr.externalId,
         );
         // Keep the snapshot's CI in step so a reload doesn't flash old checks.
@@ -250,7 +236,7 @@ export const PrConversationServiceLive = Layer.effect(
         if (hit?.completed) return hit;
         const details = yield* github.conversation.checkDetails(
           ctx.client,
-          yield* repoRef(ctx),
+          ctx.repo.fullName,
           checkRunId,
         );
         // A finished run's output never changes; a running one will.
@@ -284,21 +270,21 @@ export const PrConversationServiceLive = Layer.effect(
     const write = (prId: string, accountId: string, w: ConversationWrite) =>
       Effect.gen(function* () {
         const ctx = yield* prContext.forPr(prId, accountId);
-        yield* github.conversation.write(ctx.client, yield* repoRef(ctx), ctx.pr.externalId, w);
+        yield* github.conversation.write(ctx.client, ctx.repo.fullName, ctx.pr.externalId, w);
         return yield* afterWrite(ctx, accountId);
       });
 
     const labelOptions = (prId: string, accountId: string) =>
       Effect.gen(function* () {
         const ctx = yield* prContext.forPr(prId, accountId);
-        return yield* github.conversation.labels(ctx.client, yield* repoRef(ctx));
+        return yield* github.conversation.labels(ctx.client, ctx.repo.fullName);
       });
 
     const searchUsers = (ctx: PrContextBasic, query: string) =>
       Effect.gen(function* () {
         const users = yield* github.conversation.assignableUsers(
           ctx.client,
-          yield* repoRef(ctx),
+          ctx.repo.fullName,
           query,
         );
         const known = yield* avatars.contents(
@@ -325,9 +311,11 @@ export const PrConversationServiceLive = Layer.effect(
     const reviewerOptions = (prId: string, accountId: string, query: string) =>
       Effect.gen(function* () {
         const ctx = yield* prContext.forPr(prId, accountId);
-        const ref = yield* repoRef(ctx);
         const [users, teams] = yield* Effect.all(
-          [searchUsers(ctx, query), github.conversation.orgTeams(ctx.client, ref, query)],
+          [
+            searchUsers(ctx, query),
+            github.conversation.orgTeams(ctx.client, ctx.repo.fullName, query),
+          ],
           { concurrency: 2 },
         );
         // GitHub refuses a review request to the PR's author.

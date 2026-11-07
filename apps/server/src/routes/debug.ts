@@ -5,7 +5,7 @@ import { clearCalls, readCalls } from "../observability/github-ledger/record";
 import { selectCalls } from "../observability/github-ledger/select";
 import { clearSpans, readSpans, summarizeSpans } from "../observability/tracer";
 import { CacheService } from "../services/Cache";
-import { GitHubEtagCache } from "../services/GitHubEtagCache";
+import { GitHubEtagCache } from "../services/github/etag-cache";
 import { runRoute, withAuth } from "./middleware";
 
 export const debugRoutes = new Elysia({ prefix: "/api/_debug" })

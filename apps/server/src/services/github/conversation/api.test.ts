@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Effect, Fiber, Result } from "effect";
 import { TestClock } from "effect/testing";
-import { fetchCheckDetails, fetchCiRollup, fetchConversation } from "./conversation";
-import { makeHttp } from "./transport";
+import { makeHttp } from "../transport";
+import { conversationApi } from "./api";
 
 const http = makeHttp(null, null);
 const client = {
@@ -69,7 +69,7 @@ describe("legacy GitHub Enterprise fallback", () => {
     );
 
     const result = await Effect.runPromise(
-      fetchCiRollup(http, client, { owner: "o", repo: "r" }, 1).pipe(Effect.result),
+      conversationApi(http).ciRollup(client, "o/r", 1).pipe(Effect.result),
     );
 
     expect(queries).toHaveLength(2);
@@ -83,7 +83,7 @@ describe("legacy GitHub Enterprise fallback", () => {
     }));
 
     const result = await Effect.runPromise(
-      fetchCiRollup(http, client, { owner: "o", repo: "r" }, 1).pipe(Effect.result),
+      conversationApi(http).ciRollup(client, "o/r", 1).pipe(Effect.result),
     );
 
     expect(queries).toHaveLength(1);
@@ -172,9 +172,7 @@ describe("complete CI context lists", () => {
 
   it("includes failing and pending checks after the first 100 when polling", async () => {
     const queries = stubGraphql(respond);
-    const { rollup } = await Effect.runPromise(
-      fetchCiRollup(http, client, { owner: "o", repo: "r" }, 1),
-    );
+    const { rollup } = await Effect.runPromise(conversationApi(http).ciRollup(client, "o/r", 1));
     expect(queries).toHaveLength(2);
     expect(rollup?.checks).toHaveLength(102);
     expect(rollup?.checks.at(-2)?.bucket).toBe("fail");
@@ -184,7 +182,7 @@ describe("complete CI context lists", () => {
   it("includes the same follow-up checks in a full conversation", async () => {
     const queries = stubGraphql(respond);
     const { conversation } = await Effect.runPromise(
-      fetchConversation(http, client, { owner: "o", repo: "r" }, 1, "pr-id"),
+      conversationApi(http).fetch(client, "o/r", 1, "pr-id"),
     );
     expect(queries).toHaveLength(2);
     expect(conversation.ci?.checks).toHaveLength(102);
@@ -197,9 +195,7 @@ describe("complete CI context lists", () => {
         ? { errors: [{ message: "Field 'isRequired' doesn't exist on type 'CheckRun'" }] }
         : respond(query, variables),
     );
-    const { rollup } = await Effect.runPromise(
-      fetchCiRollup(http, client, { owner: "o", repo: "r" }, 1),
-    );
+    const { rollup } = await Effect.runPromise(conversationApi(http).ciRollup(client, "o/r", 1));
     expect(queries).toHaveLength(3);
     expect(queries[2]).not.toContain("isRequired");
     expect(queries[2]).not.toContain("$number");
@@ -236,8 +232,7 @@ describe("third-party check completion", () => {
         ),
       { preconnect: realFetch.preconnect },
     );
-    const run = () =>
-      Effect.runPromise(fetchCheckDetails(http, client, { owner: "o", repo: "r" }, 123));
+    const run = () => Effect.runPromise(conversationApi(http).checkDetails(client, "o/r", 123));
     const running = await run();
     expect(running.completed).toBe(false);
     expect(running.logUnavailable).toBe("not_actions");
@@ -292,7 +287,7 @@ describe("GitHub's own GraphQL failures", () => {
     const queries = stubGraphql(() => (queries.length === 1 ? FAILURE : CONVERSATION));
 
     const result = await skippingBackoff(
-      fetchConversation(http, client, { owner: "o", repo: "r" }, 1, "pr-id").pipe(Effect.result),
+      conversationApi(http).fetch(client, "o/r", 1, "pr-id").pipe(Effect.result),
     );
 
     expect(queries).toHaveLength(2);
