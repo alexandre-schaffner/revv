@@ -1,15 +1,17 @@
 import { describe, expect, it } from "bun:test";
-import type { ThreadEventMessage, WalkthroughStreamEvent } from "@revv/shared";
+import { RATING_AXES, type ThreadEventMessage, type WalkthroughStreamEvent } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { createDb, type Db } from "../../../db/index";
 import {
   walkthroughBlocks,
   walkthroughIssues,
+  walkthroughRatings,
   walkthroughSemanticSteps,
   walkthroughs,
 } from "../../../db/schema";
 import { blockOrder } from "../../../services/walkthrough/content";
 import { deleteSemanticStepHandler } from "./content-handlers";
+import { getWalkthroughForEditHandler } from "./read-handler";
 import { deleteIssueHandler, updateIssueHandler } from "./review-handlers";
 import type { ChatWalkthroughEditContext } from "./spec";
 
@@ -133,5 +135,34 @@ describe("chat edits", () => {
     expect(lastEditedBy(db)).toBeNull();
     expect(published).toHaveLength(0);
     expect(threadEvents).toHaveLength(0);
+  });
+});
+
+describe("get_walkthrough_for_edit", () => {
+  it("passes the completeness gate only when the orchestrator's completion check would", async () => {
+    const db = seed();
+    for (const axis of RATING_AXES) {
+      db.insert(walkthroughRatings)
+        .values({
+          id: `r-${axis}`,
+          walkthroughId: WT,
+          axis,
+          verdict: "pass",
+          confidence: "high",
+          rationale: "fine",
+          createdAt: NOW,
+        })
+        .run();
+    }
+    const { ctx } = context(db);
+
+    const result = await getWalkthroughForEditHandler(ctx, {});
+    const { validation } = JSON.parse(result.content[0]?.text ?? "{}");
+
+    // Every axis is rated and no concern is anchored, but the row has no sentiment.
+    expect(validation.missingAxes).toEqual([]);
+    expect(validation.missingInlineComments).toEqual([]);
+    expect(validation.passesCompletenessGate).toBe(false);
+    expect(validation.blocker).toContain("sentiment");
   });
 });

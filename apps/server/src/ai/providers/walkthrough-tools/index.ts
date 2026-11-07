@@ -1,4 +1,4 @@
-import type { RatingCitation, RiskLevel, WalkthroughRating } from "@revv/shared";
+import type { RiskLevel, WalkthroughRating } from "@revv/shared";
 import { RATING_AXES } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
@@ -9,6 +9,7 @@ import {
   isRatedAxis,
   renderUnknownBlockRefs,
   resolveBlockRefs,
+  toCitations,
 } from "../../../services/walkthrough/content";
 import type { ToolSpecBundle } from "../mcp-tool-gateway";
 import { fail, ok } from "../mcp-tool-gateway";
@@ -186,12 +187,7 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
       return;
     }
     const { blockIds } = refs;
-    const citations: RatingCitation[] = input.citations.map((c) => ({
-      filePath: c.file_path,
-      startLine: c.start_line,
-      endLine: c.end_line,
-      ...(c.note !== null ? { note: c.note } : {}),
-    }));
+    const citations = toCitations(input.citations);
 
     const now = new Date().toISOString();
     ctx.db

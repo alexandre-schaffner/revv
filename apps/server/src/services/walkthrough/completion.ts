@@ -6,20 +6,17 @@
 
 import { RATING_AXES } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
-import { loadWalkthroughRow } from "../../ai/providers/walkthrough-tools/helpers";
-import {
-  findUnresolvedLeads,
-  renderUnresolvedLeadsError,
-} from "../../ai/providers/walkthrough-tools/lead-handler";
 import type { Db } from "../../db";
 import { walkthroughBlocks } from "../../db/schema/walkthrough-blocks";
 import { walkthroughRatings } from "../../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../../db/schema/walkthrough-semantic-steps";
+import { findUnresolvedLeads, renderUnresolvedLeadsError } from "../walkthrough-leads";
 import {
   findIssuesMissingInlineComment,
   isJourneyChapterText,
   isRatedAxis,
   journeyKeywordList,
+  loadWalkthroughRow,
   renderMissingInlineCommentError,
 } from "./content";
 

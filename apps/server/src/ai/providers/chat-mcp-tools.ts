@@ -12,6 +12,7 @@ import { threadMessages } from "../../db/schema/thread-messages";
 import type { walkthroughBlocks } from "../../db/schema/walkthrough-blocks";
 import {
   blockOrder,
+  decodeBlock,
   decodeIssue,
   decodeRating,
   decodeStringArray,
@@ -38,47 +39,38 @@ interface ParsedBlock {
 }
 
 function parseBlock(row: typeof walkthroughBlocks.$inferSelect): ParsedBlock {
-  let parsed: Record<string, unknown> = {};
-  try {
-    const v = JSON.parse(row.data) as unknown;
-    if (v && typeof v === "object") {
-      parsed = v as Record<string, unknown>;
-    }
-  } catch {
-    /* corrupt JSON */
-  }
-  const str = (k: string): string => (typeof parsed[k] === "string" ? (parsed[k] as string) : "");
-  const num = (k: string): number | null =>
-    typeof parsed[k] === "number" ? (parsed[k] as number) : null;
-  let content = "";
-  switch (row.type) {
+  const block = decodeBlock(row);
+  const at = {
+    orderIndex: blockOrder(row.semanticStepIndex, row.stepIndex),
+    type: row.type,
+  };
+  const unanchored = { filePath: null, startLine: null, endLine: null };
+  switch (block?.type) {
     case "markdown":
-      content = str("content");
-      break;
+      return { ...at, ...unanchored, content: block.content };
     case "code":
-      content = str("content");
-      break;
+      return {
+        ...at,
+        content: block.content,
+        filePath: block.filePath,
+        startLine: block.startLine,
+        endLine: block.endLine,
+      };
     case "diff":
-      content = str("patch");
-      break;
+      return { ...at, ...unanchored, content: block.patch, filePath: block.filePath };
     case "artifact": {
       // An artifact is a full HTML document (up to 256 KB) the chat agent
       // can't act on; keep the markup out of its context.
-      const note = str("annotation").trim();
-      content = note ? `[interactive artifact: ${note}]` : "[interactive artifact]";
-      break;
+      const note = block.annotation?.trim();
+      return {
+        ...at,
+        ...unanchored,
+        content: note ? `[interactive artifact: ${note}]` : "[interactive artifact]",
+      };
     }
-    default:
-      content = JSON.stringify(parsed);
+    case undefined:
+      return { ...at, ...unanchored, content: "" };
   }
-  return {
-    orderIndex: blockOrder(row.semanticStepIndex, row.stepIndex),
-    type: row.type,
-    content,
-    filePath: typeof parsed.filePath === "string" ? (parsed.filePath as string) : null,
-    startLine: num("startLine"),
-    endLine: num("endLine"),
-  };
 }
 
 const getReviewContextSchema = z.object({}).strict();

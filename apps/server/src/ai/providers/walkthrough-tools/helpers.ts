@@ -1,7 +1,3 @@
-import { eq } from "drizzle-orm";
-import type { Db } from "../../../db";
-import { walkthroughs } from "../../../db/schema/walkthroughs";
-
 /**
  * Some agents send a single-field markdown payload JSON-wrapped —
  * `{markdown: '{"markdown": "…"}'}` — and the braces would leak into the UI.
@@ -23,11 +19,4 @@ export function unwrapJsonWrappedString(value: string, expectedKey: string): str
   const inner = (parsed as Record<string, unknown>)[expectedKey];
   if (typeof inner !== "string") return value;
   return inner;
-}
-
-export function loadWalkthroughRow(
-  db: Db,
-  walkthroughId: string,
-): typeof walkthroughs.$inferSelect | null {
-  return db.select().from(walkthroughs).where(eq(walkthroughs.id, walkthroughId)).get() ?? null;
 }

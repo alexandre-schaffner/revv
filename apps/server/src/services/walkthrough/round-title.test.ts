@@ -51,6 +51,9 @@ describe("deriveRoundFocusTitle", () => {
       commit("d", "test: add query coverage"),
     ];
 
-    expect(deriveRoundFocusTitle(JSON.stringify(commits), "b", "d")).toBe("add range indexes");
+    // Stored newest first, as `github.prs.commits` returns them.
+    expect(deriveRoundFocusTitle(JSON.stringify(commits.toReversed()), "b", "d")).toBe(
+      "add range indexes",
+    );
   });
 });

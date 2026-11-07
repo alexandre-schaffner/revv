@@ -1,9 +1,11 @@
 import { chapterNumbersByIndex, RATING_AXES } from "@revv/shared";
+import { orchestratorCompletionBlocker } from "../../../services/walkthrough/completion";
 import {
   decodeBlock,
   decodeIssue,
   decodeRating,
   findIssuesMissingInlineComment,
+  isRatedAxis,
   latestCompleteWalkthrough,
   loadContentRows,
   loadIssueThreads,
@@ -37,8 +39,9 @@ export const getWalkthroughForEditHandler: ChatEditToolHandler<GetWalkthroughFor
   );
 
   const missingComments = findIssuesMissingInlineComment(ctx.db, row.id);
-  const ratedAxes = new Set(content.ratings.map((r) => r.axis));
+  const ratedAxes = new Set(content.ratings.filter(isRatedAxis).map((r) => r.axis));
   const missingAxes = RATING_AXES.filter((a) => !ratedAxes.has(a));
+  const blocker = orchestratorCompletionBlocker(ctx.db, row.id);
 
   const payload = {
     walkthroughId: row.id,
@@ -77,7 +80,8 @@ export const getWalkthroughForEditHandler: ChatEditToolHandler<GetWalkthroughFor
       };
     }),
     validation: {
-      passesCompletenessGate: missingComments.length === 0 && missingAxes.length === 0,
+      passesCompletenessGate: blocker === null,
+      blocker,
       missingInlineComments: missingComments,
       missingAxes,
     },
