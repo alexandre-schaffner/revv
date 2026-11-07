@@ -1,10 +1,10 @@
-// The one owner of a PR's agent workspace: the worktree on the agent branch
-// (`agent-worktrees.ts`), where the chat agent works and commits, and the
-// chat session that goes with it. Everything that touches it goes through
-// here:
+// The use of a PR's agent workspace: the worktree on the agent branch, where
+// the chat agent works and commits, and the chat session that goes with it.
+// `AgentWorktrees` locates, creates and prunes the worktree and holds the PR's
+// claim (one chat turn, push, commit edit or prune at a time, refused up front
+// with `WorkspaceBusyError`); every use of it goes through here, under that
+// claim:
 //
-//   - the claim: one chat turn, push or commit edit at a time, refused up
-//     front (`WorkspaceBusyError`) rather than racing in the worktree;
 //   - which chat session is the PR's: the one for the current chat launch at
 //     the PR's head (the mirror's, recorded from GitHub first when it has
 //     none), read the same way by the timeline, the turn and the push;

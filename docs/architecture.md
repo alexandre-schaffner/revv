@@ -136,8 +136,11 @@ Feature modules depend inward on platform seams:
 - Walkthrough, Chat, Recap and stack pipelines use `PrContextService` for PR-scoped GitHub
   context and call `GitHubGateway` only with its client; they do not import `RepositoryService`
   or `GitHubAccounts`.
-- Only `services/github/` sends requests to GitHub (`services/github/transport`); everything else
-  calls `GitHubGateway` with a client minted by `GitHubAccounts` or `PrContextService`.
+- Only `services/github/` sends requests to GitHub's API (`services/github/transport`); everything
+  else calls `GitHubGateway` with a client minted by `GitHubAccounts` or `PrContextService`. Two
+  unauthenticated reads go to the host directly: a user's SSH keys (`<host>/<login>.keys`, in
+  `services/cache-signing/pubkey-cache.ts`) and Revv's own release manifests
+  (`routes/update-manifest.ts`).
 - Provider selection comes from `SettingsService`, not from AI-provider helpers.
 - Agent content writes go through MCP tool handlers; orchestrators own lifecycle/status writes.
 - Routes resolve account context through `GitHubAccounts`, not `SecretStore` directly.
