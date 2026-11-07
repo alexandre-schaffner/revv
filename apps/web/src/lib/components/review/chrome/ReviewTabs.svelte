@@ -12,7 +12,6 @@ import {
   setActiveTab,
 } from "$lib/stores/pr-view-state.svelte";
 import { getPrById } from "$lib/stores/prs.svelte";
-import { getCmdHeld } from "$lib/stores/shortcuts.svelte";
 import { getPrWalkthroughStatus } from "$lib/walkthrough/store.svelte";
 
 interface Props {
@@ -52,19 +51,13 @@ function handlePullClick(): void {
   if (buttonInteractive) onPullCommit();
 }
 
-const cmdHeld = $derived(getCmdHeld());
-
 const TAB_LABEL: Record<ReviewTab, string> = {
   conversation: "Conversation",
   walkthrough: "Walkthrough",
   diff: "Diff",
 };
 
-const tabs = REVIEW_TABS.map((id, index) => ({
-  id,
-  label: TAB_LABEL[id],
-  shortcut: String(index + 1),
-}));
+const tabs = REVIEW_TABS.map((id) => ({ id, label: TAB_LABEL[id] }));
 
 function handleTabChange(tabId: string) {
   const tab = REVIEW_TABS.find((known) => known === tabId);
@@ -148,7 +141,7 @@ $effect(() => {
 });
 </script>
 
-<PillTabs {tabs} {activeTab} onTabChange={handleTabChange} {cmdHeld} {trailingReserve}>
+<PillTabs {tabs} {activeTab} onTabChange={handleTabChange} {trailingReserve}>
 	{#snippet trailing()}
 		<span
 			bind:this={dotEl}
