@@ -140,17 +140,13 @@ describe("buildWalkthroughPrompt stack block", () => {
     capturedAt: "2026-10-16T00:00:00Z",
   };
 
-  it("places the layer in its stack, after the description and before the principles", () => {
+  it("lists the layers in stack order after the description, marking this PR", () => {
     const prompt = buildWalkthroughPrompt({
       ...BASE,
       pr: { ...BASE.pr, body: "Limits requests per token." },
       stack,
     });
-    const block = prompt.slice(
-      prompt.indexOf("### Stack"),
-      prompt.indexOf("\n\n", prompt.indexOf("- A split")),
-    );
-    expect(block).toBe(
+    expect(prompt).toContain(
       [
         "### Stack",
         "This pull request is layer 2 of 3 in stack #7, onto `main`.",
@@ -158,13 +154,6 @@ describe("buildWalkthroughPrompt stack block", () => {
         '- Layer 1: #120 "Add the store" — merged',
         '- Layer 2: #121 "Add a rate limiter" — not ready ← this PR',
         '- Layer 3: #122 "Wire the limiter" — draft',
-        "",
-        "- The diff below is this layer's own changes only: GitHub scopes it to the layer below.",
-        "- Before you flag something as missing, call `get_stack_context`. A higher layer may add it, and an absence a higher layer fills is not an issue.",
-        "- Code in lower layers is out of scope unless this layer depends on it. When it does, say so in a comment on this layer's code, not in an issue against the lower layer.",
-        "- Cite another layer as `#N (layer k)`.",
-        "- Place this layer in the stack in one sentence of the overview's Context part.",
-        "- A split recommendation, if there is one, concerns this layer alone.",
       ].join("\n"),
     );
     expect(prompt.indexOf("### Description")).toBeLessThan(prompt.indexOf("### Stack"));

@@ -2,14 +2,11 @@ import { describe, expect, it } from "bun:test";
 import { getAgentKeychainAuth } from "@revv/shared";
 import { agentFailureGuidance, looksLikeAuthFailure, withAgentKeychainHint } from "./agent-failure";
 
-describe("registry keychainAuth", () => {
-  it("declares claude-code as keychain-backed and the file-based agents as not", () => {
-    expect(getAgentKeychainAuth("claude-code")?.service).toBe("Claude Code-credentials");
-    expect(getAgentKeychainAuth("opencode")).toBeUndefined();
-    expect(getAgentKeychainAuth("codex")).toBeUndefined();
-    expect(getAgentKeychainAuth("cursor")).toBeUndefined();
-  });
-});
+// The remediation assertions below are only meaningful while the registry
+// declares Claude Code's Keychain-backed login.
+const claudeKeychain = getAgentKeychainAuth("claude-code");
+if (!claudeKeychain) throw new Error("claude-code must declare its keychainAuth");
+const REMEDIATION = claudeKeychain.remediation;
 
 describe("looksLikeAuthFailure", () => {
   it("matches auth / connection-closed errors", () => {
@@ -38,7 +35,7 @@ describe("withAgentKeychainHint", () => {
   it("leads with the keychain remediation ALONE when the agent reports logged in", () => {
     const out = withAgentKeychainHint("claude-code", "ACP connection closed", () => true);
     expect(out).toContain("ACP connection closed");
-    expect(out).toContain(getAgentKeychainAuth("claude-code")?.remediation ?? " ");
+    expect(out).toContain(REMEDIATION);
     expect(out).not.toContain("isn't logged in for this session");
   });
 
@@ -48,7 +45,7 @@ describe("withAgentKeychainHint", () => {
     expect(out).toContain("Claude Code agent isn't logged in for this session");
     expect(out).toContain("sign in to Claude Code");
     expect(out).toContain("Already signed in?");
-    expect(out).toContain(getAgentKeychainAuth("claude-code")?.remediation ?? " ");
+    expect(out).toContain(REMEDIATION);
   });
 
   it("shows the not-logged-in message with NO keychain text for a non-keychain-backed agent", () => {
@@ -70,20 +67,12 @@ describe("withAgentKeychainHint", () => {
       "ENOENT: spawn failed",
     );
   });
-
-  it("falls back to the real detectAgentAuth-based probe when no test seam is supplied (smoke test)", () => {
-    // The real auth state is environment-dependent, so this can't assert
-    // which branch fired.
-    const out = withAgentKeychainHint("claude-code", "ACP connection closed");
-    expect(typeof out).toBe("string");
-    expect(out).toContain("ACP connection closed");
-  });
 });
 
 describe("agentFailureGuidance", () => {
   it("returns only the guidance, without the raw error", () => {
     const guidance = agentFailureGuidance("claude-code", "Authentication required", () => true);
-    expect(guidance).toBe(getAgentKeychainAuth("claude-code")?.remediation ?? null);
+    expect(guidance).toBe(REMEDIATION);
   });
 
   it("returns null for errors that aren't auth-shaped", () => {

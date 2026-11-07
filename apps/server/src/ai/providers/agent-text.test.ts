@@ -29,7 +29,7 @@ describe("decodePlainText", () => {
     expect(decodePlainText("&#1114112;")).toBe("&#1114112;");
   });
 
-  it("trims, replacing the plain .trim() the handlers used to do inline", () => {
+  it("trims surrounding whitespace", () => {
     expect(decodePlainText("  Migration safety  ")).toBe("Migration safety");
     expect(decodePlainText("   ")).toBe("");
   });
