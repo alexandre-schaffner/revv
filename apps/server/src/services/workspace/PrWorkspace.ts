@@ -199,6 +199,15 @@ export const PrWorkspaceLive = Layer.effect(
         : Effect.fail(new ValidationError({ message: `Invalid commit SHA: ${invalid}` }));
     };
 
+    const resolveCommit = (branch: AgentBranch, sha: string) =>
+      gitTry(() => resolveRef(branch.worktreePath, sha)).pipe(
+        Effect.flatMap((full) =>
+          full
+            ? Effect.succeed(full)
+            : Effect.fail(new NotFoundError({ resource: "commit", id: sha })),
+        ),
+      );
+
     const editBranch = <A, E>(
       prId: string,
       edit: (ctx: PrContextBasic, branch: AgentBranch, held: WorkspaceClaim) => Effect.Effect<A, E>,
@@ -249,6 +258,8 @@ export const PrWorkspaceLive = Layer.effect(
       agentBranchOf,
       baselineOf,
       moveSession,
+      validShas,
+      resolveCommit,
       ai,
       mirror,
     });
@@ -314,12 +325,7 @@ export const PrWorkspaceLive = Layer.effect(
           return yield* editBranch(prId, (ctx, branch) =>
             Effect.gen(function* () {
               const drop = new Set<string>();
-              for (const sha of shas) {
-                const full = yield* gitTry(() => resolveRef(branch.worktreePath, sha));
-                if (!full)
-                  return yield* Effect.fail(new NotFoundError({ resource: "commit", id: sha }));
-                drop.add(full);
-              }
+              for (const sha of shas) drop.add(yield* resolveCommit(branch, sha));
               const baseSha = yield* baselineOf(ctx, branch);
               if (!baseSha) {
                 return yield* Effect.fail(

@@ -22,6 +22,7 @@ import {
   NoChatSessionError,
   type NotFoundError,
   PushRejectedError,
+  ValidationError,
   type WorkspaceBusyError,
 } from "../../domain/errors";
 import { logError } from "../../logger";
@@ -37,7 +38,6 @@ import {
   fetch,
   gitTry,
   isMergeInProgress,
-  isValidSha,
   merge,
   resolveRef,
   unmergedPaths,
@@ -68,6 +68,7 @@ export type ChatPushError =
   | PushRejectedError
   | GitOperationError
   | InvalidBranchNameError
+  | ValidationError
   | NotFoundError
   | GitHubAuthError
   | GitHubError
@@ -101,6 +102,11 @@ interface PushDeps {
     branch: AgentBranch,
   ) => Effect.Effect<string | null, DbError | GitOperationError>;
   readonly moveSession: (prId: string, newHeadSha: string) => Effect.Effect<void, DbError>;
+  readonly validShas: (shas: readonly string[]) => Effect.Effect<void, ValidationError>;
+  readonly resolveCommit: (
+    branch: AgentBranch,
+    sha: string,
+  ) => Effect.Effect<string, NotFoundError | GitOperationError>;
   readonly ai: Context.Service.Shape<typeof AiService>;
   readonly mirror: Context.Service.Shape<typeof PrMirror>;
 }
@@ -114,7 +120,11 @@ export function makeAgentPush(deps: PushDeps) {
   const begin = (prId: string, target?: string) =>
     Effect.gen(function* () {
       const claim = yield* deps.claim(prId, "push");
-      const ctx = yield* deps.resolve(prId);
+      const resolved = yield* deps.resolve(prId);
+      const ctx = {
+        ...resolved,
+        pr: { ...resolved.pr, headSha: yield* deps.mirror.headOf(resolved) },
+      };
       const { pr, repo } = ctx;
       const token = ctx.client.token;
       yield* deps.pushLock.hold(
@@ -122,13 +132,6 @@ export function makeAgentPush(deps: PushDeps) {
         "chat-push",
       );
 
-      if (!pr.headSha) {
-        return yield* Effect.fail(
-          new GitOperationError({
-            message: "PR has no head SHA recorded yet — wait for the next sync",
-          }),
-        );
-      }
       const branch = deps.agentBranchOf(ctx);
       if (!branch) return yield* Effect.fail(new NoChatSessionError({ prId: pr.id }));
       yield* Effect.try({
@@ -136,7 +139,7 @@ export function makeAgentPush(deps: PushDeps) {
           assertNotFlagLike(branch.branchName, "branchName");
           assertNotFlagLike(pr.sourceBranch, "sourceBranch");
         },
-        catch: (err) => new GitOperationError({ message: String(err) }),
+        catch: (err) => new ValidationError({ message: String(err) }),
       });
 
       const checkClean = gitTry(() => workingTreeIsClean(branch.worktreePath));
@@ -451,21 +454,12 @@ export function makeAgentPush(deps: PushDeps) {
       Effect.gen(function* () {
         if (params.shas.length === 0)
           return yield* Effect.fail(new NoChangesError({ prId: params.prId }));
-        const invalid = params.shas.find((sha) => !isValidSha(sha));
-        if (invalid)
-          return yield* Effect.fail(new GitOperationError({ message: `Invalid SHA: ${invalid}` }));
+        yield* deps.validShas(params.shas);
 
         const run = yield* begin(params.prId);
         const { branch } = run;
         const requested = new Set<string>();
-        for (const sha of params.shas) {
-          const full = yield* Effect.promise(() => resolveRef(branch.worktreePath, sha));
-          if (!full)
-            return yield* Effect.fail(
-              new GitOperationError({ message: `Cannot resolve SHA: ${sha}` }),
-            );
-          requested.add(full);
-        }
+        for (const sha of params.shas) requested.add(yield* deps.resolveCommit(branch, sha));
         const all = yield* gitTry(() => proposedShas(branch, run.baseSha));
         const picked = all.filter((sha) => requested.has(sha));
         if (picked.length === 0)
