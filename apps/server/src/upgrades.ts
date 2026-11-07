@@ -64,4 +64,10 @@ export const LEGACY_UPGRADES = {
     carries:
       "PRs reviewed before `review_rounds` existed: their rounds are read off the walkthrough rows",
   },
+  driverProviderNames: {
+    introducedIn: "0.35.0",
+    sites: ["apps/server/src/services/walkthrough/content.ts"],
+    carries:
+      "walkthrough rows and team-cache snapshots whose provider config names the agent driver (`claude-agent-sdk`, `opencode`, `codex`) instead of the ACP agent id. Snapshots are shared across a team, so a teammate on an older release can still upload one",
+  },
 } as const satisfies Record<string, LegacyUpgrade>;

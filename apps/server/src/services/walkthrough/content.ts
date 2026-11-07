@@ -224,7 +224,8 @@ export function decodeTokenUsage(raw: string | null): WalkthroughTokenUsage {
 
 /**
  * Installs that predate the ACP-only transport recorded the driver, not the
- * agent. Their rows and team-cache snapshots still carry these names.
+ * agent. Their rows and team-cache snapshots still carry these names
+ * (legacy-upgrade: driverProviderNames).
  */
 const LEGACY_PROVIDER_AGENT: Readonly<Record<string, AcpAgentId>> = {
   "claude-agent-sdk": "claude-code",
