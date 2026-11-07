@@ -167,7 +167,9 @@ wait_for_server() {
   return 1
 }
 
-# SQLite is the source of truth for `update_channel`, so reads skip the API.
+# Reads skip the API so `revv update` works with the server stopped. This
+# copies two internals of apps/server/src/services/Settings.ts: the row id
+# ('default') and the `update_channel` column.
 read_channel() {
   # Never abort: this runs before `revv update` installs a fresh CLI, so a
   # hard failure would leave no way to update out of a broken install. Warn on
@@ -177,7 +179,7 @@ read_channel() {
     printf "stable"; return 0
   fi
   # Until the new server boots once and relocates it, an older install's DB
-  # may still sit in the source tree.
+  # may still sit in the source tree (legacy-upgrade: cwdDatabase).
   local db="$REVV_DB_PATH"
   [[ -f "$db" ]] || db="$INSTALL_DIR/revv.db"
   if [[ ! -f "$db" ]]; then

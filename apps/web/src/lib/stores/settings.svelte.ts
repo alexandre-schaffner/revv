@@ -14,7 +14,7 @@ import {
   type UserSettings,
 } from "@revv/shared";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
+import { type ApiError, apiErrorMessage } from "$lib/api/errors";
 import { createResource } from "./resource";
 
 export type ModelOption = { label: string; value: string };
@@ -68,11 +68,11 @@ export function getGithubClientId(): string {
  * to public GitHub.
  */
 export async function setGithubConfig(host: string, clientId: string): Promise<void> {
-  await updateSettings({ githubHost: host, githubClientId: clientId });
+  await persist({ githubHost: host, githubClientId: clientId }, {}, sendGithubConfig);
 }
 
 export async function setGithubConfigStrict(host: string, clientId: string): Promise<void> {
-  await updateSettings({ githubHost: host, githubClientId: clientId }, { strict: true });
+  await persist({ githubHost: host, githubClientId: clientId }, { strict: true }, sendGithubConfig);
 }
 
 /**
@@ -143,13 +143,26 @@ export async function updateSettings(
   patch: SettingsUpdate,
   options: UpdateSettingsOptions = {},
 ): Promise<void> {
+  await persist(patch, options, (p) => api.api.settings.put(p));
+}
+
+// Onboarding picks the host before sign-in, so the host and client id have
+// their own unauthenticated write; every other field needs a session.
+const sendGithubConfig = (patch: Pick<UserSettings, "githubHost" | "githubClientId">) =>
+  api.api.settings.github.put(patch);
+
+async function persist<P extends SettingsUpdate>(
+  patch: P,
+  options: UpdateSettingsOptions,
+  send: (patch: P) => Promise<{ error: ApiError | null }>,
+): Promise<void> {
   const previous = loaded;
   // Apply locally first, with the same rules the server applies, so
   // concurrent writes don't clobber each other when responses arrive out of
   // order. The response body is ignored for the same reason.
   if (loaded) loaded = applySettingsUpdate(loaded, patch);
   try {
-    const { error } = await api.api.settings.put(patch);
+    const { error } = await send(patch);
     if (error) throw new Error(apiErrorMessage(error, "Couldn't save settings"));
   } catch (e) {
     if (options.strict) {
