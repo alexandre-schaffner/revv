@@ -209,21 +209,29 @@ describe("database upgrades", () => {
   });
 
   // One case per starting point: each install upgrades from wherever its build
-  // stopped, and a single case replaying them all grew quadratically.
+  // stopped, and a single case replaying them all grew quadratically. A case
+  // takes ~0.2 s, but booting through `createDb` writes and fsyncs a real file,
+  // which a contended disk can stall for seconds; bun's 5 s default (what
+  // `check:migrations` runs with) is too tight for that.
+  const bootTimeoutMs = 20_000;
   const latestWhens = journal.entries.map((entry) => entry.when);
   for (const [index, from] of journal.entries.slice(0, -1).entries()) {
-    it(`upgrades a populated database from ${from.tag} without losing rows`, () => {
-      const before = olderBuild(index + 1);
-      const tables = seedEveryTable(before);
-      const after = createDb(writeInstall(before, `upgrade-${from.tag}`)).$client;
+    it(
+      `upgrades a populated database from ${from.tag} without losing rows`,
+      () => {
+        const before = olderBuild(index + 1);
+        const tables = seedEveryTable(before);
+        const after = createDb(writeInstall(before, `upgrade-${from.tag}`)).$client;
 
-      expect(ledgerWhens(after)).toEqual(latestWhens);
-      const survivingTables = new Set(userTables(after));
-      for (const table of tables.filter((name) => survivingTables.has(name))) {
-        expect({ table, rows: rowCount(after, table) }).toEqual({ table, rows: 1 });
-      }
-      after.close();
-    });
+        expect(ledgerWhens(after)).toEqual(latestWhens);
+        const survivingTables = new Set(userTables(after));
+        for (const table of tables.filter((name) => survivingTables.has(name))) {
+          expect({ table, rows: rowCount(after, table) }).toEqual({ table, rows: 1 });
+        }
+        after.close();
+      },
+      bootTimeoutMs,
+    );
   }
 
   it("applies a migration that landed behind a newer one instead of skipping it", () => {
