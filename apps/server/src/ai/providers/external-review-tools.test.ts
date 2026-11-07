@@ -107,6 +107,7 @@ function context(
     integrationId: "integration-1",
     publishEdit: (_walkthroughId, events) => walkthroughEvents.push(...events),
     broadcastThreadEvent: (event) => threadEvents.push(event),
+    judgeArtifact: () => Promise.resolve({ failed: [], reject: false }),
     pushReply: async (messageId) => {
       pushedReplies.push(messageId);
     },

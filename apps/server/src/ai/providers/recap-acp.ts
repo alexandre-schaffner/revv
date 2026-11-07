@@ -23,7 +23,7 @@ export interface RunRecapAgentAcpParams {
   /** Bearer token the orchestrator issued for `ctx` on `/mcp/recap`. */
   readonly sessionToken: string;
   readonly launch: AgentLaunch;
-  /** Working dir the ACP connection is pooled under (repo clone path / server cwd). */
+  /** Working dir the ACP connection is pooled under: Revv's runner directory. */
   readonly workingDir: string;
   readonly abortController: AbortController;
   readonly activity: ActivityBeacon;
@@ -86,7 +86,7 @@ export async function runRecapAgentViaAcp(
     },
   });
   if (error?.kind === "no_tool_calls") {
-    params.ctx.emit({ type: "error", data: { code: "NoToolCalls", message: error.message } });
+    params.ctx.emit({ type: "error", data: { code: "GENERATION_ERROR", message: error.message } });
   }
   return error;
 }

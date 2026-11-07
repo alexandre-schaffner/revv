@@ -4,16 +4,23 @@ import type { Db } from "../../../db";
 import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
-import { semanticStepId } from "../../../services/walkthrough/content";
+import { latestCompleteWalkthrough, semanticStepId } from "../../../services/walkthrough/content";
 import { decodePlainText } from "../agent-text";
 import { fail } from "../mcp-tool-gateway";
-import { prepareBlock, withArtifactWarnings, writeBlock } from "../walkthrough-blocks";
+import {
+  artifactRefusal,
+  type BlockContent,
+  prepareBlock,
+  withArtifactWarnings,
+  writeBlock,
+} from "../walkthrough-blocks";
 import { unwrapJsonWrappedString } from "../walkthrough-tools/helpers";
 import { runChatEdit, scrubBlockReferences } from "./helpers";
 import type {
   AddBlockInput,
   AddSemanticStepEditInput,
   ChatEditToolHandler,
+  ChatWalkthroughEditContext,
   DeleteBlockInput,
   DeleteSemanticStepInput,
   UpdateBlockInput,
@@ -48,6 +55,22 @@ function blockAt(db: Db, walkthroughId: string, semanticStepIndex: number, stepI
       ),
     )
     .get();
+}
+
+/**
+ * Holds a block bound for an existing chapter to the artifact craft bar.
+ * Before `runChatEdit`, whose edit can't await: a target that is gone by then
+ * refuses there.
+ */
+function chapterBlockRefusal(
+  ctx: ChatWalkthroughEditContext,
+  semanticStepIndex: number,
+  block: BlockContent,
+): Promise<string | null> {
+  if (block.type !== "artifact") return Promise.resolve(null);
+  const target = latestCompleteWalkthrough(ctx.db, ctx.prId);
+  const chapter = target ? chapterAt(ctx.db, target.id, semanticStepIndex) : undefined;
+  return artifactRefusal(ctx.judgeArtifact, block, chapter?.title ?? "");
 }
 
 export const updateOverviewHandler: ChatEditToolHandler<UpdateOverviewInput> = async (
@@ -93,6 +116,8 @@ export const addSemanticStepEditHandler: ChatEditToolHandler<AddSemanticStepEdit
   if (title.length === 0) {
     return fail("Error: add_semantic_step requires a non-empty title.");
   }
+  const refusal = await artifactRefusal(ctx.judgeArtifact, prepared.block, title);
+  if (refusal) return fail(refusal);
 
   return runChatEdit(ctx, (wt) => {
     if (chapterAt(ctx.db, wt.id, input.semantic_step_index)) {
@@ -217,6 +242,8 @@ export const addBlockHandler: ChatEditToolHandler<AddBlockInput> = async (ctx, i
     "Error: add_block.content requires exactly one of { markdown, code, diff, artifact }.",
   );
   if ("error" in prepared) return fail(prepared.error);
+  const refusal = await chapterBlockRefusal(ctx, input.semantic_step_index, prepared.block);
+  if (refusal) return fail(refusal);
 
   return runChatEdit(ctx, (wt) => {
     if (!chapterAt(ctx.db, wt.id, input.semantic_step_index)) {
@@ -266,6 +293,8 @@ export const updateBlockHandler: ChatEditToolHandler<UpdateBlockInput> = async (
     "Error: update_block.content requires exactly one of { markdown, code, diff, artifact }.",
   );
   if ("error" in prepared) return fail(prepared.error);
+  const refusal = await chapterBlockRefusal(ctx, input.semantic_step_index, prepared.block);
+  if (refusal) return fail(refusal);
 
   return runChatEdit(ctx, (wt) => {
     if (!blockAt(ctx.db, wt.id, input.semantic_step_index, input.step_index)) {

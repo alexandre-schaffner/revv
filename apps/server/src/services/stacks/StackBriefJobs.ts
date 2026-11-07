@@ -103,7 +103,31 @@ export const StackBriefJobsLive = Layer.effect(
     const settingsService = yield* SettingsService;
     const stacks = yield* StackService;
 
-    const stackMutex = yield* makeStartJobMutex();
+    // Every decision about a stack's briefs — `ensure`, and the kernel's
+    // resumes — runs under the stack's lock. Not re-entrant: what runs under
+    // it resumes through `resumeLocked`.
+    const stackLocks = yield* makeStartJobMutex();
+    const underStackLock = <A, E>(
+      repositoryId: string,
+      stackNumber: number,
+      effect: Effect.Effect<A, E>,
+    ) =>
+      Effect.flatMap(stackLocks.acquire(`${repositoryId}:${stackNumber}`), (lock) =>
+        lock.withPermits(1)(effect),
+      );
+
+    const readJobRow = (briefId: string) =>
+      dbTry("stack brief row read", () =>
+        db
+          .select({
+            status: stackBriefs.status,
+            repositoryId: stackBriefs.repositoryId,
+            stackNumber: stackBriefs.stackNumber,
+          })
+          .from(stackBriefs)
+          .where(eq(stackBriefs.id, briefId))
+          .get(),
+      );
 
     const announce = (
       repositoryId: string,
@@ -161,6 +185,8 @@ export const StackBriefJobsLive = Layer.effect(
             .all()
             .map((row) => row.id),
         ),
+        isGenerating: (briefId) =>
+          Effect.map(readJobRow(briefId), (row) => row?.status === "generating"),
         bumpResumeAttempts: (briefId) =>
           dbTry("stack brief resume count", () => {
             const [row] = db
@@ -178,7 +204,17 @@ export const StackBriefJobsLive = Layer.effect(
       settle,
       ...TOOL_GATED_FAILURES,
       relaunch: (briefId) => launch(briefId),
+      exclusive: (briefId, effect) =>
+        Effect.flatMap(readJobRow(briefId), (row) =>
+          row ? underStackLock(row.repositoryId, row.stackNumber, effect) : effect,
+        ),
     });
+
+    /** The kernel's resume policy, then the relaunch. Under the stack lock. */
+    const resumeLocked = (briefId: string) =>
+      Effect.flatMap(jobs.resumeDecision(briefId), (decision) =>
+        decision === "run" ? launch(briefId) : Effect.void,
+      );
 
     const runBrief = (run: AgentRun<BriefRun>): Effect.Effect<RunEnd<string>, DbError> =>
       Effect.gen(function* () {
@@ -191,11 +227,9 @@ export const StackBriefJobsLive = Layer.effect(
           return { kind: "failed", failure: "The stack snapshot has no layers" };
         }
 
-        const repo = yield* prCtx.getRepo(row.repositoryId).pipe(Effect.orElseSucceed(() => null));
         return yield* runToolGatedTurn({
           run,
           purpose: "brief",
-          clonePath: repo?.clonePath ?? null,
           turn: (agent) =>
             runStackBriefAgentViaAcp({
               ctx: run.context.tools,
@@ -240,8 +274,9 @@ export const StackBriefJobsLive = Layer.effect(
         const repositoryId = ctx.repo.id;
         const signature = stackSignature(stack.layers);
 
-        const mutex = yield* stackMutex.acquire(`${repositoryId}:${stack.number}`);
-        return yield* mutex.withPermits(1)(
+        return yield* underStackLock(
+          repositoryId,
+          stack.number,
           Effect.gen(function* () {
             const active = yield* dbTry("stack brief lookup", () =>
               db
@@ -262,7 +297,7 @@ export const StackBriefJobsLive = Layer.effect(
             );
             const current = active.find((b) => b.signature === signature && b.status !== "error");
             if (current) {
-              if (current.status === "generating") yield* jobs.resume(current.id);
+              if (current.status === "generating") yield* resumeLocked(current.id);
               return current.id;
             }
 

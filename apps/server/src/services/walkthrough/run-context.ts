@@ -11,7 +11,7 @@ import type {
 } from "@revv/shared";
 import { ZERO_TOKEN_USAGE } from "@revv/shared";
 import { Effect } from "effect";
-import { judgeArtifact } from "../../ai/jev/artifact-quality";
+import { artifactJudge } from "../../ai/jev/artifact-quality";
 import { type JudgmentTracker, makeJudgmentTracker } from "../../ai/jev/pending";
 import { judgeProse, makeProseMailbox } from "../../ai/jev/prose-voice";
 import type { WalkthroughToolContext } from "../../ai/providers/walkthrough-tools";
@@ -83,15 +83,7 @@ export function makeWalkthroughRunContext(input: {
       },
       awaitIssueJudgments: () => judgments.drain(),
       issueRetracted: judgments.wasRetracted,
-      judgeArtifact: (html, context) =>
-        runJudgment(judgeArtifact(html, context)).catch((err: unknown) => {
-          logError(
-            "walkthrough-run",
-            `artifact craft bar crashed for ${walkthroughId}:`,
-            err instanceof Error ? err.message : String(err),
-          );
-          return { failed: [], reject: false };
-        }),
+      judgeArtifact: artifactJudge(runJudgment, "walkthrough-run"),
       scheduleProseCheck: (markdown, chapterTitle) => {
         // Claimed synchronously so two blocks written back to back can't both
         // take the last slot.

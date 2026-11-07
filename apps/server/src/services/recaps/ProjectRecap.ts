@@ -249,8 +249,18 @@ export class ProjectRecapService extends Context.Service<
     >;
 
     readonly incrementResumeAttempts: (recapId: string) => Effect.Effect<number, DbError>;
+
+    /** The row's status and the window it belongs to, or null when it is gone. */
+    readonly readWindow: (recapId: string) => Effect.Effect<RecapWindowRow | null, DbError>;
   }
 >()("ProjectRecapService") {}
+
+export interface RecapWindowRow {
+  readonly status: ProjectRecapStatus;
+  readonly repositoryId: string;
+  readonly period: RecapPeriod;
+  readonly periodStart: string;
+}
 
 export const ProjectRecapServiceLive = Layer.effect(
   ProjectRecapService,
@@ -556,6 +566,28 @@ export const ProjectRecapServiceLive = Layer.effect(
             return value;
           });
           return next;
+        }),
+
+      readWindow: (recapId) =>
+        dbTry("readWindow", () => {
+          const row = db
+            .select({
+              status: projectRecaps.status,
+              repositoryId: projectRecaps.repositoryId,
+              period: projectRecaps.period,
+              periodStart: projectRecaps.periodStart,
+            })
+            .from(projectRecaps)
+            .where(eq(projectRecaps.id, recapId))
+            .get();
+          return row
+            ? {
+                status: row.status as ProjectRecapStatus,
+                repositoryId: row.repositoryId,
+                period: row.period as RecapPeriod,
+                periodStart: row.periodStart,
+              }
+            : null;
         }),
     });
   }),

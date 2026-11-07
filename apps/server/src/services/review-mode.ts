@@ -4,10 +4,10 @@
 import { type AuthorRole, REVIEW_MODE, type ReviewMode, reviewModeFor } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
+import type { Db } from "../db";
 import { account, pullRequests, repositories, user } from "../db/schema";
 import type { DbError } from "../domain/errors";
 import { dbTry } from "../effects/db-try";
-import { logError } from "../logger";
 import { DbService } from "./Db";
 
 export interface PrViewer {
@@ -18,29 +18,31 @@ export interface PrViewer {
   readonly prAuthorLogin: string | null;
 }
 
+/** {@link viewerOnPr}, for a caller already inside a DB read. Throws on a DB failure. */
+export function readViewerOnPr(db: Db, prId: string): PrViewer {
+  const row = db
+    .select({
+      login: account.githubLogin,
+      name: user.name,
+      prAuthorLogin: pullRequests.authorLogin,
+    })
+    .from(pullRequests)
+    .leftJoin(repositories, eq(repositories.id, pullRequests.repositoryId))
+    .leftJoin(account, eq(account.id, repositories.accountId))
+    .leftJoin(user, eq(user.id, account.userId))
+    .where(eq(pullRequests.id, prId))
+    .get();
+  return {
+    login: row?.login ?? null,
+    name: row?.name ?? null,
+    prAuthorLogin: row?.prAuthorLogin ?? null,
+  };
+}
+
 export const viewerOnPr = (prId: string): Effect.Effect<PrViewer, DbError, DbService> =>
-  Effect.gen(function* () {
-    const { db } = yield* DbService;
-    const row = yield* dbTry(`read the viewer on ${prId}`, () =>
-      db
-        .select({
-          login: account.githubLogin,
-          name: user.name,
-          prAuthorLogin: pullRequests.authorLogin,
-        })
-        .from(pullRequests)
-        .leftJoin(repositories, eq(repositories.id, pullRequests.repositoryId))
-        .leftJoin(account, eq(account.id, repositories.accountId))
-        .leftJoin(user, eq(user.id, account.userId))
-        .where(eq(pullRequests.id, prId))
-        .get(),
-    );
-    return {
-      login: row?.login ?? null,
-      name: row?.name ?? null,
-      prAuthorLogin: row?.prAuthorLogin ?? null,
-    };
-  });
+  Effect.flatMap(DbService, ({ db }) =>
+    dbTry(`read the viewer on ${prId}`, () => readViewerOnPr(db, prId)),
+  );
 
 /** The authorship of a message the signed-in user writes on the PR: the PR's author is its `coder`. */
 export function humanAuthor(viewer: PrViewer): {
@@ -58,16 +60,10 @@ export function humanAuthor(viewer: PrViewer): {
 
 /**
  * The signed-in user's lens on a PR, for code with no request to read it from:
- * it picks the default walkthrough perspective. A missing row, an unknown login
- * or a DB failure answers `reviewer`.
+ * it picks the default walkthrough perspective. A missing row or an unknown
+ * login answers `reviewer`. Throws on a DB failure.
  */
-export const resolveReviewModeForPr = (prId: string): Effect.Effect<ReviewMode, never, DbService> =>
-  viewerOnPr(prId).pipe(
-    Effect.map((viewer) => reviewModeFor(viewer.prAuthorLogin, viewer.login)),
-    Effect.catch((cause) =>
-      Effect.sync(() => {
-        logError("review-mode", `falling back to 'reviewer' for ${prId}:`, cause);
-        return REVIEW_MODE.reviewer;
-      }),
-    ),
-  );
+export function reviewModeOnPr(db: Db, prId: string): ReviewMode {
+  const viewer = readViewerOnPr(db, prId);
+  return reviewModeFor(viewer.prAuthorLogin, viewer.login);
+}

@@ -219,9 +219,11 @@ agent tomorrow). Any change that violates them is wrong by construction — push
      fine everywhere except two places, both closed in `ai/jev/pending.ts`:
      `complete_walkthrough` drains every scheduled judgment before it validates anything,
      and `add_issue_comment` answers a retracted id with an explanatory non-error rather
-     than "unknown issue". A retraction deletes linked `comment_threads` by FK cascade and
-     broadcasts `issue:deleted`; a concern already pushed to GitHub (`submittedAt`) is never
-     touched. Anything the agent marked `critical`, or that the rubric reads as must-fix, is
+     than "unknown issue". A retraction broadcasts `issue:deleted`; a concern already pushed
+     to GitHub (`submittedAt`) is never touched. Its AI threads go through
+     `threadWrites.retireAiThreads` before the issue row is deleted: drafts are deleted,
+     threads already posted to GitHub are detached and kept. The FK still cascades, so every
+     path that deletes an issue retires its threads first. Anything the agent marked `critical`, or that the rubric reads as must-fix, is
      pinned above the floor and can never be retracted. Because severity isn't final when
      `flag_issue` returns, **every line-anchored concern owes an inline comment**, whatever
      severity the agent sent.
@@ -230,7 +232,9 @@ agent tomorrow). Any change that violates them is wrong by construction — push
      **synchronously**, and refuse a block that fails two of the three clauses. A gate that
      rejects has to answer before the write — a block that appeared and then vanished would
      leave a hole in the chapter's `step_index` sequence — and artifacts are rare enough
-     that the round trip doesn't matter.
+     that the round trip doesn't matter. It is the one artifact contract: the chat-edit
+     tools that write a block (`add_block`, `update_block`, `add_semantic_step`) hold it to
+     the same bar (`artifactRefusal` in `ai/providers/walkthrough-blocks.ts`).
 
      Both degrade to the pre-Jev behaviour when the judgment is unavailable: an unjudged
      concern stands as written, an unjudged artifact is accepted. Judgments are cached on
@@ -266,7 +270,8 @@ agent tomorrow). Any change that violates them is wrong by construction — push
    (`walkthroughs.diff_fingerprint`) that covers the requested generation mode, the orchestrator
    imports that review into the new head's row (`carried_from_walkthrough_id`) with no agent
    run. The old row is never touched. The rule is `services/walkthrough/restack.ts`; the stack
-   overlay's `restacked` label calls the same rule.
+   overlay's `restacked` label calls the same rule, in the perspective "Review the stack"
+   would queue that layer in.
 
    **Carve-out: chat-edit is the single authorized post-completion mutation path.** After
    `status='complete'`, the chat agent's edit MCP tools (`update_overview`, `add_block`,
@@ -277,8 +282,9 @@ agent tomorrow). Any change that violates them is wrong by construction — push
    `lastEditedAt` / `lastEditedBy` on the parent row, never change `status` or
    `lastCompletedPhase`, and broadcast `walkthrough:event` envelopes carrying a
    `lifecycle:edited` event on the global SSE stream (`GET /api/events`). GitHub-submitted issues
-   (`submittedAt!=null`) are off-limits even to the chat-edit path. The generation
-   pipeline still never mutates a completed row.
+   (`submittedAt!=null`) are off-limits even to the chat-edit path. A block they write
+   clears the same artifact craft bar as generation (invariant 4), and is accepted when the
+   judgment is unavailable. The generation pipeline still never mutates a completed row.
 
    The external coding-agent integrations (Claude Code, Codex, OpenCode,
    Cursor) are additional scoped callers of the same chat-edit handlers. Their
@@ -302,8 +308,11 @@ agent tomorrow). Any change that violates them is wrong by construction — push
    `resume_budget` / `budget_exhausted`) and stops. Whoever finds a row whose run died —
    boot, the recap stream, a brief's `ensure`, a walkthrough request at that row's head, the
    user's Resume — goes through the kernel's one resume policy (`resumeDecision`), under
-   the pipeline's lock on the row; the user's Resume of a stopped (`error`) walkthrough
-   first revives it with a fresh budget.
+   the lock the pipeline takes for every decision about that row (the PR's for a
+   walkthrough, the window's for a recap, the stack's for a brief). The policy leaves a row
+   that is no longer `generating` alone, so a reader that saw it generating just before its
+   run settled it never starts a second run. The user's Resume of a stopped (`error`)
+   walkthrough first revives it with a fresh budget.
 10. **Per-job resource scoping.** Each walkthrough job owns a dedicated detached git
     worktree at `head_sha` (`RepoClone.acquireReviewWorktree`, keyed on the walkthrough id),
     removed by a scope finalizer on every exit path; a resumed job clears what its killed run
@@ -385,7 +394,8 @@ orchestrator decide on one pure journal check (`stackBriefCompletionBlocker`): a
 journal passes it completes even if the agent never called the gate. `status` is
 orchestrator-only and every transition is broadcast as `stack-brief:status-changed` after
 it commits. Review-the-stack (`services/stacks/StackReview.ts`) only queues walkthroughs
-through `WalkthroughJobs.startJob` (`trigger: 'stack_review'`) and asks for a brief once
+through `WalkthroughJobs.startJob` (`trigger: 'stack_review'`), each layer in its own
+perspective (`walkthrough/perspective.ts`, as the user's Generate asks), and asks for a brief once
 they settle; it owns no walkthrough or brief lifecycle. Its own row (`stack_reviews`)
 journals the queue and progress, `running` → `done` | `abandoned` (a 2-hour deadline), so a
 restart picks a review up where it was.

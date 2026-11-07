@@ -22,17 +22,20 @@ import {
   type RepoContext,
 } from "../PrContext";
 import { Realtime } from "../Realtime";
+import { perspectiveOf } from "../walkthrough/perspective";
 import { fingerprintFiles, restackCarry, restackSourceOf } from "../walkthrough/restack";
 import { latestFinishedReviews } from "../walkthrough/review-reads";
 import { type MirroredLayer, membershipSupersededByPoll, stackFromMirror } from "./map";
-import {
-  overlayStack,
-  type RevvStackFacts,
-  STACK_REVIEW_REQUEST,
-  type TrackedLayer,
-} from "./overlay";
+import { overlayStack, type RevvStackFacts, type TrackedLayer } from "./overlay";
 import { readBriefLayers } from "./reads";
 import { stackSignature } from "./signature";
+
+/**
+ * The generation mode "Review the stack" asks for when it queues a layer, in
+ * the layer's own perspective: the overlay's `restacked` verdict says whether
+ * that request carries a review over.
+ */
+export const STACK_REVIEW_GENERATION_MODE = "full";
 
 const CACHE_NS = "pr-stack";
 const FRESH_FOR_MS = 30_000;
@@ -108,6 +111,7 @@ export function readStackFacts(
       )
       .all();
     const prIds = prRows.map((r) => r.id);
+    const layers = prRows.map((pr) => ({ ...pr, perspective: perspectiveOf(db, pr.id) }));
 
     const standing =
       prIds.length === 0
@@ -118,6 +122,7 @@ export function readStackFacts(
               prId: walkthroughs.pullRequestId,
               status: walkthroughs.status,
               prHeadSha: walkthroughs.prHeadSha,
+              mode: walkthroughs.mode,
             })
             .from(walkthroughs)
             .where(
@@ -128,12 +133,18 @@ export function readStackFacts(
             )
             .orderBy(desc(walkthroughs.generatedAt))
             .all();
-    const finished = latestFinishedReviews(db, prIds);
+    const finished = latestFinishedReviews(
+      db,
+      prIds,
+      new Map(layers.map((pr) => [pr.id, pr.perspective])),
+    );
     const filesByPr = readCurrentHeadFiles(db, prIds);
 
     const tracked = new Map<number, TrackedLayer>();
-    for (const pr of prRows) {
-      const current = standing.find((w) => w.prId === pr.id && w.prHeadSha === pr.headSha);
+    for (const pr of layers) {
+      const current = standing.find(
+        (w) => w.prId === pr.id && w.prHeadSha === pr.headSha && w.mode === pr.perspective,
+      );
       const files = filesByPr.get(pr.id);
       const currentFingerprint = files ? fingerprintFiles(toGitHubFileShape(files)) : null;
       tracked.set(pr.externalId, {
@@ -146,8 +157,8 @@ export function readStackFacts(
           pr.headSha !== null &&
           currentFingerprint !== null &&
           restackCarry(
-            restackSourceOf(db, pr.id, pr.headSha, STACK_REVIEW_REQUEST.mode),
-            STACK_REVIEW_REQUEST.generationMode,
+            restackSourceOf(db, pr.id, pr.headSha, pr.perspective),
+            STACK_REVIEW_GENERATION_MODE,
             currentFingerprint,
           ) !== null,
       });

@@ -1,12 +1,14 @@
 // The `artifact` block variant requires live state, a reader-varied control, and a verdict
 // (see `add_diff_step`'s schema). Three nouls turn that contract into a judgment, one per
-// clause, so a rejection names what failed.
+// clause, so a rejection names what failed. Every tool that writes an artifact block —
+// generation and chat edits alike — holds it to this bar (invariant 4).
 //
 // Blocking, unlike the issue gate: a block that appeared then vanished would leave a hole
 // in the chapter's `step_index` sequence, and artifacts are rare enough the latency is fine.
 
 import { noul } from "@typesafe-ai/sdk";
 import { Effect } from "effect";
+import { logError } from "../../logger";
 import type { JevState } from "../../services/Jev";
 import { JevService } from "../../services/Jev";
 import { optionalJev } from "./optional";
@@ -22,6 +24,14 @@ export const ARTIFACT_CLAUSE_FLOOR = 0.35;
 
 /** Clauses allowed to fail before rejection. One clause failing is noise in a judgment over generated HTML; two is the signal it isn't an artifact. */
 export const ARTIFACT_MAX_FAILED_CLAUSES = 1;
+
+export interface ArtifactContext {
+  readonly chapterTitle: string;
+  readonly annotation: string | null;
+}
+
+/** The craft bar as a tool handler awaits it. Never rejects. */
+export type ArtifactJudge = (html: string, context: ArtifactContext) => Promise<ArtifactVerdict>;
 
 export interface ArtifactVerdict {
   /** Labels of the clauses that fell below the floor, in contract order. */
@@ -49,7 +59,7 @@ const CLAUSE_LABELS: Record<keyof typeof CLAUSES, string> = {
 /** Judges one artifact against the craft bar. Never fails; an unavailable Jev accepts the block rather than rejecting it. */
 export function judgeArtifact(
   html: string,
-  context: { readonly chapterTitle: string; readonly annotation: string | null },
+  context: ArtifactContext,
 ): Effect.Effect<ArtifactVerdict, never, JevService> {
   return Effect.gen(function* () {
     const state: JevState = {
@@ -90,6 +100,25 @@ export function judgeArtifact(
       reject: failed.length > ARTIFACT_MAX_FAILED_CLAUSES,
     };
   });
+}
+
+/**
+ * {@link judgeArtifact} for a tool handler, run by `run`. A crash accepts the
+ * block, as an unavailable Jev does.
+ */
+export function artifactJudge(
+  run: (effect: Effect.Effect<ArtifactVerdict, never, JevService>) => Promise<ArtifactVerdict>,
+  logScope: string,
+): ArtifactJudge {
+  return (html, context) =>
+    run(judgeArtifact(html, context)).catch((err: unknown) => {
+      logError(
+        logScope,
+        "artifact craft bar crashed:",
+        err instanceof Error ? err.message : String(err),
+      );
+      return { failed: [], reject: false };
+    });
 }
 
 export function renderArtifactRejection(verdict: ArtifactVerdict): string {

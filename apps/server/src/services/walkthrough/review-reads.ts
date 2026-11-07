@@ -2,7 +2,12 @@
 // its open concerns (stack overlays, the stack brief and walkthrough agents'
 // stack context), and the current one for the chat prompt.
 
-import type { RiskLevel, WalkthroughMode, WalkthroughStackSnapshot } from "@revv/shared";
+import type {
+  IssueSeverity,
+  RiskLevel,
+  WalkthroughMode,
+  WalkthroughStackSnapshot,
+} from "@revv/shared";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { ChatWalkthroughContext } from "../../ai/prompts/chat";
 import type { Db } from "../../db";
@@ -38,13 +43,17 @@ export interface FinishedReview {
   /** Imported from an earlier head's review by a restack, with no agent run. */
   readonly carried: boolean;
   /** Concerns still open, in reading order. */
-  readonly openIssues: ReadonlyArray<{ readonly title: string; readonly severity: string }>;
+  readonly openIssues: ReadonlyArray<{ readonly title: string; readonly severity: IssueSeverity }>;
 }
 
-/** Each PR's latest finished review (see `finishedReview`), superseded since or not. */
+/**
+ * Each PR's latest finished review (see `finishedReview`), superseded since or
+ * not; with `perspectives`, only a review in the PR's perspective counts.
+ */
 export function latestFinishedReviews(
   db: Db,
   prIds: readonly string[],
+  perspectives?: ReadonlyMap<string, WalkthroughMode>,
 ): Map<string, FinishedReview> {
   if (prIds.length === 0) return new Map();
   const rows = db
@@ -65,7 +74,11 @@ export function latestFinishedReviews(
     .orderBy(desc(walkthroughs.generatedAt))
     .all();
   const latest = new Map<string, (typeof rows)[number]>();
-  for (const row of rows) if (!latest.has(row.prId)) latest.set(row.prId, row);
+  for (const row of rows) {
+    const perspective = perspectives?.get(row.prId);
+    if (perspective !== undefined && row.mode !== perspective) continue;
+    if (!latest.has(row.prId)) latest.set(row.prId, row);
+  }
 
   const ids = [...latest.values()].map((row) => row.id);
   const issues =

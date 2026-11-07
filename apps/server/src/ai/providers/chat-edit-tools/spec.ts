@@ -12,6 +12,7 @@ import {
 } from "@revv/shared";
 import { z } from "zod";
 import type { Db } from "../../../db";
+import type { ArtifactJudge } from "../../jev/artifact-quality";
 import {
   PLAIN_TEXT_FIELD,
   PROSE_VOICE_CONTRACT,
@@ -47,6 +48,8 @@ export interface ChatWalkthroughEditContext {
   readonly publishEdit: (walkthroughId: string, events: readonly WalkthroughStreamEvent[]) => void;
   /** After the commit, for edits to `comment_threads` / `thread_messages`. */
   readonly broadcastThreadEvent: (msg: ThreadEventMessage) => void;
+  /** The artifact craft bar generation holds blocks to (invariant 4). */
+  readonly judgeArtifact: ArtifactJudge;
 }
 
 export type ChatEditToolResult = McpToolResult;

@@ -2,6 +2,7 @@
 // the System One state budget, with named fields rather than a prose blob so
 // questions can reference nested paths (`pr.title`, `issues.<id>.description`).
 
+import type { IssueSeverity } from "@revv/shared";
 import type { JsonValue } from "@typesafe-ai/sdk";
 import type { JevState } from "../../services/Jev";
 import { truncatePatchToChars } from "../../services/patch-truncate";
@@ -96,7 +97,7 @@ export function buildJobStartState({ pr, files }: JobStartStateInput): JevState 
 export interface IssueRelevanceInput {
   readonly pr: PrLike;
   readonly issue: {
-    readonly severity: string;
+    readonly severity: IssueSeverity;
     readonly title: string;
     readonly description: string;
     readonly filePath: string | null;

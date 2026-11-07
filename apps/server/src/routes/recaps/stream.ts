@@ -1,12 +1,12 @@
 // A reconnect replays the current `lede`, each entry and theme summary from
 // the DB, then attaches to live events while the job is still running.
 
-import type { ProjectRecap, ProjectRecapStatus, RecapStreamEvent } from "@revv/shared";
+import type { ProjectRecap, RecapStreamEvent } from "@revv/shared";
 import { Effect } from "effect";
-import { AppRuntime } from "../../runtime";
+import { httpErrorOf } from "../../domain/errors";
 import { ProjectRecapService } from "../../services/recaps/ProjectRecap";
-import { ProjectRecapJobs } from "../../services/recaps/ProjectRecapJobs";
-import { openSse, type SseChannel } from "../sse";
+import { ProjectRecapJobs, recapTerminalEvent } from "../../services/recaps/ProjectRecapJobs";
+import { openSse, runStream, type SseChannel } from "../sse";
 
 function emitSnapshot(channel: SseChannel<RecapStreamEvent>, row: ProjectRecap): void {
   if (row.lede) {
@@ -20,113 +20,77 @@ function emitSnapshot(channel: SseChannel<RecapStreamEvent>, row: ProjectRecap):
   }
 }
 
-export function recapStreamHandler(ctx: { params: { id: string } }): Response {
-  const { response, channel } = openSse<RecapStreamEvent>();
+const endsStream = (event: RecapStreamEvent): boolean =>
+  event.type === "done" ||
+  event.type === "stopped" ||
+  event.type === "error" ||
+  event.type === "restarted";
 
-  void (async () => {
-    try {
-      const row = await AppRuntime.runPromise(
-        Effect.flatMap(ProjectRecapService, (s) => s.getById(ctx.params.id)),
-      );
+/** A finished row: a complete one replays its content first. */
+function replayFinished(
+  channel: SseChannel<RecapStreamEvent>,
+  row: ProjectRecap,
+  end: RecapStreamEvent,
+): void {
+  if (end.type === "done") {
+    emitSnapshot(channel, row);
+    channel.send(end);
+    channel.done();
+    return;
+  }
+  channel.send(end);
+  channel.close();
+}
 
-      const status = row.status as ProjectRecapStatus;
+export function recapStreamHandler(ctx: { params: { id: string } }): Promise<Response> {
+  const recapId = ctx.params.id;
+  return runStream(
+    Effect.gen(function* () {
+      const recaps = yield* ProjectRecapService;
+      const jobs = yield* ProjectRecapJobs;
+      const row = yield* recaps.getById(recapId);
+      const { response, channel } = openSse<RecapStreamEvent>();
 
-      if (status === "complete") {
-        emitSnapshot(channel, row);
-        channel.send({ type: "done", data: { recapId: row.id } });
-        channel.done();
-        return;
+      const finished = recapTerminalEvent(row);
+      if (finished) {
+        replayFinished(channel, row, finished);
+        return response;
       }
 
-      if (status === "stopped") {
-        channel.send({ type: "stopped", data: { recapId: row.id } });
-        channel.close();
-        return;
-      }
+      yield* Effect.gen(function* () {
+        // The budgeted resume when the run writing this row died.
+        yield* jobs.attach(recapId);
 
-      if (status === "error") {
-        channel.send({
-          type: "error",
-          data: {
-            code: "RecapGenerationError",
-            message: row.errorMessage ?? "Recap generation failed",
-          },
+        // Subscribed in buffered mode before the snapshot read, so nothing
+        // committed in between is missed.
+        const sub = yield* jobs.subscribe(recapId, (event) => {
+          channel.send(event);
+          if (endsStream(event)) channel.close();
         });
-        channel.close();
-        return;
-      }
 
-      if (status === "superseded") {
-        channel.send({
-          type: "error",
-          data: { code: "Superseded", message: "This recap has been superseded." },
-        });
-        channel.close();
-        return;
-      }
+        if (!sub.found) {
+          // No live run: it finished, or its resume was refused.
+          const now = yield* recaps.getById(recapId);
+          const end = recapTerminalEvent(now);
+          if (end) replayFinished(channel, now, end);
+          else channel.close();
+          return;
+        }
 
-      // Live: generating. Make sure a run is live — the budgeted resume when
-      // the one writing this row died.
-      await AppRuntime.runPromise(Effect.flatMap(ProjectRecapJobs, (jobs) => jobs.attach(row.id)));
-
-      // Subscribe in buffered mode BEFORE reading the DB snapshot.
-      const sub = await AppRuntime.runPromise(
-        Effect.flatMap(ProjectRecapJobs, (jobs) =>
-          jobs.subscribe(row.id, (event) => {
-            channel.send(event);
-            if (
-              event.type === "done" ||
-              event.type === "stopped" ||
-              event.type === "error" ||
-              event.type === "restarted"
-            ) {
-              channel.close();
-            }
+        channel.onClose(sub.unsubscribe);
+        // Buffered events go out in arrival order before the snapshot, which
+        // is re-read so writes committed since the first read are in it.
+        sub.flush();
+        emitSnapshot(channel, yield* recaps.getById(recapId));
+      }).pipe(
+        Effect.catch((err) =>
+          Effect.sync(() => {
+            const { code, message, details } = httpErrorOf(err);
+            channel.fail({ ...details, code, message });
           }),
         ),
       );
-
-      if (!sub.found) {
-        // No live run: it finished, or its resume was refused.
-        const finalRow = await AppRuntime.runPromise(
-          Effect.flatMap(ProjectRecapService, (s) => s.getById(ctx.params.id)),
-        );
-        if (finalRow.status === "complete") {
-          emitSnapshot(channel, finalRow);
-          channel.send({ type: "done", data: { recapId: finalRow.id } });
-        } else if (finalRow.status === "stopped") {
-          channel.send({ type: "stopped", data: { recapId: finalRow.id } });
-        } else if (finalRow.status === "error") {
-          channel.send({
-            type: "error",
-            data: {
-              code: "RecapGenerationError",
-              message: finalRow.errorMessage ?? "Recap generation failed",
-            },
-          });
-        }
-        channel.close();
-        return;
-      }
-
-      channel.onClose(sub.unsubscribe);
-
-      // Flush buffered events (delivered through the subscriber callback in
-      // arrival order) BEFORE reading the snapshot. Then re-read the row so any
-      // writes committed since the first read are reflected in the replay snapshot.
-      sub.flush();
-
-      const snapshot = await AppRuntime.runPromise(
-        Effect.flatMap(ProjectRecapService, (s) => s.getById(ctx.params.id)),
-      ).catch(() => row);
-
-      emitSnapshot(channel, snapshot);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      channel.send({ type: "error", data: { code: "SetupError", message } });
-      channel.close();
-    }
-  })();
-
-  return response;
+      return response;
+    }),
+  );
 }

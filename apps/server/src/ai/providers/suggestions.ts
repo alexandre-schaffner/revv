@@ -8,7 +8,7 @@
 // On any failure we return {@link CHAT_SUGGESTION_FALLBACKS} so the UI always
 // renders sensible defaults instead of going blank.
 
-import { CHAT_SUGGESTION_COUNT, CHAT_SUGGESTION_FALLBACKS } from "@revv/shared";
+import { CHAT_SUGGESTION_COUNT, CHAT_SUGGESTION_FALLBACKS, type IssueSeverity } from "@revv/shared";
 import { Effect } from "effect";
 import { debug, logError } from "../../logger";
 import { DiffCacheService } from "../../services/DiffCache";
@@ -26,7 +26,7 @@ interface SuggestionsWalkthroughContext {
   readonly riskLevel: string;
   readonly sentiment: string | null;
   readonly issues: ReadonlyArray<{
-    readonly severity: string;
+    readonly severity: IssueSeverity;
     readonly title: string;
     readonly description: string;
     readonly filePath: string | null;

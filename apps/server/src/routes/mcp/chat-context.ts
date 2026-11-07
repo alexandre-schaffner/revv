@@ -1,7 +1,9 @@
 import { Effect } from "effect";
+import { artifactJudge } from "../../ai/jev/artifact-quality";
 import type { ChatWalkthroughEditContext } from "../../ai/providers/chat-edit-tools";
 import { CHAT_TOOL_BUNDLE } from "../../ai/providers/chat-mcp-tools";
 import type { Db } from "../../db";
+import { AppRuntime } from "../../runtime";
 import { ChatMcpTokens, type ChatTokenResolved } from "../../services/chat/ChatMcpTokens";
 import { fireAndForgetThreadEventBroadcast, fireAndForgetWalkthroughEdit } from "./publish";
 import { bindTokenMcpRoute } from "./utils";
@@ -17,6 +19,10 @@ function toContext(
       actor: "chat:acp",
       publishEdit: fireAndForgetWalkthroughEdit,
       broadcastThreadEvent: (msg) => fireAndForgetThreadEventBroadcast(resolved.prId, msg),
+      judgeArtifact: artifactJudge(
+        (judgment) => AppRuntime.runPromise(judgment),
+        "mcp-chat-context",
+      ),
     },
     meta: resolved,
   };

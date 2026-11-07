@@ -1,8 +1,8 @@
 // Block content for every tool that writes `walkthrough_blocks`: the
 // generation pipeline and the post-completion edit path accept the same four
 // variants (markdown | code | diff | artifact), check them with the same rules
-// (`prepareBlock`) and write them through `writeBlock`. Only the generation
-// tools hold an artifact to the craft bar between the two (invariant 4).
+// (`prepareBlock`), hold an artifact to the craft bar (`artifactRefusal`) and
+// write them through `writeBlock` (invariant 4).
 
 import type { WalkthroughBlock } from "@revv/shared";
 import { parseHunkHeader } from "@revv/shared";
@@ -11,6 +11,7 @@ import type { z } from "zod";
 import type { Db } from "../../db";
 import { walkthroughBlocks } from "../../db/schema/walkthrough-blocks";
 import { blockId, blockOrder } from "../../services/walkthrough/content";
+import { type ArtifactJudge, renderArtifactRejection } from "../jev/artifact-quality";
 import { prLensDiagramError } from "./prlens-doc";
 import type {
   artifactBlockField,
@@ -85,6 +86,21 @@ export function prepareBlock(
   const contentError = blockContentError(input);
   if (contentError) return { error: contentError };
   return { block };
+}
+
+/**
+ * Why `block` is refused by the artifact craft bar, or null. Awaited before
+ * the write: a block refused after it landed would leave a hole in its
+ * chapter's `step_index` sequence.
+ */
+export async function artifactRefusal(
+  judge: ArtifactJudge,
+  block: BlockContent,
+  chapterTitle: string,
+): Promise<string | null> {
+  if (block.type !== "artifact") return null;
+  const verdict = await judge(block.html, { chapterTitle, annotation: block.annotation });
+  return verdict.reject ? renderArtifactRejection(verdict) : null;
 }
 
 function emptyBlockError(input: BlockVariantInput): string | null {

@@ -12,7 +12,7 @@ import { AvatarCacheLive } from "./github/avatars";
 import { GitHubGateway } from "./github/gateway";
 import { PrMirror, PrMirrorLive } from "./PrMirror";
 import { PullRequestService, PullRequestServiceLive } from "./PullRequest";
-import { PrHeadMoves, PrHeadMovesLive } from "./pr-head-moves";
+import { PrHeadMoves } from "./pr-head-moves";
 import { Realtime } from "./Realtime";
 import { RepositoryServiceLive } from "./Repository";
 import { SecretStore } from "./SecretStore";
@@ -118,17 +118,12 @@ export async function makeHarness(
     deleteSecret: () => Effect.void,
   });
   const fakes = Layer.mergeAll(
-    // A head-move listener records what WalkthroughJobs would supersede.
-    Layer.effect(
-      PrHeadMoves,
-      Effect.gen(function* () {
-        const headMoves = yield* PrHeadMoves;
-        yield* headMoves.listen((prId, exceptHeadSha) =>
-          Effect.sync(() => void recorded.superseded.push({ prId, exceptHeadSha })),
-        );
-        return headMoves;
-      }),
-    ).pipe(Layer.provide(PrHeadMovesLive)),
+    // Records each published head move: what WalkthroughJobs would supersede.
+    Layer.succeed(PrHeadMoves, {
+      publish: (prId: string, exceptHeadSha: string) =>
+        Effect.sync(() => void recorded.superseded.push({ prId, exceptHeadSha })),
+      listen: () => Effect.void,
+    }),
     Layer.succeed(AgentWorktrees, {
       prune: (params: { repoId: string; prNumber: number }) =>
         Effect.sync(() => {

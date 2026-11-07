@@ -403,7 +403,7 @@ export function finishedReview(): SQL {
 }
 
 export interface FindingIdentity {
-  readonly severity: string;
+  readonly severity: IssueSeverity;
   readonly title: string;
   readonly description: string;
   readonly filePath: string | null;

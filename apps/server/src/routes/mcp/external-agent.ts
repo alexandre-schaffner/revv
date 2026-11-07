@@ -1,5 +1,6 @@
 import { EXTERNAL_AGENT_PROVIDER_NAMES } from "@revv/shared";
 import { Effect } from "effect";
+import { artifactJudge } from "../../ai/jev/artifact-quality";
 import {
   EXTERNAL_REVIEW_TOOL_BUNDLE,
   type ExternalReviewToolContext,
@@ -75,6 +76,7 @@ async function resolveContext(
       integrationId: resolved.integrationId,
       publishEdit: fireAndForgetWalkthroughEdit,
       broadcastThreadEvent: (message) => fireAndForgetThreadEventBroadcast(resolved.prId, message),
+      judgeArtifact: artifactJudge((judgment) => AppRuntime.runPromise(judgment), LOG_SCOPE),
       pushReply: (messageId) =>
         AppRuntime.runPromise(Effect.flatMap(SyncService, (sync) => sync.pushReply(messageId))),
       pushStatus: (threadId) =>

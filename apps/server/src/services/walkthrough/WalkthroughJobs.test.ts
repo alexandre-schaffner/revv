@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { ServerEventMessage } from "@revv/shared";
+import { eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { createDb, type Db } from "../../db/index";
 import { walkthroughs } from "../../db/schema";
@@ -59,8 +60,9 @@ function seed(
 /**
  * The orchestrator over a real journal, with GitHub reporting the PR at `head`
  * and the mirror holding it at `stored` (by default the same head). Like the
- * real mirror, the fake publishes a head move on `PrHeadMoves` when the two
- * differ. `trace` records the mirror writes and diff-cache reads, in order.
+ * real mirror, the fake records the head it is handed and publishes a head
+ * move on `PrHeadMoves` when it moved. `trace` records the mirror writes and
+ * diff-cache reads, in order.
  */
 function jobsAt(db: Db, head: string, options: { readonly stored?: string } = {}) {
   const sent: ServerEventMessage[] = [];
@@ -78,7 +80,7 @@ function jobsAt(db: Db, head: string, options: { readonly stored?: string } = {}
     toPr: (_prId: string, msg: ServerEventMessage) => Effect.sync(() => sent.push(msg)),
   } as never);
   const layer = WalkthroughJobsLive.pipe(
-    Layer.provide(
+    Layer.provideMerge(
       Layer.mergeAll(
         Layer.succeed(DbService, { db }),
         WalkthroughServiceLive.pipe(
@@ -104,7 +106,8 @@ function jobsAt(db: Db, head: string, options: { readonly stored?: string } = {}
                   Effect.gen(function* () {
                     trace.push(`mirror ${rows[0]?.headSha}`);
                     const live = rows[0];
-                    if (live && live.headSha !== stored) {
+                    if (live && live.headSha !== context.pr.headSha) {
+                      context.pr = { ...context.pr, headSha: live.headSha };
                       yield* headMoves.publish(live.id, live.headSha);
                     }
                     return { rows, accountIds: new Set() };
@@ -135,10 +138,33 @@ function jobsAt(db: Db, head: string, options: { readonly stored?: string } = {}
       ),
     ),
   );
-  const run = <A, E>(f: (jobs: WalkthroughJobs["Service"]) => Effect.Effect<A, E>) =>
-    Effect.runPromise(Effect.flatMap(WalkthroughJobs, f).pipe(Effect.provide(layer)));
+  const run = <A, E>(
+    f: (jobs: WalkthroughJobs["Service"], headMoves: PrHeadMoves["Service"]) => Effect.Effect<A, E>,
+  ) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* f(yield* WalkthroughJobs, yield* PrHeadMoves);
+      }).pipe(Effect.provide(layer)),
+    );
   return { run, sent, trace };
 }
+
+/** Waits for row `id` to reach `status`: a head-move supersede runs on its own fiber. */
+const untilStatus = (db: Db, id: string, status: string) =>
+  Effect.gen(function* () {
+    const statusOf = () =>
+      db
+        .select({ status: walkthroughs.status })
+        .from(walkthroughs)
+        .where(eq(walkthroughs.id, id))
+        .get()?.status;
+    while (statusOf() !== status) yield* Effect.sleep(1);
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: "2 seconds",
+      orElse: () => Effect.die(new Error(`${id} never became ${status}`)),
+    }),
+  );
 
 const rowsOf = (db: Db) =>
   db.select({ id: walkthroughs.id, status: walkthroughs.status }).from(walkthroughs).all();
@@ -187,9 +213,10 @@ describe("a request", () => {
 });
 
 describe("a request that finds the PR moved past a running review", () => {
-  // The request writes the live head through the mirror, whose head-move
-  // listener supersedes the old head's rows under the PR lock. The request
-  // must not hold that lock yet, or the two wait on each other forever.
+  // The request writes the live head through the mirror while it holds the PR
+  // lock; the head-move listener supersedes under that lock too. The listener
+  // runs on its own fiber, so it waits for the request instead of the two
+  // waiting on each other forever.
   it("supersedes the old head's row through the head-move listener, and completes", async () => {
     const db = createDb(":memory:");
     seed(db, { id: "wt-old", status: "generating", head: "head-1" });
@@ -202,6 +229,7 @@ describe("a request that finds the PR moved past a running review", () => {
           duration: "2 seconds",
           orElse: () => Effect.die(new Error("startJob deadlocked on the PR lock")),
         }),
+        Effect.tap(() => untilStatus(db, "wt-old", "superseded")),
       ),
     );
 
@@ -210,6 +238,28 @@ describe("a request that finds the PR moved past a running review", () => {
     expect(endOf(db)).toEqual([
       { status: "superseded", endReason: "superseded" },
       { status: "error", endReason: null },
+    ]);
+  });
+});
+
+describe("a head move heard late", () => {
+  // Listeners run off the publisher, so a move's supersede can land after the
+  // PR moved again and a request created the newer head's row.
+  it("spares the head the PR holds now, not the one published", async () => {
+    const db = createDb(":memory:");
+    seed(db, { id: "wt-1", status: "generating", head: "head-1" });
+    seed(db, { id: "wt-3", status: "error", head: "head-3" });
+    const { run } = jobsAt(db, "head-3");
+
+    await run((_jobs, headMoves) =>
+      headMoves
+        .publish(PR.id, "head-2")
+        .pipe(Effect.tap(() => untilStatus(db, "wt-1", "superseded"))),
+    );
+
+    expect(rowsOf(db)).toEqual([
+      { id: "wt-1", status: "superseded" },
+      { id: "wt-3", status: "error" },
     ]);
   });
 });

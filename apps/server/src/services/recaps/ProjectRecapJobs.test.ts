@@ -134,3 +134,38 @@ describe("ProjectRecapJobs request", () => {
     expect(db.select().from(projectRecaps).all()).toHaveLength(0);
   });
 });
+
+describe("ProjectRecapJobs attach", () => {
+  // The stream reads a row `generating`, then attaches: a run that settled in
+  // between must not get a second run, a spent attempt or a false error.
+  it("leaves a recap whose run already finished alone", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+    db.insert(projectRecaps)
+      .values({
+        id: "recap-1",
+        repositoryId: REPO_ID,
+        period: "daily",
+        periodStart: "2026-11-01T00:00:00.000Z",
+        periodEnd: "2026-11-02T00:00:00.000Z",
+        status: "complete",
+        generatedAt: "2026-11-01T00:00:00.000Z",
+      })
+      .run();
+    const { layer, broadcasts } = recapJobs(db);
+
+    await Effect.runPromise(
+      Effect.flatMap(ProjectRecapJobs, (jobs) => jobs.attach("recap-1")).pipe(
+        Effect.provide(layer),
+      ),
+    );
+
+    expect(
+      db
+        .select({ status: projectRecaps.status, attempts: projectRecaps.resumeAttempts })
+        .from(projectRecaps)
+        .all(),
+    ).toEqual([{ status: "complete", attempts: 0 }]);
+    expect(broadcasts).toEqual([]);
+  });
+});
