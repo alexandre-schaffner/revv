@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Effect } from "effect";
 import { createDb, type Db } from "../db";
-import { CloneInProgressError, HeadShaMismatchError } from "../domain/errors";
+import { GitHubNetworkError, HeadShaMismatchError } from "../domain/errors";
 import { DbService } from "./Db";
 import { WalkthroughServiceLive } from "./Walkthrough";
 import {
@@ -164,6 +164,7 @@ describe("requestWalkthroughAtHead", () => {
       {
         prId: "pr-1",
         trigger: "external_agent",
+        replace: "finished",
         mode: "reviewer",
         generationMode: "incremental",
         expectedHeadSha: NEW_HEAD,
@@ -266,7 +267,8 @@ describe("requestWalkthroughAtHead", () => {
 
   it("names a failure an agent can act on", async () => {
     const db = seededDb();
-    const startJob: StartJob = () => Effect.fail(new CloneInProgressError({ repoId: "repo-1" }));
+    const startJob: StartJob = () =>
+      Effect.fail(new GitHubNetworkError({ cause: new Error("getaddrinfo ENOTFOUND") }));
 
     // As the MCP route runs it: the runtime's own message for a tagged error
     // without one is "An error has occurred".
@@ -276,8 +278,6 @@ describe("requestWalkthroughAtHead", () => {
       ),
     );
 
-    await expect(failure).rejects.toThrow(
-      "Revv is still cloning this repository. Retry in a minute.",
-    );
+    await expect(failure).rejects.toThrow("Revv could not reach GitHub. Retry in a minute.");
   });
 });

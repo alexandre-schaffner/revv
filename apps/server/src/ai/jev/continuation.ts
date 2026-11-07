@@ -40,15 +40,10 @@ const FINISH_CRITERIA = {
     "The run looks stuck rather than slow: another turn would repeat what the last one did.",
 } as const;
 
-export interface AdjudicateInput extends ContinuationInput {
-  readonly enabled: boolean;
-}
-
 /** Decides whether to spend the next auto-continuation. Asymmetric: stops only on "no progress AND unlikely to finish", both above the confidence floor; every other answer or failure mode is `proceed`. */
 export function adjudicateContinuation(
-  input: AdjudicateInput,
+  input: ContinuationInput,
 ): Effect.Effect<ContinuationVerdict, never, JevService> {
-  if (!input.enabled) return Effect.succeed(PROCEED);
   return Effect.gen(function* () {
     const jev = yield* JevService;
     const result = yield* optionalJev(
@@ -109,11 +104,9 @@ const FAILURE_CRITERIA = {
 export const FAILURE_CLASSIFY_TIMEOUT_MS = 5_000;
 
 /** Guesses why a run failed, for the user-facing message. Strictly cosmetic: changes a string, never a status. Returns `null` when it can't help. */
-export function classifyFailure(input: {
-  readonly enabled: boolean;
-  readonly state: ContinuationInput;
-}): Effect.Effect<string | null, never, JevService> {
-  if (!input.enabled) return Effect.succeed(null);
+export function classifyFailure(
+  state: ContinuationInput,
+): Effect.Effect<string | null, never, JevService> {
   return Effect.gen(function* () {
     const jev = yield* JevService;
     const result = yield* optionalJev(
@@ -121,7 +114,7 @@ export function classifyFailure(input: {
       jev.ask({
         label: "continuation",
         timeoutMs: FAILURE_CLASSIFY_TIMEOUT_MS,
-        state: buildContinuationState(input.state),
+        state: buildContinuationState(state),
         questions: {
           cause: {
             type: "choice",

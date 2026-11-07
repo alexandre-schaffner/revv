@@ -45,7 +45,7 @@ import {
   loadContentRows,
 } from "./walkthrough/content";
 import { deriveRoundFocusTitle } from "./walkthrough/round-title";
-import type { GenerationProviderConfig } from "./walkthrough-cache-format";
+import type { GeneratedBy, GenerationProviderConfig } from "./walkthrough-cache-format";
 import { loadWalkthroughLeads } from "./walkthrough-leads";
 
 function rowToWalkthrough(
@@ -127,65 +127,45 @@ export class WalkthroughService extends Context.Service<
   WalkthroughService,
   {
     /**
-     * The row a generation job writes into, decided by the active
-     * (non-superseded) row at `(prId, prHeadSha, mode, generationMode)`:
-     *
-     *   • no row              → insert a fresh row.
-     *   • row in 'generating' → return its id (the in-flight job owns it, so
-     *                            a concurrent startJob is idempotent).
-     *   • row in 'complete'   → return its id unless `forceNew`. A fresh
-     *                            round keeps the old row as superseded
-     *                            history and inserts a new row at the same SHA.
-     *   • row in 'error'      → supersede it and insert a fresh row. The
-     *                            row is terminal and has no live fiber.
-     *
-     * Superseded rows stay as history; the active uniqueness index excludes
-     * them. One transaction, so a concurrent startJob can't race it.
+     * Insert a fresh `generating` row at `(prId, prHeadSha, mode,
+     * generationMode)` and open its review round. A row already active at
+     * that key is superseded by it in the same transaction, with
+     * `supersededBy` pointing at the new row: the orchestrator joins or
+     * relaunches a live one before it ever asks for a new row. The model,
+     * provider config and risk tier come later, from the launch it records
+     * or the review it imports.
      */
-    readonly createPartial: (params: {
-      id?: string;
+    readonly createRow: (params: {
       reviewSessionId: string;
       prId: string;
-      modelUsed: string;
       prHeadSha: string;
-      mode?: WalkthroughMode;
+      mode: WalkthroughMode;
+      generationMode: WalkthroughGenerationMode;
+      parentWalkthroughId: string | null;
+      baseHeadSha: string | null;
       /**
-       * The PR's commits, oldest first, captured from GitHub at job start.
-       * The agent reads them through the `get_commit_history` MCP tool for
-       * the "How we got here" chapter; a row without them reads as an empty
-       * history and takes the single-commit path.
+       * The PR's commits as `github.prs.commits` returns them, newest first.
+       * The agent reads them through `get_commit_history` for the "How we
+       * got here" chapter; a row without them reads as an empty history.
        */
       prCommits?: readonly PrCommit[];
-      /**
-       * GitHub identity of the account that triggered the job. Travels with
-       * the snapshot to the remote cache.
-       */
-      generatedBy?: {
-        readonly githubUserId: number;
-        readonly githubLogin: string;
-        readonly displayName: string | null;
-        readonly avatarContent: string | null;
-      };
-      /**
-       * The AI provider config at job start. Pairs with `modelUsed` and
-       * survives a mid-job settings change.
-       */
-      providerConfig?: GenerationProviderConfig;
-      generationMode?: WalkthroughGenerationMode;
-      parentWalkthroughId?: string | null;
-      baseHeadSha?: string | null;
-      forceNew?: boolean;
-      /**
-       * Orchestrator-assigned risk tier (invariant 2's carve-out). Passed at
-       * insert, not a follow-up UPDATE, so no kill-9 window leaves the row
-       * without it. Omitted means the risk pass is off/unavailable; row
-       * keeps the `'low'` default and the agent judges the tier itself.
-       */
-      risk?: { readonly level: RiskLevel; readonly confidence: number };
+      /** Who the review is attributed to. Travels with the snapshot to the team cache. */
+      generatedBy?: GeneratedBy | null;
       stackContext?: WalkthroughStackSnapshot | null;
       diffFingerprint?: DiffFingerprint | null;
-      launchPlan?: WalkthroughLaunchPlan | null;
     }) => Effect.Effect<string, DbError, DbService>;
+
+    /** The row active at `(prId, headSha, mode, generationMode)`, if any. */
+    readonly activeAt: (
+      prId: string,
+      headSha: string,
+      mode: WalkthroughMode,
+      generationMode: WalkthroughGenerationMode,
+    ) => Effect.Effect<
+      { readonly id: string; readonly status: "generating" | "complete" | "error" } | null,
+      DbError,
+      DbService
+    >;
 
     readonly getStackInputs: (walkthroughId: string) => Effect.Effect<
       {
@@ -236,16 +216,23 @@ export class WalkthroughService extends Context.Service<
      */
     readonly revive: (walkthroughId: string) => Effect.Effect<boolean, DbError, DbService>;
 
-    /** Record the launch a row's runs use, and the model and provider config it shows. */
+    /**
+     * Record the launch a row's runs use, and the model and provider config
+     * it shows. With `risk`, the orchestrator-assigned tier (invariant 2's
+     * carve-out), written in the same statement so no run starts without it.
+     */
     readonly recordLaunch: (
       walkthroughId: string,
       plan: WalkthroughLaunchPlan,
       providerConfig: GenerationProviderConfig,
+      risk?: { readonly level: RiskLevel; readonly confidence: number } | null,
     ) => Effect.Effect<void, DbError, DbService>;
 
     /**
      * Supersede every active walkthrough for a PR, leaving `supersededBy`
-     * NULL. Callers go through {@link WalkthroughJobs.supersedeForPr}.
+     * NULL: the row that replaces them doesn't exist yet (a head move retires
+     * them before anyone asks for a review of the new head). Callers go
+     * through {@link WalkthroughJobs.supersedeForPr}.
      *
      * `exceptHeadSha` spares rows at that head, so a walkthrough already
      * started at a just-detected new head isn't superseded by the poll that
@@ -299,9 +286,8 @@ export class WalkthroughService extends Context.Service<
      * The PR's newest resumable walkthrough, for the manual-resume endpoint.
      *
      * Resumable = `status` is `'generating'` or `'error'`. The error case is
-     * a user-driven retry: the orchestrator revives the row to `generating`
-     * and resets the retry counter before relaunching, so the partial content
-     * is preserved instead of getting recycled by `createPartial`.
+     * a user-driven retry: the orchestrator revives the row to `generating`,
+     * resetting its retry counter and keeping its content, then relaunches it.
      */
     readonly findResumable: (
       prId: string,
@@ -463,113 +449,102 @@ function supersedeRows(tx: Db | Tx, ids: readonly string[]): void {
 }
 
 export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
-  createPartial: (params) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const newId = params.id ?? crypto.randomUUID();
-      const generatedAt = new Date().toISOString();
-      const mode = params.mode ?? "reviewer";
-      const generationMode = params.generationMode ?? "full";
+  createRow: (params) =>
+    tryDb("create walkthrough", (db) =>
+      db.transaction((tx): string => {
+        const id = crypto.randomUUID();
+        const generatedAt = new Date().toISOString();
+        const replaced = tx
+          .select({ id: walkthroughs.id })
+          .from(walkthroughs)
+          .where(
+            and(
+              eq(walkthroughs.pullRequestId, params.prId),
+              eq(walkthroughs.prHeadSha, params.prHeadSha),
+              eq(walkthroughs.mode, params.mode),
+              eq(walkthroughs.generationMode, params.generationMode),
+              ne(walkthroughs.status, "superseded"),
+            ),
+          )
+          .all()
+          .map((r) => r.id);
+        supersedeRows(tx, replaced);
 
-      const result = yield* dbTry("create walkthrough", () =>
-        db.transaction((tx): { id: string } => {
-          let supersededExistingId: string | null = null;
-          const existing = tx
-            .select({
-              id: walkthroughs.id,
-              status: walkthroughs.status,
-            })
-            .from(walkthroughs)
-            .where(
-              and(
-                eq(walkthroughs.pullRequestId, params.prId),
-                eq(walkthroughs.prHeadSha, params.prHeadSha),
-                eq(walkthroughs.mode, mode),
-                eq(walkthroughs.generationMode, generationMode),
-                ne(walkthroughs.status, "superseded"),
-              ),
-            )
-            .get();
-
-          if (existing) {
-            if (existing.status === "generating") {
-              // startJob's idempotency check catches this upstream; reaching
-              // it here means a race.
-              return { id: existing.id };
-            }
-            if (existing.status === "complete" && !params.forceNew) {
-              return { id: existing.id };
-            }
-            if (existing.status === "error" || existing.status === "complete") {
-              supersedeRows(tx, [existing.id]);
-              supersededExistingId = existing.id;
-            }
-          }
-
-          tx.insert(walkthroughs)
-            .values({
-              id: newId,
-              reviewSessionId: params.reviewSessionId,
-              pullRequestId: params.prId,
-              summary: "",
-              mode,
-              riskLevel: params.risk?.level ?? "low",
-              riskConfidence: params.risk?.confidence ?? null,
-              sentiment: null,
-              status: "generating",
-              lastCompletedPhase: "none",
-              generatedAt,
-              modelUsed: params.modelUsed,
-              tokenUsage: "{}",
-              prHeadSha: params.prHeadSha,
-              generationMode,
-              parentWalkthroughId: params.parentWalkthroughId ?? null,
-              baseHeadSha: params.baseHeadSha ?? null,
-              resumeAttempts: 0,
-              prCommits: params.prCommits ? JSON.stringify(params.prCommits) : null,
-              stackContext: params.stackContext ?? null,
-              diffFingerprint: params.diffFingerprint ?? null,
-              generatedByGithubUserId: params.generatedBy?.githubUserId ?? null,
-              generatedByGithubLogin: params.generatedBy?.githubLogin ?? null,
-              generatedByDisplayName: params.generatedBy?.displayName ?? null,
-              generatedByAvatarContent: params.generatedBy?.avatarContent ?? null,
-              providerConfig: params.providerConfig ? JSON.stringify(params.providerConfig) : null,
-              launchPlan: params.launchPlan ?? null,
-            })
+        tx.insert(walkthroughs)
+          .values({
+            id,
+            reviewSessionId: params.reviewSessionId,
+            pullRequestId: params.prId,
+            summary: "",
+            mode: params.mode,
+            sentiment: null,
+            status: "generating",
+            lastCompletedPhase: "none",
+            generatedAt,
+            modelUsed: "",
+            tokenUsage: "{}",
+            prHeadSha: params.prHeadSha,
+            generationMode: params.generationMode,
+            parentWalkthroughId: params.parentWalkthroughId,
+            baseHeadSha: params.baseHeadSha,
+            resumeAttempts: 0,
+            prCommits: params.prCommits ? JSON.stringify(params.prCommits) : null,
+            stackContext: params.stackContext ?? null,
+            diffFingerprint: params.diffFingerprint ?? null,
+            generatedByGithubUserId: params.generatedBy?.githubUserId ?? null,
+            generatedByGithubLogin: params.generatedBy?.githubLogin ?? null,
+            generatedByDisplayName: params.generatedBy?.displayName ?? null,
+            generatedByAvatarContent: params.generatedBy?.avatarContent ?? null,
+          })
+          .run();
+        if (replaced.length > 0) {
+          tx.update(walkthroughs)
+            .set({ supersededBy: id })
+            .where(inArray(walkthroughs.id, replaced))
             .run();
-          if (supersededExistingId) {
-            tx.update(walkthroughs)
-              .set({ supersededBy: newId })
-              .where(eq(walkthroughs.id, supersededExistingId))
-              .run();
-          }
-          const latestRound = tx
-            .select({ roundNumber: reviewRounds.roundNumber })
-            .from(reviewRounds)
-            .where(eq(reviewRounds.pullRequestId, params.prId))
-            .orderBy(desc(reviewRounds.roundNumber))
-            .get();
-          tx.insert(reviewRounds)
-            .values({
-              id: crypto.randomUUID(),
-              pullRequestId: params.prId,
-              reviewSessionId: params.reviewSessionId,
-              walkthroughId: newId,
-              previousWalkthroughId: params.parentWalkthroughId ?? null,
-              roundNumber: (latestRound?.roundNumber ?? 0) + 1,
-              kind: generationMode,
-              visibility: "visible",
-              status: "generating",
-              fromSha: params.baseHeadSha ?? null,
-              toSha: params.prHeadSha,
-              createdAt: generatedAt,
-            })
-            .run();
-          return { id: newId };
-        }),
-      );
+        }
+        const latestRound = tx
+          .select({ roundNumber: reviewRounds.roundNumber })
+          .from(reviewRounds)
+          .where(eq(reviewRounds.pullRequestId, params.prId))
+          .orderBy(desc(reviewRounds.roundNumber))
+          .get();
+        tx.insert(reviewRounds)
+          .values({
+            id: crypto.randomUUID(),
+            pullRequestId: params.prId,
+            reviewSessionId: params.reviewSessionId,
+            walkthroughId: id,
+            previousWalkthroughId: params.parentWalkthroughId,
+            roundNumber: (latestRound?.roundNumber ?? 0) + 1,
+            kind: params.generationMode,
+            visibility: "visible",
+            status: "generating",
+            fromSha: params.baseHeadSha,
+            toSha: params.prHeadSha,
+            createdAt: generatedAt,
+          })
+          .run();
+        return id;
+      }),
+    ),
 
-      return result.id;
+  activeAt: (prId, headSha, mode, generationMode) =>
+    tryDb("activeAt", (db) => {
+      const row = db
+        .select({ id: walkthroughs.id, status: walkthroughs.status })
+        .from(walkthroughs)
+        .where(
+          and(
+            eq(walkthroughs.pullRequestId, prId),
+            eq(walkthroughs.prHeadSha, headSha),
+            eq(walkthroughs.mode, mode),
+            eq(walkthroughs.generationMode, generationMode),
+            ne(walkthroughs.status, "superseded"),
+          ),
+        )
+        .get();
+      return row && row.status !== "superseded" ? { id: row.id, status: row.status } : null;
     }),
 
   finish: (walkthroughId, status, options) =>
@@ -618,13 +593,14 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       }),
     ),
 
-  recordLaunch: (walkthroughId, plan, providerConfig) =>
+  recordLaunch: (walkthroughId, plan, providerConfig, risk) =>
     tryDb("recordLaunch", (db) => {
       db.update(walkthroughs)
         .set({
           launchPlan: plan,
           modelUsed: plan.model,
           providerConfig: JSON.stringify(providerConfig),
+          ...(risk ? { riskLevel: risk.level, riskConfidence: risk.confidence } : {}),
         })
         .where(eq(walkthroughs.id, walkthroughId))
         .run();

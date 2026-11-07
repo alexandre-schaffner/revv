@@ -135,9 +135,6 @@ describe("walkthrough risk hydration", () => {
   });
 });
 
-// A resume must carry the row's generationMode: `createPartial` dedups on
-// (prId, headSha, mode, generationMode), so a resume defaulting to "full"
-// misses the incremental row and inserts a duplicate id.
 describe("resume incremental walkthrough", () => {
   function seedIncrementalGenerating(db: Db): void {
     insertWalkthroughs(db, {
@@ -220,37 +217,9 @@ describe("resume incremental walkthrough", () => {
     expect(partial?.id).toBe("wt-inc");
     expect(partial?.generationMode).toBe("incremental");
   });
-
-  it("createPartial reuses the existing row on a same-mode resume (no duplicate-id insert)", async () => {
-    const db = createDb(":memory:");
-    seedIncrementalGenerating(db);
-
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        return yield* (yield* WalkthroughService).createPartial({
-          id: "wt-inc",
-          reviewSessionId: "session-1",
-          prId: "pr-1",
-          modelUsed: "test-model",
-          prHeadSha: "head-2",
-          mode: "author",
-          generationMode: "incremental",
-          parentWalkthroughId: "wt-parent",
-          baseHeadSha: "head-1",
-        });
-      }).pipe(
-        Effect.provide(WalkthroughServiceLive),
-        Effect.provide(Layer.succeed(DbService, { db })),
-      ),
-    );
-
-    expect(result).toBe("wt-inc");
-    const count = db.select({ id: walkthroughs.id }).from(walkthroughs).all().length;
-    expect(count).toBe(1);
-  });
 });
 
-describe("regenerate after a stopped generation", () => {
+describe("a new row at a head", () => {
   // What Stop leaves behind: an `error` row the user cancelled, at the current head.
   function seedStoppedRun(db: Db): void {
     insertWalkthroughs(db, {
@@ -263,35 +232,35 @@ describe("regenerate after a stopped generation", () => {
     });
   }
 
-  it("starts a fresh row and retires the stopped one, even when the sweep spares the head", async () => {
+  it("retires the row it replaces at that head and points it at the new one", async () => {
     const db = createDb(":memory:");
     seedStoppedRun(db);
 
     const newId = await runWalkthrough(db, (service) =>
-      Effect.gen(function* () {
-        // As WalkthroughJobs does before a user-initiated run at a pinned head.
-        yield* service.supersedeAllForPr("pr-1", "head-1", "author");
-        return yield* service.createPartial({
-          reviewSessionId: "session-1",
-          prId: "pr-1",
-          modelUsed: "test-model",
-          prHeadSha: "head-1",
-          mode: "author",
-          generationMode: "full",
-          forceNew: true,
-        });
+      service.createRow({
+        reviewSessionId: "session-1",
+        prId: "pr-1",
+        prHeadSha: "head-1",
+        mode: "author",
+        generationMode: "full",
+        parentWalkthroughId: null,
+        baseHeadSha: null,
       }),
     );
 
     expect(newId).not.toBe("wt-stopped");
     const rows = db
-      .select({ id: walkthroughs.id, status: walkthroughs.status })
+      .select({
+        id: walkthroughs.id,
+        status: walkthroughs.status,
+        supersededBy: walkthroughs.supersededBy,
+      })
       .from(walkthroughs)
       .all();
     expect(rows).toEqual(
       expect.arrayContaining([
-        { id: "wt-stopped", status: "superseded" },
-        { id: newId, status: "generating" },
+        { id: "wt-stopped", status: "superseded", supersededBy: newId },
+        { id: newId, status: "generating", supersededBy: null },
       ]),
     );
   });

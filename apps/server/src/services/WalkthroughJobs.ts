@@ -4,12 +4,14 @@
 // the MCP token. What is walkthrough-specific lives here and in
 // `walkthrough/`:
 //
-//   • `startJob` decides, under a per-PR lock, whether a request joins the run
-//     already live, retires stale ones, imports a finished review (team cache,
-//     restack carry) or launches a run — waiting for the repository clone when
-//     it is still in progress.
-//   • A run's inputs are planned once (`walkthrough/launch-plan.ts`) and its
-//     launch recorded on the row, so every run of the row launches the same way.
+//   • `startJob` decides, under a per-PR lock, what a request lands on: the
+//     run already live, the row already at the head, or a new row — which
+//     takes over a finished review (restack carry, team cache) when one
+//     exists, and is planned and launched only when none does. `/current`'s
+//     team-cache hydrate is the same decision, import-only.
+//   • A resume — on boot, or the user's — runs an existing row exactly as its
+//     journal records it: its head, its launch plan, its stack. A row whose
+//     head GitHub (as last synced) has moved past is superseded instead.
 //   • A run ends `complete` exactly when the journal passes the completion
 //     check `complete_walkthrough` uses (`walkthrough/completion.ts`).
 //   • `emitEvent` stamps durable events with the row's seq and broadcasts
@@ -21,30 +23,23 @@
 import {
   isWalkthroughLiveEvent,
   REVIEW_MODE,
-  type StartJobTrigger,
+  type RiskLevel,
+  type ServerEventMessage,
   type WalkthroughGenerationMode,
   type WalkthroughMode,
+  type WalkthroughStartTrigger,
   type WalkthroughStreamEvent,
   ZERO_TOKEN_USAGE,
 } from "@revv/shared";
 import { SPAN } from "@revv/shared/telemetry";
-import { eq } from "drizzle-orm";
 import { Cause, Context, Effect, Layer, Option } from "effect";
+import type { JobStartStateInput } from "../ai/jev/state";
 import { withWalkthroughMetrics } from "../ai/providers/walkthrough-metrics";
-import { pullRequests } from "../db/schema/pull-requests";
-import { repositories } from "../db/schema/repositories";
-import { walkthroughs } from "../db/schema/walkthroughs";
 import {
-  type AiError,
   AiGenerationError,
-  type CloneError,
-  type CloneInProgressError,
-  CloneNotReadyError,
   type DbError,
   type GitHubError,
   HeadShaMismatchError,
-  type NotFoundError,
-  type ValidationError,
 } from "../domain/errors";
 import { dbTry } from "../effects/db-try";
 import { withDb } from "../effects/with-db";
@@ -54,11 +49,12 @@ import { withTraceAnchor } from "../observability/span-graft";
 import { AiService } from "./Ai";
 import { CacheService } from "./Cache";
 import { DbService } from "./Db";
+import { DiffCacheService, toGitHubFileShape } from "./DiffCache";
 import { HunkScanService } from "./HunkScan";
 import { JevService } from "./Jev";
 import { makeStartJobMutex } from "./job-mutex";
 import { type AgentRun, makeAgentJobs, type RunOutcome } from "./jobs/agent-jobs";
-import { PrContextService } from "./PrContext";
+import { type PrContextBasic, type PrContextError, PrContextService } from "./PrContext";
 import { Realtime } from "./Realtime";
 import { RemoteWalkthroughCache } from "./RemoteWalkthroughCache";
 import { RepoCloneService } from "./RepoClone";
@@ -68,9 +64,19 @@ import { StackService } from "./stacks/StackService";
 import { WalkthroughService } from "./Walkthrough";
 import { WalkthroughSnapshotImporter } from "./WalkthroughSnapshotImporter";
 import { orchestratorCompletionBlocker } from "./walkthrough/completion";
-import { launchFor, planWalkthroughLaunch, providerConfigFor } from "./walkthrough/launch-plan";
+import { loadWalkthroughRow, type WalkthroughRow } from "./walkthrough/content";
+import {
+  generatedByOf,
+  launchFor,
+  parentFingerprintOf,
+  planLaunch,
+  planNewRow,
+  providerConfigFor,
+  type RestackCarry,
+} from "./walkthrough/launch-plan";
 import {
   CANCELLED,
+  cloneFailure,
   makeWalkthroughLifecycle,
   type WalkthroughFailure,
 } from "./walkthrough/lifecycle";
@@ -84,6 +90,8 @@ import {
   makeWalkthroughRunContext,
   type WalkthroughRunContext,
 } from "./walkthrough/run-context";
+import type { WalkthroughSnapshotV2 } from "./walkthrough-cache-format";
+import type { PromptFile } from "./walkthrough-prompt-files";
 import { exportWalkthroughSnapshot } from "./walkthrough-snapshot";
 
 /** Cap on concurrent walkthrough runs. Additional runs queue on the kernel's semaphore. */
@@ -92,13 +100,25 @@ const MAX_CONCURRENT_JOBS = 5;
 const CLONE_WAIT_MS = 20 * 60 * 1000;
 const CLONE_POLL_MS = 2_000;
 
-const isUserInitiated = (trigger: StartJobTrigger): boolean =>
-  trigger === "user" || trigger === "external_agent" || trigger === "stack_review";
+/**
+ * What a request does with the reviews the PR already has in its perspective:
+ *
+ *   • `none` — joins a live run at the head; a finished (complete or failed)
+ *     row at the head is returned as it is. Automatic triggers: they never
+ *     redo a review the user can see, nor retry one that failed.
+ *   • `finished` — joins a live run at the head; a finished row at the head
+ *     is replaced by a new one, and the other perspective's reviews are
+ *     retired. The user's Generate, an external agent, a stack review.
+ *   • `all` — every review of the PR, live or finished, in both perspectives
+ *     and at every head, is stopped and superseded first. Regenerate.
+ */
+export type ReplacePolicy = "none" | "finished" | "all";
 
 export interface StartJobParams {
   readonly prId: string;
-  readonly trigger: StartJobTrigger;
-  readonly walkthroughId?: string;
+  /** Who asked: telemetry, and `lifecycle:started`. Decides nothing. */
+  readonly trigger: WalkthroughStartTrigger;
+  readonly replace: ReplacePolicy;
   readonly mode?: WalkthroughMode;
   readonly generationMode?: WalkthroughGenerationMode;
   /**
@@ -114,67 +134,72 @@ export interface StartJobParams {
 
 export interface StartJobResult {
   readonly walkthroughId: string;
-  /** An in-flight run (or the row being resumed) was returned; nothing new launched. */
+  /** An existing run or row was returned; nothing new launched. */
   readonly reused: boolean;
 }
+
+export type StartJobError = PrContextError | HeadShaMismatchError | AiGenerationError;
+
+/**
+ * How a user's Resume went: the row runs again (or already was running), the
+ * PR moved past its head and it was superseded, or there was nothing to resume.
+ */
+export type ResumeOutcome = "resumed" | "superseded" | "gone";
+
+export type ResumeError = PrContextError | GitHubError;
 
 const otherWalkthroughMode = (mode: WalkthroughMode): WalkthroughMode =>
   mode === REVIEW_MODE.author ? REVIEW_MODE.reviewer : REVIEW_MODE.author;
 
-export type StartJobError =
-  | AiError
-  | CloneError
-  | CloneInProgressError
-  | CloneNotReadyError
-  | GitHubError
-  | HeadShaMismatchError
-  | NotFoundError
-  | DbError
-  | ValidationError;
-
-/** A run's body failed outright: say why in the user's terms. */
+/** A run's body failed outright, outside every failure it maps itself. */
 function crashFailure(cause: Cause.Cause<unknown>): WalkthroughFailure {
-  const failure = Cause.findErrorOption(cause);
-  if (Option.isNone(failure)) {
-    return { reason: "crashed", message: "Walkthrough generation failed" };
-  }
-  const err = failure.value as { _tag?: string; message?: string; cause?: unknown };
-  const inner = err.cause as { _tag?: string } | undefined;
-  const cloneFailed = inner?._tag === "CloneNotReadyError" || inner?._tag === "CloneError";
+  const error = Cause.findErrorOption(cause);
   return {
-    reason: cloneFailed
-      ? "clone_failed"
-      : err._tag === "AiNotConfiguredError"
-        ? "agent_error"
-        : "crashed",
+    reason: "crashed",
     message:
-      err.message ??
-      (err.cause instanceof Error ? err.cause.message : String(err.cause ?? failure.value)),
+      Option.isSome(error) && error.value instanceof Error && error.value.message
+        ? error.value.message
+        : "Walkthrough generation failed",
   };
+}
+
+const IMPORT_FAILED: WalkthroughFailure = {
+  reason: "crashed",
+  message:
+    "The team's review of this head couldn't be imported. Resume or regenerate to review it.",
+};
+
+/** A finished review a new row can take over instead of running an agent. */
+interface Carry {
+  readonly snapshot: WalkthroughSnapshotV2;
+  readonly source: "remote" | "restack";
+  readonly fromWalkthroughId?: string;
 }
 
 export class WalkthroughJobs extends Context.Service<
   WalkthroughJobs,
   {
     /**
-     * Start (or attach to) a walkthrough run for a PR. Idempotent: the unique
-     * index on (pullRequestId, prHeadSha, mode, generationMode) makes a
-     * concurrent duplicate land on the same row, and a live run is returned.
+     * Review a PR's head: join, return, or create and run the row the
+     * request lands on (see {@link ReplacePolicy}). Concurrent requests for
+     * one PR are serialized, so they land on the same row.
      */
     readonly startJob: (params: StartJobParams) => Effect.Effect<StartJobResult, StartJobError>;
 
     /**
-     * Probe the remote team cache for `(prId, headSha)` and, on a hit,
-     * import it and complete the row without an agent. False on a miss or
-     * any failure (logged, never raised): the `/current` read hydrates a
-     * first page load from the team cache instead of offering Generate.
+     * `/current` found no row at the PR's synced head: when the team cache
+     * holds a review of it, import it into a new row and complete it without
+     * an agent. False on a miss, or on any failure (logged, never raised).
      */
-    readonly tryHydrateFromRemoteCache: (
-      prId: string,
-      headSha: string,
-      repoFullName: string,
-      mode?: WalkthroughMode,
-    ) => Effect.Effect<boolean>;
+    readonly importFromTeamCache: (prId: string, mode: WalkthroughMode) => Effect.Effect<boolean>;
+
+    /**
+     * The user's Resume of a row that died (`generating`) or stopped
+     * (`error`). An errored row is revived first — back to `generating`, a
+     * fresh resume budget, its content kept, its launch re-resolved from the
+     * current settings (the user may have fixed the agent since).
+     */
+    readonly resume: (walkthroughId: string) => Effect.Effect<ResumeOutcome, ResumeError>;
 
     readonly findActiveByPr: (
       prId: string,
@@ -184,21 +209,13 @@ export class WalkthroughJobs extends Context.Service<
     /** The user's Stop: the row ends `error` with end reason `cancelled`, still resumable. */
     readonly cancel: (walkthroughId: string) => Effect.Effect<void>;
 
-    /**
-     * A user's Resume of an `error` row: back to `generating` with a fresh
-     * resume budget and its content kept, the launch re-resolved from the
-     * current settings (the user may have fixed the agent since). No-op when
-     * the row isn't in `error`.
-     */
-    readonly reviveFromError: (walkthroughId: string) => Effect.Effect<void, DbError>;
-
     readonly resumePending: () => Effect.Effect<void>;
 
     /**
      * Stop the PR's runs and supersede its rows (invariant #7): in `mode`, or
      * every perspective. `exceptHeadSha` spares rows already at that head —
      * PollScheduler's "the head moved" sweep must not retire a run the user
-     * started at the new head before the poll saw it. Regenerate passes none.
+     * started at the new head before the poll saw it.
      */
     readonly supersedeForPr: (
       prId: string,
@@ -241,37 +258,44 @@ export const WalkthroughJobsLive = Layer.effect(
     const jevService = yield* JevService;
     const hunkScanService = yield* HunkScanService;
     const cacheService = yield* CacheService;
+    const diffCacheService = yield* DiffCacheService;
     const snapshotImporter = yield* WalkthroughSnapshotImporter;
     const realtime = yield* Realtime;
     const stackService = yield* StackService;
 
-    // Serializes `startJob` per PR, so the check-and-launch is atomic: two
-    // concurrent starts can't both pass the liveness check.
-    const startJobMutex = yield* makeStartJobMutex();
+    // Every decision about a PR's rows — a request, a resume, a hydrate —
+    // runs under its PR's lock, so two of them can't both find the head free.
+    const prLocks = yield* makeStartJobMutex();
+    const underPrLock = <A, E>(prId: string, effect: Effect.Effect<A, E>) =>
+      Effect.flatMap(prLocks.acquire(prId), (lock) => lock.withPermits(1)(effect));
 
     const provideDb = <A, E>(eff: Effect.Effect<A, E, DbService>): Effect.Effect<A, E> =>
       withDb(db, eff);
+    const readRow = (walkthroughId: string) =>
+      dbTry("read walkthrough", () => loadWalkthroughRow(db, walkthroughId));
 
-    const eventTargets = (
+    /** Where a walkthrough's events go: the live run's account, or the PR's owner. */
+    const targetOf = (
       walkthroughId: string,
-    ): Effect.Effect<{ prId: string; accountId: string } | null> =>
+    ): Effect.Effect<{
+      readonly prId: string;
+      readonly send: (msg: ServerEventMessage) => Effect.Effect<void>;
+    } | null> =>
       Effect.gen(function* () {
         const run = yield* jobs.running(walkthroughId);
-        if (run) return { prId: run.context.prId, accountId: run.context.accountId };
-        // No live run: a chat edit on a completed walkthrough (invariant #7's carve-out).
-        return yield* dbTry("walkthrough event targets", () =>
-          db
-            .select({ prId: walkthroughs.pullRequestId, accountId: repositories.accountId })
-            .from(walkthroughs)
-            .innerJoin(pullRequests, eq(pullRequests.id, walkthroughs.pullRequestId))
-            .innerJoin(repositories, eq(repositories.id, pullRequests.repositoryId))
-            .where(eq(walkthroughs.id, walkthroughId))
-            .get(),
-        ).pipe(
-          Effect.map((row) => row ?? null),
+        if (run) {
+          const { prId, accountId } = run.context;
+          return { prId, send: (msg) => realtime.toAccount(accountId, msg) };
+        }
+        // No live run: a settle after the run ended, or a chat edit on a
+        // completed walkthrough (invariant #7's carve-out).
+        const row = yield* readRow(walkthroughId).pipe(
           // Best effort: clients reconcile from the DB (invariant #8).
           Effect.orElseSucceed(() => null),
         );
+        if (!row) return null;
+        const prId = row.pullRequestId;
+        return { prId, send: (msg) => realtime.toPr(prId, msg) };
       });
 
     const emitEvent = (walkthroughId: string, event: WalkthroughStreamEvent): Effect.Effect<void> =>
@@ -279,16 +303,14 @@ export const WalkthroughJobsLive = Layer.effect(
         attributes: { walkthroughId, eventType: event.type },
       })(
         Effect.gen(function* () {
-          const targets = yield* eventTargets(walkthroughId);
-          if (targets === null) {
+          const target = yield* targetOf(walkthroughId);
+          if (target === null) {
             debug("wt-trace", `emitEvent-no-target wt=${walkthroughId} type=${event.type}`);
             return;
           }
+          const { prId, send } = target;
           if (isWalkthroughLiveEvent(event)) {
-            return yield* realtime.toAccount(targets.accountId, {
-              type: "walkthrough:live",
-              data: { prId: targets.prId, walkthroughId, event },
-            });
+            return yield* send({ type: "walkthrough:live", data: { prId, walkthroughId, event } });
           }
           // The seq is bumped in the DB, so it survives kill -9, resumes and
           // chat edits after completion. An event whose seq didn't commit isn't
@@ -302,10 +324,7 @@ export const WalkthroughJobsLive = Layer.effect(
             ),
           );
           if (seq === null) return;
-          yield* realtime.toAccount(targets.accountId, {
-            type: "walkthrough:event",
-            data: { prId: targets.prId, walkthroughId, seq, event },
-          });
+          yield* send({ type: "walkthrough:event", data: { prId, walkthroughId, seq, event } });
         }),
       );
 
@@ -331,33 +350,6 @@ export const WalkthroughJobsLive = Layer.effect(
       }
     };
 
-    // Launched with a resume, so a boot that finds a row still `generating`
-    // runs it again through `startJob` against its own journal.
-    const relaunch = (walkthroughId: string): Effect.Effect<void, StartJobError> =>
-      Effect.gen(function* () {
-        const row = yield* dbTry("walkthrough relaunch read", () =>
-          db
-            .select({
-              prId: walkthroughs.pullRequestId,
-              mode: walkthroughs.mode,
-              generationMode: walkthroughs.generationMode,
-              status: walkthroughs.status,
-            })
-            .from(walkthroughs)
-            .where(eq(walkthroughs.id, walkthroughId))
-            .get(),
-        );
-        if (row?.status !== "generating") return;
-        yield* startJob({
-          prId: row.prId,
-          trigger: "resume",
-          walkthroughId,
-          mode: row.mode,
-          // The row's generationMode keeps `createPartial` on this row.
-          generationMode: row.generationMode === "incremental" ? "incremental" : "full",
-        });
-      });
-
     const jobs = yield* makeAgentJobs<WalkthroughRunContext, WalkthroughFailure>({
       name: "walkthrough-jobs",
       concurrency: MAX_CONCURRENT_JOBS,
@@ -379,7 +371,7 @@ export const WalkthroughJobsLive = Layer.effect(
         reason: "resume_budget",
         message: "Walkthrough failed after repeated retries. Try regenerating.",
       },
-      relaunch,
+      relaunch: (walkthroughId) => resumeRow(walkthroughId, { revive: false }),
     });
 
     /** Waits on a clone in progress; null once it is ready. */
@@ -394,17 +386,14 @@ export const WalkthroughJobsLive = Layer.effect(
         for (let poll = 1; ; poll++) {
           const clone = yield* repoCloneService.getCloneStatus(repoId);
           if (clone.status === "ready") return null;
-          if (clone.status === "error" || Date.now() > deadline) {
+          if (clone.status === "error") {
             return {
               kind: "failed" as const,
-              failure: {
-                reason: "clone_failed" as const,
-                message:
-                  clone.status === "error"
-                    ? `Repository clone failed: ${clone.error ?? "unknown error"} — check Settings`
-                    : "Repository clone is taking too long — check Settings",
-              },
+              failure: cloneFailure({ kind: "failed", error: clone.error }),
             };
+          }
+          if (Date.now() > deadline) {
+            return { kind: "failed" as const, failure: cloneFailure({ kind: "slow" }) };
           }
           // A heartbeat for the client's stall watchdog.
           if (poll % 15 === 0) yield* waiting;
@@ -412,18 +401,85 @@ export const WalkthroughJobsLive = Layer.effect(
         }
       });
 
-    const launchRun = (input: {
-      readonly walkthroughId: string;
-      readonly prId: string;
-      readonly accountId: string;
-      readonly mode: WalkthroughMode;
-      readonly prHeadSha: string;
-      readonly trigger: StartJobTrigger;
-      readonly cloneInProgress: boolean;
-      readonly inputs: WalkthroughRunInputs;
-    }): Effect.Effect<void> =>
+    const findActiveByPr = (
+      prId: string,
+      mode: WalkthroughMode = "reviewer",
+    ): Effect.Effect<{ readonly walkthroughId: string; readonly prHeadSha: string } | null> =>
+      Effect.map(jobs.runs, (runs) => {
+        const run = runs.find((r) => r.context.prId === prId && r.context.mode === mode);
+        return run ? { walkthroughId: run.id, prHeadSha: run.context.prHeadSha } : null;
+      });
+
+    const supersedeForPr = (
+      prId: string,
+      exceptHeadSha?: string,
+      mode?: WalkthroughMode,
+    ): Effect.Effect<void, DbError> =>
       Effect.gen(function* () {
-        const { walkthroughId, inputs } = input;
+        // Stop the runs first, so none writes after its row is superseded.
+        for (const run of yield* jobs.runs) {
+          if (run.context.prId !== prId) continue;
+          if (mode !== undefined && run.context.mode !== mode) continue;
+          if (exceptHeadSha !== undefined && run.context.prHeadSha === exceptHeadSha) continue;
+          yield* jobs.stop(run.id, "superseded");
+        }
+        yield* lifecycle.supersede(prId, exceptHeadSha, mode);
+      });
+
+    /**
+     * Run a `generating` row as its journal records it. The launch is planned
+     * and recorded first if the row has none: `jobStart` (when given) asks the
+     * job-start judgment to size it.
+     */
+    const launchRow = (input: {
+      readonly row: WalkthroughRow;
+      readonly context: PrContextBasic;
+      readonly files: ReadonlyArray<PromptFile>;
+      readonly trigger: WalkthroughStartTrigger;
+      readonly cloneInProgress: boolean;
+      readonly resumed: boolean;
+      readonly jobStart: JobStartStateInput | null;
+    }): Effect.Effect<void, DbError> =>
+      Effect.gen(function* () {
+        const { row, context } = input;
+        const { pr, repo, accountId } = context;
+        const walkthroughId = row.id;
+
+        let plan = row.launchPlan;
+        // A confidence marks the tier as the orchestrator's; without one it is the agent's to judge.
+        let assignedRisk = row.riskConfidence !== null ? (row.riskLevel as RiskLevel) : null;
+        if (plan === null) {
+          const settings = yield* settingsService.getSettings();
+          const planned = yield* planLaunch({
+            prId: pr.id,
+            headSha: row.prHeadSha,
+            state: input.jobStart,
+            settings,
+            agent: yield* settingsService.resolveAgent(),
+          }).pipe(
+            Effect.provideService(JevService, jevService),
+            Effect.provideService(CacheService, cacheService),
+            Effect.provideService(DbService, { db }),
+          );
+          yield* provideDb(
+            walkthroughService.recordLaunch(
+              walkthroughId,
+              planned.plan,
+              providerConfigFor(planned.plan, settings.aiMaxTurns),
+              planned.risk,
+            ),
+          );
+          plan = planned.plan;
+          assignedRisk = planned.risk?.level ?? assignedRisk;
+        }
+        const generationMode: WalkthroughGenerationMode =
+          row.generationMode === "incremental" ? "incremental" : "full";
+        const parentFingerprint = yield* provideDb(
+          parentFingerprintOf(row.stackContext, generationMode, row.parentWalkthroughId).pipe(
+            Effect.provideService(WalkthroughService, walkthroughService),
+          ),
+        );
+
         const services = yield* Effect.context<never>();
         const runSync = Effect.runSyncWith(services);
         const runPromise = Effect.runPromiseWith(services);
@@ -455,36 +511,53 @@ export const WalkthroughJobsLive = Layer.effect(
           type: "lifecycle:started",
           data: {
             walkthroughId,
-            prHeadSha: input.prHeadSha,
-            mode: input.mode,
+            prHeadSha: row.prHeadSha,
+            mode: row.mode,
             trigger: input.trigger,
-            ...(inputs.assignedRisk !== null ? { riskLevel: inputs.assignedRisk } : {}),
-            modelUsed: inputs.plan.model,
+            ...(assignedRisk !== null ? { riskLevel: assignedRisk } : {}),
+            modelUsed: plan.model,
           },
         });
 
+        const inputs: WalkthroughRunInputs = {
+          pr: {
+            id: pr.id,
+            title: pr.title,
+            body: pr.body,
+            sourceBranch: pr.sourceBranch,
+            targetBranch: pr.targetBranch,
+            url: pr.url,
+            externalId: pr.externalId,
+          },
+          repoId: repo.id,
+          repoFullName: repo.fullName,
+          githubHost: repo.githubHost,
+          token: context.client.token,
+          files: input.files,
+          generationMode,
+          parentWalkthroughId: row.parentWalkthroughId,
+          baseHeadSha: row.baseHeadSha,
+          resumed: input.resumed,
+          plan,
+          assignedRisk,
+          stack: row.stackContext,
+          parentFingerprint,
+        };
         yield* jobs.launch({
           id: walkthroughId,
           context: () =>
             makeWalkthroughRunContext({
               db,
               walkthroughId,
-              prId: input.prId,
-              accountId: input.accountId,
-              mode: input.mode,
-              prHeadSha: input.prHeadSha,
+              prId: pr.id,
+              accountId,
+              mode: row.mode,
+              prHeadSha: row.prHeadSha,
               emit: emitNow,
-              broadcastThreadEvent: (msg) =>
-                void runPromise(
-                  input.accountId === ""
-                    ? realtime.toPr(input.prId, msg)
-                    : realtime.toAccount(input.accountId, msg),
-                ),
+              broadcastThreadEvent: (msg) => void runPromise(realtime.toAccount(accountId, msg)),
               runJudgment,
             }),
-          ...(input.cloneInProgress
-            ? { queue: () => awaitClone(inputs.repoId, walkthroughId) }
-            : {}),
+          ...(input.cloneInProgress ? { queue: () => awaitClone(repo.id, walkthroughId) } : {}),
           body: (run) =>
             runWalkthrough(
               {
@@ -507,14 +580,14 @@ export const WalkthroughJobsLive = Layer.effect(
               // their spans under it.
               withTraceAnchor(walkthroughId),
               withWalkthroughMetrics(walkthroughId),
-              Effect.annotateLogs({ walkthroughId, prId: input.prId }),
+              Effect.annotateLogs({ walkthroughId, prId: pr.id }),
               // The forked work's real duration: the walkthrough-gen-duration KPI.
               Effect.withSpan(SPAN.walkthroughGenerate, {
                 attributes: {
                   walkthroughId,
-                  prId: input.prId,
+                  prId: pr.id,
                   trigger: input.trigger,
-                  model: inputs.plan.model,
+                  model: plan.model,
                 },
               }),
               withGitHubOrigin("walkthrough:job"),
@@ -522,205 +595,21 @@ export const WalkthroughJobsLive = Layer.effect(
         });
       });
 
-    const findActiveByPr = (
-      prId: string,
-      mode: WalkthroughMode = "reviewer",
-    ): Effect.Effect<{ readonly walkthroughId: string; readonly prHeadSha: string } | null> =>
-      Effect.map(jobs.runs, (runs) => {
-        const run = runs.find((r) => r.context.prId === prId && r.context.mode === mode);
-        return run ? { walkthroughId: run.id, prHeadSha: run.context.prHeadSha } : null;
-      });
-
-    const supersedeForPr = (
-      prId: string,
-      exceptHeadSha?: string,
-      mode?: WalkthroughMode,
-    ): Effect.Effect<void, DbError> =>
+    /** The finished review a new row at `headSha` can take over, if any. */
+    const findCarry = (input: {
+      readonly restack: RestackCarry | null;
+      readonly repoFullName: string;
+      readonly headSha: string;
+      readonly mode: WalkthroughMode;
+    }): Effect.Effect<Carry | null> =>
       Effect.gen(function* () {
-        // Stop the runs first, so none writes after its row is superseded.
-        for (const run of yield* jobs.runs) {
-          if (run.context.prId !== prId) continue;
-          if (mode !== undefined && run.context.mode !== mode) continue;
-          if (exceptHeadSha !== undefined && run.context.prHeadSha === exceptHeadSha) continue;
-          yield* jobs.stop(run.id, "superseded");
-        }
-        yield* lifecycle.supersede(prId, exceptHeadSha, mode);
-      });
-
-    /** Import a snapshot into the row and complete it, or false to fall through to the agent. */
-    const importReview = (
-      walkthroughId: string,
-      snapshot: Parameters<typeof snapshotImporter.import>[0]["snapshot"],
-      source: "remote" | "restack",
-      afterImport: Effect.Effect<void, DbError> = Effect.void,
-    ): Effect.Effect<boolean, DbError> =>
-      Effect.gen(function* () {
-        const imported = yield* provideDb(
-          snapshotImporter.import({ walkthroughId, snapshot }),
-        ).pipe(Effect.result);
-        if (imported._tag === "Failure") {
-          logError(
-            "walkthrough-jobs",
-            `${source} import failed wt=${walkthroughId} — falling through to agent: ${imported.failure.reason}`,
-          );
-          return false;
-        }
-        yield* afterImport;
-        yield* lifecycle.complete(walkthroughId, ZERO_TOKEN_USAGE, source);
-        return true;
-      });
-
-    const startJob = (params: StartJobParams): Effect.Effect<StartJobResult, StartJobError> =>
-      Effect.gen(function* () {
-        if (params.walkthroughId !== undefined && (yield* jobs.running(params.walkthroughId))) {
-          return { walkthroughId: params.walkthroughId, reused: true };
-        }
-        const mutex = yield* startJobMutex.acquire(params.prId);
-        return yield* mutex.withPermits(1)(startJobBody(params));
-      });
-
-    const startJobBody = (params: StartJobParams): Effect.Effect<StartJobResult, StartJobError> =>
-      Effect.gen(function* () {
-        const mode = params.mode ?? "reviewer";
-        const existing = yield* findActiveByPr(params.prId, mode);
-        if (
-          params.walkthroughId !== undefined &&
-          existing?.walkthroughId === params.walkthroughId
-        ) {
-          return { walkthroughId: existing.walkthroughId, reused: true };
-        }
-
-        const resolved = yield* prContextService.withDiff(params.prId);
-        const { pr, repo, client, meta, files, commits } = resolved;
-        const token = client.token;
-        const pinnedHead = params.expectedHeadSha?.toLowerCase();
-        if (pinnedHead !== undefined && meta.headSha.toLowerCase() !== pinnedHead) {
-          return yield* Effect.fail(
-            new HeadShaMismatchError({ expectedHeadSha: pinnedHead, githubHeadSha: meta.headSha }),
-          );
-        }
-
-        if (existing !== null) {
-          if (existing.prHeadSha === meta.headSha) {
-            if (
-              params.walkthroughId === undefined ||
-              params.walkthroughId === existing.walkthroughId
-            ) {
-              return { walkthroughId: existing.walkthroughId, reused: true };
-            }
-          } else {
-            // The PR moved past the live run's head: it is stale (invariant #7).
-            yield* supersedeForPr(pr.id, meta.headSha, mode);
-          }
-        }
-
-        // A run waits for a clone in progress. A resumed one waits for a
-        // `pending` clone too: at boot, clones cut off mid-way restart as
-        // `pending`.
-        const clone = yield* repoCloneService.getCloneStatus(repo.id);
-        const cloneInProgress =
-          clone.status === "cloning" || (clone.status === "pending" && params.trigger === "resume");
-        if (clone.status !== "ready" && !cloneInProgress) {
-          const message =
-            clone.status === "error"
-              ? `Repository clone failed: ${clone.error ?? "unknown error"} — check Settings`
-              : "Repository has not been cloned yet — check Settings";
-          return yield* Effect.fail(
-            new AiGenerationError({ cause: new CloneNotReadyError({ repoId: repo.id }), message }),
-          );
-        }
-
-        // See `expectedHeadSha`. After the clone check, so a run that can't
-        // start leaves the previous review standing.
-        if (pinnedHead !== undefined) yield* supersedeForPr(pr.id, meta.headSha, mode);
-
-        // One perspective at a time. Both write their AI threads into the PR's
-        // one review, so a fresh user start retires the other
-        // perspective's rows (and their unsubmitted threads), or Submit would
-        // post both walkthroughs' comments.
-        if (isUserInitiated(params.trigger)) {
-          yield* supersedeForPr(pr.id, undefined, otherWalkthroughMode(mode));
-        }
-
-        const requestedGenerationMode = params.generationMode ?? "full";
-        let partial = yield* provideDb(
-          walkthroughService.getPartial(pr.id, meta.headSha, mode, requestedGenerationMode),
-        );
-        if (params.walkthroughId !== undefined && partial?.id !== params.walkthroughId) {
-          partial = null;
-        }
-        if (isUserInitiated(params.trigger) && partial?.status === "error") partial = null;
-
-        const reviewSessionId = yield* provideDb(reviewService.sessionIdFor(pr.id));
-        const settings = yield* settingsService.getSettings();
-        const agent = yield* settingsService.resolveAgent();
-
-        const decision = yield* planWalkthroughLaunch({
-          db,
-          resolved,
-          mode,
-          requestedGenerationMode,
-          existing: partial,
-          trigger: params.trigger,
-          settings,
-          agent,
-          snapshotStack: stackService
-            .snapshot(resolved)
-            .pipe(
-              Effect.provideService(DbService, { db }),
-              Effect.provideService(CacheService, cacheService),
-            ),
-          cacheProbe:
-            partial === null
-              ? remoteCache.probe(repo.fullName, meta.headSha, mode)
-              : Effect.succeed(false),
-        }).pipe(
-          Effect.provideService(WalkthroughService, walkthroughService),
-          Effect.provideService(JevService, jevService),
-          Effect.provideService(CacheService, cacheService),
-          Effect.provideService(DbService, { db }),
-        );
-
-        // Only the orchestrator creates walkthrough rows; MCP handlers only
-        // update them.
-        const walkthroughId = yield* provideDb(
-          walkthroughService.createPartial({
-            ...((partial?.id ?? params.walkthroughId)
-              ? { id: partial?.id ?? params.walkthroughId }
-              : {}),
-            reviewSessionId,
-            prId: pr.id,
-            modelUsed: decision.plan.model,
-            prHeadSha: meta.headSha,
-            mode,
-            generationMode: decision.generationMode,
-            parentWalkthroughId: decision.parentWalkthroughId,
-            baseHeadSha: decision.baseHeadSha,
-            forceNew: isUserInitiated(params.trigger) && decision.generationMode === "full",
-            prCommits: commits,
-            stackContext: decision.stack,
-            diffFingerprint: decision.diffFingerprint,
-            ...(decision.owner.generatedBy ? { generatedBy: decision.owner.generatedBy } : {}),
-            // At insert, not a follow-up UPDATE: no kill-9 window without the tier.
-            ...(decision.risk !== null ? { risk: decision.risk } : {}),
-            providerConfig: decision.providerConfig,
-            launchPlan: decision.plan,
-          }),
-        );
-        // A row from before launch plans: record the one its runs use now.
-        if (partial !== null && decision.planIsNew) {
-          yield* provideDb(
-            walkthroughService.recordLaunch(walkthroughId, decision.plan, decision.providerConfig),
-          );
-        }
-
-        if (decision.restack !== null) {
-          const fromWalkthroughId = decision.restack.fromWalkthroughId;
+        const { restack } = input;
+        if (restack !== null) {
           const snapshot = yield* Effect.try({
             try: () =>
               exportWalkthroughSnapshot(db, {
-                walkthroughId: fromWalkthroughId,
-                repoFullName: repo.fullName,
+                walkthroughId: restack.fromWalkthroughId,
+                repoFullName: input.repoFullName,
               }),
             catch: (cause) => cause,
           }).pipe(
@@ -729,86 +618,221 @@ export const WalkthroughJobsLive = Layer.effect(
               Effect.sync(() => {
                 logError(
                   "walkthrough-jobs",
-                  `restack export of ${fromWalkthroughId} failed — falling through to agent:`,
+                  `restack export of ${restack.fromWalkthroughId} failed — trying the team cache:`,
                   cause,
                 );
-                return Option.none();
+                return Option.none<WalkthroughSnapshotV2>();
               }),
             ),
           );
-          if (
-            Option.isSome(snapshot) &&
-            (yield* importReview(
-              walkthroughId,
-              snapshot.value,
-              "restack",
-              provideDb(walkthroughService.markCarriedFrom(walkthroughId, fromWalkthroughId)),
-            ))
-          ) {
-            return { walkthroughId, reused: false };
+          if (Option.isSome(snapshot)) {
+            return {
+              snapshot: snapshot.value,
+              source: "restack",
+              fromWalkthroughId: restack.fromWalkthroughId,
+            };
+          }
+        }
+        const snapshot = yield* remoteCache.fetch(input.repoFullName, input.headSha, input.mode);
+        return Option.isSome(snapshot) ? { snapshot: snapshot.value, source: "remote" } : null;
+      });
+
+    /** Import a carried review into the new row and complete it, or false to fall through. */
+    const takeOver = (walkthroughId: string, carry: Carry): Effect.Effect<boolean, DbError> =>
+      Effect.gen(function* () {
+        const imported = yield* provideDb(
+          snapshotImporter.import({ walkthroughId, snapshot: carry.snapshot }),
+        ).pipe(Effect.result);
+        if (imported._tag === "Failure") {
+          logError(
+            "walkthrough-jobs",
+            `${carry.source} import failed wt=${walkthroughId}: ${imported.failure.reason}`,
+          );
+          return false;
+        }
+        if (carry.fromWalkthroughId !== undefined) {
+          yield* provideDb(
+            walkthroughService.markCarriedFrom(walkthroughId, carry.fromWalkthroughId),
+          );
+        }
+        yield* lifecycle.complete(walkthroughId, ZERO_TOKEN_USAGE, carry.source);
+        return true;
+      });
+
+    const request = (params: StartJobParams): Effect.Effect<StartJobResult, StartJobError> =>
+      Effect.gen(function* () {
+        const mode = params.mode ?? "reviewer";
+        const requestedGenerationMode = params.generationMode ?? "full";
+        const live = yield* findActiveByPr(params.prId, mode);
+
+        const resolved = yield* prContextService.withDiff(params.prId);
+        const { pr, repo, meta, files, commits } = resolved;
+        const headSha = meta.headSha;
+        const pinnedHead = params.expectedHeadSha?.toLowerCase();
+        if (pinnedHead !== undefined && headSha.toLowerCase() !== pinnedHead) {
+          return yield* Effect.fail(
+            new HeadShaMismatchError({ expectedHeadSha: pinnedHead, githubHeadSha: headSha }),
+          );
+        }
+
+        if (live !== null) {
+          if (live.prHeadSha !== headSha) {
+            // The PR moved past the live run's head: it is stale (invariant #7).
+            yield* supersedeForPr(pr.id, headSha, mode);
+          } else if (params.replace !== "all") {
+            return { walkthroughId: live.walkthroughId, reused: true };
           }
         }
 
-        if (partial === null) {
-          const snapshot = yield* remoteCache.fetch(repo.fullName, meta.headSha, mode);
-          if (
-            Option.isSome(snapshot) &&
-            (yield* importReview(walkthroughId, snapshot.value, "remote"))
-          ) {
-            return { walkthroughId, reused: false };
-          }
+        // A run waits for a clone in progress.
+        const clone = yield* repoCloneService.getCloneStatus(repo.id);
+        if (clone.status === "error" || clone.status === "pending") {
+          const { message } = cloneFailure(
+            clone.status === "error" ? { kind: "failed", error: clone.error } : { kind: "missing" },
+          );
+          return yield* Effect.fail(new AiGenerationError({ cause: clone, message }));
         }
-
-        const assignedRisk =
-          decision.risk?.level ??
-          (partial !== null && partial.riskConfidence != null ? partial.riskLevel : null);
-        yield* launchRun({
-          walkthroughId,
-          prId: pr.id,
-          accountId: decision.owner.accountId,
-          mode,
-          prHeadSha: meta.headSha,
-          trigger: params.trigger,
-          cloneInProgress,
-          inputs: {
-            pr: {
-              id: pr.id,
-              title: pr.title,
-              body: pr.body,
-              sourceBranch: pr.sourceBranch,
-              targetBranch: pr.targetBranch,
-              url: pr.url,
-              externalId: pr.externalId,
-            },
-            repoId: repo.id,
-            repoFullName: repo.fullName,
-            githubHost: repo.githubHost,
-            token,
+        const cloneInProgress = clone.status === "cloning";
+        const launch = (row: WalkthroughRow, resumed: boolean) =>
+          launchRow({
+            row,
+            context: resolved,
             files,
-            generationMode: decision.generationMode,
-            parentWalkthroughId: decision.parentWalkthroughId,
-            baseHeadSha: decision.baseHeadSha,
-            resumed: partial !== null,
-            plan: decision.plan,
-            assignedRisk,
-            stack: decision.stack,
-            parentFingerprint: decision.parentFingerprint,
-          },
+            trigger: params.trigger,
+            cloneInProgress,
+            resumed,
+            jobStart: { pr, files, commits },
+          });
+
+        // After the clone check, so a request that can't start leaves the
+        // reviews it would replace standing.
+        if (params.replace === "all") {
+          yield* supersedeForPr(pr.id);
+        } else {
+          if (pinnedHead !== undefined) yield* supersedeForPr(pr.id, headSha, mode);
+          // One perspective at a time. Both write their AI threads into the
+          // PR's one review, so Submit would post both walkthroughs' comments.
+          if (params.replace === "finished") {
+            yield* supersedeForPr(pr.id, undefined, otherWalkthroughMode(mode));
+          }
+          const atHead = yield* provideDb(
+            walkthroughService.activeAt(pr.id, headSha, mode, requestedGenerationMode),
+          );
+          if (atHead?.status === "generating") {
+            // Its run died before anything resumed it: run it again.
+            const row = yield* readRow(atHead.id);
+            if (row) {
+              yield* launch(row, true);
+              return { walkthroughId: row.id, reused: false };
+            }
+          } else if (atHead !== null && params.replace === "none") {
+            return { walkthroughId: atHead.id, reused: true };
+          }
+        }
+
+        const newRow = yield* planNewRow({
+          prId: pr.id,
+          headSha,
+          files,
+          mode,
+          requestedGenerationMode,
+          snapshotStack: stackService
+            .snapshot(resolved)
+            .pipe(
+              Effect.provideService(DbService, { db }),
+              Effect.provideService(CacheService, cacheService),
+            ),
+        }).pipe(
+          Effect.provideService(WalkthroughService, walkthroughService),
+          Effect.provideService(DbService, { db }),
+        );
+        const carry = yield* findCarry({
+          restack: newRow.restack,
+          repoFullName: repo.fullName,
+          headSha,
+          mode,
         });
+        // Only the orchestrator creates walkthrough rows; MCP handlers only
+        // update them.
+        const walkthroughId = yield* provideDb(
+          walkthroughService.createRow({
+            reviewSessionId: yield* provideDb(reviewService.sessionIdFor(pr.id)),
+            prId: pr.id,
+            prHeadSha: headSha,
+            mode,
+            generationMode: newRow.generationMode,
+            parentWalkthroughId: newRow.parentWalkthroughId,
+            baseHeadSha: newRow.baseHeadSha,
+            prCommits: commits,
+            generatedBy: generatedByOf(db, { ...repo, accountId: resolved.accountId }) ?? null,
+            stackContext: newRow.stack,
+            diffFingerprint: newRow.diffFingerprint,
+          }),
+        );
+        if (carry !== null && (yield* takeOver(walkthroughId, carry))) {
+          return { walkthroughId, reused: false };
+        }
+        const row = yield* readRow(walkthroughId);
+        if (row) yield* launch(row, false);
         return { walkthroughId, reused: false };
       });
 
-    const reviveFromError = (walkthroughId: string): Effect.Effect<void, DbError> =>
+    const importFromTeamCache = (prId: string, mode: WalkthroughMode): Effect.Effect<boolean> =>
+      underPrLock(
+        prId,
+        Effect.gen(function* () {
+          const context = yield* prContextService.forPr(prId);
+          const { pr, repo } = context;
+          const headSha = pr.headSha;
+          if (headSha === null) return false;
+          // Settled under the lock: a request may have created one since `/current` looked.
+          for (const generationMode of ["full", "incremental"] as const) {
+            if (
+              yield* provideDb(walkthroughService.activeAt(pr.id, headSha, mode, generationMode))
+            ) {
+              return false;
+            }
+          }
+          const carry = yield* findCarry({
+            restack: null,
+            repoFullName: repo.fullName,
+            headSha,
+            mode,
+          });
+          if (carry === null) return false;
+          const walkthroughId = yield* provideDb(
+            walkthroughService.createRow({
+              reviewSessionId: yield* provideDb(reviewService.sessionIdFor(pr.id)),
+              prId: pr.id,
+              prHeadSha: headSha,
+              mode,
+              generationMode: "full",
+              parentWalkthroughId: null,
+              baseHeadSha: null,
+            }),
+          );
+          if (yield* takeOver(walkthroughId, carry)) return true;
+          yield* lifecycle.fail(walkthroughId, IMPORT_FAILED);
+          return false;
+        }),
+      ).pipe(
+        Effect.catchCause((cause) =>
+          Effect.sync(() => {
+            logError(
+              "walkthrough-jobs",
+              `team-cache hydrate of ${prId} failed:`,
+              Cause.pretty(cause),
+            );
+            return false;
+          }),
+        ),
+      );
+
+    /** Back to `generating` with the launch re-resolved from today's settings; false when the row isn't in `error`. */
+    const revive = (row: WalkthroughRow): Effect.Effect<boolean, DbError> =>
       Effect.gen(function* () {
-        if (!(yield* provideDb(walkthroughService.revive(walkthroughId)))) return;
-        const row = yield* dbTry("walkthrough launch plan", () =>
-          db
-            .select({ launchPlan: walkthroughs.launchPlan })
-            .from(walkthroughs)
-            .where(eq(walkthroughs.id, walkthroughId))
-            .get(),
-        );
-        if (!row?.launchPlan) return;
+        if (!(yield* provideDb(walkthroughService.revive(row.id)))) return false;
+        if (!row.launchPlan) return true;
         const settings = yield* settingsService.getSettings();
         const agent = yield* settingsService.resolveAgent();
         const plan = {
@@ -817,56 +841,79 @@ export const WalkthroughJobsLive = Layer.effect(
         };
         yield* provideDb(
           walkthroughService.recordLaunch(
-            walkthroughId,
+            row.id,
             plan,
             providerConfigFor(plan, settings.aiMaxTurns),
           ),
         );
+        return true;
       });
 
-    const tryHydrateFromRemoteCache = (
-      prId: string,
-      headSha: string,
-      repoFullName: string,
-      mode: WalkthroughMode = "reviewer",
-    ): Effect.Effect<boolean> =>
+    /**
+     * Run an existing row again, from its journal alone: no GitHub call but
+     * the diff at its head when none is cached. A boot resume (`revive`
+     * false) only takes `generating` rows; the user's Resume revives an
+     * errored one first.
+     */
+    const resumeRow = (
+      walkthroughId: string,
+      options: { readonly revive: boolean },
+    ): Effect.Effect<ResumeOutcome, ResumeError> =>
       Effect.gen(function* () {
-        const snapshot = yield* remoteCache.fetch(repoFullName, headSha, mode);
-        if (Option.isNone(snapshot)) return false;
+        const found = yield* readRow(walkthroughId);
+        if (!found) return "gone";
+        return yield* underPrLock(
+          found.pullRequestId,
+          Effect.gen(function* () {
+            if (yield* jobs.running(walkthroughId)) return "resumed";
+            const row = yield* readRow(walkthroughId);
+            const resumable =
+              row?.status === "generating" || (options.revive && row?.status === "error");
+            if (!row || !resumable) return "gone";
 
-        const reviewSessionId = yield* provideDb(reviewService.sessionIdFor(prId));
-        const walkthroughId = yield* provideDb(
-          walkthroughService.createPartial({
-            reviewSessionId,
-            prId,
-            modelUsed: snapshot.value.modelUsed,
-            prHeadSha: headSha,
-            mode,
-            generatedBy: snapshot.value.generatedBy,
-            providerConfig: snapshot.value.providerConfig,
+            const context = yield* prContextService.forPr(row.pullRequestId);
+            const { pr, repo, client } = context;
+            if (pr.headSha !== null && pr.headSha !== row.prHeadSha) {
+              // The PR has moved on since this row's run (invariant #7).
+              yield* supersedeForPr(pr.id, pr.headSha, row.mode);
+              return "superseded";
+            }
+            if (row.status === "error" && !(yield* revive(row))) return "gone";
+            const current = (yield* readRow(walkthroughId)) ?? row;
+
+            const { files } = yield* diffCacheService.getOrFetch(pr, repo.fullName, client);
+            // A clone cut off by the restart comes back `pending`; one that
+            // failed ends the run through the same wait.
+            const clone = yield* repoCloneService.getCloneStatus(repo.id);
+            yield* launchRow({
+              row: current,
+              context,
+              files: toGitHubFileShape(files),
+              trigger: "resume",
+              cloneInProgress: clone.status !== "ready",
+              resumed: true,
+              // Sized by the job-start judgment only while nothing is written:
+              // the tier it assigns would overwrite the one the agent set.
+              jobStart:
+                current.lastCompletedPhase === "none"
+                  ? { pr, files: toGitHubFileShape(files), commits: [] }
+                  : null,
+            });
+            return "resumed";
           }),
         );
-        return yield* importReview(walkthroughId, snapshot.value, "remote");
-      }).pipe(
-        Effect.catch((e) => {
-          logError(
-            "walkthrough-jobs",
-            `tryHydrateFromRemoteCache failed pr=${prId}: ${e instanceof Error ? e.message : String(e)}`,
-          );
-          return Effect.succeed(false);
-        }),
-      );
+      });
 
     return {
-      startJob,
+      startJob: (params) => underPrLock(params.prId, request(params)),
+      importFromTeamCache,
+      resume: (walkthroughId) => resumeRow(walkthroughId, { revive: true }),
       findActiveByPr,
       cancel: (walkthroughId) => jobs.stop(walkthroughId, "user"),
-      reviveFromError,
       resumePending: () => jobs.resumePending,
       supersedeForPr,
       emitEvent,
       resolveSessionToken: jobs.resolveToken,
-      tryHydrateFromRemoteCache,
     };
   }),
 );

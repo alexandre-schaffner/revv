@@ -9,13 +9,10 @@
 // resumes only if that head is asked for again.
 
 import type { HunkScanEventMessage, HunkScanRow, HunkScanSnapshot } from "@revv/shared";
-import { eq } from "drizzle-orm";
 import { Context, Deferred, Effect, Exit, type Fiber, Layer, Option, Semaphore } from "effect";
-import { pullRequests, repositories } from "../db/schema";
-import { dbTry } from "../effects/db-try";
 import { debug } from "../logger";
 import type { CacheService } from "./Cache";
-import { DbService } from "./Db";
+import type { DbService } from "./Db";
 import {
   type HunkScanInput,
   planHunkScan,
@@ -70,25 +67,11 @@ export const HunkScanServiceLive = Layer.effect(
   HunkScanService,
   Effect.gen(function* () {
     const context = yield* Effect.context<JevService | CacheService | DbService>();
-    const { db } = Context.get(context, DbService);
     const realtime = yield* Realtime;
     const callSlots = yield* Semaphore.make(MAX_CONCURRENT_HUNK_SCANS);
 
     /** By PR id: one run per PR at a time. */
     const inFlight = new Map<string, InFlight>();
-
-    /** The account that owns the PR's repo — the SSE scope for its events. */
-    const accountIdFor = (prId: string) =>
-      dbTry(
-        "hunk-scan account lookup",
-        () =>
-          db
-            .select({ accountId: repositories.accountId })
-            .from(pullRequests)
-            .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
-            .where(eq(pullRequests.id, prId))
-            .get()?.accountId ?? null,
-      );
 
     const snapshot = (prId: string, headSha: string) =>
       loadHunkScan({ prId, headSha }).pipe(Effect.provide(context));
@@ -116,16 +99,7 @@ export const HunkScanServiceLive = Layer.effect(
           const done = yield* Deferred.make<HunkScanRow[]>();
           const body = Effect.gen(function* () {
             if (after !== null) yield* Deferred.await(after);
-            const accountId = yield* accountIdFor(input.prId).pipe(
-              Effect.catch((e) =>
-                Effect.sync(() => {
-                  debug("jev", `hunk-scan events dropped: ${String(e)}`);
-                  return null;
-                }),
-              ),
-            );
-            const emit = (event: HunkScanEventMessage) =>
-              accountId === null ? Effect.void : realtime.toAccount(accountId, event);
+            const emit = (event: HunkScanEventMessage) => realtime.toPr(input.prId, event);
             return yield* runHunkScan({
               prId: input.prId,
               headSha: input.headSha,

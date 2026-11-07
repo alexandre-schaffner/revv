@@ -46,18 +46,20 @@ function failStart(prId: string, message: string): void {
 
 /**
  * Ask the server to run a walkthrough of the PR's head. Idempotent server-side:
- * a job already running for the head answers with its id. Resolves with the
+ * a job already running for the head answers with its id — unless `fresh`
+ * asks it to start over. Resolves with the
  * new walkthrough's id, or null after recording the failure on the entry.
  */
 async function requestStart(
   prId: string,
   mode: WalkthroughMode,
   generationMode: GenerationMode,
+  fresh = false,
 ): Promise<string | null> {
   try {
     const { data, error } = await api.api
       .reviews({ id: prId })
-      .walkthrough.start.post({ mode, generationMode });
+      .walkthrough.start.post({ mode, generationMode, fresh });
     if (error) {
       failStart(prId, `Failed to start walkthrough (HTTP ${error.status}).`);
       return null;
@@ -120,12 +122,8 @@ async function runRegenerate(
       generationMode === "incremental" ? "Reviewing new commits..." : "Regenerating...",
     ),
   );
-  try {
-    await api.api.reviews({ id: prId }).walkthrough.regenerate.post({ mode, generationMode });
-  } catch {
-    // The start below creates a fresh job regardless.
-  }
-  const walkthroughId = await requestStart(prId, mode, generationMode);
+  // `fresh`: the server stops and supersedes every review of the PR first.
+  const walkthroughId = await requestStart(prId, mode, generationMode, true);
   if (walkthroughId) await hydrateFromCache(prId, { reportId: walkthroughId, replace: true });
 }
 
@@ -208,7 +206,7 @@ export async function invalidateForPull(prId: string): Promise<void> {
     entry.streamError = null;
   });
   try {
-    await api.api.reviews({ id: prId }).walkthrough.regenerate.post({});
+    await api.api.reviews({ id: prId }).walkthrough.supersede.post();
   } catch {
     // The next regenerate supersedes it anyway.
   }

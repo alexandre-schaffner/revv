@@ -31,19 +31,24 @@ const prWalkthroughRoutes = new Elysia({ prefix: "/api/reviews" })
         Effect.gen(function* () {
           const jobs = yield* WalkthroughJobs;
           // `mode` is the walkthrough's perspective, the user's pick. A live
-          // run at the PR's head is joined by `startJob` itself.
-          const mode = ctx.body?.mode ?? "reviewer";
+          // run at the PR's head is joined by `startJob` itself, unless the
+          // user asked to start over (`fresh`: Regenerate).
           return yield* jobs.startJob({
             prId: ctx.params.id,
             trigger: "user",
-            mode,
+            replace: ctx.body?.fresh === true ? "all" : "finished",
+            mode: ctx.body?.mode ?? "reviewer",
             generationMode: ctx.body?.generationMode ?? "full",
           });
         }).pipe(Effect.map(({ walkthroughId }) => ({ success: true, walkthroughId }))),
       ),
     {
       body: t.Optional(
-        t.Object({ mode: t.Optional(perspective), generationMode: t.Optional(generationMode) }),
+        t.Object({
+          mode: t.Optional(perspective),
+          generationMode: t.Optional(generationMode),
+          fresh: t.Optional(t.Boolean()),
+        }),
       ),
     },
   )
@@ -111,13 +116,10 @@ const prWalkthroughRoutes = new Elysia({ prefix: "/api/reviews" })
     ),
   )
 
-  // A do-over: cancel the live job and supersede every row of the PR, in
-  // every perspective and at every head — the same path PollScheduler takes
-  // on a new head, minus its `exceptHeadSha`, which would spare the stopped
-  // row at the current head for `createPartial` to hand back. Rows are
-  // superseded, not deleted, so history survives (invariant 7). The
-  // following `start` call carries the perspective and generation mode.
-  .post("/:id/walkthrough/regenerate", (ctx) =>
+  // Retire every review of the PR, in every perspective and at every head,
+  // without starting another: a pulled commit makes them describe an older
+  // head. Rows are superseded, not deleted, so history survives (invariant 7).
+  .post("/:id/walkthrough/supersede", (ctx) =>
     runRoute(
       Effect.flatMap(WalkthroughJobs, (jobs) => jobs.supersedeForPr(ctx.params.id)).pipe(
         Effect.as({ success: true }),
@@ -125,11 +127,10 @@ const prWalkthroughRoutes = new Elysia({ prefix: "/api/reviews" })
     ),
   )
 
-  // Relaunch a run that died (`generating`) or stopped (`error`). An errored
-  // row is revived with a fresh resume budget, so the agent picks up its
-  // persisted content through `get_walkthrough_state` instead of
-  // `createPartial` recycling the row. 404 when nothing is resumable — the
-  // row was superseded or never created; Regenerate is the next step.
+  // Relaunch a run that died (`generating`) or stopped (`error`) from its
+  // journal, its content kept. 404 when nothing is resumable — the row was
+  // superseded, the PR moved past its head, or it never existed; a new
+  // review is the next step.
   .post(
     "/:id/walkthrough/resume",
     (ctx) =>
@@ -137,22 +138,14 @@ const prWalkthroughRoutes = new Elysia({ prefix: "/api/reviews" })
         Effect.gen(function* () {
           const jobs = yield* WalkthroughJobs;
           const service = yield* WalkthroughService;
-          const mode = ctx.body?.mode;
-          const row = yield* service.findResumable(ctx.params.id, mode);
-          if (!row) {
+          const row = yield* service.findResumable(ctx.params.id, ctx.body?.mode);
+          const outcome = row ? yield* jobs.resume(row.id) : "gone";
+          if (!row || outcome !== "resumed") {
             return yield* Effect.fail(
               new NotFoundError({ resource: "walkthrough", id: ctx.params.id }),
             );
           }
-          if (row.status === "error") yield* jobs.reviveFromError(row.id);
-          const { walkthroughId } = yield* jobs.startJob({
-            prId: ctx.params.id,
-            trigger: "resume",
-            walkthroughId: row.id,
-            mode: mode ?? row.mode,
-            generationMode: row.generationMode,
-          });
-          return { success: true, walkthroughId };
+          return { success: true, walkthroughId: row.id };
         }),
       ),
     { body: perspectiveBody },

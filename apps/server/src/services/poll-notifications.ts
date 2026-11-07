@@ -133,17 +133,23 @@ export const announceSyncChanges = (
       );
       if (!uncached) continue;
       yield* Effect.forkDetach(
-        svc.walkthroughJobs.startJob({ prId: pr.id, trigger: "review_requested" }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.sync(() => {
-              logError(
-                "PollScheduler",
-                `Auto-walkthrough trigger failed for PR ${pr.id} (${change.repoFullName}#${change.prNumber}):`,
-                Cause.pretty(cause),
-              );
-            }),
+        svc.walkthroughJobs
+          .startJob({
+            prId: pr.id,
+            trigger: "review_requested",
+            replace: "none",
+          })
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.sync(() => {
+                logError(
+                  "PollScheduler",
+                  `Auto-walkthrough trigger failed for PR ${pr.id} (${change.repoFullName}#${change.prNumber}):`,
+                  Cause.pretty(cause),
+                );
+              }),
+            ),
           ),
-        ),
       );
     }
   });

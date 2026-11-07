@@ -36,7 +36,7 @@ export function currentWalkthrough(prId: string, requestedMode?: WalkthroughMode
     const walkthroughService = yield* WalkthroughService;
     const jobs = yield* WalkthroughJobs;
 
-    const { pr, repo } = yield* prContext.forPr(prId);
+    const { pr } = yield* prContext.forPr(prId);
     const mode = requestedMode ?? (yield* walkthroughPerspective(pr.id));
     const headSha = pr.headSha;
     // No synced head SHA → nothing to match a walkthrough against. The PR
@@ -64,10 +64,8 @@ export function currentWalkthrough(prId: string, requestedMode?: WalkthroughMode
       };
     }
 
-    // No local row: probe the team cache. On a hit the cache importer creates a
-    // complete row, so re-query and return it as complete.
-    const hydrated = yield* jobs.tryHydrateFromRemoteCache(pr.id, headSha, repo.fullName, mode);
-    if (hydrated) {
+    // No local row: a teammate's review of this head may be in the team cache.
+    if (yield* jobs.importFromTeamCache(pr.id, mode)) {
       const fromCache = yield* walkthroughService.getCached(pr.id, headSha, mode);
       if (fromCache) {
         const seqAt = yield* walkthroughService.getSeqAt(fromCache.id);

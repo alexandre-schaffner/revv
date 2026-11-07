@@ -23,9 +23,10 @@ import { reviewSessions } from "./review-sessions";
 export type DiffFingerprint = Readonly<Record<string, string>>;
 
 /**
- * What a run of this row launches with, decided once when the row is created
- * so every run of it (auto-continuations, resume-on-boot) launches the same
- * way. Null on rows created before plans were recorded.
+ * What a run of this row launches with, recorded before its first run so
+ * every run of it (auto-continuations, resume-on-boot) launches the same
+ * way. Null until then: on a row a snapshot import completed, and on rows
+ * created before plans were recorded.
  */
 export interface WalkthroughLaunchPlan {
   readonly agent: AcpAgentId;
@@ -41,8 +42,6 @@ export interface WalkthroughLaunchPlan {
     readonly tier: number | null;
   }> | null;
   readonly splitRecommendation: { readonly pieces: number } | null;
-  /** Whether a doomed run may be stopped early between auto-continuations. */
-  readonly adjudicateContinuations: boolean;
 }
 
 /**
@@ -82,10 +81,10 @@ export const walkthroughs = sqliteTable(
      */
     mode: text("mode").$type<WalkthroughMode>().notNull().default(REVIEW_MODE.reviewer),
     /**
-     * `'low' | 'medium' | 'high'`. Written by the orchestrator at job start
-     * from the Jev risk pass (invariant 2's carve-out), passed to
-     * `createPartial` so no `kill -9` gap exists before the row has a tier.
-     * Falls back to `'low'` when Jev is off or unreachable.
+     * `'low' | 'medium' | 'high'`. Written by the orchestrator from the Jev
+     * risk pass (invariant 2's carve-out), with the launch plan, before the
+     * row's first run. Falls back to `'low'` when Jev is off or unreachable,
+     * and the agent sets it in Phase A.
      */
     riskLevel: text("risk_level").notNull().default("low"),
     /** Calibrated confidence [0,1] behind {@link riskLevel}; null when the tier didn't come from Jev. */
@@ -233,8 +232,8 @@ export const walkthroughs = sqliteTable(
   (t) => ({
     /**
      * One live (non-superseded) walkthrough per (PR, head SHA, mode, generation
-     * mode). Makes `WalkthroughJobs.startJob` idempotent: concurrent starts
-     * upsert onto the same row instead of spawning duplicates.
+     * mode). `createRow` supersedes the row at its key in the transaction that
+     * inserts the new one.
      */
     activePrHeadShaUnique: uniqueIndex("walkthroughs_active_pr_head_sha_unique")
       .on(t.pullRequestId, t.prHeadSha, t.mode, t.generationMode)

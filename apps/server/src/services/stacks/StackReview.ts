@@ -109,7 +109,7 @@ export const StackReviewServiceLive = Layer.effect(
         const layer = review.layers[review.started];
         if (!layer) return;
         const walkthroughId = yield* walkthroughJobs
-          .startJob({ prId: layer.prId, trigger: "stack_review" })
+          .startJob({ prId: layer.prId, trigger: "stack_review", replace: "finished" })
           .pipe(
             Effect.map((r) => r.walkthroughId),
             Effect.catchCause((cause) =>

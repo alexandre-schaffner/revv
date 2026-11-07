@@ -75,8 +75,7 @@ async function resolveContext(
       providerName: EXTERNAL_AGENT_PROVIDER_NAMES[resolved.provider],
       integrationId: resolved.integrationId,
       publishEdit: fireAndForgetWalkthroughEdit,
-      broadcastThreadEvent: (message) =>
-        fireAndForgetThreadEventBroadcast(resolved.prId, message, resolved.accountId),
+      broadcastThreadEvent: (message) => fireAndForgetThreadEventBroadcast(resolved.prId, message),
       pushReply: (messageId) =>
         AppRuntime.runPromise(Effect.flatMap(SyncService, (sync) => sync.pushReply(messageId))),
       pushThreadStatus: (threadId) =>

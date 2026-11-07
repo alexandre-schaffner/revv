@@ -48,25 +48,13 @@ const failingJev = Layer.succeed(JevService, {
 });
 
 describe("adjudicateContinuation", () => {
-  it("proceeds without asking when the toggle is off", async () => {
-    const { layer, calls } = stubJev({
-      progress_since_last: { choice: "none", confidence: 1 },
-      will_next_turn_finish: { choice: "unlikely", confidence: 1 },
-    });
-    const verdict = await Effect.runPromise(
-      adjudicateContinuation({ ...STATE, enabled: false }).pipe(Effect.provide(layer)),
-    );
-    expect(verdict.kind).toBe("proceed");
-    expect(calls.count).toBe(0);
-  });
-
   it("stops only when progress is none AND the next turn is unlikely to finish", async () => {
     const { layer } = stubJev({
       progress_since_last: { choice: "none", confidence: 0.95 },
       will_next_turn_finish: { choice: "unlikely", confidence: 0.95 },
     });
     const verdict = await Effect.runPromise(
-      adjudicateContinuation({ ...STATE, enabled: true }).pipe(Effect.provide(layer)),
+      adjudicateContinuation(STATE).pipe(Effect.provide(layer)),
     );
     expect(verdict.kind).toBe("stop-doomed");
   });
@@ -84,7 +72,7 @@ describe("adjudicateContinuation", () => {
     ]) {
       const { layer } = stubJev(answers);
       const verdict = await Effect.runPromise(
-        adjudicateContinuation({ ...STATE, enabled: true }).pipe(Effect.provide(layer)),
+        adjudicateContinuation(STATE).pipe(Effect.provide(layer)),
       );
       expect(verdict.kind).toBe("proceed");
     }
@@ -96,14 +84,14 @@ describe("adjudicateContinuation", () => {
       will_next_turn_finish: { choice: "unlikely", confidence: 0.99 },
     });
     const verdict = await Effect.runPromise(
-      adjudicateContinuation({ ...STATE, enabled: true }).pipe(Effect.provide(layer)),
+      adjudicateContinuation(STATE).pipe(Effect.provide(layer)),
     );
     expect(verdict.kind).toBe("proceed");
   });
 
   it("proceeds when the call fails — never costs a walkthrough", async () => {
     const verdict = await Effect.runPromise(
-      adjudicateContinuation({ ...STATE, enabled: true }).pipe(Effect.provide(failingJev)),
+      adjudicateContinuation(STATE).pipe(Effect.provide(failingJev)),
     );
     expect(verdict.kind).toBe("proceed");
   });

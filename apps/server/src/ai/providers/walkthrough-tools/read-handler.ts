@@ -57,7 +57,7 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
   };
 };
 
-// The commit list `createPartial` captured at job start. A tool rather than
+// The commit list the orchestrator captured when it created the row. A tool rather than
 // the prompt, so long PRs (GitHub returns up to 250 commits) don't pay for it
 // on every run and resume. A legacy row's NULL `pr_commits` reads as an empty list.
 

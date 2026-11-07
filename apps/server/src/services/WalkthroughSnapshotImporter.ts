@@ -30,7 +30,7 @@ export class WalkthroughSnapshotImporter extends Context.Service<
   WalkthroughSnapshotImporter,
   {
     /**
-     * Fill a `generating` row the caller created with `createPartial`; the
+     * Fill a `generating` row the caller created with `createRow`; the
      * caller completes it afterwards. On a failure (validation, or a row in
      * any other state) the caller falls back to running the agent, and no
      * half-imported row exists: the fill is one transaction.
@@ -61,7 +61,7 @@ export const WalkthroughSnapshotImporterLive = Layer.succeed(WalkthroughSnapshot
         try: () =>
           db.transaction(() => {
             // Only a `generating` row is filled: a complete one is immutable
-            // (invariant 7), and an errored one is `createPartial`'s to recycle.
+            // (invariant 7), and an errored one is its run's record.
             const row = db
               .select({ id: walkthroughs.id, status: walkthroughs.status })
               .from(walkthroughs)
@@ -101,6 +101,7 @@ export const WalkthroughSnapshotImporterLive = Layer.succeed(WalkthroughSnapshot
               .set({
                 summary: snapshot.summary,
                 riskLevel: snapshot.riskLevel,
+                riskConfidence: null,
                 sentiment: snapshot.sentiment,
                 lastCompletedPhase: "D",
                 modelUsed: snapshot.modelUsed,
