@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, jest } from "bun:test";
 import { type Answer, createResource } from "./resource";
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
@@ -10,6 +10,16 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 }
 
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
+
+/** Moves the fake clock and lets the asks it starts settle. */
+async function elapse(ms: number): Promise<void> {
+  jest.advanceTimersByTime(ms);
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+}
+
+afterEach(() => {
+  jest.useRealTimers();
+});
 
 describe("createResource", () => {
   it("joins an ask already in flight", async () => {
@@ -31,6 +41,7 @@ describe("createResource", () => {
   });
 
   it("serves a fresh answer, then asks again once it is stale", async () => {
+    jest.useFakeTimers();
     let calls = 0;
     const r = createResource<void, number>({
       freshForMs: 20,
@@ -38,17 +49,20 @@ describe("createResource", () => {
     });
     await r.load("k", undefined);
     await r.load("k", undefined);
+    await elapse(19);
+    await r.load("k", undefined);
     expect(calls).toBe(1);
-    await tick(25);
+    await elapse(1);
     await r.load("k", undefined);
     expect(calls).toBe(2);
     expect(r.data("k")).toBe(2);
   });
 
   it("re-asks a pending answer on the retry schedule, then gives up", async () => {
+    jest.useFakeTimers();
     let calls = 0;
     const r = createResource<void, string>({
-      retryDelaysMs: [1, 1],
+      retryDelaysMs: [100, 200],
       gaveUpError: "never ready",
       fetch: async () => {
         calls += 1;
@@ -57,7 +71,11 @@ describe("createResource", () => {
     });
     await r.load("k", undefined);
     expect(r.entry("k").loading).toBe(true);
-    await tick(20);
+    await elapse(99);
+    expect(calls).toBe(1);
+    await elapse(1);
+    expect(calls).toBe(2);
+    await elapse(200);
     expect(calls).toBe(3);
     expect(r.entry("k")).toMatchObject({
       loading: false,
@@ -67,6 +85,7 @@ describe("createResource", () => {
   });
 
   it("waits on a pending answer for a signal instead of asking again", async () => {
+    jest.useFakeTimers();
     let calls = 0;
     const r = createResource<void, string>({
       waitForSignalMs: 1_000,
@@ -76,7 +95,7 @@ describe("createResource", () => {
       },
     });
     await r.load("k", undefined);
-    await tick(20);
+    await elapse(999);
     expect(calls).toBe(1);
     expect(r.isWaiting("k")).toBe(true);
     expect(r.waitingKeys()).toEqual(["k"]);
@@ -89,13 +108,16 @@ describe("createResource", () => {
   });
 
   it("gives up a signal that never comes, or one that says so", async () => {
+    jest.useFakeTimers();
     const r = createResource<void, string>({
-      waitForSignalMs: 5,
+      waitForSignalMs: 1_000,
       gaveUpError: "never ready",
       fetch: async () => ({ status: "pending" }),
     });
     await r.load("timeout", undefined);
-    await tick(20);
+    await elapse(999);
+    expect(r.entry("timeout").gaveUp).toBe(false);
+    await elapse(1);
     expect(r.entry("timeout").gaveUp).toBe(true);
     expect(r.entry("timeout").request).toEqual({ status: "error", error: "never ready" });
 

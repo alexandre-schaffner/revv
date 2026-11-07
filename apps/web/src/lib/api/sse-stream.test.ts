@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, mock } from "bun:test";
+import { afterEach, describe, expect, it, jest, mock } from "bun:test";
 
 mock.module("$lib/api/base-url", () => ({ API_BASE_URL: "http://test" }));
 mock.module("$lib/session/token.svelte", () => ({
@@ -10,7 +10,13 @@ const { SseFrameError, SseHttpError, SseIdleError, streamSse } = await import(".
 const realFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = realFetch;
+  jest.useRealTimers();
 });
+
+/** Lets the stream read whatever has been enqueued so far. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+}
 
 /** A response whose body yields `chunks` and then, unless `hang`, closes. */
 function respondWith(chunks: string[], opts: { hang?: boolean } = {}): RequestInit[] {
@@ -98,24 +104,43 @@ describe("streamSse", () => {
   });
 
   it("keeps a stream alive while heartbeats arrive", async () => {
+    jest.useFakeTimers();
     const encoder = new TextEncoder();
-    globalThis.fetch = (async (_url: string, init: RequestInit) => {
-      let beats = 0;
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          const timer = setInterval(() => {
-            beats += 1;
-            if (beats < 5) return controller.enqueue(encoder.encode(": ping\n\n"));
-            clearInterval(timer);
-            controller.enqueue(encoder.encode('data: {"ok":true}\n\n'));
-            controller.close();
-          }, 10);
-          init.signal?.addEventListener("abort", () => clearInterval(timer));
-        },
-      });
-      return new Response(body);
-    }) as unknown as typeof fetch;
-    expect(await collect({ idleTimeoutMs: 30 })).toEqual([{ ok: true }]);
+    let body: ReadableStreamDefaultController<Uint8Array> | undefined;
+    globalThis.fetch = (async (_url: string, init: RequestInit) =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            body = controller;
+            init.signal?.addEventListener("abort", () =>
+              controller.error(new DOMException("aborted", "AbortError")),
+            );
+          },
+        }),
+      )) as unknown as typeof fetch;
+    const events: unknown[] = [];
+    let settled: unknown = "open";
+    const done = streamSse<unknown>({
+      path: "/s",
+      idleTimeoutMs: 30,
+      onEvent: (e) => void events.push(e),
+    }).then(
+      () => (settled = "resolved"),
+      (e: unknown) => (settled = e),
+    );
+    // Five silent-but-alive stretches of 20 ms each: 100 ms in all, past the 30 ms idle limit.
+    for (let beat = 0; beat < 5; beat++) {
+      await settle();
+      jest.advanceTimersByTime(20);
+      body?.enqueue(encoder.encode(": ping\n\n"));
+    }
+    await settle();
+    expect(settled).toBe("open");
+    body?.enqueue(encoder.encode('data: {"ok":true}\n\n'));
+    body?.close();
+    await done;
+    expect(settled).toBe("resolved");
+    expect(events).toEqual([{ ok: true }]);
   });
 
   it("rejects with AbortError when the caller aborts", async () => {
