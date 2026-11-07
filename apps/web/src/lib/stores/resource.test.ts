@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, jest } from "bun:test";
-import { type Answer, createResource } from "./resource";
+import { type Answer, createResource, refreshAllWaiting } from "./resource";
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve: (value: T) => void = () => {};
@@ -98,7 +98,6 @@ describe("createResource", () => {
     await elapse(999);
     expect(calls).toBe(1);
     expect(r.isWaiting("k")).toBe(true);
-    expect(r.waitingKeys()).toEqual(["k"]);
     await r.load("k", undefined);
     expect(calls).toBe(1);
     await r.refresh("k", undefined);
@@ -236,5 +235,45 @@ describe("createResource", () => {
     gate.resolve({ status: "ok", data: "late" });
     await tick();
     expect(r.entry("k").request.status).toBe("idle");
+  });
+
+  it("asks again by key with the argument it was last asked with", async () => {
+    const asked: string[] = [];
+    const r = createResource<{ prId: string }, string>({
+      fetch: async (key, { prId }) => {
+        asked.push(`${key}:${prId}`);
+        return { status: "ok", data: prId };
+      },
+    });
+    await r.load("a|x", { prId: "a" });
+    await r.load("b|y", { prId: "b" });
+    expect(r.argOf("a|x")).toEqual({ prId: "a" });
+    r.refreshAll((_key, arg) => arg.prId === "b");
+    await tick();
+    expect(asked).toEqual(["a|x:a", "b|y:b", "b|y:b"]);
+    r.invalidate("a|x");
+    expect(r.argOf("a|x")).toBeUndefined();
+  });
+
+  it("re-asks only the keys waiting on a signal, by resource and from the registry", async () => {
+    jest.useFakeTimers();
+    let calls = 0;
+    const waiting = createResource<{ prId: string }, string>({
+      waitForSignalMs: 10_000,
+      fetch: async (key) => {
+        calls += 1;
+        return key === "pending" ? { status: "pending" } : { status: "ok", data: key };
+      },
+    });
+    await waiting.load("pending", { prId: "p" });
+    await waiting.load("settled", { prId: "s" });
+    expect(calls).toBe(2);
+    waiting.refreshWaiting((_key, arg) => arg.prId === "other");
+    await elapse(0);
+    expect(calls).toBe(2);
+    refreshAllWaiting();
+    await elapse(0);
+    expect(calls).toBe(3);
+    waiting.reset();
   });
 });

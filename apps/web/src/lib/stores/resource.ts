@@ -6,8 +6,13 @@
 //
 // A store either keeps its data here (`data(key)`), or keeps its own state and
 // lets its fetcher write it, using the resource only to schedule asks.
+//
+// Each key remembers the argument it was last asked with, so a store can ask
+// again by key alone (a completion signal, a reconnect) without packing the
+// argument into the key string.
 
 import { SvelteMap } from "svelte/reactivity";
+import { thrownMessage } from "$lib/api/wire";
 import { RequestState } from "./_types";
 
 /** One ask's outcome. `pending` waits for a signal, or is asked again after the next retry delay. */
@@ -68,7 +73,12 @@ export interface Resource<A, T> {
    * response). Always false without `waitForSignalMs`.
    */
   isWaiting(key: string): boolean;
-  waitingKeys(): string[];
+  /** The argument `key` was last asked with; undefined when it never was, or was forgotten. */
+  argOf(key: string): A | undefined;
+  /** Ask again every key that was asked (and `match`es), with its last argument. */
+  refreshAll(match?: (key: string, arg: A) => boolean): void;
+  /** Ask again every key {@link isWaiting} on a signal (and `match`es), with its last argument. */
+  refreshWaiting(match?: (key: string, arg: A) => boolean): void;
   /** Forget `key`; an ask in flight for it can't write back. */
   invalidate(key: string): void;
   reset(): void;
@@ -82,8 +92,15 @@ const IDLE: ResourceEntry<never> = Object.freeze({
   loadedAt: 0,
 });
 
-function thrownMessage(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
+/** Resources that wait on a server signal: a reconnect re-asks their waiting keys. */
+const signalWaiters = new Set<{ refreshWaiting(): void }>();
+
+/**
+ * Signals sent while the event stream was down reached no one: every key
+ * waiting on one is asked again.
+ */
+export function refreshAllWaiting(): void {
+  for (const resource of signalWaiters) resource.refreshWaiting();
 }
 
 export function createResource<A, T>(options: ResourceOptions<A, T>): Resource<A, T> {
@@ -92,6 +109,7 @@ export function createResource<A, T>(options: ResourceOptions<A, T>): Resource<A
   const entries = new SvelteMap<string, ResourceEntry<T>>();
   const inflight = new Map<string, Promise<RequestState<T>>>();
   const askAgain = new Map<string, A>();
+  const args = new Map<string, A>();
   const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const generations = new Map<string, number>();
   /** Keys whose last answer was `ok`; only those are ever served fresh. */
@@ -118,6 +136,7 @@ export function createResource<A, T>(options: ResourceOptions<A, T>): Resource<A
 
   function start(key: string, arg: A, version: string): Promise<RequestState<T>> {
     const generation = cancel(key);
+    args.set(key, arg);
     const previous = entry(key);
     entries.set(key, {
       request: previous.request.status === "ok" ? previous.request : RequestState.loading(),
@@ -220,7 +239,13 @@ export function createResource<A, T>(options: ResourceOptions<A, T>): Resource<A
     return promise;
   }
 
-  return {
+  function refreshWhere(keep: (key: string) => boolean, match?: (key: string, arg: A) => boolean) {
+    for (const [key, arg] of [...args]) {
+      if (keep(key) && (match?.(key, arg) ?? true)) void resource.refresh(key, arg);
+    }
+  }
+
+  const resource: Resource<A, T> = {
     entry,
     data(key) {
       const request = entry(key).request;
@@ -239,6 +264,7 @@ export function createResource<A, T>(options: ResourceOptions<A, T>): Resource<A
       const running = inflight.get(key);
       if (running) {
         askAgain.set(key, arg);
+        args.set(key, arg);
         return running;
       }
       return start(key, arg, entry(key).version);
@@ -261,18 +287,28 @@ export function createResource<A, T>(options: ResourceOptions<A, T>): Resource<A
       markGaveUp(key, entry(key).request);
     },
     isWaiting,
-    waitingKeys() {
-      return [...new Set([...retryTimers.keys(), ...inflight.keys()])].filter(isWaiting);
+    argOf(key) {
+      return args.get(key);
+    },
+    refreshAll(match) {
+      refreshWhere(() => true, match);
+    },
+    refreshWaiting(match) {
+      refreshWhere(isWaiting, match);
     },
     invalidate(key) {
       cancel(key);
       entries.delete(key);
+      args.delete(key);
     },
     reset() {
       for (const key of new Set([...entries.keys(), ...inflight.keys(), ...retryTimers.keys()])) {
         cancel(key);
       }
       entries.clear();
+      args.clear();
     },
   };
+  if (waitForSignalMs !== undefined) signalWaiters.add(resource);
+  return resource;
 }
