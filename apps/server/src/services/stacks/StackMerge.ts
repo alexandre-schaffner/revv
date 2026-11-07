@@ -1,4 +1,9 @@
-import type { StackMergePlan, StackMergeRun } from "@revv/shared";
+import {
+  isLiveStackMergeRun,
+  LIVE_STACK_MERGE_RUN_STATUSES,
+  type StackMergePlan,
+  type StackMergeRun,
+} from "@revv/shared";
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { Cause, Context, Effect, Layer } from "effect";
 import { pullRequests } from "../../db/schema/pull-requests";
@@ -32,14 +37,7 @@ import {
 } from "./merge-plan";
 import { StackRebaseService } from "./StackRebase";
 import { type StackError, StackService } from "./StackService";
-import {
-  isLiveStatus,
-  LIVE_RUN_STATUSES,
-  liveRunFor,
-  type RunRow,
-  toRun,
-  updateLiveRun,
-} from "./stack-merge-runs";
+import { liveRunFor, type RunRow, toRun, updateLiveRun } from "./stack-merge-runs";
 import { logContradiction } from "./unverified-github";
 
 const STALE_RUN_MS = 30 * 60_000;
@@ -232,7 +230,7 @@ export const StackMergeServiceLive = Layer.effect(
               .from(stackMergeRuns)
               .where(eq(stackMergeRuns.id, runId))
               .get();
-            return row !== undefined && isLiveStatus(row.status);
+            return row !== undefined && isLiveStackMergeRun(row.status);
           }),
         reportContradiction: (c) => Effect.sync(() => logContradiction("stack-merge", c)),
         now: () => Date.now(),
@@ -379,7 +377,7 @@ export const StackMergeServiceLive = Layer.effect(
     const cancel = (runId: string, accountId: string) =>
       Effect.gen(function* () {
         const row = yield* loadRun(runId, accountId);
-        if (!isLiveStatus(row.status)) return toRun(row);
+        if (!isLiveStackMergeRun(row.status)) return toRun(row);
         const handedOver = row.layersBaseFirst.filter((l) => l.state === "auto_merge");
         const error =
           handedOver.length > 0
@@ -455,7 +453,7 @@ export const StackMergeServiceLive = Layer.effect(
           })
           .where(
             and(
-              inArray(stackMergeRuns.status, [...LIVE_RUN_STATUSES]),
+              inArray(stackMergeRuns.status, [...LIVE_STACK_MERGE_RUN_STATUSES]),
               lt(stackMergeRuns.updatedAt, bootedAt),
             ),
           )

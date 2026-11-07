@@ -26,7 +26,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import type { ExternalAgentProvider } from "@revv/shared";
 import { serverEnv } from "../../config";
 import { ExternalIntegrationError } from "../../domain/errors";
@@ -610,6 +610,8 @@ function uninstallCursor(paths: CursorPaths, serverName: string): void {
 export interface ExternalIntegrationInstaller {
   /** Account-scoped name shown in the agent's MCP configuration. */
   readonly clientName: string;
+  /** What the user still has to do in the agent itself after connecting. */
+  readonly activation: string;
   /** Files and directories this install owns, shown to the user on connect. */
   readonly locations: readonly string[];
   readonly install: (input: BridgeInstallInput) => void;
@@ -631,6 +633,7 @@ export function externalIntegrationInstaller(
       const paths = claudeCodePaths(accountKey, home);
       return {
         clientName: serverName,
+        activation: `Run /reload-plugins in an open session, or restart Claude Code. Server: ${serverName}.`,
         locations: [paths.installDir],
         install: (input) => installClaudeCode(input, paths, serverName),
         uninstall: () => removeManagedDirectory(paths.installDir),
@@ -642,6 +645,7 @@ export function externalIntegrationInstaller(
       const paths = codexPaths(accountKey, home);
       return {
         clientName: serverName,
+        activation: `Restart Codex, then use /${basename(paths.promptFile, ".md")}.`,
         locations: [paths.configFile, paths.promptFile],
         install: (input) => installCodex(input, paths, serverName),
         uninstall: () => uninstallCodex(paths, serverName),
@@ -653,6 +657,7 @@ export function externalIntegrationInstaller(
       const paths = openCodePaths(accountKey, home);
       return {
         clientName: serverName,
+        activation: `Restart opencode, then use /${basename(paths.commandFile, ".md")}.`,
         locations: [paths.configFile, paths.commandFile],
         install: (input) => installOpenCode(input, paths, serverName),
         uninstall: () => uninstallOpenCode(paths, serverName),
@@ -664,6 +669,7 @@ export function externalIntegrationInstaller(
       const paths = cursorPaths(accountKey, home);
       return {
         clientName: serverName,
+        activation: `Reload the Cursor window, then enable “${serverName}” under Settings → MCP.`,
         locations: [paths.configFile],
         install: (input) => installCursor(input, paths, serverName),
         uninstall: () => uninstallCursor(paths, serverName),

@@ -1,11 +1,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { API_PORT, DEV_API_PORT } from "@revv/shared";
+import { API_PORT, DEV_API_PORT, EXTERNAL_AGENT_SCOPES } from "@revv/shared";
 import {
   EXTERNAL_REVIEW_TOOL_SPECS,
   MAX_WAIT_SECONDS,
 } from "../apps/server/src/ai/providers/external-review-tools";
-import { EXTERNAL_AGENT_SCOPES } from "../apps/server/src/services/ExternalIntegrations";
 
 const names = EXTERNAL_REVIEW_TOOL_SPECS.map((spec) => spec.name);
 const duplicateNames = names.filter((name, index) => names.indexOf(name) !== index);

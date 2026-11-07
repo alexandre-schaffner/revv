@@ -13,6 +13,8 @@ export interface ExternalIntegrationStatus {
   /** The account-scoped client entry still exists on disk. */
   readonly clientConfigured: boolean;
   readonly clientName: string;
+  /** What the user still has to do in the agent itself after connecting. */
+  readonly activation: string;
   readonly createdAt: string | null;
   readonly lastUsedAt: string | null;
   readonly expiresAt: string | null;
@@ -29,6 +31,24 @@ export const EXTERNAL_AGENT_PROVIDER_NAMES: Readonly<Record<ExternalAgentProvide
   opencode: "OpenCode",
   cursor: "Cursor",
 };
+
+/**
+ * What an external agent's tools may do. Every tool declares the one it needs,
+ * and every credential holds them all: a new scope reaches existing installs
+ * with the tool that needs it, with no backfill.
+ */
+export const EXTERNAL_AGENT_SCOPES = [
+  "context:read",
+  "walkthrough:edit",
+  "walkthrough:generate",
+  "issues:resolve",
+  "comments:write",
+] as const;
+
+export type ExternalAgentScope = (typeof EXTERNAL_AGENT_SCOPES)[number];
+
+/** A full commit SHA, as a checkout reports its heads. */
+export const SHA_PATTERN = /^[0-9a-f]{40}$/i;
 
 export function isExternalAgentProvider(value: string): value is ExternalAgentProvider {
   return (EXTERNAL_AGENT_PROVIDERS as readonly string[]).includes(value);

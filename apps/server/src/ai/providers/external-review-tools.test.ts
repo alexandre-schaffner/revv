@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
   EXTERNAL_AGENT_PROVIDER_NAMES,
+  EXTERNAL_AGENT_SCOPES,
   type ExternalAgentProvider,
   type ThreadEventMessage,
   type WalkthroughStreamEvent,
 } from "@revv/shared";
 import { createDb, type Db } from "../../db";
-import { EXTERNAL_AGENT_SCOPES } from "../../services/ExternalIntegrations";
 import type { WalkthroughRequestOutcome } from "../../services/walkthrough-request";
 import {
   EXTERNAL_REVIEW_TOOL_SPECS,

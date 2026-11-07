@@ -4,8 +4,7 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { RECAP_EMPTY_WINDOW_LEDE } from "@revv/shared";
-import { EXTERNAL_AGENT_SCOPES } from "../services/ExternalIntegrations";
+import { EXTERNAL_AGENT_SCOPES, RECAP_EMPTY_WINDOW_LEDE } from "@revv/shared";
 import { createDb } from "./index";
 
 describe("walkthrough:generate scope migration", () => {

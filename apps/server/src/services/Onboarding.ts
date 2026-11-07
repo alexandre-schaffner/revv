@@ -8,7 +8,7 @@ import {
 } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
 import { detectAgentStatus } from "../ai/acp/agents";
-import { addInstalledBinDirs, isCommandOnPath } from "../ai/acp/host";
+import { addInstalledBinDirs, hostEnv, isCommandOnPath } from "../ai/acp/host";
 import { debug, logError } from "../logger";
 import { EventJobRegistry, type Job, type JobSubscription } from "./jobs/EventJobRegistry";
 
@@ -101,9 +101,12 @@ export const OnboardingServiceLive = Layer.effect(
 
       let proc: ReturnType<typeof Bun.spawn>;
       try {
+        // The user's PATH, as every other agent spawn gets it: the desktop
+        // app's own environment lacks their shell's (Homebrew, npm prefix).
         proc = Bun.spawn(argv, {
           stdout: "pipe",
           stderr: "pipe",
+          env: hostEnv(),
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

@@ -4,6 +4,7 @@ import {
   CHAT_SUGGESTION_FALLBACKS,
   type CommentThread,
   guessImageContentType,
+  MERGE_METHODS,
   PR_DIFF_RENDER_OPTIONS,
 } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
@@ -525,7 +526,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
       ),
     {
       body: t.Object({
-        mergeMethod: t.Union([t.Literal("merge"), t.Literal("squash"), t.Literal("rebase")]),
+        mergeMethod: t.Union(MERGE_METHODS.map((method) => t.Literal(method))),
       }),
     },
   )

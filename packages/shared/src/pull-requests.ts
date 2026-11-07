@@ -77,7 +77,8 @@ export function sameStack(a: PrStackPlace | null, b: PrStackPlace | null): boole
   return a?.number === b?.number && a?.position === b?.position;
 }
 
-export type MergeMethod = "merge" | "squash" | "rebase";
+export const MERGE_METHODS = ["merge", "squash", "rebase"] as const;
+export type MergeMethod = (typeof MERGE_METHODS)[number];
 
 /**
  * GitHub's `mergeStateStatus`, upper-cased. GitHub computes it lazily, so an

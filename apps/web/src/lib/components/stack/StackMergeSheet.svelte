@@ -1,5 +1,12 @@
 <script lang="ts">
-import type { MergeMethod, StackMergePlan, StackMergePlanLayer, StackMergeRun } from "@revv/shared";
+import {
+  isLiveStackMergeRun,
+  MERGE_METHODS,
+  type MergeMethod,
+  type StackMergePlan,
+  type StackMergePlanLayer,
+  type StackMergeRun,
+} from "@revv/shared";
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import CheckCircle from "phosphor-svelte/lib/CheckCircle";
 import CircleNotch from "phosphor-svelte/lib/CircleNotch";
@@ -83,7 +90,7 @@ const run = $derived.by<StackMergeRun | null>(() => {
   }
   return latest;
 });
-const runLive = $derived(run?.status === "running" || run?.status === "waiting");
+const runLive = $derived(run ? isLiveStackMergeRun(run.status) : false);
 const runStopped = $derived(run?.status === "failed" || run?.status === "expired");
 
 let wasLive = false;
@@ -130,7 +137,7 @@ const targetLayer = $derived(bottomUp.find((l) => l.position === target) ?? null
 
 const methodOptions = $derived.by<SegmentedOption<MergeMethod>[]>(() => {
   const allowed = plan?.allowedMethods ?? [];
-  const all: MergeMethod[] = ["merge", "squash", "rebase"];
+  const all: readonly MergeMethod[] = MERGE_METHODS;
   return all
     .filter((m) => allowed.includes(m))
     .map((m) => ({
