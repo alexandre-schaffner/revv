@@ -82,7 +82,7 @@ onMount(() => {
 			<div class="waiting">
 				<Dotmatrix variant="square-13" size="small" />
 				<span class="waiting-text">Awaiting authorization</span>
-				<button class="cancel" onclick={cancelSignIn}>Cancel</button>
+				<button class="cancel" onclick={() => cancelSignIn()}>Cancel</button>
 			</div>
 		</div>
 	{:else}

@@ -17,10 +17,12 @@ import {
 import { Effect } from "effect";
 import { serverEnv } from "../../config";
 import {
+  GitHubApiError,
   type GitHubError,
   InvalidGitHubClientIdError,
   MissingGitHubClientIdError,
 } from "../../domain/errors";
+import { logError } from "../../logger";
 import { oauthPost } from "./transport";
 
 export type ClientIdError = MissingGitHubClientIdError | InvalidGitHubClientIdError;
@@ -147,30 +149,68 @@ export interface DeviceCode {
   readonly interval: number;
 }
 
-export type DeviceCodeAnswer =
-  | { readonly ok: true; readonly code: DeviceCode }
-  | {
-      readonly ok: false;
-      readonly status: number;
-      readonly statusText: string;
-      readonly text: string;
-    };
+/**
+ * GitHub's answer to a device-code request for a client it doesn't know: 404
+ * for an id registered elsewhere (github.com on a GHE id), 400/401 otherwise.
+ */
+const rejectsClient = (status: number) => status === 400 || status === 401 || status === 404;
 
-export const requestDeviceCode = (
+function deviceFlowErrorMessage(
   host: string,
-  clientId: string,
-): Effect.Effect<DeviceCodeAnswer, GitHubError> =>
-  oauthPost(host, "/login/device/code", {
-    client_id: clientId,
-    ...(clientIdIsGitHubApp(clientId) ? {} : { scope: DEVICE_FLOW_SCOPE }),
-  }).pipe(
-    Effect.map(
-      (res): DeviceCodeAnswer =>
-        res.status >= 200 && res.status < 300
-          ? { ok: true, code: JSON.parse(res.text) as DeviceCode }
-          : { ok: false, ...res },
-    ),
+  res: { readonly status: number; readonly statusText: string; readonly text: string },
+): string {
+  let detail = res.text.trim();
+  try {
+    const parsed = JSON.parse(res.text) as { error?: string; error_description?: string };
+    detail = parsed.error_description ?? parsed.error ?? detail;
+  } catch {
+    // Keep the raw text.
+  }
+  const suffix = detail ? `: ${detail.slice(0, 300)}` : "";
+  return (
+    `GitHub device flow failed for ${host} (${res.status} ${res.statusText}${suffix}). ` +
+    "Check that the client ID belongs to this GitHub host and that Device Flow is enabled."
   );
+}
+
+/**
+ * Start a device-flow sign-in on `host` with the first of `clientIds` GitHub
+ * accepts, and say which one it was: the poll must use the same.
+ */
+export const startDeviceFlow = (
+  host: string,
+  clientIds: readonly [string, ...string[]],
+): Effect.Effect<
+  { readonly clientId: string; readonly code: DeviceCode },
+  GitHubError | InvalidGitHubClientIdError
+> =>
+  Effect.gen(function* () {
+    for (const clientId of clientIds) {
+      const res = yield* oauthPost(host, "/login/device/code", {
+        client_id: clientId,
+        ...(clientIdIsGitHubApp(clientId) ? {} : { scope: DEVICE_FLOW_SCOPE }),
+      });
+      if (res.status >= 200 && res.status < 300) {
+        return { clientId, code: JSON.parse(res.text) as DeviceCode };
+      }
+      logError(
+        "device-auth",
+        `GitHub device code request failed: ${res.status} ${res.statusText}`,
+        res.text,
+      );
+      if (!rejectsClient(res.status)) {
+        return yield* Effect.fail(
+          new GitHubApiError({ status: res.status, cause: deviceFlowErrorMessage(host, res) }),
+        );
+      }
+    }
+    return yield* Effect.fail(
+      new InvalidGitHubClientIdError({
+        host,
+        message: `GitHub rejected the client ID for ${host}. Check that it was copied from the GitHub App or OAuth App registered on that host.`,
+      }),
+    );
+  });
 
 const tokenRequest = (host: string, params: Record<string, string>) =>
   oauthPost(host, "/login/oauth/access_token", params).pipe(

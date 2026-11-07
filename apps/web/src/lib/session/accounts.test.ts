@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { type Account, reauthAsked, withIdentity, withReauth } from "./accounts";
+import { type Account, reauthAsked, reauthsCleared, withIdentity, withReauth } from "./accounts";
 
 const account = (host: string, overrides: Partial<Account> = {}): Account => ({
   host,
@@ -61,5 +61,16 @@ describe("the user's accounts", () => {
       account("github.com", { githubLogin: "renamed", avatarContent: "data:a" }),
       accounts[1] as Account,
     ]);
+  });
+
+  test("a re-auth clears when its flag drops or its account goes, not when another's does", () => {
+    const before = [
+      account("github.com", { reauthRequired: true }),
+      account("ghe.example.com", { reauthRequired: true }),
+      account("ghe2.example.com", { reauthRequired: true }),
+    ];
+    const after = withReauth(before.slice(1), { host: "GHE.example.com", reauthRequired: false });
+    expect(reauthsCleared(before, after)).toEqual(["github.com", "ghe.example.com"]);
+    expect(reauthsCleared(after, before)).toEqual([]);
   });
 });

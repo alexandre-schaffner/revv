@@ -23,6 +23,7 @@ import {
   fetchLocalAccounts,
   getDeviceFlow,
   getError,
+  getErrorFor,
   getIsAuthenticated,
   getIsOnboarded,
   getLocalAccounts,
@@ -243,11 +244,13 @@ export async function openPrDeepLink(rawUrl: string): Promise<void> {
     return;
   }
 
-  const wasAuthorizingFromDeepLink =
-    state.kind === "connect-account" && state.phase === "device-code";
+  const authorizingOn =
+    state.kind === "connect-account" && state.phase === "device-code"
+      ? state.locator.githubHost
+      : null;
   cancelResolution();
-  if (wasAuthorizingFromDeepLink) {
-    cancelSignIn();
+  if (authorizingOn !== null) {
+    cancelSignIn(authorizingOn);
     clearError();
   }
   state = pendingResolution(locator);
@@ -379,10 +382,13 @@ export function chooseAnotherPrDeepLinkAccount(): void {
 }
 
 export function dismissPrDeepLink(): void {
-  const wasAuthorizing = state.kind === "connect-account" && state.phase === "device-code";
+  const authorizingOn =
+    state.kind === "connect-account" && state.phase === "device-code"
+      ? state.locator.githubHost
+      : null;
   cancelResolution();
   state = { kind: "idle" };
-  if (wasAuthorizing) cancelSignIn();
+  if (authorizingOn !== null) cancelSignIn(authorizingOn);
 }
 
 /**
@@ -398,8 +404,9 @@ export function listenForPrDeepLinks(): () => void {
     });
     $effect(() => {
       if (state.kind !== "connect-account" || state.phase !== "device-code") return;
-      if (getDeviceFlow() !== null) return;
-      const authError = getError();
+      const host = state.locator.githubHost;
+      if (getDeviceFlow(host) !== null) return;
+      const authError = getErrorFor(host);
       untrack(() => void settlePrDeepLinkAuthorization(authError));
     });
   });
