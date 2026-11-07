@@ -31,11 +31,13 @@ test("the server shuts down when its desktop parent is force-killed", async () =
     expect(Number.isSafeInteger(childPid) && childPid > 0).toBe(true);
     parent.kill("SIGKILL");
     await parent.exited;
+    // The watcher polls once a second; the generous deadline only matters on a
+    // loaded machine, where process startup alone can take seconds.
+    const deadline = Date.now() + 15_000;
     let stopped = "";
-    for (let attempt = 0; attempt < 50; attempt++) {
-      stopped = await readFile(marker, "utf8").catch(() => "");
-      if (stopped) break;
+    while (!stopped && Date.now() < deadline) {
       await Bun.sleep(100);
+      stopped = await readFile(marker, "utf8").catch(() => "");
     }
     expect(stopped).toBe("stopped");
   } finally {
@@ -47,4 +49,4 @@ test("the server shuts down when its desktop parent is force-killed", async () =
     }
     await rm(root, { recursive: true, force: true });
   }
-}, 10_000);
+}, 20_000);

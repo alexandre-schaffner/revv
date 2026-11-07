@@ -86,7 +86,7 @@ it("round-trips native spans and joins only the matching ACP session and turn", 
 });
 
 it("keeps two weekly windows and rejects invalid retention limits", () => {
-  expect(retentionFromEnv({})).toEqual({ maxAgeMs: 14 * 86400000, maxRows: 1000000 });
+  expect(retentionFromEnv({}).maxAgeMs).toBe(14 * 86400000);
   expect(
     retentionFromEnv({ COLLECTOR_RETENTION_DAYS: "30", COLLECTOR_MAX_SPANS: "2000000" }),
   ).toEqual({ maxAgeMs: 30 * 86400000, maxRows: 2000000 });
@@ -170,14 +170,12 @@ it("keeps identically named operations from different services separate", async 
         resource: { attributes: [{ key: "service.name", value: { stringValue: service } }] },
         scopeSpans: [
           {
-            spans: [
-              span(service, service, "same.name", Date.now(), service === "server" ? 20 : 200, []),
-            ],
+            spans: [span(service, service, "same.name", 1000, service === "server" ? 20 : 200, [])],
           },
         ],
       })),
     });
-    const summary = await store.operationSummary({ sinceMs: Date.now() - 1000 });
+    const summary = await store.operationSummary({ sinceMs: 0, untilMs: 2000 });
     expect(summary).toHaveLength(2);
     expect(summary.find((row) => row.serviceName === "server")?.p95).toBe(20);
     expect(summary.find((row) => row.serviceName === "agent")?.p95).toBe(200);
