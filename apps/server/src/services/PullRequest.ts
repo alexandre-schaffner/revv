@@ -47,15 +47,8 @@ function rowToPr(
 }
 
 export interface ListArchivedPrsParams {
-  readonly repoId?: string;
-  /** Inclusive lower bound on `closedAt` (ISO). */
-  readonly since?: string;
-  /** Exclusive upper bound on `closedAt` (ISO). */
-  readonly until?: string;
-  /** Cursor: the `closedAt` of the last row from the previous page. */
+  /** Opaque cursor from the previous page's `nextCursor`. */
   readonly cursor?: string;
-  /** Page size. Clamped to `[1, MAX_ARCHIVE_PAGE_LIMIT]`. */
-  readonly limit?: number;
   /**
    * Only PRs authored by these logins; empty or omitted means any author. The
    * sidebar's creator/team filter, so the closed list narrows like the open one.
@@ -65,12 +58,12 @@ export interface ListArchivedPrsParams {
 
 export interface ListArchivedPrsResult {
   readonly prs: ReadonlyArray<PullRequest>;
-  /** `closedAt` cursor to pass back for the next page, or null if exhausted. */
+  /** Opaque cursor to pass back for the next page, or null if exhausted. */
   readonly nextCursor: string | null;
 }
 
 /**
- * A PR's latest complete, non-superseded walkthrough, for the recap window
+ * A PR's latest complete walkthrough, for the recap window
  * queries. The recap MCP read tool fetches the full walkthrough on demand.
  */
 export interface ArchivedPrWalkthroughSummary {
@@ -112,8 +105,79 @@ function mergeMentionedUsers(
     .run();
 }
 
-export const DEFAULT_ARCHIVE_PAGE_LIMIT = 50;
-export const MAX_ARCHIVE_PAGE_LIMIT = 500;
+const ARCHIVE_PAGE_LIMIT = 50;
+
+/**
+ * The archive is ordered on `(closedAt, id)`: several PRs routinely share a
+ * `closedAt` (one settle pass stamps the same instant on every vanished PR), so
+ * `closedAt` alone can't say where a page ended.
+ */
+const archiveClosedAt = sql<string>`coalesce(${pullRequests.closedAt}, '')`;
+const CURSOR_SEPARATOR = "|";
+
+function encodeArchiveCursor(closedAt: string | null, id: string): string {
+  return `${closedAt ?? ""}${CURSOR_SEPARATOR}${id}`;
+}
+
+function decodeArchiveCursor(cursor: string): { closedAt: string; id: string } | null {
+  const at = cursor.indexOf(CURSOR_SEPARATOR);
+  if (at < 0) return null;
+  return { closedAt: cursor.slice(0, at), id: cursor.slice(at + 1) };
+}
+
+/** Each PR's latest complete walkthrough, by `completedAt`. */
+function latestCompleteWalkthroughs(
+  db: (typeof DbService)["Service"]["db"],
+  prIds: readonly string[],
+): Map<string, ArchivedPrWalkthroughSummary> {
+  const rows = db
+    .select({
+      id: walkthroughs.id,
+      pullRequestId: walkthroughs.pullRequestId,
+      summary: walkthroughs.summary,
+      sentiment: walkthroughs.sentiment,
+      riskLevel: walkthroughs.riskLevel,
+      completedAt: walkthroughs.completedAt,
+    })
+    .from(walkthroughs)
+    .where(
+      and(inArray(walkthroughs.pullRequestId, [...prIds]), eq(walkthroughs.status, "complete")),
+    )
+    .orderBy(walkthroughs.completedAt)
+    .all();
+  const latest = new Map<string, ArchivedPrWalkthroughSummary>();
+  for (const { pullRequestId, sentiment, ...w } of rows) {
+    latest.set(pullRequestId, { ...w, sentiment: sentiment ?? null });
+  }
+  return latest;
+}
+
+function withLatestWalkthrough(
+  db: (typeof DbService)["Service"]["db"],
+  prRows: ReadonlyArray<{ pr: typeof pullRequests.$inferSelect; avatarContent: string | null }>,
+): ArchivedPrWithWalkthrough[] {
+  if (prRows.length === 0) return [];
+  const latest = latestCompleteWalkthroughs(
+    db,
+    prRows.map((r) => r.pr.id),
+  );
+  return prRows.map((r) => ({
+    pr: rowToPr(r.pr, r.avatarContent),
+    walkthrough: latest.get(r.pr.id) ?? null,
+  }));
+}
+
+/** False when `accountId` is given and doesn't own the repository. */
+function ownsRepo(repoId: string, accountId: string | undefined) {
+  if (!accountId) return Effect.succeed(true);
+  return tryDb("read repository owner", (db) =>
+    db
+      .select({ accountId: repositories.accountId })
+      .from(repositories)
+      .where(eq(repositories.id, repoId))
+      .get(),
+  ).pipe(Effect.map((repo) => repo?.accountId === accountId));
+}
 
 export class PullRequestService extends Context.Service<
   PullRequestService,
@@ -149,7 +213,7 @@ export class PullRequestService extends Context.Service<
     ) => Effect.Effect<Map<string, Set<number>>, DbError, DbService>;
     /** `diff_stats_head_sha` of every PR: the head its stored diff size describes. */
     readonly diffStatsHeads: () => Effect.Effect<Map<string, string | null>, DbError, DbService>;
-    /** Closed and merged PRs, newest `closedAt` first, paginated on that cursor. */
+    /** Closed and merged PRs, newest `closedAt` first, paginated on `(closedAt, id)`. */
     readonly listArchivedPrs: (
       accountId?: string,
       params?: ListArchivedPrsParams,
@@ -157,7 +221,7 @@ export class PullRequestService extends Context.Service<
     /**
      * Per-window read used by the recap pipeline. Returns every archived PR
      * for the repo whose `closedAt` falls in `[since, until)`, joined to the
-     * latest non-superseded complete walkthrough (if any). Unpaginated by
+     * latest complete walkthrough (if any). Unpaginated by
      * design — daily/weekly windows are bounded by time, not by row count,
      * and the agent's MCP read tool needs the whole set to produce a recap.
      */
@@ -169,7 +233,7 @@ export class PullRequestService extends Context.Service<
     ) => Effect.Effect<ReadonlyArray<ArchivedPrWithWalkthrough>, DbError, DbService>;
     /**
      * PRs in flight *as of* `until`: created before the window closed and not
-     * yet closed at that instant. Joined to their latest non-superseded
+     * yet closed at that instant. Joined to their latest
      * complete walkthrough (if any). Used by the recap agent to surface
      * "who is working on what" context. Sorted by walkthrough presence then
      * updatedAt DESC. Capped at 20 rows to keep the context window bounded.
@@ -424,11 +488,6 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
   listArchivedPrs: (accountId, params) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      const limit = Math.min(
-        Math.max(1, params?.limit ?? DEFAULT_ARCHIVE_PAGE_LIMIT),
-        MAX_ARCHIVE_PAGE_LIMIT,
-      );
-
       const repoIds = accountId
         ? yield* dbTry("listPrs repos", () =>
             db
@@ -445,30 +504,20 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
       }
 
       return yield* dbTry("listArchivedPrs", () => {
-        const conditions: (
-          | ReturnType<typeof eq>
-          | ReturnType<typeof ne>
-          | ReturnType<typeof gte>
-          | ReturnType<typeof lt>
-          | ReturnType<typeof inArray>
-        )[] = [ne(pullRequests.status, "open")];
+        const conditions = [ne(pullRequests.status, "open")];
         if (repoIds && repoIds.length > 0) {
           conditions.push(inArray(pullRequests.repositoryId, repoIds));
-        }
-        if (params?.repoId !== undefined) {
-          conditions.push(eq(pullRequests.repositoryId, params.repoId));
         }
         if (params?.authorLogins && params.authorLogins.length > 0) {
           conditions.push(inArray(pullRequests.authorLogin, [...params.authorLogins]));
         }
-        if (params?.since !== undefined) {
-          conditions.push(gte(pullRequests.closedAt, params.since));
-        }
-        if (params?.until !== undefined) {
-          conditions.push(lt(pullRequests.closedAt, params.until));
-        }
-        if (params?.cursor !== undefined) {
-          conditions.push(lt(pullRequests.closedAt, params.cursor));
+        const cursor = params?.cursor !== undefined ? decodeArchiveCursor(params.cursor) : null;
+        if (cursor) {
+          const after = or(
+            lt(archiveClosedAt, cursor.closedAt),
+            and(eq(archiveClosedAt, cursor.closedAt), lt(pullRequests.id, cursor.id)),
+          );
+          if (after) conditions.push(after);
         }
 
         const rows = db
@@ -478,193 +527,78 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
           })
           .from(pullRequests)
           .where(and(...conditions))
-          .orderBy(desc(pullRequests.closedAt))
-          .limit(limit + 1)
+          .orderBy(desc(archiveClosedAt), desc(pullRequests.id))
+          .limit(ARCHIVE_PAGE_LIMIT + 1)
           .all();
 
-        const hasMore = rows.length > limit;
-        const trimmed = hasMore ? rows.slice(0, limit) : rows;
-        const lastRow = trimmed[trimmed.length - 1];
-        const nextCursor = hasMore && lastRow ? (lastRow.pr.closedAt ?? null) : null;
-
+        const hasMore = rows.length > ARCHIVE_PAGE_LIMIT;
+        const page = hasMore ? rows.slice(0, ARCHIVE_PAGE_LIMIT) : rows;
+        const lastRow = page[page.length - 1];
         return {
-          prs: trimmed.map((r) => rowToPr(r.pr, r.avatarContent)),
-          nextCursor,
+          prs: page.map((r) => rowToPr(r.pr, r.avatarContent)),
+          nextCursor:
+            hasMore && lastRow ? encodeArchiveCursor(lastRow.pr.closedAt, lastRow.pr.id) : null,
         };
       });
     }),
 
   listArchivedPrsForWindow: (repoId, since, until, accountId) =>
     Effect.gen(function* () {
+      if (!(yield* ownsRepo(repoId, accountId))) return [];
       const { db } = yield* DbService;
-      if (accountId) {
-        const repo = db.select().from(repositories).where(eq(repositories.id, repoId)).get();
-        if (!repo || repo.accountId !== accountId) {
-          return [] as ReadonlyArray<ArchivedPrWithWalkthrough>;
-        }
-      }
-      return yield* dbTry("listArchivedPrsForWindow", () => {
-        const prRows = db
-          .select({
-            pr: pullRequests,
-            avatarContent: avatarOfRepoLogin(pullRequests.authorLogin, pullRequests.repositoryId),
-          })
-          .from(pullRequests)
-          .where(
-            and(
-              eq(pullRequests.repositoryId, repoId),
-              ne(pullRequests.status, "open"),
-              gte(pullRequests.closedAt, since),
-              lt(pullRequests.closedAt, until),
-            ),
-          )
-          .orderBy(desc(pullRequests.closedAt))
-          .all();
-
-        if (prRows.length === 0) {
-          return [] as ReadonlyArray<ArchivedPrWithWalkthrough>;
-        }
-
-        const prIds = prRows.map((r) => r.pr.id);
-
-        const wtRows = db
-          .select({
-            id: walkthroughs.id,
-            pullRequestId: walkthroughs.pullRequestId,
-            summary: walkthroughs.summary,
-            sentiment: walkthroughs.sentiment,
-            riskLevel: walkthroughs.riskLevel,
-            completedAt: walkthroughs.completedAt,
-            generatedAt: walkthroughs.generatedAt,
-          })
-          .from(walkthroughs)
-          .where(
-            and(
-              inArray(walkthroughs.pullRequestId, prIds),
-              eq(walkthroughs.status, "complete"),
-              isNull(walkthroughs.supersededBy),
-            ),
-          )
-          .all();
-
-        const latestByPr = new Map<string, (typeof wtRows)[number]>();
-        for (const w of wtRows) {
-          const current = latestByPr.get(w.pullRequestId);
-          if (!current) {
-            latestByPr.set(w.pullRequestId, w);
-            continue;
-          }
-          // A complete row can still lack `completedAt` if it predates the
-          // column; `generatedAt` stands in.
-          const curTs = current.completedAt ?? current.generatedAt;
-          const newTs = w.completedAt ?? w.generatedAt;
-          if (newTs > curTs) latestByPr.set(w.pullRequestId, w);
-        }
-
-        return prRows.map((pr): ArchivedPrWithWalkthrough => {
-          const w = latestByPr.get(pr.pr.id);
-          return {
-            pr: rowToPr(pr.pr, pr.avatarContent),
-            walkthrough: w
-              ? {
-                  id: w.id,
-                  summary: w.summary,
-                  sentiment: w.sentiment ?? null,
-                  riskLevel: w.riskLevel,
-                  completedAt: w.completedAt ?? null,
-                }
-              : null,
-          };
-        });
-      });
+      return yield* dbTry("listArchivedPrsForWindow", () =>
+        withLatestWalkthrough(
+          db,
+          db
+            .select({
+              pr: pullRequests,
+              avatarContent: avatarOfRepoLogin(pullRequests.authorLogin, pullRequests.repositoryId),
+            })
+            .from(pullRequests)
+            .where(
+              and(
+                eq(pullRequests.repositoryId, repoId),
+                ne(pullRequests.status, "open"),
+                gte(pullRequests.closedAt, since),
+                lt(pullRequests.closedAt, until),
+              ),
+            )
+            .orderBy(desc(pullRequests.closedAt))
+            .all(),
+        ),
+      );
     }),
 
   listOpenPrsAsOfWindow: (repoId, until, accountId) =>
     Effect.gen(function* () {
+      if (!(yield* ownsRepo(repoId, accountId))) return [];
       const { db } = yield* DbService;
-      if (accountId) {
-        const repo = db.select().from(repositories).where(eq(repositories.id, repoId)).get();
-        if (!repo || repo.accountId !== accountId) {
-          return [] as ReadonlyArray<ArchivedPrWithWalkthrough>;
-        }
-      }
       return yield* dbTry("listOpenPrsAsOfWindow", () => {
-        const prRows = db
-          .select({
-            pr: pullRequests,
-            avatarContent: avatarOfRepoLogin(pullRequests.authorLogin, pullRequests.repositoryId),
-          })
-          .from(pullRequests)
-          .where(
-            and(
-              eq(pullRequests.repositoryId, repoId),
-              // "Open at `until`" reconstructed from timestamps rather than
-              // the mutable `status` column, which only ever describes now.
-              lt(pullRequests.createdAt, until),
-              or(isNull(pullRequests.closedAt), gte(pullRequests.closedAt, until)),
-            ),
-          )
-          .orderBy(desc(pullRequests.updatedAt))
-          .limit(20)
-          .all();
-
-        if (prRows.length === 0) {
-          return [] as ReadonlyArray<ArchivedPrWithWalkthrough>;
-        }
-
-        const prIds = prRows.map((r) => r.pr.id);
-
-        const wtRows = db
-          .select({
-            id: walkthroughs.id,
-            pullRequestId: walkthroughs.pullRequestId,
-            summary: walkthroughs.summary,
-            sentiment: walkthroughs.sentiment,
-            riskLevel: walkthroughs.riskLevel,
-            completedAt: walkthroughs.completedAt,
-            generatedAt: walkthroughs.generatedAt,
-          })
-          .from(walkthroughs)
-          .where(
-            and(
-              inArray(walkthroughs.pullRequestId, prIds),
-              eq(walkthroughs.status, "complete"),
-              isNull(walkthroughs.supersededBy),
-            ),
-          )
-          .all();
-
-        const latestByPr = new Map<string, (typeof wtRows)[number]>();
-        for (const w of wtRows) {
-          const current = latestByPr.get(w.pullRequestId);
-          if (!current) {
-            latestByPr.set(w.pullRequestId, w);
-            continue;
-          }
-          const curTs = current.completedAt ?? current.generatedAt;
-          const newTs = w.completedAt ?? w.generatedAt;
-          if (newTs > curTs) latestByPr.set(w.pullRequestId, w);
-        }
-
-        const withWt = prRows.filter((r) => latestByPr.has(r.pr.id));
-        const withoutWt = prRows.filter((r) => !latestByPr.has(r.pr.id));
-        const sorted = [...withWt, ...withoutWt];
-
-        return sorted.map((r): ArchivedPrWithWalkthrough => {
-          const w = latestByPr.get(r.pr.id);
-          return {
-            pr: rowToPr(r.pr, r.avatarContent),
-            walkthrough: w
-              ? {
-                  id: w.id,
-                  summary: w.summary,
-                  sentiment: w.sentiment ?? null,
-                  riskLevel: w.riskLevel,
-                  completedAt: w.completedAt ?? null,
-                }
-              : null,
-          };
-        });
+        const rows = withLatestWalkthrough(
+          db,
+          db
+            .select({
+              pr: pullRequests,
+              avatarContent: avatarOfRepoLogin(pullRequests.authorLogin, pullRequests.repositoryId),
+            })
+            .from(pullRequests)
+            .where(
+              and(
+                eq(pullRequests.repositoryId, repoId),
+                // "Open at `until`" reconstructed from timestamps rather than
+                // the mutable `status` column, which only ever describes now.
+                lt(pullRequests.createdAt, until),
+                or(isNull(pullRequests.closedAt), gte(pullRequests.closedAt, until)),
+              ),
+            )
+            .orderBy(desc(pullRequests.updatedAt))
+            .limit(20)
+            .all(),
+        );
+        return [
+          ...rows.filter((r) => r.walkthrough !== null),
+          ...rows.filter((r) => r.walkthrough === null),
+        ];
       });
     }),
 
