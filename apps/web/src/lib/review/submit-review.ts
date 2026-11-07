@@ -11,7 +11,6 @@ import { thrownMessage } from "$lib/api/wire";
 import { acceptWriteResult } from "$lib/stores/conversation.svelte";
 import { loadSession } from "$lib/stores/review.svelte";
 import { markIssuesAsSubmitted } from "$lib/walkthrough/store.svelte";
-import { reviewBody } from "./review-payload";
 import { draftThreadIds } from "./threads";
 
 export type ReviewAction = "approve" | "request_changes" | "comment";
@@ -36,9 +35,7 @@ export async function submitReview(
   const threadIds = draftThreadIds(prId);
   try {
     const result = await call(
-      api.api
-        .reviews({ id: prId })
-        ["github-submit"].post({ action, body: reviewBody(issues), threadIds, issueIds }),
+      api.api.reviews({ id: prId })["github-submit"].post({ action, threadIds, issueIds }),
       "Failed to submit review",
     );
     acceptWriteResult(prId, { conversation: result.conversation });

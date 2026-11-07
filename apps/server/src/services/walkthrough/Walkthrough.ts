@@ -7,6 +7,7 @@ import type {
   Walkthrough,
   WalkthroughEndReason,
   WalkthroughGenerationMode,
+  WalkthroughIssue,
   WalkthroughMode,
   WalkthroughPipelinePhase,
   WalkthroughReviewRound,
@@ -307,6 +308,15 @@ export class WalkthroughService extends Context.Service<
      * reviewer opening the tab and clicking Submit.
      */
     readonly markIssuesSubmitted: (issueIds: readonly string[]) => Effect.Effect<string, DbError>;
+
+    /**
+     * The PR's issues among `issueIds`, in that order. Ids that name no issue
+     * of this PR are dropped: a regenerate may have wiped them.
+     */
+    readonly issuesOnPr: (
+      prId: string,
+      issueIds: readonly string[],
+    ) => Effect.Effect<WalkthroughIssue[], DbError>;
 
     /**
      * Atomically take the next `seq` to stamp on an outgoing
@@ -820,6 +830,24 @@ export const WalkthroughServiceLive = Layer.effect(
             .where(inArray(walkthroughIssues.id, [...issueIds]))
             .run();
           return submittedAt;
+        }),
+
+      issuesOnPr: (prId, issueIds) =>
+        dbTry("issuesOnPr", () => {
+          if (issueIds.length === 0) return [];
+          const rows = db
+            .select({ issue: walkthroughIssues })
+            .from(walkthroughIssues)
+            .innerJoin(walkthroughs, eq(walkthroughs.id, walkthroughIssues.walkthroughId))
+            .where(
+              and(
+                inArray(walkthroughIssues.id, [...issueIds]),
+                eq(walkthroughs.pullRequestId, prId),
+              ),
+            )
+            .all();
+          const byId = new Map(rows.map(({ issue }) => [issue.id, decodeIssue(issue)]));
+          return issueIds.flatMap((id) => byId.get(id) ?? []);
         }),
 
       bumpSeq: (walkthroughId) =>

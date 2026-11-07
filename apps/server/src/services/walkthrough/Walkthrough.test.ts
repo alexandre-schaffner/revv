@@ -364,6 +364,30 @@ describe("supersede", () => {
   });
 });
 
+describe("issuesOnPr", () => {
+  it("returns the PR's issues in the order asked, dropping ids of other PRs or none", async () => {
+    const db = createDb(":memory:");
+    insertWalkthroughs(db, { id: "wt-1" }, { id: "wt-other", pullRequestId: "pr-2" });
+    const issue = (id: string, walkthroughId: string) => ({
+      id,
+      walkthroughId,
+      order: 0,
+      severity: "warning",
+      title: id,
+      description: "d",
+      createdAt: "2026-01-01T00:00:00Z",
+    });
+    db.insert(walkthroughIssues)
+      .values([issue("a", "wt-1"), issue("b", "wt-1"), issue("foreign", "wt-other")])
+      .run();
+
+    const issues = await runWalkthrough(db, (s) =>
+      s.issuesOnPr("pr-1", ["b", "foreign", "gone", "a"]),
+    );
+    expect(issues.map((i) => i.id)).toEqual(["b", "a"]);
+  });
+});
+
 describe("getLatestMode", () => {
   const latestMode = (db: Db) => runWalkthrough(db, (s) => s.getLatestMode("pr-1"));
 

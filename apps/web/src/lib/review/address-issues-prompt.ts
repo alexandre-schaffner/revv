@@ -1,6 +1,5 @@
-import type { WalkthroughIssue } from "@revv/shared";
+import { ISSUE_SEVERITY_TAG, issueLocation, type WalkthroughIssue } from "@revv/shared";
 import addressIssuesTemplate from "./address-issues.md?raw";
-import { ISSUE_SEVERITY_TAG, issueLocation } from "./issue-text";
 
 /**
  * The first chat message when the user clicks "Generate changes" in Your
