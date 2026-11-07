@@ -97,8 +97,9 @@ export const AiServiceLive = Layer.effect(
           },
         })(
           Effect.gen(function* () {
-            yield* requireLaunchable(params.launch);
-            return yield* Effect.promise(() => runWalkthroughTurn(params));
+            const result = yield* Effect.promise(() => runWalkthroughTurn(params));
+            if ("notConfigured" in result) return yield* Effect.fail(new AiNotConfiguredError());
+            return result;
           }),
         ),
 

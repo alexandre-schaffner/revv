@@ -14,7 +14,7 @@ export const mcpRecapRoute = bindTokenMcpRoute({
   rejected: "Session token not recognized, expired, or job no longer running",
   toContext: (ctx: RecapToolContext) => ({ ctx, meta: { recapId: ctx.recapId } }),
   logInbound: true,
-  traceAnchorKey: (meta) => meta.recapId,
+  trace: { attribute: "recapId", key: (meta) => meta.recapId },
   // The agent's stream names an MCP tool call only by a human title; this is
   // the one place that knows which recap tool ran.
   beforeToolCall: ({ toolName, input, ctx }) => {

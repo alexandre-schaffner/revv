@@ -13,7 +13,7 @@ export const mcpStackBriefRoute = bindTokenMcpRoute({
   rejected: "Session token not recognized, expired, or job no longer running",
   toContext: (ctx: StackBriefToolContext) => ({ ctx, meta: { briefId: ctx.briefId } }),
   logInbound: true,
-  traceAnchorKey: (meta) => meta.briefId,
+  trace: { attribute: "briefId", key: (meta) => meta.briefId },
   beforeToolCall: ({ toolName, ctx }) => ctx.onToolCall(toolName),
   servedMessage: (requests, _ctx, meta) =>
     `served ${requests.length} request(s), briefId=${meta.briefId}`,

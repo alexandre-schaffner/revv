@@ -86,14 +86,14 @@ export interface BindHttpOptions<Ctx, Meta, Result extends McpToolResult> {
   ) => ReadonlyArray<ToolSpec<Ctx, Result>>;
   readonly rejectToolCall?: (toolName: string, meta: Meta) => string | null;
   /**
-   * Key under which the job that provoked this call published its trace anchor
-   * (see observability/span-graft.ts) — the walkthrough id for generation, the
-   * recap id for recaps. Returning it files each `tools/call` span inside that
-   * job's trace instead of a trace of its own, which is what makes an agent's
-   * content writes visible in the generation timeline. Omit for surfaces with
-   * no owning job (chat context): the span is still recorded, just unparented.
+   * The job that provoked this call: `key` is the id it published its trace
+   * anchor under (see observability/span-graft.ts), stamped on the span as
+   * `attribute`. Files each `tools/call` span inside that job's trace instead
+   * of a trace of its own, which is what makes an agent's content writes
+   * visible in the generation timeline. Omit for surfaces with no owning job
+   * (chat context): the span is still recorded, just unparented.
    */
-  readonly traceAnchorKey?: (meta: Meta) => string | null;
+  readonly trace?: { readonly attribute: string; readonly key: (meta: Meta) => string };
   readonly beforeToolCall?: (call: HttpToolCall<Ctx, Meta>) => void;
   readonly servedMessage?: (requests: readonly JsonRpcRequest[], ctx: Ctx, meta: Meta) => string;
 }
@@ -177,11 +177,16 @@ async function handleToolsCall<Ctx, Meta, Result extends McpToolResult>(
       ctx: resolved.ctx,
       meta: resolved.meta,
     });
-    const anchorKey = options.traceAnchorKey?.(resolved.meta) ?? null;
+    const anchorKey = options.trace?.key(resolved.meta) ?? null;
     const result = await withGraftedSpan(
       anchorKey,
       `Mcp.${name}`,
-      { attributes: { mcp_tool: name, ...(anchorKey ? { walkthrough_id: anchorKey } : {}) } },
+      {
+        attributes: {
+          mcp_tool: name,
+          ...(anchorKey && options.trace ? { [options.trace.attribute]: anchorKey } : {}),
+        },
+      },
       () => spec.handler(resolved.ctx, parsed.data),
     );
     return jsonRpcSuccess(id, result);

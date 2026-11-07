@@ -3,7 +3,7 @@ import { isOpenLayer, type StackBriefStatus } from "@revv/shared";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { Cause, Context, Effect, Layer } from "effect";
 import { resolveAgentLaunch } from "../../ai/acp/agent-launch";
-import { isAgentLaunchable } from "../../ai/acp/launch";
+import { makeTurnSettle, type TurnSettle } from "../../ai/acp/run-turn";
 import { runStackBriefAgentViaAcp } from "../../ai/providers/stack-brief-acp";
 import {
   type StackBriefToolContext,
@@ -93,7 +93,7 @@ export function buildStackBriefSnapshot(
 interface BriefRun {
   readonly tools: StackBriefToolContext;
   calledAnyTool: boolean;
-  validated: boolean;
+  readonly completion: TurnSettle;
   modelUsed: string | null;
 }
 
@@ -198,18 +198,12 @@ export const StackBriefJobsLive = Layer.effect(
         const agentLaunch = yield* resolveAgentLaunch("brief").pipe(
           Effect.provideService(SettingsService, settingsService),
         );
-        if (!isAgentLaunchable(agentLaunch.agent)) {
-          return {
-            kind: "failed",
-            failure: `The configured agent ('${agentLaunch.agent}') is not available on this machine.`,
-          };
-        }
         run.context.modelUsed = agentLaunch.model;
         const repo = yield* withDb(db, prCtx.getRepo(row.repositoryId)).pipe(
           Effect.orElseSucceed(() => null),
         );
 
-        const outcome = yield* Effect.promise(() =>
+        const error = yield* Effect.promise(() =>
           runStackBriefAgentViaAcp({
             ctx: run.context.tools,
             snapshot,
@@ -219,13 +213,13 @@ export const StackBriefJobsLive = Layer.effect(
             abortController: run.abort,
             activity: run.activity,
             calledAnyTool: () => run.context.calledAnyTool,
-            isValidated: () => run.context.validated,
+            completion: run.context.completion,
           }),
         );
         return {
           kind: "journal",
           failure:
-            outcome.error ??
+            error?.message ??
             "The agent stopped before complete_stack_brief; the brief is unfinished",
         };
       });
@@ -234,10 +228,11 @@ export const StackBriefJobsLive = Layer.effect(
       jobs
         .launch({
           id: briefId,
-          context: (handles): BriefRun => {
+          context: (): BriefRun => {
+            const completion = makeTurnSettle();
             const context: BriefRun = {
               calledAnyTool: false,
-              validated: false,
+              completion,
               modelUsed: null,
               tools: {
                 db,
@@ -245,12 +240,7 @@ export const StackBriefJobsLive = Layer.effect(
                 onToolCall: () => {
                   context.calledAnyTool = true;
                 },
-                onCompleted: () => {
-                  context.validated = true;
-                  if (!handles.abort.signal.aborted) {
-                    handles.abort.abort(new Error("Stack brief completed"));
-                  }
-                },
+                onCompleted: completion.settle,
               },
             };
             return context;

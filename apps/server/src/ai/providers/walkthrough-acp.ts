@@ -18,9 +18,8 @@ import { ZERO_TOKEN_USAGE } from "@revv/shared";
 import { debug, logError } from "../../logger";
 import { graftedSpan } from "../../observability/span-graft";
 import type { PrFileMeta } from "../../services/github/pulls";
-import { AgentTurnError } from "../acp/agent-failure";
 import type { AgentLaunch } from "../acp/agent-launch";
-import { type ActivityBeacon, JOB_TURN, runAcpTurn } from "../acp/run-turn";
+import { type AcpTurnOutcome, type ActivityBeacon, JOB_TURN, runAcpTurn } from "../acp/run-turn";
 import { decodeAcpSessionUpdate, makeAcpDecodeState } from "../agent-stream/acp-decoders";
 import type { NormalizedAgentEvent } from "../agent-stream/normalized-events";
 import {
@@ -91,7 +90,7 @@ export interface WalkthroughTurnResult {
  */
 export async function runWalkthroughTurn(
   params: WalkthroughTurnParams,
-): Promise<WalkthroughTurnResult> {
+): Promise<WalkthroughTurnResult | { readonly notConfigured: true }> {
   const push = params.onLive;
   let finished = false;
   const activity = params.activity;
@@ -207,8 +206,9 @@ export async function runWalkthroughTurn(
   }, WALKTHROUGH_HEARTBEAT_MS);
   const decodeState = makeAcpDecodeState();
 
+  let end: AcpTurnOutcome;
   try {
-    const { end } = await runAcpTurn({
+    end = await runAcpTurn({
       label: "walkthrough-acp",
       launch: params.launch,
       cwd: params.worktreePath,
@@ -221,7 +221,7 @@ export async function runWalkthroughTurn(
       deadlines: JOB_TURN,
       activity,
       signal: params.abortController.signal,
-      traceKey: params.walkthroughId,
+      trace: { key: params.walkthroughId, attribute: "walkthrough_id" },
       onSessionOpened: () => {
         // The model may take minutes to its first tool call; the session is alive.
         lastPhaseMessage = "Waiting for model response...";
@@ -233,21 +233,6 @@ export async function runWalkthroughTurn(
         for (const ev of decodeAcpSessionUpdate(update, decodeState)) handleAgentEvent(ev);
       },
     });
-    if (end.kind === "timeout") {
-      debug("walkthrough-acp", "turn timed out:", end.reason);
-      return { end: { kind: "timeout", reason: end.reason }, tokenUsage };
-    }
-    if (end.kind === "cancelled") {
-      return { end: { kind: "cancelled", reason: end.reason }, tokenUsage };
-    }
-    return { end: { kind: "stopped", refused: end.stopReason === "refusal" }, tokenUsage };
-  } catch (err) {
-    const failure = err instanceof AgentTurnError ? err : new AgentTurnError(String(err), "other");
-    logError("walkthrough-acp", "turn failed:", failure.message);
-    return {
-      end: { kind: "failed", message: failure.message, auth: failure.kind === "auth" },
-      tokenUsage,
-    };
   } finally {
     finished = true;
     clearInterval(heartbeatInterval);
@@ -255,5 +240,26 @@ export async function runWalkthroughTurn(
     // an unended span never reaches the exporter.
     for (const span of openToolSpans.values()) span.end();
     openToolSpans.clear();
+  }
+  switch (end.kind) {
+    case "timeout":
+      debug("walkthrough-acp", "turn timed out:", end.reason);
+      return { end, tokenUsage };
+    case "cancelled":
+      return { end, tokenUsage };
+    case "stopped":
+    case "settled":
+      return {
+        end: { kind: "stopped", refused: end.kind === "stopped" && end.stopReason === "refusal" },
+        tokenUsage,
+      };
+    case "failed":
+      logError("walkthrough-acp", "turn failed:", end.failure.message);
+      return {
+        end: { kind: "failed", message: end.failure.message, auth: end.failure.kind === "auth" },
+        tokenUsage,
+      };
+    case "not_configured":
+      return { notConfigured: true };
   }
 }

@@ -7,11 +7,11 @@
 import type { RecapStreamEvent } from "@revv/shared";
 import { logError } from "../../logger";
 import type { AgentLaunch } from "../acp/agent-launch";
-import type { ActivityBeacon } from "../acp/run-turn";
+import type { ActivityBeacon, TurnSettle } from "../acp/run-turn";
 import { decodeAcpSessionUpdate, makeAcpDecodeState } from "../agent-stream/acp-decoders";
 import type { NormalizedAgentEvent } from "../agent-stream/normalized-events";
 import { buildRecapUserMessage, RECAP_SYSTEM_PROMPT } from "../prompts/recap";
-import { type McpAgentAcpResult, runMcpAgentViaAcp } from "./mcp-agent-acp";
+import { type McpAgentRunError, runMcpAgentViaAcp } from "./mcp-agent-acp";
 import { createRecapDispatchState, dispatchRecapStreamEvent } from "./recap-event-dispatch";
 import type { RecapToolContext } from "./recap-tools";
 import { RECAP_MCP_SERVER } from "./recap-tools";
@@ -26,13 +26,13 @@ export interface RunRecapAgentAcpParams {
   readonly abortController: AbortController;
   readonly activity: ActivityBeacon;
   readonly calledAnyTool: () => boolean;
-  /** True once `complete_recap` passed during this run. */
-  readonly isValidated: () => boolean;
+  /** Fired once `complete_recap` passed during this run. */
+  readonly completion: TurnSettle;
 }
 
 export async function runRecapAgentViaAcp(
   params: RunRecapAgentAcpParams,
-): Promise<McpAgentAcpResult> {
+): Promise<McpAgentRunError> {
   const userMessage = `${RECAP_SYSTEM_PROMPT}\n\n---\n\n${buildRecapUserMessage(
     params.ctx.sourceBundle,
     params.ctx.priorRecaps,
@@ -40,7 +40,7 @@ export async function runRecapAgentViaAcp(
 
   const dispatchState = createRecapDispatchState();
   const fanOut = (event: RecapStreamEvent): void => {
-    if (params.isValidated()) return;
+    if (params.completion.settled()) return;
     try {
       params.ctx.emit(event);
     } catch (err) {
@@ -55,25 +55,25 @@ export async function runRecapAgentViaAcp(
     dispatchRecapStreamEvent(ev, dispatchState, fanOut);
   const decodeState = makeAcpDecodeState();
 
-  const outcome = await runMcpAgentViaAcp({
+  const error = await runMcpAgentViaAcp({
     launch: params.launch,
     workingDir: params.workingDir,
     abortController: params.abortController,
     activity: params.activity,
-    traceKey: params.ctx.recapId,
+    settle: params.completion,
+    trace: { key: params.ctx.recapId, attribute: "recapId" },
     route: "/mcp/recap",
     mcpServerName: `${RECAP_MCP_SERVER}-${params.ctx.recapId}`,
     sessionToken: params.sessionToken,
     prompt: userMessage,
     calledAnyTool: params.calledAnyTool,
-    isValidated: params.isValidated,
     debugLabel: "recap-acp",
     onSessionUpdate: (update) => {
       for (const ev of decodeAcpSessionUpdate(update, decodeState)) onAgentEvent(ev);
     },
   });
-  if (outcome.noToolCalls && outcome.error) {
-    params.ctx.emit({ type: "error", data: { code: "NoToolCalls", message: outcome.error } });
+  if (error?.kind === "no_tool_calls") {
+    params.ctx.emit({ type: "error", data: { code: "NoToolCalls", message: error.message } });
   }
-  return outcome;
+  return error;
 }

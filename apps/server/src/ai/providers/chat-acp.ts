@@ -6,11 +6,10 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ContentBlock } from "@agentclientprotocol/sdk";
 import { type ChatAttachment, extractMentionTokens, type InteractionMode } from "@revv/shared";
-import { AiGenerationError } from "../../domain/errors";
+import { AiGenerationError, AiNotConfiguredError } from "../../domain/errors";
 import { logError } from "../../logger";
-import { AgentTurnError } from "../acp/agent-failure";
 import type { AgentLaunch } from "../acp/agent-launch";
-import { CHAT_TURN, runAcpTurn, type TurnMcpServer } from "../acp/run-turn";
+import { type AcpTurnOutcome, CHAT_TURN, runAcpTurn, type TurnMcpServer } from "../acp/run-turn";
 import { decodeAcpSessionUpdate, makeAcpDecodeState } from "../agent-stream/acp-decoders";
 import { fluidEmit } from "../agent-stream/fluid-chunker";
 import type { NormalizedAgentEvent } from "../agent-stream/normalized-events";
@@ -107,13 +106,22 @@ function buildPromptBlocks(opts: {
   return [{ type: "text", text }, ...extractFileReferences(opts.message, opts.cwd), ...blocks];
 }
 
-function toAiError(err: unknown): AiGenerationError {
-  return err instanceof AgentTurnError
-    ? new AiGenerationError({ cause: err, message: err.message, kind: err.kind })
-    : new AiGenerationError({
-        cause: err,
-        message: err instanceof Error ? err.message : String(err),
+function turnError(
+  outcome: Exclude<AcpTurnOutcome, { readonly kind: "stopped" | "settled" }>,
+): AiGenerationError | AiNotConfiguredError {
+  switch (outcome.kind) {
+    case "cancelled":
+    case "timeout":
+      return new AiGenerationError({ cause: outcome.reason, message: outcome.reason });
+    case "failed":
+      return new AiGenerationError({
+        cause: outcome.failure.cause,
+        message: outcome.failure.message,
+        kind: outcome.failure.kind,
       });
+    case "not_configured":
+      return new AiNotConfiguredError();
+  }
 }
 
 export function streamChatViaAcp(
@@ -165,7 +173,7 @@ export function streamChatViaAcp(
       const decodeState = makeAcpDecodeState();
 
       try {
-        const { end } = await runAcpTurn({
+        const end = await runAcpTurn({
           label: "chat-acp",
           launch: opts.launch,
           cwd: opts.cwd,
@@ -198,8 +206,13 @@ export function streamChatViaAcp(
           },
         });
 
-        if (end.kind !== "stopped") throw new Error(end.reason);
-        if (end.stopReason === "refusal") {
+        if (end.kind !== "stopped" && end.kind !== "settled") {
+          const error = turnError(end);
+          logError("chat-acp", "turn failed:", error.message ?? error._tag);
+          controller.error(error);
+          return;
+        }
+        if (end.kind === "stopped" && end.stopReason === "refusal") {
           controller.enqueue({ kind: "text", data: "\n\n_The agent declined to continue._" });
         }
         // In plan mode the buffered assistant turn is the plan.
@@ -209,9 +222,10 @@ export function streamChatViaAcp(
         }
         controller.close();
       } catch (err) {
-        const error = toAiError(err);
-        logError("chat-acp", "turn failed:", error.message ?? String(err));
-        controller.error(error);
+        // The client went away mid-turn: the controller refuses further frames.
+        const message = err instanceof Error ? err.message : String(err);
+        logError("chat-acp", "turn failed:", message);
+        controller.error(new AiGenerationError({ cause: err, message }));
       } finally {
         opts.onFinished?.();
       }

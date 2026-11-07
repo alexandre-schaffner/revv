@@ -16,7 +16,7 @@ export const mcpWalkthroughRoute = bindTokenMcpRoute({
   logInbound: true,
   // File each content write inside the generation's trace — the agent calls us
   // from its own subprocess, so without this every write is an orphan trace.
-  traceAnchorKey: (meta) => meta.walkthroughId,
+  trace: { attribute: "walkthrough_id", key: (meta) => meta.walkthroughId },
   beforeToolCall: ({ toolName, ctx }) => {
     const summary = TOOL_ACTIVITY.get(toolName);
     if (summary === undefined) return;
