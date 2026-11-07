@@ -20,7 +20,7 @@ that hides provider details, GitHub mechanics, persistence shape, and transport 
 ```text
 Feature modules        Walkthrough        Chat        Recaps        Merge-conflict
                             \               |             /
-Agent substrate        job helpers      AI Providers      MCP Tool Gateway
+Agent substrate        job kernel       AI Providers      MCP Tool Gateway
                             \               |             /
 Context seam                         PR Context
                             /               |             \
@@ -39,29 +39,33 @@ GitHub, token, repository, or daemon details.
 
 ### AI Providers
 
-`AiService` exposes the three provider-shaped operations the product actually needs:
-walkthrough streaming, chat streaming, and merge-conflict resolution. Provider selection is read
-through `SettingsService.resolveAgent()`; provider-specific dependency assembly stays inside the
-AI layer.
+Every agent is an ACP (Agent Client Protocol) subprocess; `ai/acp/run-turn.ts` runs one turn and
+`ai/acp/agents/` holds one adapter per agent (how model and effort reach it, its auth probe, its
+environment). `AiService` exposes the operations the product needs: `walkthroughTurn`, `chat`,
+`resolveMergeConflict` and `isConfigured`. Provider selection is read through
+`SettingsService.resolveAgent()`; provider-specific assembly stays inside the AI layer.
 
-### Job Helpers
+### Job Kernel
 
-Shared job code should stay as small helpers for duplicated mechanics such as subscriber fan-out,
-per-key start mutexes, failure verdicts, and session-token stores. Walkthrough and recap
-orchestrators remain concrete because their lifecycle, phases, worktree ownership, and completion
-semantics differ.
+`makeAgentJobs` (`services/jobs/agent-jobs.ts`) is the one kernel every durable agent pipeline
+(walkthrough, project recap, stack brief) runs on: the registry of live runs, the concurrency
+budget, launch, Stop, resume-on-boot and how a run ends. Each orchestrator (`WalkthroughJobs`,
+`ProjectRecapJobs`, `StackBriefJobs`) supplies its journal reads and writes, its phases and its
+completion check. The journal row is the job.
 
 ### MCP Tool Gateway
 
-Agent content reaches SQLite through MCP tool handlers. Tool handlers are the shared gateway
-between in-process SDK usage and HTTP daemon usage; each tool validates raw input at the boundary
-and performs one atomic idempotent write.
+Agent content reaches SQLite through MCP tool handlers, served over HTTP by the `routes/mcp/`
+routes (one per pipeline, plus chat and the external coding agents) and authenticated with a
+per-run bearer token. Each tool validates raw input at the boundary and performs one atomic
+idempotent write.
 
 ### PR Context
 
-`PrContextService` is the PR-scoped context seam. Walkthrough, Chat, and Recap code should consume
-PR, repository, token, metadata, and diff context from this service instead of importing
-`GitHubGateway`, `RepositoryService`, or `GitHubAccounts` directly.
+`PrContextService` is the PR-scoped context seam. Walkthrough, Chat, Recap and stack code consume
+PR, repository, metadata, and diff context from it, plus the `GitHubClient` for the repository's
+owning account, which they pass to `GitHubGateway`. They never import `RepositoryService` or
+`GitHubAccounts`, and never mint a client of their own.
 
 ### Settings
 
@@ -77,26 +81,22 @@ Repos/GitHub hides API calls, retries, sync watermarks, and metadata persistence
 
 #### Realtime / Events
 
-`Broadcaster` is the realtime narrow neck for the global SSE stream (`GET /api/events`). Its
-interface is — `register` / `broadcastToAccount` / `broadcastAll` — and it hides best-effort
-fan-out, SSE frame encoding, and disconnect bookkeeping. The envelope union (`ServerEventMessage`)
-lives entirely in `@revv/shared/src/events`, never server-side, so the wire contract has one
-source of truth.
+`Realtime` (`services/Realtime.ts`) is the realtime narrow neck for the global SSE stream
+(`GET /api/events`). Features address a push to an account: `toAccount(accountId, msg)`, or
+`toRepo(repoId, msg)` / `toPr(prId, msg)`, which resolve the owning account in one place.
+`toAll(msg)` reaches every connected client and is reserved for server-global sync signals.
+`Broadcaster` is the transport underneath (`register` per account from `routes/events.ts`, fan-out,
+disconnect bookkeeping); only `Realtime`, `AppLayer` and the events route may import it
+(`check:import-boundaries`). The envelope union (`ServerEventMessage`) lives entirely in
+`@revv/shared/src/events`, so the wire contract has one source of truth.
 
-`broadcastToAccount(accountId, msg)` fans out only to the writers registered for that account.
-`broadcastAll(msg)` fans out to every registered writer regardless of account — use this only
-for server-global sync-lifecycle signals (`prs:sync-started`, `prs:sync-complete`, and the
-generic `error` envelope for sync failures). All feature-level events use `broadcastToAccount`.
+Doctrine: **commit-first, broadcast-second** (invariant #8). Callers MUST commit to SQLite before
+sending; a missed push is reconstructible from the DB on reconnect via the snapshot REST
+endpoints. The interface carries no sequence cursor: the walkthrough emitter bumps the durable
+`seq` and stamps it onto the envelope before sending.
 
-Doctrine: **commit-first, broadcast-second** (invariant #8). The broadcaster is the broadcast
-point — callers MUST commit to SQLite before broadcasting; a missed broadcast is reconstructible
-from the DB on reconnect via the snapshot REST endpoints. The interface carries no sequence cursor:
-the walkthrough emitter owns `bumpSeq` (durable wire cursor) and `nextSeq` (in-memory diagnostic)
-and stamps `seq` onto the envelope before it reaches the broadcaster.
-
-PR / repo / auth / thread / chat / recap envelopes all flow through this same
-SSE channel. Client-initiated sync requests are REST commands; server-to-client updates are
-`ServerEventMessage` envelopes broadcast by `Broadcaster`.
+PR / repo / auth / thread / chat / recap envelopes all flow through this same SSE channel.
+Client-initiated sync requests are REST commands.
 
 #### Local Git
 
@@ -121,8 +121,9 @@ touches the local filesystem.
 
 Feature modules depend inward on platform seams:
 
-- Walkthrough, Chat, and Recap use `PrContextService` for PR-scoped GitHub context; they do not
-  import `GitHubGateway`, `RepositoryService`, or `GitHubAccounts` directly.
+- Walkthrough, Chat, Recap and stack pipelines use `PrContextService` for PR-scoped GitHub
+  context and call `GitHubGateway` only with its client; they do not import `RepositoryService`
+  or `GitHubAccounts`.
 - Only `services/github/` sends requests to GitHub (`services/github/transport`); everything else
   calls `GitHubGateway` with a client minted by `GitHubAccounts` or `PrContextService`.
 - Provider selection comes from `SettingsService`, not from AI-provider helpers.
@@ -130,6 +131,8 @@ Feature modules depend inward on platform seams:
 - Routes resolve account context through `GitHubAccounts`, not `SecretStore` directly.
 - Only `services/git/` spawns git, through its runner; everything else calls `services/git/ops`
   (or `RepoCloneService` / `PrWorkspace` for worktrees).
+- Features send realtime pushes through `Realtime`, never `Broadcaster`.
+- A multi-file feature keeps its files in `services/<feature>/` (conventions §2.7).
 
-`bun run check:import-boundaries` enforces the PR-context, secret-store, GitHub-transport, and Local-Git import rules and
-names the remaining legacy exceptions scheduled for later waves.
+`bun run check:import-boundaries` enforces the PR-context, secret-store, GitHub-transport,
+Local-Git and Broadcaster import rules.

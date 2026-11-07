@@ -180,7 +180,7 @@ make dist             # build the macOS app bundle
 bun run typecheck && bun run lint && bun run knip && bun run build
 ```
 
-Read the [agent and contributor guide](AGENTS.md), [code conventions](docs/conventions.md), and [product roadmap](docs/prds/README.md) before making changes. Open pull requests against `main`.
+Read the [agent and contributor guide](CLAUDE.md), [code conventions](docs/conventions.md), and [product roadmap](docs/prds/README.md) before making changes. Open pull requests against `main`.
 
 </details>
 
