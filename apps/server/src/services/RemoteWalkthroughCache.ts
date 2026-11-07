@@ -144,11 +144,7 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
           const key = cacheObjectKey(repoFullName, headSha);
           const record = yield* blob.get(key).pipe(
             Effect.catch((e) => {
-              if (e._tag === "BlobCorrupt") {
-                logError("remote-cache", `blob corrupt key=${key}: ${e.reason}`);
-              } else {
-                debug("remote-cache", `fetch failed key=${key}: ${e.message}`);
-              }
+              debug("remote-cache", `fetch failed key=${key}: ${e.message}`);
               return Effect.succeed(
                 Option.none<{ body: Buffer; metadata: Record<string, string> }>(),
               );
@@ -207,19 +203,13 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
               const contentSha = advertisedSha ?? createHash("sha256").update(body).digest("hex");
               const sigMsg = cacheSigningMessage(repoFullName, headSha, contentSha);
 
-              const verifyResult = yield* signer
-                .verify(sigMsg, signature, signerHost, signerLogin)
-                .pipe(
-                  Effect.map(() => "ok" as const),
-                  Effect.catch((e) => {
-                    const tag = (e as { _tag?: string })._tag ?? "unknown";
-                    const msg = (e as { message?: string }).message ?? String(e);
-                    return Effect.succeed(`fail:${tag}:${msg}` as const);
-                  }),
-                );
+              const verified = yield* Effect.result(
+                signer.verify(sigMsg, signature, signerHost, signerLogin),
+              );
 
-              if (typeof verifyResult === "string" && verifyResult.startsWith("fail:")) {
-                const detail = verifyResult.slice(5);
+              if (verified._tag === "Failure") {
+                const e = verified.failure;
+                const detail = `${e._tag}: ${e._tag === "SshKeysFetchFailed" ? `couldn't fetch ${e.login}'s keys from ${e.host}` : e.message}`;
                 if (signingMode === "strict") {
                   logError(
                     "remote-cache",
@@ -322,9 +312,19 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
 
           const repoFullName = repo.fullName;
 
-          const canPush = yield* eligibility
-            .canPush(repo.id)
-            .pipe(Effect.catch(() => Effect.succeed(false)));
+          const canPush = yield* eligibility.canPush(repo.id).pipe(
+            Effect.catch((err) =>
+              Effect.sync(() => {
+                logError(
+                  "remote-cache",
+                  `push skipped: couldn't read the write permission on ${repoFullName}:`,
+                  err,
+                );
+                return null;
+              }),
+            ),
+          );
+          if (canPush === null) return;
           if (!canPush) {
             debug(
               "remote-cache",

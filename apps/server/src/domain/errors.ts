@@ -317,16 +317,6 @@ export class BlobStoreUnavailable extends Data.TaggedError("BlobStoreUnavailable
 }> {}
 
 /**
- * The blob exists but its metadata or body is unusable (missing
- * `schemaVersion`, `contentSha256` mismatch, gunzip failure). Cache hit
- * is downgraded to a miss; no row mutation.
- */
-export class BlobCorrupt extends Data.TaggedError("BlobCorrupt")<{
-  readonly key: string;
-  readonly reason: string;
-}> {}
-
-/**
  * `RemoteWalkthroughCache` operation hit an unreachable backend. The
  * orchestrator treats this as "cache miss" and runs the agent.
  */
@@ -435,7 +425,6 @@ type AppError =
   | RecapNotFoundError
   | DbError
   | BlobStoreUnavailable
-  | BlobCorrupt
   | CacheUnavailable
   | CacheSerialization
   | ImportError
@@ -607,7 +596,6 @@ const HTTP_ERRORS: {
   DbError: (e) => internal(e.message),
   ProfilingError: (e) => internal(String(e.cause)),
   BlobStoreUnavailable: (e) => internal(e.message),
-  BlobCorrupt: (e) => internal(e.reason),
   CacheUnavailable: (e) => internal(e.message),
   CacheSerialization: (e) => internal(e.message),
   ImportError: (e) => internal(e.reason),

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { Cause, Data, Deferred, Effect, Exit, Fiber, Layer, Option } from "effect";
 import { createDb } from "../db";
-import { CacheService, CacheServiceLive } from "./Cache";
+import { kvCache } from "../db/schema/index";
+import { CacheService, CacheServiceLive, kvCacheRetention } from "./Cache";
 import { DbService } from "./Db";
 
 class FetchFailed extends Data.TaggedError("FetchFailed")<{ readonly reason: string }> {}
@@ -118,5 +119,23 @@ describe("CacheService.getOrFetch", () => {
     );
     expect([a, b]).toEqual(["value", "value"]);
     expect(calls).toBe(1);
+  });
+});
+
+describe("kvCacheRetention", () => {
+  it("ages out entries that never expire once they are old, and keeps fresh ones", async () => {
+    const db = createDb(":memory:");
+    const now = new Date("2026-06-01T00:00:00Z");
+    const at = (days: number) => new Date(now.getTime() - days * 86_400_000).toISOString();
+    db.insert(kvCache)
+      .values([
+        { ns: "jev", key: "old", valueJson: "1", fetchedAt: at(31), expiresAt: null },
+        { ns: "jev", key: "fresh", valueJson: "1", fetchedAt: at(2), expiresAt: null },
+        { ns: "ttl", key: "expired", valueJson: "1", fetchedAt: at(1), expiresAt: at(0.5) },
+      ])
+      .run();
+
+    expect(kvCacheRetention.sweep(db, now)).toBe(2);
+    expect(db.select({ key: kvCache.key }).from(kvCache).all()).toEqual([{ key: "fresh" }]);
   });
 });

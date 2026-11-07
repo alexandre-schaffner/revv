@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { Context, Effect, Layer, Stream } from "effect";
 import {
+  SshKeygenMissing,
   SshKeysFetchFailed,
   SshSignatureInvalid,
   SshSigningUnavailable,
@@ -11,6 +12,7 @@ import { debug } from "../../logger";
 import { githubTryPromise } from "../../observability/github-ledger/origin";
 import { GitHubAccounts } from "../github/accounts";
 import { SettingsService } from "../Settings";
+import { cacheSigningNamespace } from "../walkthrough-cache-format";
 import { PubkeyCache } from "./pubkey-cache";
 import { sshSign, sshVerify } from "./ssh-keygen";
 
@@ -27,8 +29,8 @@ export class SshSigner extends Context.Service<
   {
     /**
      * `accountId` is the account tracking the repository the message is about.
-     * With no key path in settings, the first call picks the `~/.ssh` key that
-     * account publishes on GitHub and saves it to settings.
+     * With no key path in settings, it signs with the `~/.ssh` key that
+     * account publishes on GitHub, found once per process.
      */
     readonly sign: (
       message: string,
@@ -39,7 +41,7 @@ export class SshSigner extends Context.Service<
       signature: string,
       signerHost: string,
       signerLogin: string,
-    ) => Effect.Effect<void, SshSignatureInvalid | SshKeysFetchFailed>;
+    ) => Effect.Effect<void, SshSignatureInvalid | SshKeysFetchFailed | SshKeygenMissing>;
   }
 >()("SshSigner") {}
 
@@ -59,14 +61,8 @@ async function autoDetectKeyPath(
   }
 
   const candidates = files.filter((f) => SSH_KEY_PATTERNS.test(f) && files.includes(`${f}.pub`));
-
-  let publishedKeys: string[];
-  try {
-    publishedKeys = await pubkeyCache.getKeys(host, login);
-  } catch {
-    return null;
-  }
-
+  // A failed fetch is not "no key matches": it propagates with its cause.
+  const publishedKeys = await pubkeyCache.getKeys(host, login);
   if (publishedKeys.length === 0) return null;
 
   for (const candidate of candidates) {
@@ -88,6 +84,9 @@ export const SshSignerLive = Layer.effect(
     const settingsSvc = yield* SettingsService;
     const accounts = yield* GitHubAccounts;
     const pubkeyCache = new PubkeyCache();
+    // Found once per process rather than saved as the user's key setting, so a
+    // key they replace is found again on the next start.
+    const detectedKeys = new Map<string, string>();
 
     yield* Effect.forkScoped(
       settingsSvc
@@ -122,13 +121,17 @@ export const SshSignerLive = Layer.effect(
             );
           }
 
-          let keyPath = settings.cache.signing.keyPath;
-          let autoDetected: string | undefined;
+          const detectedFor = `${acct.host}:${acct.login}`;
+          let keyPath = settings.cache.signing.keyPath || detectedKeys.get(detectedFor);
 
           if (!keyPath) {
             const detected = yield* githubTryPromise({
               try: () => autoDetectKeyPath(acct.login, acct.host, pubkeyCache),
-              catch: () => new SshSigningUnavailable({ message: "key auto-detection failed" }),
+              catch: (e) =>
+                new SshSigningUnavailable({
+                  message: `couldn't read the keys ${acct.login} publishes on ${acct.host}: ${e instanceof Error ? e.message : String(e)}`,
+                  cause: e,
+                }),
             });
 
             if (!detected) {
@@ -140,10 +143,11 @@ export const SshSignerLive = Layer.effect(
             }
 
             keyPath = detected;
-            autoDetected = detected;
+            detectedKeys.set(detectedFor, detected);
+            debug("cache-signing", `auto-detected key path: ${detected}`);
           }
 
-          const namespace = `revv-cache@${acct.host}`;
+          const namespace = cacheSigningNamespace(acct.host);
           const signature = yield* Effect.tryPromise({
             try: () => sshSign(message, keyPath, namespace),
             catch: (e) => {
@@ -154,13 +158,6 @@ export const SshSignerLive = Layer.effect(
               });
             },
           });
-
-          if (autoDetected) {
-            yield* settingsSvc
-              .updateSettings({ cache: { signing: { keyPath: autoDetected } } })
-              .pipe(Effect.ignore);
-            debug("cache-signing", `auto-detected key path: ${autoDetected}`);
-          }
 
           return {
             signature,
@@ -181,12 +178,13 @@ export const SshSignerLive = Layer.effect(
             },
           });
 
-          const namespace = `revv-cache@${signerHost}`;
+          const namespace = cacheSigningNamespace(signerHost);
           yield* Effect.tryPromise({
             try: () => sshVerify(message, signature, signerLogin, publicKeys, namespace),
             catch: (e) => {
               if (e instanceof SshSignatureInvalid) return e;
               if (e instanceof SshKeysFetchFailed) return e;
+              if (e instanceof SshKeygenMissing) return e;
               return new SshSignatureInvalid({
                 message: e instanceof Error ? e.message : String(e),
               });
