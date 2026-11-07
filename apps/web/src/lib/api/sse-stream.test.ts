@@ -147,7 +147,7 @@ describe("streamSse", () => {
   it("rejects with AbortError when the caller aborts", async () => {
     respondWith([], { hang: true });
     const ctrl = new AbortController();
-    const pending = collect({ signal: ctrl.signal, idleTimeoutMs: null }).catch((e: unknown) => e);
+    const pending = collect({ signal: ctrl.signal }).catch((e: unknown) => e);
     ctrl.abort();
     expect(await pending).toMatchObject({ name: "AbortError" });
   });

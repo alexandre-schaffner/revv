@@ -1,5 +1,5 @@
-// The client for the server's fetch-SSE streams. The server heartbeats most of
-// them (`: ping` every 15 s), so a stretch with no bytes at all means the
+// The client for the server's fetch-SSE streams. The server heartbeats every
+// one of them (`routes/sse.ts`), so a stretch with no bytes at all means the
 // connection is dead, not that the agent is thinking. A silent close (server
 // crash, the OS reclaiming the WKWebView socket) never resolves a pending
 // read, so only a timer can notice it.
@@ -21,11 +21,8 @@ interface SseStreamOptions<T> {
   readonly method?: "GET" | "POST";
   readonly body?: unknown;
   readonly signal?: AbortSignal;
-  /**
-   * Abort with {@link SseIdleError} after this long without a byte. `null`
-   * for streams the server doesn't heartbeat, where a quiet stretch is normal.
-   */
-  readonly idleTimeoutMs?: number | null;
+  /** Abort with {@link SseIdleError} after this long without a byte. */
+  readonly idleTimeoutMs?: number;
   /** Awaited before the next frame is delivered when it returns a promise. */
   readonly onEvent: (event: T) => void | Promise<void>;
 }
@@ -81,12 +78,10 @@ export async function streamSse<T>(opts: SseStreamOptions<T>): Promise<void> {
   if (opts.signal?.aborted) forwardAbort();
   opts.signal?.addEventListener("abort", forwardAbort, { once: true });
 
-  const idleTimeoutMs =
-    opts.idleTimeoutMs === undefined ? DEFAULT_IDLE_TIMEOUT_MS : opts.idleTimeoutMs;
+  const idleTimeoutMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let idleTripped = false;
   const armIdle = (): void => {
-    if (idleTimeoutMs === null) return;
     clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
       idleTripped = true;
@@ -140,7 +135,7 @@ export async function streamSse<T>(opts: SseStreamOptions<T>): Promise<void> {
       if (done) return;
     }
   } catch (err) {
-    if (idleTripped && idleTimeoutMs !== null) throw new SseIdleError(idleTimeoutMs);
+    if (idleTripped) throw new SseIdleError(idleTimeoutMs);
     throw err;
   } finally {
     clearTimeout(idleTimer);

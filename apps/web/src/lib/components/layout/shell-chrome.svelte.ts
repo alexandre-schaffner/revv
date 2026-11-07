@@ -20,8 +20,10 @@ export interface ShellChrome {
    * page's PR id, so one module-level snippet serves every PR).
    */
   tabs?: { readonly snippet: Snippet<[key: string]>; readonly key: string } | undefined;
-  /** Floats over the bottom of the main pane. */
+  /** Floats over the bottom of the main pane; render its controls in an `.actions-row`. */
   actions?: Snippet | undefined;
+  /** Right of the agent selectors in the bottom bar. */
+  status?: Snippet | undefined;
 }
 
 const KEY = Symbol("shell-chrome");
@@ -37,6 +39,7 @@ class ShellChromeHost {
       if (chrome.subtitle !== undefined) merged.subtitle = chrome.subtitle;
       if (chrome.tabs !== undefined) merged.tabs = chrome.tabs;
       if (chrome.actions !== undefined) merged.actions = chrome.actions;
+      if (chrome.status !== undefined) merged.status = chrome.status;
     }
     return merged;
   });

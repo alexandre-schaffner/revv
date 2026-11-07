@@ -87,7 +87,7 @@ The project uses **Drizzle's code-first migration workflow**.
 - **Chat**: state lives in `src/lib/chat/` (`timeline`, `proposed`, `session`, `queue`, and `turn`, which sends turns and owns the PR-level actions), its UI in `components/chat/`. Tool-call cards and peeks shared by chat, walkthrough and recaps are in `components/agent-activity/` (with the token gauge the bottom bar shows).
 - **Feature folders**: a feature's state, pure logic and API calls live together in `src/lib/<feature>/` (`chat/`, `walkthrough/`, `hunk-scan/`, `recaps/`, `agent-setup/`, `repos/`, `conversation/`, `stacks/`, `pierre/`, `markdown/`, …); a helper only one component folder uses sits in that `components/<feature>/` folder. `src/lib/utils/` keeps only helpers several features share.
 - **API client**: Eden (Elysia type-safe client) — import from `@revv/server` types.
-- **Deep links**: `revv://` links open a PR (`stores/pr-deep-link.svelte.ts`), arriving through `tauri-plugin-deep-link` in `routes/+layout.svelte`. Sign-in is GitHub's device flow, with no redirect back into the app.
+- **Deep links**: `revv://` links open a PR (`deep-link/pr-deep-link.svelte.ts`, which also listens through `tauri-plugin-deep-link` from `routes/+layout.svelte`). Sign-in is GitHub's device flow, with no redirect back into the app.
 - **Component library**: shadcn-svelte + Tailwind CSS v4.
 
 ### Desktop (`apps/desktop`)

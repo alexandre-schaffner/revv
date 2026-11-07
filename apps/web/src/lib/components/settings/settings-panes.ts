@@ -3,18 +3,7 @@
 // lists them, which is the only registration a new pane needs.
 
 import type { Component } from "svelte";
-
-/** The settings sections, by the id each pane declares. */
-export type SettingsSectionId =
-  | "general"
-  | "account"
-  | "repositories"
-  | "ai"
-  | "recap"
-  | "jev"
-  | "integrations"
-  | "cache"
-  | "updates";
+import type { SettingsSectionId } from "$lib/stores/settingsModal.svelte";
 
 export interface SettingsRowMeta {
   readonly label: string;

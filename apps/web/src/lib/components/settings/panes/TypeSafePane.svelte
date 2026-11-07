@@ -18,7 +18,7 @@ export const pane = defineSettingsPane({
 <script lang="ts">
 import Spinner from "phosphor-svelte/lib/Spinner";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
+import { call } from "$lib/api/errors";
 import { type EdenData, thrownMessage } from "$lib/api/wire";
 import { Button } from "$lib/components/ui/button/index.js";
 import { Input } from "$lib/components/ui/input";
@@ -51,9 +51,8 @@ async function saveApiKey(value: string): Promise<void> {
   apiKeySaving = true;
   testState = null;
   try {
-    const { error } = await api.api.settings.jev["api-key"].put({ apiKey: value });
-    if (error) testState = { ok: false, error: apiErrorMessage(error, "Could not save the key") };
-    else await afterKeyChange();
+    await call(api.api.settings.jev["api-key"].put({ apiKey: value }), "Could not save the key");
+    await afterKeyChange();
   } catch (e) {
     testState = { ok: false, error: thrownMessage(e) };
   } finally {
@@ -66,7 +65,7 @@ async function clearApiKey(): Promise<void> {
   apiKeySaving = true;
   testState = null;
   try {
-    await api.api.settings.jev["api-key"].delete();
+    await call(api.api.settings.jev["api-key"].delete(), "Could not clear the key");
     await afterKeyChange();
   } catch {
     // Best-effort: the next settings fetch reconciles the real state.
@@ -79,8 +78,7 @@ async function testConnection(): Promise<void> {
   if (testRunning) return;
   testRunning = true;
   try {
-    const { data, error } = await api.api.settings.jev.test.post();
-    testState = error ? { ok: false, error: apiErrorMessage(error, "Test failed") } : data;
+    testState = await call(api.api.settings.jev.test.post(), "Test failed");
   } catch (e) {
     testState = { ok: false, error: thrownMessage(e) };
   } finally {

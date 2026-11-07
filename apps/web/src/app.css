@@ -896,28 +896,6 @@ diffs-container {
   }
 }
 
-/* Wraps a page's `actions` chrome, which AppShell renders inside `.main-area`.
-   pointer-events:none lets clicks through the padding around the pill row. */
-.actions-float {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  display: flex;
-  justify-content: center;
-  padding: 8px 0 10px;
-  z-index: 10;
-  pointer-events: none;
-}
-.actions-float * {
-  pointer-events: auto;
-}
-.actions-row {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-island);
-}
-
 :root.document-crossfade::view-transition-old(root),
 :root.document-crossfade::view-transition-new(root) {
   animation-duration: var(--duration-ceremonial-medium);

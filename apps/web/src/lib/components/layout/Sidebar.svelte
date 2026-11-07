@@ -11,6 +11,8 @@ import ProjectPrList from "$lib/components/sidebar/ProjectPrList.svelte";
 import SearchFilter from "$lib/components/sidebar/SearchFilter.svelte";
 import SidebarFilesView from "$lib/components/sidebar/SidebarFilesView.svelte";
 import { gsapFade, tokens } from "$lib/motion";
+import type { BareBinding, Command } from "$lib/stores/command-keys";
+import { useCommands } from "$lib/stores/commands.svelte";
 import { enterScrollMode, getActivePanel } from "$lib/stores/focus-mode.svelte";
 import { getPrScrollPosition, setPrScrollPosition } from "$lib/stores/pr-view-state.svelte";
 import { getRepoById, getRepositories } from "$lib/stores/repos.svelte";
@@ -22,8 +24,16 @@ import {
   setAddRepoDialogOpen,
   setSidebarView,
 } from "$lib/stores/sidebar.svelte";
-import { focusPr, handleKey as handleNavKey } from "$lib/stores/sidebar-nav.svelte";
-import { isTextEditingKeyTarget } from "$lib/utils";
+import {
+  clearFocus,
+  focusFirst,
+  focusLast,
+  focusPr,
+  getFocusedId,
+  moveDown,
+  moveUp,
+  openFocused,
+} from "$lib/stores/sidebar-nav.svelte";
 
 interface Props {
   collapsed?: boolean;
@@ -76,53 +86,77 @@ function returnToPrList(): void {
   focusPr(getSelectedPrId());
 }
 
-function handleKeydown(e: KeyboardEvent) {
-  if (collapsed) return;
-  if (getPaletteOpen()) return;
-  if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (isTextEditingKeyTarget(e)) return;
+const keysLive = (): boolean => !collapsed && !getPaletteOpen();
+// Tree rows live in a shadow root, so a key's target is retargeted to its
+// host, which is still inside the sidebar.
+const inSidebar = (): HTMLElement | null => sidebarEl;
+const inPrList = (): boolean => keysLive() && getActivePanel() === "sidebar" && view !== "files";
+const inFileTree = (): boolean => keysLive() && getActivePanel() === "sidebar" && view === "files";
 
-  // '/' is the global "go to search" shortcut, resolved against the visible
-  // pane. Sits above the active-panel guard so it also works from the diff
-  // modes.
-  if (e.key === "/") {
-    e.preventDefault();
-    if (view === "files") filesView?.focusSearch();
-    else prSearch?.focus();
-    return;
-  }
-
-  if (getActivePanel() !== "sidebar") return;
-  // Tree rows live in a shadow root, so the event's target is retargeted to
-  // its host — which is still inside the sidebar.
-  if (!(e.target instanceof Node) || !sidebarEl?.contains(e.target)) return;
-
-  if (view === "files") {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      returnToPrList();
-      return;
-    }
-    const result = filesView?.navigate(e.key) ?? "ignored";
-    if (result === "ignored") return;
-    e.preventDefault();
-    if (result === "exit") returnToPrList();
-    return;
-  }
-
-  if (e.key === "v") {
-    e.preventDefault();
-    enterScrollMode();
-    return;
-  }
-
-  if (handleNavKey(e)) {
-    e.preventDefault();
-  }
+function sidebarKey(
+  id: string,
+  label: string,
+  keys: BareBinding,
+  when: () => boolean,
+  run: () => void,
+): Command {
+  return { id: `sidebar:${id}`, label, keys, when, within: inSidebar, hidden: true, run };
 }
-</script>
 
-<svelte:window onkeydown={handleKeydown} />
+useCommands([
+  {
+    id: "sidebar:search",
+    label: "Search",
+    keys: { bare: ["/"] },
+    when: keysLive,
+    hidden: true,
+    run: () => {
+      if (view === "files") filesView?.focusSearch();
+      else prSearch?.focus();
+    },
+  },
+  sidebarKey(
+    "files-back",
+    "Back to pull requests",
+    { bare: ["Escape"] },
+    inFileTree,
+    returnToPrList,
+  ),
+  sidebarKey("files-down", "Next file", { bare: ["j"] }, inFileTree, () => filesView?.moveFocus(1)),
+  sidebarKey("files-up", "Previous file", { bare: ["k"] }, inFileTree, () =>
+    filesView?.moveFocus(-1),
+  ),
+  sidebarKey("files-open", "Open file", { bare: ["l"] }, inFileTree, () =>
+    filesView?.openFocused(),
+  ),
+  sidebarKey("files-out", "Collapse folder", { bare: ["h"] }, inFileTree, () => {
+    if (!filesView?.collapseOrParent()) returnToPrList();
+  }),
+  sidebarKey("prs-diff", "Scroll the diff", { bare: ["v"] }, inPrList, enterScrollMode),
+  sidebarKey("prs-down", "Next pull request", { bare: ["j", "ArrowDown"] }, inPrList, moveDown),
+  sidebarKey("prs-up", "Previous pull request", { bare: ["k", "ArrowUp"] }, inPrList, moveUp),
+  sidebarKey("prs-open", "Open pull request", { bare: ["l", "ArrowRight"] }, inPrList, openFocused),
+  sidebarKey(
+    "prs-open-enter",
+    "Open pull request",
+    { bare: ["Enter"] },
+    () => inPrList() && getFocusedId() !== null,
+    openFocused,
+  ),
+  sidebarKey("prs-drop", "Drop the cursor", { bare: ["h", "ArrowLeft"] }, inPrList, clearFocus),
+  sidebarKey(
+    "prs-escape",
+    "Drop the cursor",
+    { bare: ["Escape"] },
+    () => inPrList() && getFocusedId() !== null,
+    clearFocus,
+  ),
+  sidebarKey("prs-first", "First pull request", { bare: ["g"], after: "g" }, inPrList, () => {
+    focusFirst();
+  }),
+  sidebarKey("prs-last", "Last pull request", { bare: ["G"] }, inPrList, focusLast),
+]);
+</script>
 
 <div class="sidebar" bind:this={sidebarEl}>
 	<div

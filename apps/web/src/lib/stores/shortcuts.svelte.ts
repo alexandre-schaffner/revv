@@ -1,6 +1,6 @@
 import { goto } from "$app/navigation";
 import type { Command, KeyBinding } from "./command-keys";
-import { dispatchCommandKey, registerCommands } from "./commands.svelte";
+import { dispatchBareKey, dispatchCommandKey, registerCommands } from "./commands.svelte";
 import { copySelectedPrLink } from "./pr-link.svelte";
 import { getSelectedPrId } from "./route.svelte";
 import { openSettings, toggleSettings } from "./settingsModal.svelte";
@@ -251,11 +251,14 @@ export function initShortcuts(): () => void {
   const unregister = registerCommands(APP_COMMANDS);
   // Capture phase, so ⌘ combos work even while an input has focus.
   window.addEventListener("keydown", handleKeydown, { capture: true });
+  // Bubble phase, so the focused widget handles a bare key first.
+  window.addEventListener("keydown", dispatchBareKey);
   window.addEventListener("keyup", handleKeyup, { capture: true });
   window.addEventListener("blur", handleBlur);
   return () => {
     unregister();
     window.removeEventListener("keydown", handleKeydown, { capture: true });
+    window.removeEventListener("keydown", dispatchBareKey);
     window.removeEventListener("keyup", handleKeyup, { capture: true });
     window.removeEventListener("blur", handleBlur);
   };

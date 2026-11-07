@@ -1,6 +1,6 @@
 import { buildPullRequestDeepLink, type PrStackEntry } from "@revv/shared";
+import { openPrDeepLink } from "$lib/deep-link/pr-deep-link.svelte";
 import { setNavigationIntent } from "$lib/stores/navigation-intent.svelte";
-import { openPrDeepLink } from "$lib/stores/pr-deep-link.svelte";
 import { getPrById, getPullRequests } from "$lib/stores/prs.svelte";
 import { getRepoById } from "$lib/stores/repos.svelte";
 import { selectPr } from "$lib/stores/route.svelte";

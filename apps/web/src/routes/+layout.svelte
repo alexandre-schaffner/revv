@@ -11,10 +11,10 @@ import AppShell from "$lib/components/layout/AppShell.svelte";
 import OnboardingGate from "$lib/components/onboarding/OnboardingGate.svelte";
 import { Toaster } from "$lib/components/ui/sonner";
 import { TooltipProvider } from "$lib/components/ui/tooltip";
+import { listenForPrDeepLinks } from "$lib/deep-link/pr-deep-link.svelte";
 import { initGsap } from "$lib/motion";
 import { detachSession, restoreSession, startSession } from "$lib/session/lifecycle.svelte";
 import { getUser } from "$lib/stores/auth.svelte";
-import { openPrDeepLink } from "$lib/stores/pr-deep-link.svelte";
 import { getSelectedPrId } from "$lib/stores/route.svelte";
 import { fetchAllModels, fetchSettings } from "$lib/stores/settings.svelte";
 import { initShortcuts } from "$lib/stores/shortcuts.svelte";
@@ -49,18 +49,7 @@ onMount(() => {
   initGsap();
   const cleanupTheme = initTheme();
   const cleanupShortcuts = initShortcuts();
-  let cleanupDeepLinks: (() => void) | undefined;
-
-  if ("__TAURI_INTERNALS__" in window) {
-    void import("@tauri-apps/plugin-deep-link").then(async ({ getCurrent, onOpenUrl }) => {
-      const receive = (urls: string[]): void => {
-        for (const url of urls) void openPrDeepLink(url);
-      };
-      cleanupDeepLinks = await onOpenUrl(receive);
-      const current = await getCurrent().catch(() => null);
-      if (current) receive(current);
-    });
-  }
+  const cleanupDeepLinks = listenForPrDeepLinks();
 
   void fetchRuntimeHealth()
     .then((health) => {
@@ -88,7 +77,7 @@ onMount(() => {
   return () => {
     cleanupTheme();
     cleanupShortcuts();
-    cleanupDeepLinks?.();
+    cleanupDeepLinks();
     detachSession();
     stopUpdater();
   };

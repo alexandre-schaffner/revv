@@ -37,7 +37,7 @@ export const pane = defineSettingsPane({
 import type { CacheSigningMode } from "@revv/shared";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
+import { call } from "$lib/api/errors";
 import { type EdenData, thrownMessage } from "$lib/api/wire";
 import { Button } from "$lib/components/ui/button/index.js";
 import { SegmentedControl, type SegmentedOption } from "$lib/components/ui/segmented-control";
@@ -59,11 +59,7 @@ async function testCacheConnection(): Promise<void> {
   if (cacheTestRunning) return;
   cacheTestRunning = true;
   try {
-    const { data, error } = await api.api.settings.cache.status.get();
-    cacheTestState =
-      data && "healthy" in data
-        ? data
-        : { healthy: false, detail: error ? apiErrorMessage(error, "Probe failed") : "No answer" };
+    cacheTestState = await call(api.api.settings.cache.status.get(), "Probe failed");
   } catch (e) {
     cacheTestState = { healthy: false, detail: thrownMessage(e) };
   } finally {
@@ -71,18 +67,15 @@ async function testCacheConnection(): Promise<void> {
   }
 }
 
-type AdcStatus = Extract<
-  EdenData<typeof api.api.settings.cache["adc-status"]["get"]>,
-  { gcloudFound: boolean }
->;
+type AdcStatus = EdenData<typeof api.api.settings.cache["adc-status"]["get"]>;
 type AdcState = { kind: "loading" } | { kind: "error" } | { kind: "ready"; status: AdcStatus };
 let adc = $state<AdcState>({ kind: "loading" });
 let adcPolling = $state(false);
 
 async function fetchAdcStatus(): Promise<void> {
   try {
-    const { data } = await api.api.settings.cache["adc-status"].get();
-    adc = data && "gcloudFound" in data ? { kind: "ready", status: data } : { kind: "error" };
+    const status = await call(api.api.settings.cache["adc-status"].get(), "Couldn't check credentials");
+    adc = { kind: "ready", status };
   } catch {
     adc = { kind: "error" };
   }
@@ -111,8 +104,10 @@ function stopAdcPolling(): void {
 $effect(() => stopAdcPolling);
 
 async function startAdcLogin(): Promise<void> {
-  const { data } = await api.api.settings.cache["adc-login"].post().catch(() => ({ data: null }));
-  if (!data?.started) return;
+  const login = await call(api.api.settings.cache["adc-login"].post(), "Couldn't start gcloud").catch(
+    () => null,
+  );
+  if (!login?.started) return;
   stopAdcPolling();
   adcPolling = true;
   adcPollTimers = {
@@ -141,10 +136,7 @@ const signingMode = $derived(cache.signing.mode);
 // Round-trips a probe message through the local SSH key + the user's published
 // `.keys`. Surfaces the specific signer service error verbatim so a user can
 // see e.g. "no key in ~/.ssh matches your GitHub keys" or ssh-keygen output.
-type SigningTestResult = Extract<
-  EdenData<typeof api.api.settings.cache.signing.test.post>,
-  { ok: boolean }
->;
+type SigningTestResult = EdenData<typeof api.api.settings.cache.signing.test.post>;
 let signingTestState = $state<SigningTestResult | null>(null);
 let signingTestRunning = $state(false);
 
@@ -152,11 +144,10 @@ async function testCacheSigning(): Promise<void> {
   if (signingTestRunning) return;
   signingTestRunning = true;
   try {
-    const { data, error } = await api.api.settings.cache.signing.test.post();
-    signingTestState =
-      data && "ok" in data
-        ? data
-        : { ok: false, error: error ? apiErrorMessage(error, "Signing test failed") : "No answer" };
+    signingTestState = await call(
+      api.api.settings.cache.signing.test.post(),
+      "Signing test failed",
+    );
   } catch (e) {
     signingTestState = { ok: false, error: thrownMessage(e) };
   } finally {

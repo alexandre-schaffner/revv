@@ -12,6 +12,7 @@ import { reset as resetHunkScan } from "$lib/hunk-scan/store.svelte";
 import { reset as resetRecaps } from "$lib/recaps/store.svelte";
 import { reset as resetRecapStream } from "$lib/recaps/stream.svelte";
 import { reset as resetRepoCatalog } from "$lib/repos/catalog.svelte";
+import { reset as resetPrCommits } from "$lib/review/pr-commits.svelte";
 import { reset as resetPulls } from "$lib/review/pull-latest";
 import {
   cancelSignIn,
@@ -82,6 +83,7 @@ function resetAccountStores(): void {
   resetDiffFiles();
   resetPrViewState();
   resetPulls();
+  resetPrCommits();
   resetSync();
   resetWalkthrough();
   resetWalkthroughSizings();

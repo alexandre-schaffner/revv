@@ -1,7 +1,14 @@
 import { onDestroy } from "svelte";
 import { isTextEditingKeyTarget } from "$lib/utils";
 import { fuzzyScore } from "$lib/utils/fuzzy";
-import { type Command, findBoundCommand, isAvailable, shortcutGlyphs } from "./command-keys";
+import {
+  type Command,
+  findBareCommand,
+  findBoundCommand,
+  isAvailable,
+  shortcutGlyphs,
+  startsChord,
+} from "./command-keys";
 
 // Later registrations shadow earlier ones on the same keys, so a page can
 // take over a binding for as long as it is mounted.
@@ -32,6 +39,39 @@ export function dispatchCommandKey(e: KeyboardEvent): boolean {
   e.preventDefault();
   e.stopPropagation();
   if (!(cmd.ignoreRepeat && e.repeat)) cmd.run();
+  return true;
+}
+
+/** How long a chord's first key waits for its second. */
+const CHORD_MS = 300;
+let chordPrefix: string | null = null;
+let chordTimer: ReturnType<typeof setTimeout> | undefined;
+
+function clearChord(): void {
+  chordPrefix = null;
+  clearTimeout(chordTimer);
+}
+
+/**
+ * Runs the command bound to a bare key (see `BareBinding`). Call after the
+ * event has reached the focused widget: a key it took (`defaultPrevented`) is
+ * left alone. Any key ends a pending chord. Returns whether the event was taken.
+ */
+export function dispatchBareKey(e: KeyboardEvent): boolean {
+  if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return false;
+  if (isTextEditingKeyTarget(e)) return false;
+  const prefix = chordPrefix;
+  clearChord();
+  const cmd = findBareCommand(registered, e, prefix);
+  if (cmd) {
+    e.preventDefault();
+    cmd.run();
+    return true;
+  }
+  if (!startsChord(registered, e)) return false;
+  e.preventDefault();
+  chordPrefix = e.key;
+  chordTimer = setTimeout(clearChord, CHORD_MS);
   return true;
 }
 

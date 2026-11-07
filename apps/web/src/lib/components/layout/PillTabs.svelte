@@ -1,15 +1,17 @@
 <script lang="ts">
 import type { Snippet } from "svelte";
 import { gsap, prefersReducedMotion, tokens } from "$lib/motion";
+import { type KeyBinding, shortcutLabel } from "$lib/stores/command-keys";
+import { registerCommands } from "$lib/stores/commands.svelte";
+import { getCmdHeld } from "$lib/stores/shortcuts.svelte";
 
-export type TabConfig = { id: string; label: string; shortcut?: string };
+export type TabConfig = { id: string; label: string };
 
 interface Props {
   tabs: TabConfig[];
   activeTab: string;
   onTabChange: (tab: string) => void;
   trailing?: Snippet;
-  cmdHeld?: boolean;
   /**
    * Width, in px, of whatever the `trailing` snippet is currently showing —
    * 0 when it shows nothing. The snippet's content is out of flow, so this
@@ -19,14 +21,26 @@ interface Props {
   trailingReserve?: number;
 }
 
-let {
-  tabs,
-  activeTab,
-  onTabChange,
-  trailing,
-  cmdHeld = false,
-  trailingReserve = 0,
-}: Props = $props();
+let { tabs, activeTab, onTabChange, trailing, trailingReserve = 0 }: Props = $props();
+
+/** ⌘1…⌘N switch to the tab at that position, for as long as the pill is mounted. */
+function tabKeys(index: number): KeyBinding {
+  return { key: String(index + 1) };
+}
+
+$effect(() =>
+  registerCommands(
+    tabs.map((tab, index) => ({
+      id: `tabs:${tab.id}`,
+      label: `Show ${tab.label}`,
+      keys: tabKeys(index),
+      hidden: true,
+      run: () => onTabChange(tab.id),
+    })),
+  ),
+);
+
+const cmdHeld = $derived(getCmdHeld());
 
 let wrapperEl: HTMLDivElement | null = $state(null);
 let pillEl: HTMLDivElement | null = $state(null);
@@ -189,7 +203,7 @@ $effect(() => {
 				onpointerleave={() => {
 					if (hoveredIndex === i) hoveredIndex = null;
 				}}
->{#if tab.shortcut}<span class="seg-shortcut">⌘{tab.shortcut}</span>{/if}<span class="seg-label">{tab.label}</span></button>
+><span class="seg-shortcut">{shortcutLabel(tabKeys(i))}</span><span class="seg-label">{tab.label}</span></button>
 			{#if i < tabs.length - 1}
 				<span
 					class="pill-divider"

@@ -339,8 +339,6 @@ export function resolveConflictsAndPush(
       path: `/api/chat/${prId}/proposed-changes/resolve-and-push`,
       method: "POST",
       signal: controller.signal,
-      // The resolve-and-push stream sends no heartbeat, so a quiet agent step is normal.
-      idleTimeoutMs: null,
       onEvent: (frame) => {
         switch (frame.kind) {
           case "status":

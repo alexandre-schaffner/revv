@@ -5,6 +5,7 @@ import { untrack } from "svelte";
 import YourReview from "$lib/components/review/YourReview.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { prefersReducedMotion } from "$lib/motion";
+import { useCommands } from "$lib/stores/commands.svelte";
 import {
   editBody,
   getAbilities,
@@ -14,7 +15,6 @@ import {
   watchConversation,
 } from "$lib/stores/conversation.svelte";
 import { getActivePanel } from "$lib/stores/focus-mode.svelte";
-import { isTextEditingKeyTarget } from "$lib/utils";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { openExternal } from "$lib/utils/open-external";
 import BaseConflicts from "./BaseConflicts.svelte";
@@ -46,29 +46,60 @@ $effect(() => {
   return untrack(() => watchConversation(id));
 });
 
-function onKeydown(e: KeyboardEvent): void {
-  if (!isActive || !conversation || e.defaultPrevented) return;
-  if (e.metaKey || e.ctrlKey || e.altKey || isTextEditingKeyTarget(e)) return;
-  // The sidebar's file tree binds the same letters (`l` opens a file).
-  if (getActivePanel() === "sidebar") return;
-  const key = e.key.toLowerCase();
-  if (key === "c" && abilities.canComment && composer) {
-    e.preventDefault();
-    composer.focus();
-    composer.scrollIntoView({
-      block: "center",
-      behavior: prefersReducedMotion() ? "auto" : "smooth",
-    });
-  } else if (abilities.canEdit && (key === "r" || key === "a" || key === "l")) {
-    e.preventDefault();
-    if (key === "r") reviewersOpen = true;
-    if (key === "a") assigneesOpen = true;
-    if (key === "l") labelsOpen = true;
-  }
-}
-</script>
+// The sidebar's file tree binds the same letters (`l` opens a file).
+const keysLive = (): boolean => isActive && conversation !== null && getActivePanel() !== "sidebar";
+const canEdit = (): boolean => keysLive() && abilities.canEdit;
 
-<svelte:window onkeydown={onKeydown} />
+function focusComposer(): void {
+  if (!composer) return;
+  composer.focus();
+  composer.scrollIntoView({
+    block: "center",
+    behavior: prefersReducedMotion() ? "auto" : "smooth",
+  });
+}
+
+useCommands([
+  {
+    id: "conversation:comment",
+    label: "Write a comment",
+    keys: { bare: ["c", "C"] },
+    when: () => keysLive() && abilities.canComment && composer !== null,
+    hidden: true,
+    run: focusComposer,
+  },
+  {
+    id: "conversation:reviewers",
+    label: "Edit reviewers",
+    keys: { bare: ["r", "R"] },
+    when: canEdit,
+    hidden: true,
+    run: () => {
+      reviewersOpen = true;
+    },
+  },
+  {
+    id: "conversation:assignees",
+    label: "Edit assignees",
+    keys: { bare: ["a", "A"] },
+    when: canEdit,
+    hidden: true,
+    run: () => {
+      assigneesOpen = true;
+    },
+  },
+  {
+    id: "conversation:labels",
+    label: "Edit labels",
+    keys: { bare: ["l", "L"] },
+    when: canEdit,
+    hidden: true,
+    run: () => {
+      labelsOpen = true;
+    },
+  },
+]);
+</script>
 
 <div class="conversation review-columns">
 	<div class="conversation-main">

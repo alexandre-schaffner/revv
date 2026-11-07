@@ -4,7 +4,7 @@
 
 import { getContext, setContext } from "svelte";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
+import { ApiError, call } from "$lib/api/errors";
 import { thrownMessage } from "$lib/api/wire";
 
 const ACTIVITY_PR = Symbol("agent-activity-pr");
@@ -32,10 +32,10 @@ const UNAVAILABLE = {
  */
 export async function loadRepoFile(prId: string, path: string): Promise<RepoFile> {
   try {
-    const { data, error } = await api.api.prs({ id: prId })["repo-file"].get({ query: { path } });
-    if (error) {
-      return { status: "unavailable", message: apiErrorMessage(error, "Couldn't preview file") };
-    }
+    const data = await call(
+      api.api.prs({ id: prId })["repo-file"].get({ query: { path } }),
+      "Couldn't preview file",
+    );
     if (data.status === "ready") {
       return { status: "ready", content: data.content, size: data.size };
     }
@@ -47,6 +47,7 @@ export async function loadRepoFile(prId: string, path: string): Promise<RepoFile
           : UNAVAILABLE[data.status],
     };
   } catch (e) {
-    return { status: "unavailable", message: `Couldn't load file: ${thrownMessage(e)}` };
+    const message = e instanceof ApiError ? e.message : `Couldn't load file: ${thrownMessage(e)}`;
+    return { status: "unavailable", message };
   }
 }
