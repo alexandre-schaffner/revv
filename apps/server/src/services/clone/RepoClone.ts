@@ -554,7 +554,7 @@ export const repoCloneLayer = (base: string) =>
       /**
        * An older Revv keyed every folder on `owner/name`, so two rows of one
        * repository could share a clone. The earliest-added row keeps it; the
-       * others get a managed clone of their own.
+       * others get a managed clone of their own (legacy-upgrade: rowKeyedFolders).
        */
       const unshareClones = dbTry("shared clone split", () => {
         const rows = db
@@ -581,9 +581,10 @@ export const repoCloneLayer = (base: string) =>
       });
 
       /**
-       * Move a row's worktrees out of the older shared layout. Agent worktrees
-       * keep their branch and uncommitted edits; scratch and review worktrees
-       * are throwaway, so they are cleared.
+       * Move a row's worktrees out of the older shared layout
+       * (legacy-upgrade: rowKeyedFolders). Agent worktrees keep their branch
+       * and uncommitted edits; scratch and review worktrees are throwaway, so
+       * they are cleared.
        */
       const moveLegacyWorktrees = async (row: RepoRow, clonePath: string) => {
         const legacy = layout.legacyHolder(row);

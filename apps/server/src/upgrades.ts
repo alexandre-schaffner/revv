@@ -55,7 +55,10 @@ export const LEGACY_UPGRADES = {
   },
   prRefNamespace: {
     introducedIn: "0.21.1",
-    sites: ["apps/server/src/services/git/pr-refs.ts"],
+    sites: [
+      "apps/server/src/services/git/pr-refs.ts",
+      "apps/server/src/services/workspace/agent-worktrees.ts",
+    ],
     carries: "clones holding `refs/revv/pr-N`, which made `revv/pr-N` resolve to the PR head",
   },
   walkthroughOnlyReviewRounds: {
@@ -63,5 +66,14 @@ export const LEGACY_UPGRADES = {
     sites: ["apps/server/src/services/walkthrough/Walkthrough.ts"],
     carries:
       "PRs reviewed before `review_rounds` existed: their rounds are read off the walkthrough rows",
+  },
+  rowKeyedFolders: {
+    introducedIn: "0.35.0",
+    sites: [
+      "apps/server/src/services/clone/RepoClone.ts",
+      "apps/server/src/services/clone/layout.ts",
+    ],
+    carries:
+      "clones and worktrees keyed on `owner/name`, which two accounts' rows of one repository shared: at boot each row gets its own clone and its worktrees move under `.worktrees/<row id>`",
   },
 } as const satisfies Record<string, LegacyUpgrade>;
