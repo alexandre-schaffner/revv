@@ -1,6 +1,7 @@
 <script lang="ts">
 import { page } from "$app/state";
 import RepoHomeSection from "$lib/components/repo/RepoHomeSection.svelte";
+import { getReposFetchAttempted } from "$lib/stores/repos.svelte";
 import { getSelectedRepo } from "$lib/stores/route.svelte";
 
 const repo = $derived(getSelectedRepo());
@@ -11,7 +12,7 @@ const repoIdFromUrl = $derived(page.params.repoId ?? "");
 <div class="repo-landing">
 	{#if repo}
 		<RepoHomeSection {repo} variant="page" />
-	{:else}
+	{:else if getReposFetchAttempted()}
 		<div class="missing">
 			<h1 class="missing-title">Repository not found</h1>
 			<p class="missing-text">No repo matches <code>{repoIdFromUrl}</code> in your visible workspace.</p>
