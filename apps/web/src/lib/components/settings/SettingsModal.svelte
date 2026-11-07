@@ -3,7 +3,7 @@ import { Dialog as DialogPrimitive } from "bits-ui";
 import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlass";
 import User from "phosphor-svelte/lib/User";
 import X from "phosphor-svelte/lib/X";
-import { tick, untrack } from "svelte";
+import { tick } from "svelte";
 import Avatar from "$lib/components/shared/Avatar.svelte";
 import * as Dialog from "$lib/components/ui/dialog/index.js";
 import {
@@ -15,11 +15,7 @@ import {
   settingFlash,
 } from "$lib/motion";
 import { getUser } from "$lib/stores/auth.svelte";
-import {
-  clearSettingsTargetSection,
-  getSettingsTargetSection,
-  type SettingsSectionId,
-} from "$lib/stores/settingsModal.svelte";
+import { getSettingsSection, selectSettingsSection } from "$lib/stores/settingsModal.svelte";
 import { SETTINGS_PANE_CLUSTERS, SETTINGS_PANES, type SettingsPaneEntry } from "./panes";
 import { type SettingsSearchHit, searchSettings } from "./settings-panes";
 
@@ -30,35 +26,22 @@ interface Props {
 
 let { open, onClose }: Props = $props();
 
-let activePane = $state<SettingsSectionId>("general");
+const activePane = $derived(getSettingsSection());
 let query = $state("");
 let paneEl = $state<HTMLElement | null>(null);
 let navEl = $state<HTMLElement | null>(null);
 const ActivePane = $derived(SETTINGS_PANES.find((p) => p.id === activePane)?.component);
 
-function selectPane(id: SettingsSectionId): void {
-  if (id === activePane) return;
-  activePane = id;
-  if (paneEl) paneEl.scrollTop = 0;
-}
-
-// Every open starts on General, unless a caller asked for a pane.
+// A section opens at its top.
 $effect(() => {
-  if (!open) return;
-  untrack(() => {
-    query = "";
-    activePane = getSettingsTargetSection() ?? "general";
-    clearSettingsTargetSection();
-  });
-  for (const pane of SETTINGS_PANES) pane.onModalOpen?.();
+  void activePane;
+  if (paneEl) paneEl.scrollTop = 0;
 });
 
-// `openSettings("ai")` while already open retargets the visible pane.
 $effect(() => {
-  const target = getSettingsTargetSection();
-  if (!target || !open) return;
-  selectPane(target);
-  clearSettingsTargetSection();
+  if (!open) return;
+  query = "";
+  for (const pane of SETTINGS_PANES) pane.onModalOpen?.();
 });
 
 function focusNavItem(list: HTMLElement | null, e: KeyboardEvent, onEscapeTop?: () => void): void {
@@ -96,7 +79,7 @@ function splitLabel(hit: SettingsSearchHit): [string, string, string] {
 
 async function openHit(hit: SettingsSearchHit<SettingsPaneEntry>): Promise<void> {
   query = "";
-  selectPane(hit.pane.id);
+  selectSettingsSection(hit.pane.id);
   await tick();
   // A row behind a switch that's off (e.g. the team-cache bucket) isn't
   // rendered: land on the pane's first row, which is that switch.
@@ -232,7 +215,7 @@ function handleKeydown(e: KeyboardEvent): void {
 													aria-current={activePane === item.id ? 'page' : undefined}
 													tabindex={activePane === item.id ? 0 : -1}
 													data-roving
-													onclick={() => selectPane(item.id)}
+													onclick={() => selectSettingsSection(item.id)}
 												>
 													<item.icon size={14} />
 													<span class="nav-label">{item.title}</span>
