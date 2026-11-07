@@ -35,8 +35,7 @@ export function closeSettings(): void {
   open = false;
 }
 
-/** Opening without a target starts on General. */
 export function toggleSettings(): void {
-  if (!open) section = "general";
-  open = !open;
+  if (open) closeSettings();
+  else openSettings("general");
 }

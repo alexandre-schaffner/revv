@@ -30,33 +30,29 @@ export type WalkthroughSizing =
     };
 
 /**
- * Which phase of the A→B→C→D pipeline a block belongs to. Only Phase B writes
- * blocks: Phase A lives on `Walkthrough.summary` and Phase C on
- * `Walkthrough.sentiment`.
+ * Where a block sits in Phase B, the only phase that writes blocks: Phase A
+ * lives on `Walkthrough.summary` and Phase C on `Walkthrough.sentiment`.
  */
-export type WalkthroughBlockPhase = "diff_analysis";
-
-export interface BlockPhaseFields {
-  phase: WalkthroughBlockPhase;
+export interface BlockPosition {
   /** Monotonic, zero-based index of the parent semantic step. */
   semanticStepIndex: number;
   /**
    * Monotonic, zero-based atomic-block index *within* the parent semantic
    * step. Restarts at 0 in each section. The persistence key is
-   * `(walkthroughId, phase, semanticStepIndex, stepIndex)` — retries with
-   * the same identity are idempotent upserts.
+   * `(walkthroughId, semanticStepIndex, stepIndex)` — retries with the same
+   * identity are idempotent upserts.
    */
   stepIndex: number;
 }
 
-export interface MarkdownBlock extends BlockPhaseFields {
+export interface MarkdownBlock extends BlockPosition {
   type: "markdown";
   id: string;
   order: number;
   content: string;
 }
 
-export interface CodeBlock extends BlockPhaseFields {
+export interface CodeBlock extends BlockPosition {
   type: "code";
   id: string;
   order: number;
@@ -68,7 +64,7 @@ export interface CodeBlock extends BlockPhaseFields {
   annotation: string | null;
 }
 
-export interface DiffBlock extends BlockPhaseFields {
+export interface DiffBlock extends BlockPosition {
   type: "diff";
   id: string;
   order: number;
@@ -77,7 +73,7 @@ export interface DiffBlock extends BlockPhaseFields {
   annotation: string | null;
 }
 
-export interface ArtifactBlock extends BlockPhaseFields {
+export interface ArtifactBlock extends BlockPosition {
   type: "artifact";
   id: string;
   order: number;

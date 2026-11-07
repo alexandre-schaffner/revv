@@ -31,7 +31,6 @@ function block(
     id,
     order,
     content,
-    phase: "diff_analysis",
     semanticStepIndex,
     stepIndex: order,
   };

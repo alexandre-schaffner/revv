@@ -6,15 +6,13 @@ export interface DiffStats {
   readonly deletions: number;
 }
 
-/** Lines an edit added and removed, or null when Pierre can't parse the pair. */
-export function diffLineStats(diff: ToolDiffOutput): DiffStats | null {
+/** Lines an edit added and removed. */
+export function diffLineStats(diff: ToolDiffOutput): DiffStats {
   const name = diff.path || "file";
-  let meta: ReturnType<typeof parseDiffFromFile>;
-  try {
-    meta = parseDiffFromFile({ name, contents: diff.oldText }, { name, contents: diff.newText });
-  } catch {
-    return null;
-  }
+  const meta = parseDiffFromFile(
+    { name, contents: diff.oldText },
+    { name, contents: diff.newText },
+  );
   let additions = 0;
   let deletions = 0;
   for (const hunk of meta.hunks) {

@@ -170,7 +170,6 @@ describe("decodeBlock", () => {
   it("takes the block's identity from its row, even when the stored JSON predates it", () => {
     const block = decodeBlock({
       data: JSON.stringify({ type: "markdown", id: "b-1", order: 20001, content: "hi" }),
-      phase: "diff_analysis",
       semanticStepIndex: 2,
       stepIndex: 1,
     });
@@ -179,16 +178,28 @@ describe("decodeBlock", () => {
       id: "b-1",
       order: 20001,
       content: "hi",
-      phase: "diff_analysis",
       semanticStepIndex: 2,
       stepIndex: 1,
     });
   });
 
+  it("drops the phase older stored blocks carry", () => {
+    const block = decodeBlock({
+      data: JSON.stringify({
+        type: "markdown",
+        id: "b-1",
+        order: 1,
+        content: "hi",
+        phase: "diff_analysis",
+      }),
+      semanticStepIndex: 0,
+      stepIndex: 1,
+    });
+    expect(block && "phase" in block).toBe(false);
+  });
+
   it("is null for a corrupt payload", () => {
-    expect(
-      decodeBlock({ data: "{", phase: "diff_analysis", semanticStepIndex: 0, stepIndex: 0 }),
-    ).toBeNull();
+    expect(decodeBlock({ data: "{", semanticStepIndex: 0, stepIndex: 0 })).toBeNull();
   });
 });
 

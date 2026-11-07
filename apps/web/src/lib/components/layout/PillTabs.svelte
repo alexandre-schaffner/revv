@@ -1,16 +1,14 @@
-<script lang="ts">
+<script lang="ts" generics="T extends string">
 import type { Snippet } from "svelte";
 import { gsap, prefersReducedMotion, tokens } from "$lib/motion";
 import { type KeyBinding, shortcutLabel } from "$lib/stores/command-keys";
 import { registerCommands } from "$lib/stores/commands.svelte";
 import { getCmdHeld } from "$lib/stores/shortcuts.svelte";
 
-export type TabConfig = { id: string; label: string };
-
 interface Props {
-  tabs: TabConfig[];
-  activeTab: string;
-  onTabChange: (tab: string) => void;
+  tabs: readonly { id: T; label: string }[];
+  activeTab: T;
+  onTabChange: (tab: T) => void;
   trailing?: Snippet;
   /**
    * Width, in px, of whatever the `trailing` snippet is currently showing —

@@ -145,17 +145,18 @@ export function decodeCitations(raw: string | null): RatingCitation[] {
  * comes from the row's columns: older payloads lack it.
  */
 export function decodeBlock(
-  row: Pick<BlockRow, "data" | "phase" | "semanticStepIndex" | "stepIndex">,
+  row: Pick<BlockRow, "data" | "semanticStepIndex" | "stepIndex">,
 ): WalkthroughBlock | null {
-  let data: WalkthroughBlock;
+  let data: WalkthroughBlock & { phase?: unknown };
   try {
     data = JSON.parse(row.data) as WalkthroughBlock;
   } catch {
     return null;
   }
+  // Blocks stored before the wire type dropped `phase` still carry it.
+  const { phase: _stored, ...block } = data;
   return {
-    ...data,
-    phase: row.phase,
+    ...block,
     semanticStepIndex: row.semanticStepIndex,
     stepIndex: row.stepIndex,
   };

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { ProposedDiffFile } from "./api";
-import { proposedFileDiffs } from "./proposed-diff";
+import { proposedFiles } from "./proposed-diff";
 
 function file(over: Partial<ProposedDiffFile>): ProposedDiffFile {
   return {
@@ -14,27 +14,48 @@ function file(over: Partial<ProposedDiffFile>): ProposedDiffFile {
   };
 }
 
-describe("proposedFileDiffs", () => {
+describe("proposedFiles", () => {
   it("lists a rename with no content change", () => {
-    const [diff, ...rest] = proposedFileDiffs("abc", [
-      file({ path: "src/new.ts", oldPath: "src/old.ts", oldContent: "x\n", newContent: "x\n" }),
+    const [entry, ...rest] = proposedFiles("abc", [
+      file({
+        path: "src/new.ts",
+        oldPath: "src/old.ts",
+        oldContent: "x\n",
+        newContent: "x\n",
+        status: "R100",
+      }),
     ]);
     expect(rest).toEqual([]);
-    expect(diff?.type).toBe("rename-pure");
-    expect(diff?.name).toBe("src/new.ts");
-    expect(diff?.prevName).toBe("src/old.ts");
-    expect(diff?.hunks).toEqual([]);
+    expect(entry?.status).toBe("renamed");
+    expect(entry?.diff?.type).toBe("rename-pure");
+    expect(entry?.diff?.name).toBe("src/new.ts");
+    expect(entry?.diff?.prevName).toBe("src/old.ts");
+    expect(entry?.diff?.hunks).toEqual([]);
   });
 
   it("builds whole-file diffs, so context around a hunk can expand", () => {
-    const [diff] = proposedFileDiffs("abc", [file({})]);
-    expect(diff?.type).toBe("change");
-    expect(diff?.isPartial).toBe(false);
+    const [entry] = proposedFiles("abc", [file({})]);
+    expect(entry?.status).toBe("modified");
+    expect(entry?.diff?.type).toBe("change");
+    expect(entry?.diff?.isPartial).toBe(false);
   });
 
-  it("leaves binary files out", () => {
+  it("takes the change kind from git's status", () => {
+    const statuses = proposedFiles("abc", [
+      file({ path: "added.ts", status: "A", oldContent: null }),
+      file({ path: "gone.ts", status: "D", newContent: null }),
+    ]).map((f) => [f.path, f.status]);
+    expect(statuses).toEqual([
+      ["added.ts", "added"],
+      ["gone.ts", "deleted"],
+    ]);
+  });
+
+  it("keeps a binary file, with no diff", () => {
     expect(
-      proposedFileDiffs("abc", [file({ binary: true, oldContent: null, newContent: null })]),
-    ).toEqual([]);
+      proposedFiles("abc", [
+        file({ path: "logo.png", status: "A", binary: true, oldContent: null, newContent: null }),
+      ]),
+    ).toEqual([{ path: "logo.png", status: "added", diff: null }]);
   });
 });

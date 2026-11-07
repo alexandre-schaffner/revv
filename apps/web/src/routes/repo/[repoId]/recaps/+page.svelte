@@ -19,7 +19,7 @@ useShellChrome(() => ({ tabs: { snippet: periodTabs, key: repoId } }));
 	<PillTabs
 		{tabs}
 		activeTab={activePeriod}
-		onTabChange={(tab) => (activePeriod = tab as RecapPeriod)}
+		onTabChange={(tab) => (activePeriod = tab)}
 	/>
 {/snippet}
 
