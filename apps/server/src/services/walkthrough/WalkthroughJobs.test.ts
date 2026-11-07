@@ -32,7 +32,10 @@ const PR = {
 };
 const REPO = { id: "repo-1", fullName: "acme/widget", githubHost: "github.com" };
 
-function seed(db: Db, row: { id: string; status: "generating" | "error"; head: string }): void {
+function seed(
+  db: Db,
+  row: { id: string; status: "generating" | "error"; head: string; resumeAttempts?: number },
+): void {
   db.$client.run("PRAGMA foreign_keys = OFF");
   db.insert(walkthroughs)
     .values({
@@ -45,6 +48,7 @@ function seed(db: Db, row: { id: string; status: "generating" | "error"; head: s
       prHeadSha: row.head,
       status: row.status,
       lastCompletedPhase: "B",
+      resumeAttempts: row.resumeAttempts ?? 0,
     })
     .run();
 }
@@ -66,6 +70,7 @@ function jobsAt(db: Db, head: string) {
           Layer.provide(Layer.merge(Layer.succeed(DbService, { db }), realtime)),
         ),
         Layer.succeed(PrContextService, {
+          readPr: () => Effect.succeed({ pr: context.pr, repo: REPO, accountId: "account-1" }),
           forPr: () => Effect.succeed(context),
           withDiff: () =>
             Effect.succeed({
@@ -99,6 +104,12 @@ function jobsAt(db: Db, head: string) {
 
 const rowsOf = (db: Db) =>
   db.select({ id: walkthroughs.id, status: walkthroughs.status }).from(walkthroughs).all();
+
+const endOf = (db: Db) =>
+  db
+    .select({ status: walkthroughs.status, endReason: walkthroughs.endReason })
+    .from(walkthroughs)
+    .all();
 
 describe("resuming a walkthrough", () => {
   // The resumed row keeps its id; the new head gets a new row only when
@@ -135,5 +146,22 @@ describe("an automatic request", () => {
 
     expect(result).toEqual({ walkthroughId: "wt-err", reused: true });
     expect(rowsOf(db)).toEqual([{ id: "wt-err", status: "error" }]);
+  });
+});
+
+describe("a request that finds a dead run at the head", () => {
+  // The resume budget holds whoever finds the row: a request doesn't relaunch
+  // a row that has already crashed its way through it.
+  it("fails it over the resume budget instead of running it again", async () => {
+    const db = createDb(":memory:");
+    seed(db, { id: "wt-dead", status: "generating", head: "head-1", resumeAttempts: 3 });
+    const { run } = jobsAt(db, "head-1");
+
+    const result = await run((jobs) =>
+      jobs.startJob({ prId: PR.id, trigger: "review_requested", replace: "none" }),
+    );
+
+    expect(result).toEqual({ walkthroughId: "wt-dead", reused: true });
+    expect(endOf(db)).toEqual([{ status: "error", endReason: "resume_budget" }]);
   });
 });

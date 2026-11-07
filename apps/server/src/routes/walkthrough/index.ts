@@ -109,9 +109,10 @@ const prWalkthroughRoutes = new Elysia({ prefix: "/api/reviews" })
   )
 
   // Relaunch a run that died (`generating`) or stopped (`error`) from its
-  // journal, its content kept. 404 when nothing is resumable — the row was
-  // superseded, the PR moved past its head, or it never existed; a new
-  // review is the next step.
+  // journal, its content kept — or complete it, when its journal already
+  // passes. 404 when nothing is resumable — the row was superseded, the PR
+  // moved past its head, it was over its resume budget, or it never existed;
+  // a new review is the next step.
   .post(
     "/:id/walkthrough/resume",
     (ctx) =>
@@ -121,7 +122,7 @@ const prWalkthroughRoutes = new Elysia({ prefix: "/api/reviews" })
           const service = yield* WalkthroughService;
           const row = yield* service.findResumable(ctx.params.id, ctx.body?.mode);
           const outcome = row ? yield* jobs.resume(row.id) : "gone";
-          if (!row || outcome !== "resumed") {
+          if (!row || (outcome !== "resumed" && outcome !== "completed")) {
             return yield* Effect.fail(
               new NotFoundError({ resource: "walkthrough", id: ctx.params.id }),
             );

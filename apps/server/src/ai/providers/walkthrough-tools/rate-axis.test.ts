@@ -149,4 +149,13 @@ describe("rate_axis", () => {
     const verdicts = db.select({ v: walkthroughRatings.verdict }).from(walkthroughRatings).all();
     expect(verdicts.every((r) => r.v === "pass")).toBe(true);
   });
+
+  it("refuses a row that is no longer generating, and writes nothing", async () => {
+    const db = seed();
+    db.update(walkthroughs).set({ status: "superseded" }).where(eq(walkthroughs.id, WT)).run();
+    const res = await rateAxisHandler(ctxFor(db), rating());
+    expect(res.isError).toBe(true);
+    expect(String(res.content?.[0]?.text)).toContain("no longer generating");
+    expect(db.select().from(walkthroughRatings).all()).toHaveLength(0);
+  });
 });

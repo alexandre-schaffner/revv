@@ -1,6 +1,8 @@
 // The phase window of each write tool: the phase it belongs to (its
 // description opens with it) and the completed phases a call may follow. A
-// call outside its window is refused before anything is written (invariant 5).
+// call outside its window is refused before anything is written (invariant 5),
+// and so is every call on a row that is no longer generating: a superseded or
+// finished review is never written by the generation pipeline (invariant 7).
 
 import type { WalkthroughPipelinePhase } from "@revv/shared";
 import type { Db } from "../../../db";
@@ -93,6 +95,13 @@ export function openForWrite(
   | { readonly refusal: WalkthroughToolResult } {
   const row = loadWalkthroughRow(db, walkthroughId);
   if (!row) return { refusal: fail(`Walkthrough ${walkthroughId} not found.`) };
+  if (row.status !== "generating") {
+    return {
+      refusal: fail(
+        `Error: this walkthrough is no longer generating (it is '${row.status}'). Nothing was written; stop here.`,
+      ),
+    };
+  }
   const phase = row.lastCompletedPhase as WalkthroughPipelinePhase;
   const window: PhaseWindow = TOOL_PHASES[tool];
   if (!window.after.includes(phase)) return { refusal: fail(window.refusal(phase)) };

@@ -3,14 +3,19 @@
 // which owns the registry, the concurrency budget, cancel, resume-on-boot and
 // the MCP token. What is walkthrough-specific lives here and beside it:
 //
-//   • `startJob` decides, under a per-PR lock, what a request lands on: the
-//     run already live, the row already at the head, or a new row — which
-//     takes over a finished review (restack carry, team cache) when one
-//     exists, and is planned and launched only when none does. `/current`'s
-//     team-cache hydrate is the same decision, import-only.
-//   • A resume — on boot, or the user's — runs an existing row exactly as its
-//     journal records it: its head, its launch plan, its stack. A row whose
-//     head GitHub (as last synced) has moved past is superseded instead.
+//   • Every decision about a PR's rows runs under the PR's lock: a request, a
+//     resume, a hydrate, a supersede.
+//   • `startJob` decides what a request lands on: the run already live, the
+//     row already at the head, or a new row — which takes over a finished
+//     review (restack carry, team cache) when one exists, and is planned and
+//     launched only when none does. `/current`'s team-cache hydrate is the
+//     same decision, import-only.
+//   • A row whose run died — found on boot, by the user's Resume, or by a
+//     request at its head — goes through the kernel's one resume policy
+//     (completed if its journal passes, failed over the budget), and if it
+//     runs again, it runs exactly as its journal records it: its head, its
+//     launch plan, its stack. A row whose head GitHub (as last synced) has
+//     moved past is superseded instead.
 //   • A run ends `complete` exactly when the journal passes the completion
 //     check `complete_walkthrough` uses (`completion.ts`).
 //   • `emitEvent` stamps durable events with the row's seq and broadcasts
@@ -135,10 +140,12 @@ export interface StartJobResult {
 export type StartJobError = PrContextError | HeadShaMismatchError | AiGenerationError;
 
 /**
- * How a user's Resume went: the row runs again (or already was running), the
- * PR moved past its head and it was superseded, or there was nothing to resume.
+ * How a resume went: the row runs again (or already was running), its journal
+ * already passed and it completed, it was over its resume budget and failed,
+ * the PR moved past its head and it was superseded, or there was nothing to
+ * resume.
  */
-export type ResumeOutcome = "resumed" | "superseded" | "gone";
+export type ResumeOutcome = "resumed" | "completed" | "exhausted" | "superseded" | "gone";
 
 export type ResumeError = PrContextError | GitHubError;
 
@@ -257,14 +264,21 @@ export const WalkthroughJobsLive = Layer.effect(
     const realtime = yield* Realtime;
     const stackService = yield* StackService;
 
-    // Every decision about a PR's rows — a request, a resume, a hydrate —
-    // runs under its PR's lock, so two of them can't both find the head free.
+    // Not re-entrant: what runs under it calls the `*Locked` variants.
     const prLocks = yield* makeStartJobMutex();
     const underPrLock = <A, E>(prId: string, effect: Effect.Effect<A, E>) =>
       Effect.flatMap(prLocks.acquire(prId), (lock) => lock.withPermits(1)(effect));
 
     const readRow = (walkthroughId: string) =>
       dbTry("read walkthrough", () => loadWalkthroughRow(db, walkthroughId));
+
+    const underRowsPrLock = <A, E>(
+      walkthroughId: string,
+      effect: Effect.Effect<A, E>,
+    ): Effect.Effect<A, E | DbError> =>
+      Effect.flatMap(readRow(walkthroughId), (row) =>
+        row ? underPrLock(row.pullRequestId, effect) : effect,
+      );
 
     /** Where a walkthrough's events go: the live run's account, or the PR's owner. */
     const targetOf = (
@@ -362,7 +376,8 @@ export const WalkthroughJobsLive = Layer.effect(
         reason: "resume_budget",
         message: "Walkthrough failed after repeated retries. Try regenerating.",
       },
-      relaunch: (walkthroughId) => resumeRow(walkthroughId, { revive: false }),
+      relaunch: (walkthroughId) => relaunchLocked(walkthroughId, null),
+      exclusive: underRowsPrLock,
     });
 
     /** Waits on a clone in progress; null once it is ready. */
@@ -401,7 +416,7 @@ export const WalkthroughJobsLive = Layer.effect(
         return run ? { walkthroughId: run.id, prHeadSha: run.context.prHeadSha } : null;
       });
 
-    const supersedeForPr = (
+    const supersedeLocked = (
       prId: string,
       exceptHeadSha?: string,
       mode?: WalkthroughMode,
@@ -419,8 +434,9 @@ export const WalkthroughJobsLive = Layer.effect(
 
     /**
      * Run a `generating` row as its journal records it. The launch is planned
-     * and recorded first if the row has none: `jobStart` (when given) asks the
-     * job-start judgment to size it.
+     * and recorded first if the row has none, sized by the job-start judgment
+     * only while nothing is written: the tier it assigns would overwrite the
+     * one the agent set.
      */
     const launchRow = (input: {
       readonly row: WalkthroughRow;
@@ -429,7 +445,7 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly trigger: WalkthroughStartTrigger;
       readonly cloneInProgress: boolean;
       readonly resumed: boolean;
-      readonly jobStart: JobStartStateInput | null;
+      readonly jobStart: JobStartStateInput;
     }): Effect.Effect<void, DbError> =>
       Effect.gen(function* () {
         const { row, context } = input;
@@ -444,7 +460,7 @@ export const WalkthroughJobsLive = Layer.effect(
           const planned = yield* planLaunch({
             prId: pr.id,
             headSha: row.prHeadSha,
-            state: input.jobStart,
+            state: row.lastCompletedPhase === "none" ? input.jobStart : null,
             settings,
             agent: yield* settingsService.resolveAgent(),
           }).pipe(
@@ -460,6 +476,8 @@ export const WalkthroughJobsLive = Layer.effect(
           plan = planned.plan;
           assignedRisk = planned.risk?.level ?? assignedRisk;
         }
+        // Planning took a while; only a row still generating gets a run.
+        if ((yield* readRow(walkthroughId))?.status !== "generating") return;
         const generationMode: WalkthroughGenerationMode =
           row.generationMode === "incremental" ? "incremental" : "full";
         const parentFingerprint = yield* parentFingerprintOf(
@@ -644,6 +662,92 @@ export const WalkthroughJobsLive = Layer.effect(
         return true;
       });
 
+    /**
+     * Where a relaunch runs: the PR as a request just resolved it at its live
+     * head, or (null) from the row's journal alone.
+     */
+    interface RelaunchAt {
+      readonly context: PrContextBasic;
+      readonly files: ReadonlyArray<PromptFile>;
+      readonly cloneInProgress: boolean;
+      readonly trigger: WalkthroughStartTrigger;
+    }
+
+    /** The synced head the PR moved to past `row`'s, or null while it is still at it. */
+    const movedPast = (row: WalkthroughRow) =>
+      Effect.map(prContextService.readPr(row.pullRequestId), ({ pr }) =>
+        pr.headSha !== null && pr.headSha !== row.prHeadSha ? pr.headSha : null,
+      );
+
+    /**
+     * Run a `generating` row again, once the resume decision said to. From
+     * the journal alone, a row the PR has moved past is superseded instead;
+     * the diff at its head is the only GitHub call, and only when none is
+     * cached. Under the PR lock.
+     */
+    const relaunchLocked = (
+      walkthroughId: string,
+      at: RelaunchAt | null,
+    ): Effect.Effect<ResumeOutcome, ResumeError> =>
+      Effect.gen(function* () {
+        const row = yield* readRow(walkthroughId);
+        if (row?.status !== "generating") return "gone";
+        if (at !== null) {
+          yield* launchRow({
+            row,
+            context: at.context,
+            files: at.files,
+            trigger: at.trigger,
+            cloneInProgress: at.cloneInProgress,
+            resumed: true,
+            jobStart: { pr: at.context.pr, files: at.files },
+          });
+          return "resumed";
+        }
+        const head = yield* movedPast(row);
+        if (head !== null) {
+          // The PR has moved on since this row's run (invariant #7).
+          yield* supersedeLocked(row.pullRequestId, head, row.mode);
+          return "superseded";
+        }
+        const context = yield* prContextService.forPr(row.pullRequestId);
+        const { pr, repo, client } = context;
+        const files = toGitHubFileShape(
+          (yield* diffCacheService.getOrFetch(pr, repo.fullName, client)).files,
+        );
+        // A clone cut off by the restart comes back `pending`; one that
+        // failed ends the run through the same wait.
+        const clone = yield* repoCloneService.getCloneStatus(repo.id);
+        yield* launchRow({
+          row,
+          context,
+          files,
+          trigger: "resume",
+          cloneInProgress: clone.status !== "ready",
+          resumed: true,
+          jobStart: { pr, files },
+        });
+        return "resumed";
+      });
+
+    /** The kernel's resume policy for a row whose run isn't live, then its relaunch. Under the PR lock. */
+    const resumeLocked = (
+      walkthroughId: string,
+      at: RelaunchAt | null,
+    ): Effect.Effect<ResumeOutcome, ResumeError> =>
+      Effect.gen(function* () {
+        const decision = yield* jobs.resumeDecision(walkthroughId);
+        switch (decision) {
+          case "live":
+            return "resumed";
+          case "completed":
+          case "exhausted":
+            return decision;
+          case "run":
+            return yield* relaunchLocked(walkthroughId, at);
+        }
+      });
+
     const request = (params: StartJobParams): Effect.Effect<StartJobResult, StartJobError> =>
       Effect.gen(function* () {
         const mode = params.mode ?? "reviewer";
@@ -663,7 +767,7 @@ export const WalkthroughJobsLive = Layer.effect(
         if (live !== null) {
           if (live.prHeadSha !== headSha) {
             // The PR moved past the live run's head: it is stale (invariant #7).
-            yield* supersedeForPr(pr.id, headSha, mode);
+            yield* supersedeLocked(pr.id, headSha, mode);
           } else if (params.replace !== "all") {
             return { walkthroughId: live.walkthroughId, reused: true };
           }
@@ -677,28 +781,23 @@ export const WalkthroughJobsLive = Layer.effect(
           );
           return yield* Effect.fail(new AiGenerationError({ cause: clone, message }));
         }
-        const cloneInProgress = clone.status === "cloning";
-        const launch = (row: WalkthroughRow, resumed: boolean) =>
-          launchRow({
-            row,
-            context: resolved,
-            files,
-            trigger: params.trigger,
-            cloneInProgress,
-            resumed,
-            jobStart: { pr, files },
-          });
+        const at: RelaunchAt = {
+          context: resolved,
+          files,
+          cloneInProgress: clone.status === "cloning",
+          trigger: params.trigger,
+        };
 
         // After the clone check, so a request that can't start leaves the
         // reviews it would replace standing.
         if (params.replace === "all") {
-          yield* supersedeForPr(pr.id);
+          yield* supersedeLocked(pr.id);
         } else {
-          if (pinnedHead !== undefined) yield* supersedeForPr(pr.id, headSha, mode);
+          if (pinnedHead !== undefined) yield* supersedeLocked(pr.id, headSha, mode);
           // One perspective at a time. Both write their AI threads into the
           // PR's one review, so Submit would post both walkthroughs' comments.
           if (params.replace === "finished") {
-            yield* supersedeForPr(pr.id, undefined, otherWalkthroughMode(mode));
+            yield* supersedeLocked(pr.id, undefined, otherWalkthroughMode(mode));
           }
           const atHead = yield* walkthroughService.activeAt(
             pr.id,
@@ -707,13 +806,13 @@ export const WalkthroughJobsLive = Layer.effect(
             requestedGenerationMode,
           );
           if (atHead?.status === "generating") {
-            // Its run died before anything resumed it: run it again.
-            const row = yield* readRow(atHead.id);
-            if (row) {
-              yield* launch(row, true);
-              return { walkthroughId: row.id, reused: false };
-            }
-          } else if (atHead !== null && params.replace === "none") {
+            // Its run died before anything resumed it.
+            const outcome = yield* resumeLocked(atHead.id, at);
+            if (outcome === "resumed") return { walkthroughId: atHead.id, reused: false };
+            if (outcome === "completed") return { walkthroughId: atHead.id, reused: true };
+            // Over its budget, it failed: from here it is a finished row.
+          }
+          if (atHead !== null && params.replace === "none") {
             return { walkthroughId: atHead.id, reused: true };
           }
         }
@@ -751,7 +850,17 @@ export const WalkthroughJobsLive = Layer.effect(
           return { walkthroughId, reused: false };
         }
         const row = yield* readRow(walkthroughId);
-        if (row) yield* launch(row, false);
+        if (row) {
+          yield* launchRow({
+            row,
+            context: resolved,
+            files,
+            trigger: params.trigger,
+            cloneInProgress: at.cloneInProgress,
+            resumed: false,
+            jobStart: { pr, files },
+          });
+        }
         return { walkthroughId, reused: false };
       });
 
@@ -759,8 +868,7 @@ export const WalkthroughJobsLive = Layer.effect(
       underPrLock(
         prId,
         Effect.gen(function* () {
-          const context = yield* prContextService.forPr(prId);
-          const { pr, repo } = context;
+          const { pr, repo } = yield* prContextService.readPr(prId);
           const headSha = pr.headSha;
           if (headSha === null) return false;
           // Settled under the lock: a request may have created one since `/current` looked.
@@ -821,69 +929,34 @@ export const WalkthroughJobsLive = Layer.effect(
         return true;
       });
 
-    /**
-     * Run an existing row again, from its journal alone: no GitHub call but
-     * the diff at its head when none is cached. A boot resume (`revive`
-     * false) only takes `generating` rows; the user's Resume revives an
-     * errored one first.
-     */
-    const resumeRow = (
-      walkthroughId: string,
-      options: { readonly revive: boolean },
-    ): Effect.Effect<ResumeOutcome, ResumeError> =>
-      Effect.gen(function* () {
-        const found = yield* readRow(walkthroughId);
-        if (!found) return "gone";
-        return yield* underPrLock(
-          found.pullRequestId,
-          Effect.gen(function* () {
-            if (yield* jobs.running(walkthroughId)) return "resumed";
-            const row = yield* readRow(walkthroughId);
-            const resumable =
-              row?.status === "generating" || (options.revive && row?.status === "error");
-            if (!row || !resumable) return "gone";
-
-            const context = yield* prContextService.forPr(row.pullRequestId);
-            const { pr, repo, client } = context;
-            if (pr.headSha !== null && pr.headSha !== row.prHeadSha) {
-              // The PR has moved on since this row's run (invariant #7).
-              yield* supersedeForPr(pr.id, pr.headSha, row.mode);
-              return "superseded";
-            }
-            if (row.status === "error" && !(yield* revive(row))) return "gone";
-            const current = (yield* readRow(walkthroughId)) ?? row;
-
-            const { files } = yield* diffCacheService.getOrFetch(pr, repo.fullName, client);
-            // A clone cut off by the restart comes back `pending`; one that
-            // failed ends the run through the same wait.
-            const clone = yield* repoCloneService.getCloneStatus(repo.id);
-            yield* launchRow({
-              row: current,
-              context,
-              files: toGitHubFileShape(files),
-              trigger: "resume",
-              cloneInProgress: clone.status !== "ready",
-              resumed: true,
-              // Sized by the job-start judgment only while nothing is written:
-              // the tier it assigns would overwrite the one the agent set.
-              jobStart:
-                current.lastCompletedPhase === "none"
-                  ? { pr, files: toGitHubFileShape(files) }
-                  : null,
-            });
-            return "resumed";
-          }),
-        );
-      });
+    /** The user's Resume: an errored row is revived first, then the one resume policy decides. */
+    const resume = (walkthroughId: string): Effect.Effect<ResumeOutcome, ResumeError> =>
+      underRowsPrLock(
+        walkthroughId,
+        Effect.gen(function* () {
+          if (yield* jobs.running(walkthroughId)) return "resumed";
+          const row = yield* readRow(walkthroughId);
+          if (row?.status !== "generating" && row?.status !== "error") return "gone";
+          const head = yield* movedPast(row);
+          if (head !== null) {
+            // The PR has moved on since this row's run (invariant #7).
+            yield* supersedeLocked(row.pullRequestId, head, row.mode);
+            return "superseded";
+          }
+          if (row.status === "error" && !(yield* revive(row))) return "gone";
+          return yield* resumeLocked(walkthroughId, null);
+        }),
+      );
 
     return {
       startJob: (params) => underPrLock(params.prId, request(params)),
       importFromTeamCache,
-      resume: (walkthroughId) => resumeRow(walkthroughId, { revive: true }),
+      resume,
       findActiveByPr,
       cancel: (walkthroughId) => jobs.stop(walkthroughId, "user"),
       resumePending: () => jobs.resumePending,
-      supersedeForPr,
+      supersedeForPr: (prId, exceptHeadSha, mode) =>
+        underPrLock(prId, supersedeLocked(prId, exceptHeadSha, mode)),
       emitEvent,
       resolveSessionToken: jobs.resolveToken,
     };
