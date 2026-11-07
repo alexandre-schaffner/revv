@@ -65,7 +65,7 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
   .post("/complete", (ctx) =>
     runRoute(
       tryDb("complete onboarding", (db) => {
-        const userId = ctx.session.user.id;
+        const userId = ctx.userId;
         const current = db
           .select({ onboardedAt: user.onboardedAt })
           .from(user)
@@ -92,7 +92,7 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
         db
           .update(user)
           .set({ onboardedAt: null, updatedAt: new Date() })
-          .where(eq(user.id, ctx.session.user.id))
+          .where(eq(user.id, ctx.userId))
           .run(),
       ).pipe(Effect.as({ onboardedAt: null })),
     ),

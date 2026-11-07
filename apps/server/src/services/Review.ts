@@ -7,7 +7,7 @@ import type {
   AuthorRole,
   CommentThread,
   MessageType,
-  ServerEventMessage,
+  ThreadEventMessage,
   ThreadMessage,
   ThreadStatus,
 } from "@revv/shared";
@@ -289,8 +289,12 @@ function firstMessageId(db: Db | Tx, threadId: string): string | undefined {
     .get()?.id;
 }
 
-function insertMessage(db: Db | Tx, threadId: string, params: NewMessage): ThreadMessage {
-  const id = crypto.randomUUID();
+function insertMessage(
+  db: Db | Tx,
+  threadId: string,
+  params: NewMessage,
+  id: string = crypto.randomUUID(),
+): ThreadMessage {
   const row: typeof threadMessages.$inferInsert = {
     id,
     threadId,
@@ -312,6 +316,239 @@ function insertMessage(db: Db | Tx, threadId: string, params: NewMessage): Threa
 const isRefusal = (value: unknown): value is Refusal =>
   value instanceof NotFoundError || value instanceof ForbiddenError;
 
+const threadNotFound = (threadId: string) =>
+  new NotFoundError({ resource: "thread", id: threadId });
+const messageNotFound = (messageId: string) =>
+  new NotFoundError({ resource: "message", id: messageId });
+
+const statusEnvelope = (thread: CommentThread): ThreadEventMessage => ({
+  type: "thread:updated",
+  data: { threadId: thread.id, status: thread.status, resolvedAt: thread.resolvedAt },
+});
+
+/**
+ * A thread change made inside the caller's transaction: what it produced, the
+ * PR it belongs to, and the envelopes that announce it once the transaction
+ * commits (invariant 8). A replay that changes nothing has no envelopes.
+ */
+export interface ThreadWrite<T> {
+  readonly prId: string;
+  readonly value: T;
+  readonly envelopes: readonly ThreadEventMessage[];
+}
+
+/**
+ * The thread writes, as plain functions of a transaction. `ReviewService`
+ * runs them for routes and the GitHub sync; agent tool handlers, which write
+ * in their own synchronous transactions, call them directly. Nothing else
+ * writes `comment_threads` / `thread_messages` (deletes cascading from a PR
+ * or a walkthrough issue aside).
+ */
+export const threadWrites = {
+  /** A thread with its first message. */
+  start(
+    tx: Db | Tx,
+    prId: string,
+    anchor: ThreadAnchor & Partial<ThreadGitHubLink>,
+    message: NewMessage,
+  ): ThreadWrite<{ thread: CommentThread; message: ThreadMessage }> {
+    const row: typeof commentThreads.$inferInsert = {
+      id: crypto.randomUUID(),
+      reviewSessionId: sessionIdIn(tx, prId),
+      filePath: anchor.filePath,
+      startLine: anchor.startLine,
+      endLine: anchor.endLine,
+      diffSide: anchor.diffSide,
+      status: statusAfterMessage("open", message.authorRole),
+      createdAt: new Date().toISOString(),
+    };
+    if (anchor.externalCommentId !== undefined) row.externalCommentId = anchor.externalCommentId;
+    if (anchor.lastSyncedAt !== undefined) row.lastSyncedAt = anchor.lastSyncedAt;
+    const thread = toThread(tx.insert(commentThreads).values(row).returning().get());
+    const created = { thread, message: insertMessage(tx, thread.id, message) };
+    return {
+      prId,
+      value: created,
+      envelopes: [{ type: "thread:created", data: { prId, ...created } }],
+    };
+  },
+
+  /**
+   * Revv's comment on a walkthrough issue, keyed on the caller's
+   * deterministic ids: created once, its text replaced on a replay with a new
+   * body, untouched on a replay with the same one.
+   */
+  upsertIssueComment(
+    tx: Db | Tx,
+    params: {
+      readonly prId: string;
+      readonly threadId: string;
+      readonly messageId: string;
+      readonly issueId: string;
+      readonly anchor: ThreadAnchor;
+      readonly body: string;
+    },
+  ): ThreadWrite<{ thread: CommentThread; message: ThreadMessage }> {
+    const { prId, threadId, messageId } = params;
+    const now = new Date().toISOString();
+    const inserted = tx
+      .insert(commentThreads)
+      .values({
+        id: threadId,
+        reviewSessionId: sessionIdIn(tx, prId),
+        ...params.anchor,
+        status: "open",
+        createdAt: now,
+        walkthroughIssueId: params.issueId,
+      })
+      .onConflictDoNothing({ target: commentThreads.id })
+      .returning({ id: commentThreads.id })
+      .all();
+    const before = readMessage(tx, messageId);
+    if (!before) {
+      insertMessage(
+        tx,
+        threadId,
+        {
+          authorRole: "ai_agent",
+          authorName: "Revv AI",
+          body: params.body,
+          messageType: "comment",
+          createdAt: now,
+        },
+        messageId,
+      );
+    } else if (before.body !== params.body) {
+      tx.update(threadMessages)
+        .set({ body: params.body, editedAt: now })
+        .where(eq(threadMessages.id, messageId))
+        .run();
+    }
+    const threadRow = tx.select().from(commentThreads).where(eq(commentThreads.id, threadId)).get();
+    const message = readMessage(tx, messageId);
+    if (!threadRow || !message) {
+      throw new Error(`issue comment ${threadId} was written but cannot be read back`);
+    }
+    const thread = toThread(threadRow);
+    const envelopes: ThreadEventMessage[] =
+      inserted.length > 0
+        ? [{ type: "thread:created", data: { prId, thread, message } }]
+        : before?.body !== params.body
+          ? [{ type: "thread:message:edited", data: { threadId, message } }]
+          : [];
+    return { prId, value: { thread, message }, envelopes };
+  },
+
+  /**
+   * A message on a thread, which moves the thread's status (see
+   * `statusAfterMessage`). `messageId` makes the caller's own key the row's.
+   */
+  reply(
+    tx: Db | Tx,
+    threadId: string,
+    message: NewMessage,
+    messageId?: string,
+  ): ThreadWrite<{ thread: CommentThread; message: ThreadMessage }> | NotFoundError {
+    const found = readThreadOnPr(tx, threadId);
+    if (!found) return threadNotFound(threadId);
+    const inserted = insertMessage(tx, threadId, message, messageId);
+    const before = found.row.status as ThreadStatus;
+    const status = statusAfterMessage(before, message.authorRole);
+    const thread = toThread(
+      status === before
+        ? found.row
+        : tx
+            .update(commentThreads)
+            .set({ status })
+            .where(eq(commentThreads.id, threadId))
+            .returning()
+            .get(),
+    );
+    const envelopes: ThreadEventMessage[] = [
+      { type: "thread:message", data: { threadId, message: inserted } },
+    ];
+    if (status !== before) envelopes.push(statusEnvelope(thread));
+    return { prId: found.prId, value: { thread, message: inserted }, envelopes };
+  },
+
+  /**
+   * A status set in Revv. On a thread that is on GitHub it stays pending
+   * until GitHub takes it (`statusPushed`), so a pull doesn't revert it.
+   * Setting the status a thread already has changes nothing.
+   */
+  setStatus(
+    tx: Db | Tx,
+    threadId: string,
+    status: ThreadStatus,
+  ): ThreadWrite<CommentThread> | NotFoundError {
+    const found = readThreadOnPr(tx, threadId);
+    if (!found) return threadNotFound(threadId);
+    if (found.row.status === status) {
+      return { prId: found.prId, value: toThread(found.row), envelopes: [] };
+    }
+    const thread = toThread(
+      tx
+        .update(commentThreads)
+        .set({
+          status,
+          resolvedAt: isThreadResolved(status) ? new Date().toISOString() : null,
+          statusPushPending: found.row.externalCommentId !== null,
+        })
+        .where(eq(commentThreads.id, threadId))
+        .returning()
+        .get(),
+    );
+    return { prId: found.prId, value: thread, envelopes: [statusEnvelope(thread)] };
+  },
+
+  /** A message's new text. `editedAt` defaults to now. */
+  editMessage(
+    tx: Db | Tx,
+    messageId: string,
+    body: string,
+    editedAt: string = new Date().toISOString(),
+  ): ThreadWrite<ThreadMessage> | NotFoundError {
+    tx.update(threadMessages).set({ body, editedAt }).where(eq(threadMessages.id, messageId)).run();
+    const message = readMessage(tx, messageId);
+    if (!message) return messageNotFound(messageId);
+    const thread = readThreadOnPr(tx, message.threadId);
+    if (!thread) return threadNotFound(message.threadId);
+    return {
+      prId: thread.prId,
+      value: message,
+      envelopes: [{ type: "thread:message:edited", data: { threadId: message.threadId, message } }],
+    };
+  },
+
+  /** A message removed. A thread's first message is the thread: removing it removes the thread. */
+  removeMessage(
+    tx: Db | Tx,
+    threadId: string,
+    messageId: string,
+  ): ThreadWrite<void> | NotFoundError {
+    const found = readThreadOnPr(tx, threadId);
+    if (!found) return threadNotFound(threadId);
+    if (firstMessageId(tx, threadId) === messageId) return threadWrites.removeThread(tx, threadId);
+    tx.delete(threadMessages).where(eq(threadMessages.id, messageId)).run();
+    return {
+      prId: found.prId,
+      value: undefined,
+      envelopes: [{ type: "thread:message:deleted", data: { threadId, messageId } }],
+    };
+  },
+
+  removeThread(tx: Db | Tx, threadId: string): ThreadWrite<void> | NotFoundError {
+    const found = readThreadOnPr(tx, threadId);
+    if (!found) return threadNotFound(threadId);
+    tx.delete(commentThreads).where(eq(commentThreads.id, threadId)).run();
+    return {
+      prId: found.prId,
+      value: undefined,
+      envelopes: [{ type: "thread:deleted", data: { threadId } }],
+    };
+  },
+};
+
 /**
  * Run `body` in one transaction. A refusal it returns fails the effect; bodies
  * return one before any write, so nothing needs undoing.
@@ -328,17 +565,24 @@ const transact = <T>(
     ),
   );
 
-const threadNotFound = (threadId: string) =>
-  new NotFoundError({ resource: "thread", id: threadId });
-const messageNotFound = (messageId: string) =>
-  new NotFoundError({ resource: "message", id: messageId });
-
 export const ReviewServiceLive = Layer.effect(
   ReviewService,
   Effect.gen(function* () {
     const realtime = yield* Realtime;
-    const announce = (prId: string, ...messages: ServerEventMessage[]) =>
-      Effect.forEach(messages, (msg) => realtime.toPr(prId, msg), { discard: true });
+    /** Commit `write` in one transaction, then announce what it did. */
+    const commit = <T, R extends Refusal = never>(
+      label: string,
+      write: (tx: Tx) => ThreadWrite<T> | R,
+    ): Effect.Effect<T, DbError | R, DbService> =>
+      tryDb(label, (db) => db.transaction((tx) => write(tx))).pipe(
+        Effect.flatMap((done) => {
+          if (isRefusal(done)) return Effect.fail(done as R);
+          const { prId, value, envelopes } = done as ThreadWrite<T>;
+          return Effect.forEach(envelopes, (msg) => realtime.toPr(prId, msg), {
+            discard: true,
+          }).pipe(Effect.as(value));
+        }),
+      );
 
     /** A draft on `threadId` the actor may still change: not on GitHub, and theirs or Revv's. */
     const modifiableDraft = (
@@ -347,7 +591,7 @@ export const ReviewServiceLive = Layer.effect(
       messageId: string,
       actorLogin: string | null,
       verb: "edit" | "discard",
-    ): { row: MessageRow; prId: string } | Refusal => {
+    ): MessageRow | Refusal => {
       const row = tx.select().from(threadMessages).where(eq(threadMessages.id, messageId)).get();
       if (!row || row.threadId !== threadId) return messageNotFound(messageId);
       if (row.externalId !== null) {
@@ -363,9 +607,7 @@ export const ReviewServiceLive = Layer.effect(
           message: `You can only ${verb} your own comments or comments left by Revv`,
         });
       }
-      const thread = readThreadOnPr(tx, row.threadId);
-      if (!thread) return threadNotFound(row.threadId);
-      return { row, prId: thread.prId };
+      return row;
     };
 
     return {
@@ -433,83 +675,16 @@ export const ReviewServiceLive = Layer.effect(
           (db) => readMessages(db, eq(threadMessages.externalId, externalId))[0] ?? null,
         ),
 
-      startThread: (prId, anchor, params) =>
-        Effect.gen(function* () {
-          const created = yield* transact("start a thread", (tx) => {
-            const row: typeof commentThreads.$inferInsert = {
-              id: crypto.randomUUID(),
-              reviewSessionId: sessionIdIn(tx, prId),
-              filePath: anchor.filePath,
-              startLine: anchor.startLine,
-              endLine: anchor.endLine,
-              diffSide: anchor.diffSide,
-              status: statusAfterMessage("open", params.authorRole),
-              createdAt: new Date().toISOString(),
-            };
-            if (anchor.externalCommentId !== undefined) {
-              row.externalCommentId = anchor.externalCommentId;
-            }
-            if (anchor.lastSyncedAt !== undefined) row.lastSyncedAt = anchor.lastSyncedAt;
-            const thread = tx.insert(commentThreads).values(row).returning().get();
-            return { thread: toThread(thread), message: insertMessage(tx, thread.id, params) };
-          });
-          yield* announce(prId, { type: "thread:created", data: { prId, ...created } });
-          return created;
-        }),
+      startThread: (prId, anchor, message) =>
+        commit<{ thread: CommentThread; message: ThreadMessage }, never>("start a thread", (tx) =>
+          threadWrites.start(tx, prId, anchor, message),
+        ),
 
-      reply: (threadId, params) =>
-        Effect.gen(function* () {
-          const { prId, before, thread, message } = yield* transact("reply", (tx) => {
-            const found = readThreadOnPr(tx, threadId);
-            if (!found) return threadNotFound(threadId);
-            const message = insertMessage(tx, threadId, params);
-            const before = found.row.status as ThreadStatus;
-            const status = statusAfterMessage(before, params.authorRole);
-            const thread =
-              status === before
-                ? found.row
-                : tx
-                    .update(commentThreads)
-                    .set({ status })
-                    .where(eq(commentThreads.id, threadId))
-                    .returning()
-                    .get();
-            return { prId: found.prId, before, thread: toThread(thread), message };
-          });
-          yield* announce(prId, { type: "thread:message", data: { threadId, message } });
-          if (thread.status !== before) {
-            yield* announce(prId, {
-              type: "thread:updated",
-              data: { threadId, status: thread.status, resolvedAt: thread.resolvedAt },
-            });
-          }
-          return { thread, message };
-        }),
+      reply: (threadId, message) =>
+        commit("reply", (tx) => threadWrites.reply(tx, threadId, message)),
 
       setStatus: (threadId, status) =>
-        Effect.gen(function* () {
-          const { prId, thread } = yield* transact("set thread status", (tx) => {
-            const found = readThreadOnPr(tx, threadId);
-            if (!found) return threadNotFound(threadId);
-            const resolvedAt = isThreadResolved(status) ? new Date().toISOString() : null;
-            const row = tx
-              .update(commentThreads)
-              .set({
-                status,
-                resolvedAt,
-                statusPushPending: found.row.externalCommentId !== null,
-              })
-              .where(eq(commentThreads.id, threadId))
-              .returning()
-              .get();
-            return { prId: found.prId, thread: toThread(row) };
-          });
-          yield* announce(prId, {
-            type: "thread:updated",
-            data: { threadId, status: thread.status, resolvedAt: thread.resolvedAt },
-          });
-          return thread;
-        }),
+        commit("set thread status", (tx) => threadWrites.setStatus(tx, threadId, status)),
 
       statusPushed: (threadId, status) =>
         tryDb("mark a thread status pushed", (db) => {
@@ -548,108 +723,40 @@ export const ReviewServiceLive = Layer.effect(
             return { outcome: "changed" as const, prId: found.prId, thread: toThread(updated) };
           });
           if (applied.outcome === "changed") {
-            yield* announce(applied.prId, {
-              type: "thread:updated",
-              data: {
-                threadId,
-                status: applied.thread.status,
-                resolvedAt: applied.thread.resolvedAt,
-              },
-            });
+            yield* realtime.toPr(applied.prId, statusEnvelope(applied.thread));
           }
           return applied.outcome;
         }),
 
       editDraft: (threadId, messageId, body, actorLogin) =>
-        Effect.gen(function* () {
-          const { prId, message } = yield* transact("edit a draft", (tx) => {
-            const draft = modifiableDraft(tx, threadId, messageId, actorLogin, "edit");
-            if (isRefusal(draft)) return draft;
-            tx.update(threadMessages)
-              .set({ body, editedAt: new Date().toISOString() })
-              .where(eq(threadMessages.id, messageId))
-              .run();
-            const message = readMessage(tx, messageId);
-            if (!message) return messageNotFound(messageId);
-            return { prId: draft.prId, message };
-          });
-          yield* announce(prId, { type: "thread:message:edited", data: { threadId, message } });
-          return message;
+        commit("edit a draft", (tx) => {
+          const draft = modifiableDraft(tx, threadId, messageId, actorLogin, "edit");
+          return isRefusal(draft) ? draft : threadWrites.editMessage(tx, messageId, body);
         }),
 
       applyRemoteEdit: (messageId, body, editedAt) =>
-        Effect.gen(function* () {
-          const { prId, message } = yield* transact("apply a GitHub edit", (tx) => {
-            tx.update(threadMessages)
-              .set({ body, editedAt })
-              .where(eq(threadMessages.id, messageId))
-              .run();
-            const message = readMessage(tx, messageId);
-            if (!message) return messageNotFound(messageId);
-            const thread = readThreadOnPr(tx, message.threadId);
-            if (!thread) return threadNotFound(message.threadId);
-            return { prId: thread.prId, message };
-          });
-          yield* announce(prId, {
-            type: "thread:message:edited",
-            data: { threadId: message.threadId, message },
-          });
-        }),
+        commit("apply a GitHub edit", (tx) =>
+          threadWrites.editMessage(tx, messageId, body, editedAt),
+        ).pipe(Effect.asVoid),
 
       discardThread: (threadId, actorLogin) =>
-        Effect.gen(function* () {
-          const prId = yield* transact("discard a thread", (tx) => {
-            const found = readThreadOnPr(tx, threadId);
-            if (!found) return threadNotFound(threadId);
-            if (found.row.externalCommentId !== null) {
-              return new ForbiddenError({
-                message: "Cannot discard a thread already synced to GitHub",
-              });
-            }
-            const firstId = firstMessageId(tx, threadId);
-            const first = firstId
-              ? tx.select().from(threadMessages).where(eq(threadMessages.id, firstId)).get()
-              : undefined;
-            if (!first) return new NotFoundError({ resource: "thread message", id: threadId });
-            if (!canUserModifyComment(first, actorLogin)) {
-              return new ForbiddenError({
-                message: "You can only discard your own comments or comments left by Revv",
-              });
-            }
-            tx.delete(commentThreads).where(eq(commentThreads.id, threadId)).run();
-            return found.prId;
-          });
-          yield* announce(prId, { type: "thread:deleted", data: { threadId } });
+        commit("discard a thread", (tx) => {
+          const firstId = firstMessageId(tx, threadId);
+          if (!firstId) return threadNotFound(threadId);
+          const draft = modifiableDraft(tx, threadId, firstId, actorLogin, "discard");
+          return isRefusal(draft) ? draft : threadWrites.removeThread(tx, threadId);
         }),
 
       discardReply: (threadId, messageId, actorLogin) =>
-        Effect.gen(function* () {
-          const prId = yield* transact("discard a reply", (tx) => {
-            const draft = modifiableDraft(tx, threadId, messageId, actorLogin, "discard");
-            if (isRefusal(draft)) return draft;
-            if (firstMessageId(tx, threadId) === messageId) {
-              return new ForbiddenError({
-                message: "Cannot discard a thread's first message — discard the thread instead",
-              });
-            }
-            tx.delete(threadMessages).where(eq(threadMessages.id, messageId)).run();
-            return draft.prId;
-          });
-          yield* announce(prId, {
-            type: "thread:message:deleted",
-            data: { threadId, messageId },
-          });
+        commit("discard a reply", (tx) => {
+          const draft = modifiableDraft(tx, threadId, messageId, actorLogin, "discard");
+          return isRefusal(draft) ? draft : threadWrites.removeMessage(tx, threadId, messageId);
         }),
 
       dropThread: (threadId) =>
-        Effect.gen(function* () {
-          const found = yield* tryDb("drop a thread", (db) => {
-            const thread = readThreadOnPr(db, threadId);
-            db.delete(commentThreads).where(eq(commentThreads.id, threadId)).run();
-            return thread;
-          });
-          if (found) yield* announce(found.prId, { type: "thread:deleted", data: { threadId } });
-        }),
+        commit("drop a thread", (tx) => threadWrites.removeThread(tx, threadId)).pipe(
+          Effect.catchTag("NotFoundError", () => Effect.void),
+        ),
 
       linkThread: (threadId, ids) =>
         tryDb("link a thread to GitHub", (db) => {

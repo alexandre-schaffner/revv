@@ -8,7 +8,7 @@ import {
   type StackMergeRun,
   type StackMergeRunLayer,
 } from "@revv/shared";
-import type { GitHubStack, GitHubStackLayer } from "./map";
+import type { GitHubStack, GitHubStackLayer } from "../github/stacks";
 import {
   baseWasMoved,
   blockedOnlyByLayersBelow,

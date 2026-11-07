@@ -43,8 +43,8 @@ $effect(() => {
 
 // `onMount`, not `$effect`: `restoreSession()` and `fetchAllModels()` read the
 // auth token before their first `await`, so an effect would re-run on every
-// token change (better-auth hands back a refreshed `set-auth-token` on
-// sign-in), re-arming the updater into a duplicate "Update available" toast.
+// token change (sign-in, account switch), re-arming the updater into a
+// duplicate "Update available" toast.
 onMount(() => {
   initGsap();
   const cleanupTheme = initTheme();

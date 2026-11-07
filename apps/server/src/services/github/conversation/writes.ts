@@ -1,8 +1,8 @@
 import type { ConversationWrite } from "@revv/shared";
 import { Effect } from "effect";
-import { type GitHubError, GitHubNotFoundError } from "../../domain/errors";
-import type { RepoRef } from "./conversation";
-import type { GitHubClient, GitHubHttp } from "./transport";
+import { type GitHubError, GitHubNotFoundError } from "../../../domain/errors";
+import type { GitHubClient, GitHubHttp } from "../transport";
+import type { RepoRef } from "./api";
 
 interface GitHubWriteRequest {
   readonly method: "POST" | "PATCH" | "DELETE";

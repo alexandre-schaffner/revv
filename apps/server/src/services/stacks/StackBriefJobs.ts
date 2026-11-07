@@ -16,6 +16,7 @@ import { dbTry } from "../../effects/db-try";
 import { withDb } from "../../effects/with-db";
 import { withTraceAnchor } from "../../observability/span-graft";
 import { DbService } from "../Db";
+import type { GitHubStack } from "../github/stacks";
 import { makeStartJobMutex } from "../job-mutex";
 import {
   type AgentJobs,
@@ -29,7 +30,6 @@ import { PrContextService } from "../PrContext";
 import { Realtime } from "../Realtime";
 import { SettingsService } from "../Settings";
 import { stackSignature } from "./fingerprint";
-import type { GitHubStack } from "./map";
 import { type StackError, StackService } from "./StackService";
 
 const MAX_CONCURRENT_BRIEF_JOBS = 1;

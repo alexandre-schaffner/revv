@@ -70,13 +70,6 @@ export interface CodeBlock extends BlockPhaseFields {
   language: string;
   content: string;
   annotation: string | null;
-  /**
-   * Server-rendered HTML produced by `@pierre/diffs/ssr` (`preloadFile`).
-   * When present the client calls `instance.hydrate(...)` and skips the
-   * initial worker tokenize round-trip. Absent on cache misses and on
-   * live first emit — clients fall back to `instance.render(...)`.
-   */
-  prerenderedHtml?: string;
 }
 
 export interface DiffBlock extends BlockPhaseFields {
@@ -86,8 +79,6 @@ export interface DiffBlock extends BlockPhaseFields {
   filePath: string;
   patch: string;
   annotation: string | null;
-  /** See {@link CodeBlock.prerenderedHtml}; produced via `preloadPatchDiff`. */
-  prerenderedHtml?: string;
 }
 
 export interface ArtifactBlock extends BlockPhaseFields {

@@ -1,6 +1,5 @@
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { serverEnv } from "../config";
 import { NotFoundError } from "../domain/errors";
 import {
   InvalidGitHubClientIdError,
@@ -9,24 +8,9 @@ import {
 } from "../github-oauth";
 import { logError } from "../logger";
 import { GitHubAccounts } from "../services/github/accounts";
-import { AvatarCache } from "../services/github/avatars";
 import { exchangeDeviceCode, issuedTokens, requestDeviceCode } from "../services/github/oauth";
 import { SettingsService } from "../services/Settings";
 import { runRoute, withAuth } from "./middleware";
-
-// An empty `GITHUB_CLIENT_ID` is normal: GitHub Enterprise hosts supply their
-// client ID during onboarding, and the env var only overrides it for a fixed
-// self-hosted deployment. Warn only when it is an obvious placeholder.
-if (
-  serverEnv.githubClientId.startsWith("BUNDLED_") ||
-  serverEnv.githubClientId.startsWith("REPLACE_")
-) {
-  logError(
-    "device-auth",
-    "WARNING: GITHUB_CLIENT_ID looks like a placeholder — sign-in will fail. " +
-      "Set GITHUB_CLIENT_ID to a real client ID or leave it empty and configure the host during onboarding.",
-  );
-}
 
 type ClientIdError = MissingGitHubClientIdError | InvalidGitHubClientIdError;
 
@@ -109,6 +93,8 @@ const deviceFlowRoutes = new Elysia()
           }
           const { code } = answer;
           return {
+            host: target.host,
+            client_id: target.clientId,
             device_code: code.device_code,
             user_code: code.user_code,
             verification_uri: code.verification_uri,
@@ -135,8 +121,9 @@ const deviceFlowRoutes = new Elysia()
             ? yield* accounts.sessionUser(body.session_token)
             : null;
 
-          const target = yield* signInTarget(body.host, body.client_id);
-          if (!target.ok) return status(400, clientIdErrorBody(target.error));
+          // The device code belongs to the client `/device/init` resolved, so
+          // the poll uses exactly that host and client.
+          const target = { host: body.host, clientId: body.client_id };
           const { data } = yield* exchangeDeviceCode(
             target.host,
             target.clientId,
@@ -159,14 +146,7 @@ const deviceFlowRoutes = new Elysia()
                 error: `${linkToUserId ? "Account link" : "Session creation"} failed: ${e.message}`,
               });
             }
-            const { userId, sessionToken } = signedIn.success;
-            const profile = yield* accounts.userProfile(userId);
-            const login = profile?.githubLogin;
-            if (login) {
-              yield* Effect.flatMap(AvatarCache, (avatars) =>
-                avatars.ensure(target.host, login, profile.image),
-              );
-            }
+            const { sessionToken } = signedIn.success;
             return sessionToken === null
               ? { status: "linked" as const }
               : { status: "success" as const, token: sessionToken };
@@ -186,8 +166,8 @@ const deviceFlowRoutes = new Elysia()
     {
       body: t.Object({
         device_code: t.String(),
-        host: t.Optional(t.String()),
-        client_id: t.Optional(t.String()),
+        host: t.String({ minLength: 1 }),
+        client_id: t.String({ minLength: 1 }),
         session_token: t.Optional(t.String()),
       }),
     },
@@ -216,16 +196,14 @@ const sessionRoutes = new Elysia()
     { body: t.Object({ userId: t.String({ minLength: 1 }) }) },
   )
   .get("/api/auth/accounts", (ctx) =>
-    runRoute(
-      Effect.flatMap(GitHubAccounts, (accounts) => accounts.connectedHosts(ctx.session.user.id)),
-    ),
+    runRoute(Effect.flatMap(GitHubAccounts, (accounts) => accounts.connectedHosts(ctx.userId))),
   )
   .post(
     "/api/auth/accounts/disconnect",
     (ctx) =>
       runRoute(
         Effect.flatMap(GitHubAccounts, (accounts) =>
-          accounts.disconnect(ctx.session.user.id, ctx.body.host),
+          accounts.disconnect(ctx.userId, ctx.body.host),
         ).pipe(Effect.as({ ok: true })),
       ),
     { body: t.Object({ host: t.String() }) },

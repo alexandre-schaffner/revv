@@ -151,6 +151,45 @@ describe("listArchivedPrs author filter", () => {
   });
 });
 
+describe("listArchivedPrs paging", () => {
+  it("pages through PRs that share a closedAt without skipping or repeating any", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+    db.insert(pullRequests)
+      .values(
+        Array.from({ length: 120 }, (_, i) => ({
+          id: `pr-settled-${String(i).padStart(3, "0")}`,
+          externalId: 100 + i,
+          repositoryId: REPO_ID,
+          title: "t",
+          authorLogin: "dave",
+          status: "closed",
+          closedAt: "2026-06-01T00:00:00Z",
+          sourceBranch: "feature",
+          targetBranch: "main",
+          url: "https://example.com",
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+          fetchedAt: "2026-01-01T00:00:00Z",
+        })),
+      )
+      .run();
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 10; page++) {
+      const result = await listArchived(db, cursor === undefined ? {} : { cursor });
+      seen.push(...result.prs.map((p) => p.id));
+      if (result.nextCursor === null) break;
+      cursor = result.nextCursor;
+    }
+
+    expect(seen).toHaveLength(123);
+    expect(new Set(seen).size).toBe(123);
+    expect(seen.slice(0, 2)).toEqual(["pr-merged-bob", "pr-closed-alice"]);
+  });
+});
+
 // The poll lists open PRs from GitHub's list-PRs endpoint, which returns the
 // "simple" PR object: no additions, deletions or changed_files, so zeroes after
 // mapping. Stored stats must survive that.

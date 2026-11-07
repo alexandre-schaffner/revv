@@ -10,6 +10,7 @@ import {
 } from "../../domain/observed-pr";
 import { logError } from "../../logger";
 import { prsByNumber, reposByName, splitFullName } from "./graphql-batch";
+import { STACK_SCHEMA_TOKENS } from "./stack-queries";
 import {
   type GitHubClient,
   type GitHubHttp,
@@ -204,8 +205,6 @@ export const OPEN_PRS_PAGE_SIZE = 100;
 
 export const OPEN_PRS_LIST_CAP = OPEN_PRS_MAX_PAGES * OPEN_PRS_PAGE_SIZE;
 
-const STACK_TOKENS = ["PullRequestStack", "Field 'stack'", "Field 'stackEntry'"] as const;
-
 const openPrsQuery = (
   withStacks: boolean,
 ) => `query OpenPullRequests($owner: String!, $name: String!, $cursor: String) {
@@ -309,7 +308,6 @@ export interface PrFileMeta {
 
 const PR_FILES_PAGE_SIZE = 100;
 export const PR_FILES_MAX_PAGES = 30;
-export const PR_FILES_MAX_COUNT = PR_FILES_PAGE_SIZE * PR_FILES_MAX_PAGES;
 /**
  * Hard cap on `files[]` from GitHub's compare endpoint. Unlike `/pulls/:n/files`
  * this endpoint does not paginate the file list, so a range touching more than
@@ -499,7 +497,7 @@ export const pullsApi = (http: GitHubHttp) => {
             modern
               ? list(true).pipe(retryTransientBeforeFallback)
               : list(false).pipe(retryTransient),
-          STACK_TOKENS,
+          STACK_SCHEMA_TOKENS,
           { anyGraphqlFailure: true },
         );
         return { prs: value, hostPredatesStacks: outdated };

@@ -1,6 +1,6 @@
 import { classifyLayerMergeState, type StackMergeRunLayer } from "@revv/shared";
 import { logError } from "../../logger";
-import type { GitHubStack, GitHubStackLayer } from "./map";
+import type { GitHubStack, GitHubStackLayer } from "../github/stacks";
 
 /**
  * Native-stack behaviour Revv acts on without having watched GitHub do it

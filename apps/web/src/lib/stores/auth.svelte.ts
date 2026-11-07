@@ -6,9 +6,8 @@
 import { isMaintainerLogin, type UserUpdatedEnvelope } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
-import { ApiError, call } from "$lib/api/errors";
+import { ApiError, apiErrorMessage, call } from "$lib/api/errors";
 import { type EdenData, thrownMessage } from "$lib/api/wire";
-import { authClient } from "$lib/auth-client";
 import { getHeldSessions, holdSession, releaseSession } from "$lib/session/held-sessions";
 import { clearToken, getToken, setToken } from "$lib/session/token.svelte";
 import { surfaceWindow } from "$lib/utils/surface-window";
@@ -27,14 +26,6 @@ interface User {
 
 let user = $state<User | null>(null);
 let isLoading = $state(false);
-/**
- * Set once `/api/user/identity` has been *attempted* for the current session
- * — on success and on failure alike, so a flaky identity call can never wedge
- * a caller that waits on it. Distinguishes "GitHub login not fetched yet" from
- * "fetched, and there is none", which `getCurrentUserLogin()` reports
- * identically. See {@link hasAttemptedIdentityLoad}.
- */
-let identityAttempted = $state(false);
 let isSwitching = $state(false);
 let error = $state<string | null>(null);
 
@@ -47,8 +38,9 @@ let deviceFlow = $state<{
   deviceCode: string;
   interval: number;
   expiresAt: number;
-  host?: string;
-  clientId?: string;
+  /** The host and client `/device/init` resolved; the poll must use the same ones. */
+  host: string;
+  clientId: string;
 } | null>(null);
 /** A local user and its GitHub account on each host. */
 export type LocalAccount = EdenData<(typeof api.api.auth)["local-accounts"]["get"]>[number];
@@ -173,7 +165,6 @@ export function clearIdentity(): void {
   user = null;
   localAccounts = [];
   localAccountsLoaded = false;
-  identityAttempted = false;
   // The re-auth modal is gated solely on `reauthRequired`, so an invalidated /
   // signed-out session must clear it (and any stale sign-in error) — otherwise
   // a dead session strands the modal with no account behind it.
@@ -207,12 +198,6 @@ function authErrorStatus(error: unknown): number | null {
   if (typeof error !== "object" || error === null || !("status" in error)) return null;
   const status = (error as { status: unknown }).status;
   return typeof status === "number" ? status : null;
-}
-
-function authErrorMessage(error: unknown): string | null {
-  if (typeof error !== "object" || error === null || !("message" in error)) return null;
-  const message = (error as { message: unknown }).message;
-  return typeof message === "string" && message.length > 0 ? message : null;
 }
 
 function shouldClearTokenAfterSessionMiss(error: unknown): boolean {
@@ -274,8 +259,8 @@ export async function signIn(host?: string, clientId?: string): Promise<boolean>
       deviceCode: data.device_code,
       interval: data.interval ?? 5,
       expiresAt: Date.now() + (data.expires_in ?? 900) * 1000,
-      ...(host ? { host } : {}),
-      ...(clientId ? { clientId } : {}),
+      host: data.host,
+      clientId: data.client_id,
     };
     try {
       const { openUrl } = await import("@tauri-apps/plugin-opener");
@@ -312,8 +297,8 @@ async function poll(): Promise<void> {
     const body = {
       device_code: deviceFlow.deviceCode,
       ...(token ? { session_token: token } : {}),
-      ...(deviceFlow.host ? { host: deviceFlow.host } : {}),
-      ...(deviceFlow.clientId ? { client_id: deviceFlow.clientId } : {}),
+      host: deviceFlow.host,
+      client_id: deviceFlow.clientId,
     };
     let data: EdenData<typeof api.api.auth.device.poll.post> | null = null;
     let reason: string | undefined;
@@ -389,28 +374,33 @@ export async function loadUser(): Promise<void> {
   if (!tokenSnapshot) return;
   isLoading = true;
   try {
-    const session = await authClient.getSession();
-    if (session.data?.user) {
+    const { data, error: refusal } = await api.api.user.identity.get();
+    if (data) {
       resetLoadUserRetryState();
-      const u = session.data.user;
+      // `avatarContent` is the cached avatar bytes: GitHub Enterprise's signed
+      // avatar URLs expire.
       user = {
-        id: u.id,
-        name: u.name,
-        email: u.email,
-        ...(u.image != null ? { image: u.image } : {}),
+        id: data.id,
+        name: data.name,
+        email: data.email,
+        githubLogin: data.login,
+        onboardedAt: data.onboardedAt,
+        ...(data.avatarContent != null ? { image: data.avatarContent } : {}),
       };
-      await readIdentity();
-      identityAttempted = true;
+      reauthRequired = data.reauthRequired
+        ? { host: data.host ?? null, githubLogin: data.login }
+        : null;
       accountPickerDismissed = false;
       holdCurrentSession();
       void fetchLocalAccounts();
-    } else if (shouldClearTokenAfterSessionMiss(session.error)) {
+    } else if (shouldClearTokenAfterSessionMiss(refusal)) {
       releaseSession({ token: tokenSnapshot });
       clearIdentity();
     } else {
-      const message =
-        authErrorMessage(session.error) ??
-        "Could not restore your session. Revv will retry when the local server is available.";
+      const message = apiErrorMessage(
+        refusal,
+        "Could not restore your session. Revv will retry when the local server is available.",
+      );
       error = message;
       scheduleLoadUserRetry(tokenSnapshot, message);
     }
@@ -620,13 +610,13 @@ export function getCurrentUserLogin(): string | null {
 }
 
 /**
- * Whether the GitHub identity fetch has run for this session (successfully or
- * not). Callers that *branch* on `getCurrentUserLogin()` — rather than merely
- * displaying it — should wait for this, otherwise they act on a provisional
- * `null` and have to redo the work when the real answer lands.
+ * Whether the identity has loaded for this session: the user and their login
+ * arrive together. Callers that *branch* on `getCurrentUserLogin()` — rather
+ * than merely displaying it — should wait for this, otherwise they act on a
+ * provisional `null` and have to redo the work when the real answer lands.
  */
-export function hasAttemptedIdentityLoad(): boolean {
-  return identityAttempted;
+export function isIdentityLoaded(): boolean {
+  return user !== null;
 }
 
 /**

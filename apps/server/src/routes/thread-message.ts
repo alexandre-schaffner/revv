@@ -1,10 +1,11 @@
 import { t } from "elysia";
 
-/** A message posted on a review thread, as the web sends it. */
+/**
+ * A message the signed-in user posts on a review thread. Its author is not the
+ * client's to say: the route stamps it from the PR's owning account
+ * (`humanAuthor`).
+ */
 export const threadMessageBody = t.Object({
-  authorRole: t.Union([t.Literal("reviewer"), t.Literal("coder"), t.Literal("ai_agent")]),
-  authorName: t.String(),
-  authorLogin: t.Optional(t.String()),
   body: t.String(),
   messageType: t.Union([
     t.Literal("comment"),

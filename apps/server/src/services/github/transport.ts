@@ -20,7 +20,7 @@ import {
 } from "../../domain/errors";
 import { apiBaseForHost } from "../../domain/github-host";
 import { githubTryPromise } from "../../observability/github-ledger/origin";
-import { buildCacheKey, type EtagCache } from "../GitHubEtagCache";
+import { buildCacheKey, type EtagCache } from "./etag-cache";
 
 /**
  * Who a request is made as and where it goes. Minted only by `GitHubAccounts`

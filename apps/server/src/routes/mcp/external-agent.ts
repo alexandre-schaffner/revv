@@ -78,11 +78,9 @@ async function resolveContext(
         fireAndForgetThreadEventBroadcast(resolved.prId, message, resolved.accountId),
       pushReply: (messageId) =>
         AppRuntime.runPromise(Effect.flatMap(SyncService, (sync) => sync.pushReply(messageId))),
-      pushThreadStatus: (threadId) =>
+      pushStatus: (threadId) =>
         AppRuntime.runPromise(
-          Effect.flatMap(SyncService, (sync) =>
-            sync.pushThreadStatus(threadId).pipe(Effect.asVoid),
-          ),
+          Effect.flatMap(SyncService, (sync) => sync.pushStatus(threadId).pipe(Effect.asVoid)),
         ),
       requestWalkthrough: ({ headSha, generationMode }) =>
         AppRuntime.runPromise(

@@ -15,6 +15,13 @@ export const COLLECTOR_BASE_URL = `http://localhost:${COLLECTOR_PORT}`;
 
 export const AUTO_FETCH_DEFAULT_INTERVAL = 5; // minutes
 export const THREAD_SYNC_INTERVAL_SECONDS = 5 * 60;
+/**
+ * How recently a PR-list sync must have started for a "freshen" (a window
+ * opening or regaining focus) to skip. The server skips such a request; the
+ * web throttles its asks to the same window, since asking more often only
+ * spends requests.
+ */
+export const FRESHEN_MIN_INTERVAL_MS = 2 * 60 * 1000;
 
 // How long after publication a stable release waits before the passive update
 // check offers it to non-maintainers, so maintainers and nightly users can

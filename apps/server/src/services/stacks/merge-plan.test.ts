@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { StackMergeRunLayer } from "@revv/shared";
-import type { GitHubStack, GitHubStackLayer } from "./map";
+import type { GitHubStack, GitHubStackLayer } from "../github/stacks";
 import {
   AUTO_MERGE_WAIT_MS,
   defaultThrough,

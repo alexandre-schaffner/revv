@@ -16,16 +16,11 @@ import {
   RECAP_EMPTY_WINDOW_LEDE,
   recapSummaryOf,
 } from "@revv/shared";
-import { and, asc, desc, eq, gte, inArray, isNull, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNull, lt } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import {
-  projectRecaps,
-  recapPrEntries,
-  recapThemeSummaries,
-  remoteUsers,
-  repositories,
-} from "../db/schema/index";
+import { projectRecaps, recapPrEntries, recapThemeSummaries } from "../db/schema/index";
 import type { RecapSourceBundle } from "../db/schema/project-recaps";
+import { avatarOfRepoLogin } from "../db/schema/remote-users";
 import { type DbError, RecapNotFoundError } from "../domain/errors";
 import { dbTry } from "../effects/db-try";
 import { DbService } from "./Db";
@@ -308,35 +303,21 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
       }
       const entryRows = yield* dbTry("getById entries", () =>
         db
-          .select()
+          .select({
+            entry: recapPrEntries,
+            avatarContent: avatarOfRepoLogin(recapPrEntries.prAuthorLogin, row.repositoryId),
+          })
           .from(recapPrEntries)
           .where(eq(recapPrEntries.recapId, id))
           .orderBy(asc(recapPrEntries.position))
           .all(),
       );
-      const logins = Array.from(new Set(entryRows.map((r) => r.prAuthorLogin).filter(Boolean)));
-      const avatarsByLogin = yield* dbTry("getById avatars", () => {
-        if (logins.length === 0) return new Map<string, string | null>();
-        const rows = db
-          .select({ login: remoteUsers.login, avatarContent: remoteUsers.avatarContent })
-          .from(remoteUsers)
-          .innerJoin(repositories, eq(repositories.githubHost, remoteUsers.host))
-          .where(
-            and(
-              eq(repositories.id, row.repositoryId),
-              eq(remoteUsers.provider, "github"),
-              inArray(remoteUsers.login, logins),
-            ),
-          )
-          .all();
-        return new Map(rows.map((r) => [r.login, r.avatarContent ?? null]));
-      });
       const themeSummaryRows = yield* dbTry("getById theme summaries", () =>
         db.select().from(recapThemeSummaries).where(eq(recapThemeSummaries.recapId, id)).all(),
       );
       return rowToRecap(
         row,
-        entryRows.map((r) => entryRowToEntry(r, avatarsByLogin.get(r.prAuthorLogin) ?? null)),
+        entryRows.map((r) => entryRowToEntry(r.entry, r.avatarContent)),
         themeSummaryRows.map(themeSummaryRowToSummary),
       );
     }),

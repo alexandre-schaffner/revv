@@ -33,7 +33,7 @@ export const LEGACY_UPGRADES = {
   },
   plaintextTokens: {
     introducedIn: "0.6.0",
-    site: "apps/server/src/services/SecretStore.ts",
+    site: "apps/server/src/services/github/accounts.ts",
     carries: "GitHub tokens in `account.access_token`/`refresh_token` into the secure store",
   },
   launchAgent: {

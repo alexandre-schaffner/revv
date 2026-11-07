@@ -53,12 +53,6 @@ export interface CommentThread {
   lastSyncedAt: string | null;
 }
 
-export interface ThreadSummary {
-  total: number;
-  open: number;
-  resolved: number;
-}
-
 export interface ThreadMessage {
   id: string;
   threadId: string;

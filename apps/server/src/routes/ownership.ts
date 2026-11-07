@@ -86,10 +86,8 @@ export const checkOwnership = (fields: Fields, request: GuardedRequest, userId: 
 
 /** {@link checkOwnership} as a router's `beforeHandle` hook, for the signed-in user. */
 export function ownedBy(fields: Fields) {
-  return async (
-    ctx: GuardedRequest & { readonly session: { readonly user: { readonly id: string } } },
-  ) => {
-    const exit = await AppRuntime.runPromiseExit(checkOwnership(fields, ctx, ctx.session.user.id));
+  return async (ctx: GuardedRequest & { readonly userId: string }) => {
+    const exit = await AppRuntime.runPromiseExit(checkOwnership(fields, ctx, ctx.userId));
     return Exit.isFailure(exit) ? errorResponse(Cause.squash(exit.cause)) : undefined;
   };
 }

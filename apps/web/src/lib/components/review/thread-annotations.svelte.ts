@@ -3,7 +3,7 @@
 // replied to. A viewer creates one and hands it to its Pierre renderer.
 
 import type { DiffLineAnnotation } from "@pierre/diffs";
-import type { CommentThread, ThreadMessage } from "@revv/shared";
+import { type CommentThread, type ThreadMessage, threadAnnotationPosition } from "@revv/shared";
 import type { DiffLineRange, DiffSide } from "$lib/pierre/diff-rows";
 import {
   addThread,
@@ -45,8 +45,7 @@ export class ThreadAnnotations {
 
   readonly annotations: DiffLineAnnotation<ThreadMeta>[] = $derived.by(() => {
     const out: DiffLineAnnotation<ThreadMeta>[] = this.#threads().map((thread) => ({
-      side: thread.diffSide === "old" ? "deletions" : "additions",
-      lineNumber: thread.startLine,
+      ...threadAnnotationPosition(thread),
       metadata: {
         threadId: thread.id,
         isInputActive: false,

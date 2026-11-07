@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { DEFAULT_USER_SETTINGS } from "@revv/shared";
-import { type Context, Effect, Layer, Stream } from "effect";
+import { Effect, Layer } from "effect";
 import { createDb } from "../db/index";
 import { account, pullRequests, repositories, user } from "../db/schema";
 import { NotFoundError } from "../domain/errors";
@@ -8,9 +7,9 @@ import { Broadcaster, BroadcasterLive } from "./Broadcaster";
 import { CacheServiceLive } from "./Cache";
 import { DbService } from "./Db";
 import { DiffCacheServiceLive } from "./DiffCache";
-import { type GitHubEtagCache, GitHubEtagCacheLive } from "./GitHubEtagCache";
 import { GitHubAccountsLive } from "./github/accounts";
 import { AvatarCacheLive } from "./github/avatars";
+import { type GitHubEtagCache, GitHubEtagCacheLive } from "./github/etag-cache";
 import { GitHubGatewayLive } from "./github/gateway";
 import { PrContextService, PrContextServiceLive } from "./PrContext";
 import { PrConversationService, PrConversationServiceLive } from "./PrConversation";
@@ -18,7 +17,6 @@ import { PullRequestServiceLive } from "./PullRequest";
 import { RealtimeLive } from "./Realtime";
 import { RepositoryServiceLive } from "./Repository";
 import { SecretStore } from "./SecretStore";
-import { SettingsService } from "./Settings";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -84,13 +82,9 @@ function fixture() {
   });
   const dbLayer = Layer.succeed(DbService, { db });
   const realtime = RealtimeLive.pipe(Layer.provideMerge(BroadcasterLive), Layer.provide(dbLayer));
-  const settings = Layer.succeed(SettingsService, {
-    getSettings: () => Effect.succeed(DEFAULT_USER_SETTINGS),
-    githubHost: () => Effect.succeed("github.com"),
-    watch: () => Stream.empty,
-  } as unknown as Context.Service.Shape<typeof SettingsService>);
+  const avatars = AvatarCacheLive.pipe(Layer.provide(dbLayer));
   const accounts = GitHubAccountsLive.pipe(
-    Layer.provide(Layer.mergeAll(dbLayer, secrets, realtime, settings)),
+    Layer.provide(Layer.mergeAll(dbLayer, secrets, realtime, avatars)),
   );
   const gateway = GitHubGatewayLive.pipe(
     Layer.provide(Layer.mergeAll(GitHubEtagCacheLive.pipe(Layer.provide(dbLayer)), accounts)),
@@ -105,7 +99,7 @@ function fixture() {
     PullRequestServiceLive,
     RepositoryServiceLive,
     DiffCacheServiceLive.pipe(Layer.provide(Layer.mergeAll(dbLayer, gateway, realtime))),
-    AvatarCacheLive.pipe(Layer.provide(dbLayer)),
+    avatars,
   );
   const context = PrContextServiceLive.pipe(Layer.provide(base));
   const layer = PrConversationServiceLive.pipe(Layer.provideMerge(Layer.merge(base, context)));

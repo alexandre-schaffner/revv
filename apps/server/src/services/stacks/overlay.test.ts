@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import type { GitHubStackLayer } from "../github/stacks";
 import { fingerprintFiles } from "./fingerprint";
-import type { GitHubStackLayer } from "./map";
 import {
   fileOverlaps,
   restackVerdict,

@@ -1,18 +1,15 @@
-import type { CommentThread } from "@revv/shared";
+import {
+  type CommentThread,
+  draftCommentBody,
+  isPublishableDraftComment,
+  type ThreadMessage,
+} from "@revv/shared";
 import type { CachedDiffFile } from "./DiffCache";
 import { fitAnchorToPatch } from "./diff-anchors";
-
-export interface GitHubReviewComment {
-  path: string;
-  body: string;
-  line: number;
-  side: "LEFT" | "RIGHT";
-  startLine?: number;
-  startSide?: "LEFT" | "RIGHT";
-}
+import type { GhCommentAnchor } from "./github/reviews";
 
 export type GitHubCommentFit =
-  | { readonly ok: true; readonly comment: GitHubReviewComment }
+  | { readonly ok: true; readonly comment: GhCommentAnchor }
   | { readonly ok: false; readonly reason: string };
 
 /** The cached diff's entry for `path`, a rename's old path included. */
@@ -42,10 +39,45 @@ export function toGitHubComment(
     side,
   });
   if (!fit.ok) return fit;
-  const comment: GitHubReviewComment = { path: thread.filePath, body, line: fit.endLine, side };
-  if (fit.startLine !== fit.endLine) {
-    comment.startLine = fit.startLine;
-    comment.startSide = side;
+  const comment = { path: thread.filePath, body, line: fit.endLine, side } as const;
+  return {
+    ok: true,
+    comment: fit.startLine === fit.endLine ? comment : { ...comment, startLine: fit.startLine },
+  };
+}
+
+export type ThreadCommentPlan =
+  | {
+      readonly kind: "post";
+      readonly comment: GhCommentAnchor;
+      /** The drafts the comment carries; they become it once posted. */
+      readonly draftIds: readonly string[];
+    }
+  | { readonly kind: "skip"; readonly reason: string };
+
+/**
+ * What a thread not yet on GitHub posts: its publishable drafts as one review
+ * comment, or why it can't go up. Null when it has nothing to post. The cached
+ * diff is the PR head's, so a file it doesn't hold left the diff, and GitHub
+ * would reject the comment; with no cached diff nothing is known to be stale.
+ */
+export function planThreadComment(
+  thread: CommentThread,
+  messages: readonly ThreadMessage[],
+  viewerLogin: string | null,
+  cachedFiles: readonly CachedDiffFile[] | null,
+): ThreadCommentPlan | null {
+  const text = draftCommentBody(thread, messages, viewerLogin);
+  if (text === null) return null;
+  const file = diffFileFor(cachedFiles, thread.filePath);
+  if (cachedFiles !== null && cachedFiles.length > 0 && !file) {
+    return { kind: "skip", reason: "the file is no longer part of the diff" };
   }
-  return { ok: true, comment };
+  const fit = toGitHubComment(thread, text, file?.patch ?? null);
+  if (!fit.ok) return { kind: "skip", reason: fit.reason };
+  return {
+    kind: "post",
+    comment: fit.comment,
+    draftIds: messages.filter((m) => isPublishableDraftComment(m, viewerLogin)).map((m) => m.id),
+  };
 }

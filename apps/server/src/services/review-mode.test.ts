@@ -10,12 +10,12 @@ const PR_ID = "repo-1:7";
 
 /**
  * Seed the identity chain a review mode is derived from: PR → repository →
- * account → user. `userLogin: null` models an identity that hasn't been
- * backfilled yet.
+ * owning account. `accountLogin: null` models an account whose login isn't
+ * known yet.
  */
 function seedIdentity(params: {
   readonly authorLogin: string;
-  readonly userLogin: string | null;
+  readonly accountLogin: string | null;
 }): Db {
   const db = createDb(":memory:");
   const now = new Date();
@@ -24,7 +24,6 @@ function seedIdentity(params: {
       id: "user-1",
       name: "Test User",
       email: "test@example.com",
-      githubLogin: params.userLogin,
       createdAt: now,
       updatedAt: now,
     })
@@ -35,6 +34,7 @@ function seedIdentity(params: {
       accountId: "1",
       providerId: "github:github.com",
       userId: "user-1",
+      githubLogin: params.accountLogin,
       createdAt: now,
       updatedAt: now,
     })
@@ -75,47 +75,35 @@ const resolve = (db: Db, prId = PR_ID) => runWithDb(db, resolveReviewModeForPr(p
 
 describe("resolveReviewModeForPr", () => {
   it("reports author for a PR the signed-in user wrote", async () => {
-    const db = seedIdentity({ authorLogin: "alex", userLogin: "alex" });
+    const db = seedIdentity({ authorLogin: "alex", accountLogin: "alex" });
     expect(await resolve(db)).toBe("author");
   });
 
   it("reports reviewer for someone else's PR", async () => {
-    const db = seedIdentity({ authorLogin: "picodes", userLogin: "alex" });
+    const db = seedIdentity({ authorLogin: "picodes", accountLogin: "alex" });
     expect(await resolve(db)).toBe("reviewer");
   });
 
   // GitHub logins are case-insensitive, and the casing held for the viewer
   // comes from a different endpoint than the casing on the PR.
   it("matches logins case-insensitively", async () => {
-    const db = seedIdentity({ authorLogin: "Alex", userLogin: "alex" });
+    const db = seedIdentity({ authorLogin: "Alex", accountLogin: "alex" });
     expect(await resolve(db)).toBe("author");
   });
 
   it("reports reviewer when no login is known", async () => {
-    const db = seedIdentity({ authorLogin: "alex", userLogin: null });
+    const db = seedIdentity({ authorLogin: "alex", accountLogin: null });
     expect(await resolve(db)).toBe("reviewer");
   });
 
   it("reports reviewer for an unknown PR", async () => {
-    const db = seedIdentity({ authorLogin: "alex", userLogin: "alex" });
+    const db = seedIdentity({ authorLogin: "alex", accountLogin: "alex" });
     expect(await resolve(db, "nope")).toBe("reviewer");
   });
 
-  it("resolves against the PR's owning account, not an arbitrary user row", async () => {
-    const db = seedIdentity({ authorLogin: "alex", userLogin: "someone-else" });
-    const now = new Date();
-    // The owner is the second user row, so "the first user" would read someone else.
-    db.insert(user)
-      .values({
-        id: "user-2",
-        name: "Owner",
-        email: "owner@example.com",
-        githubLogin: "alex",
-        createdAt: now,
-        updatedAt: now,
-      })
-      .run();
-    db.update(account).set({ userId: "user-2" }).where(eq(account.id, "account-1")).run();
+  it("is the owning account's login, not the user's mirrored one", async () => {
+    const db = seedIdentity({ authorLogin: "alex", accountLogin: "alex" });
+    db.update(user).set({ githubLogin: "alex-on-another-host" }).run();
     expect(await resolve(db)).toBe("author");
   });
 });

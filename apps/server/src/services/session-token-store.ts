@@ -27,7 +27,6 @@ export interface SessionTokenStore<T> {
   readonly resolve: (token: string) => Effect.Effect<T | null>;
   /** Invalidate a single token early (e.g. on job cancel). Silent if absent. */
   readonly clear: (token: string) => Effect.Effect<void>;
-  readonly clearWhere: (predicate: (payload: T) => boolean) => Effect.Effect<void>;
 }
 
 export const makeSessionTokenStore = <T>(
@@ -69,18 +68,5 @@ export const makeSessionTokenStore = <T>(
         return next;
       });
 
-    const clearWhere = (predicate: (payload: T) => boolean): Effect.Effect<void> =>
-      Ref.update(tokens, (map) => {
-        let changed = false;
-        const next = new Map(map);
-        for (const [token, entry] of next) {
-          if (predicate(entry.payload)) {
-            next.delete(token);
-            changed = true;
-          }
-        }
-        return changed ? next : map;
-      });
-
-    return { issue, resolve, clear, clearWhere };
+    return { issue, resolve, clear };
   });

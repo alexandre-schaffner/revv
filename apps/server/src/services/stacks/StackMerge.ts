@@ -15,11 +15,11 @@ import { withGitHubOrigin } from "../../observability/github-ledger/origin";
 import { DbService } from "../Db";
 import { GitHubAccounts } from "../github/accounts";
 import { GitHubGateway } from "../github/gateway";
+import type { GitHubStack } from "../github/stacks";
 import { type PrContextBasic, PrContextService } from "../PrContext";
 import { PullRequestService } from "../PullRequest";
 import { Realtime } from "../Realtime";
 import type { SettingsService } from "../Settings";
-import type { GitHubStack } from "./map";
 import { driveRun, type MergeDriverPort, type SaveEffects } from "./merge-driver";
 import {
   defaultThrough,

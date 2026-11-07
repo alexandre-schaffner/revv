@@ -34,7 +34,8 @@ export interface PrContextBasic extends RepoContext {
 
 /**
  * {@link PrContextBasic} plus what an agent run needs: the PR's head and base
- * as GitHub reports them now, its changed files and its commits.
+ * as GitHub reports them now, and the files, commits, title and body of that
+ * head.
  */
 export interface PrContextWithDiff extends PrContextBasic {
   readonly meta: { readonly headSha: string; readonly baseSha: string };
@@ -48,7 +49,7 @@ export class PrContextService extends Context.Service<
   PrContextService,
   {
     /** A tracked repository, for work that may go on without GitHub. */
-    readonly getRepo: (repoId: string) => Effect.Effect<Repository, NotFoundError>;
+    readonly getRepo: (repoId: string) => Effect.Effect<Repository, NotFoundError | DbError>;
     readonly forRepo: (repoId: string) => Effect.Effect<RepoContext, PrContextError>;
     /**
      * A PR, its repository and the owning account's client. With `accountId`,
@@ -100,12 +101,24 @@ export const PrContextServiceLive = Layer.effect(
             }),
           );
         }
-        const { files } = yield* diffCache.getOrFetch(pr, repo.fullName, client);
+        // The cache holds the stored row's head. Until the poll records a push
+        // GitHub already reports, the live head's files come from GitHub.
+        const files =
+          live.headSha === pr.headSha && live.baseSha === pr.baseSha
+            ? toGitHubFileShape((yield* diffCache.getOrFetch(pr, repo.fullName, client)).files)
+            : yield* github.prs.files(client, repo.fullName, pr.externalId);
         const commits = yield* github.prs.commits(client, repo.fullName, pr.externalId);
         return {
           ...basic,
+          pr: {
+            ...pr,
+            title: live.title,
+            body: live.body,
+            headSha: live.headSha,
+            baseSha: live.baseSha,
+          },
           meta: { headSha: live.headSha, baseSha: live.baseSha },
-          files: toGitHubFileShape(files),
+          files,
           commits,
         } satisfies PrContextWithDiff;
       });

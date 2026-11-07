@@ -11,8 +11,8 @@ import {
   type WalkthroughStackSnapshot,
 } from "@revv/shared";
 import type { DiffFingerprint } from "../../db/schema/walkthroughs";
+import type { GitHubStack, GitHubStackLayer } from "../github/stacks";
 import { changedFiles, isComparable } from "./fingerprint";
-import type { GitHubStack, GitHubStackLayer } from "./map";
 
 export interface WalkthroughFact {
   readonly id: string;

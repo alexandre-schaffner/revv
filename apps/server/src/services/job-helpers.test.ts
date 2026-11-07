@@ -65,20 +65,6 @@ describe("makeSessionTokenStore", () => {
         expect(yield* store.resolve(deadTok)).toBeNull();
       }),
     ));
-
-  it("clearWhere evicts every matching token", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const store = yield* makeSessionTokenStore<{ recapId: string }>(60_000);
-        const a = yield* store.issue({ recapId: "r1" });
-        const b = yield* store.issue({ recapId: "r1" });
-        const c = yield* store.issue({ recapId: "r2" });
-        yield* store.clearWhere((ctx) => ctx.recapId === "r1");
-        expect(yield* store.resolve(a)).toBeNull();
-        expect(yield* store.resolve(b)).toBeNull();
-        expect(yield* store.resolve(c)).toEqual({ recapId: "r2" });
-      }),
-    ));
 });
 
 type TestEvent = { readonly type: string; readonly n?: number };

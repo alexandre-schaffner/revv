@@ -25,8 +25,6 @@ export function createDiffsHost(): HTMLElement {
 
 export interface PierreFileParams {
   file: FileContents;
-  /** Server-rendered HTML (`@pierre/diffs/ssr`) to hydrate instead of tokenizing on the worker. */
-  prerenderedHtml?: string | undefined;
   /** Render only this window of the file; the gutter keeps absolute line numbers. */
   renderRange?: RenderRange | undefined;
   onPostRender?: ((node: HTMLElement) => void) | undefined;
@@ -45,26 +43,16 @@ export function pierreFile(
     },
     workerManager,
   );
-  if (params.prerenderedHtml !== undefined) {
-    const host = createDiffsHost();
-    el.appendChild(host);
-    instance.hydrate({
-      fileContainer: host,
-      prerenderedHTML: params.prerenderedHtml,
-      file: params.file,
-    });
-  } else {
-    instance.render({
-      containerWrapper: el,
-      file: params.file,
-      ...(params.renderRange ? { renderRange: params.renderRange } : {}),
-    });
-  }
+  instance.render({
+    containerWrapper: el,
+    file: params.file,
+    ...(params.renderRange ? { renderRange: params.renderRange } : {}),
+  });
   return { destroy: () => instance.cleanUp() };
 }
 
 export type PierreDiffParams =
-  | { fileDiff: FileDiffMetadata; prerenderedHtml?: string | undefined }
+  | { fileDiff: FileDiffMetadata }
   | { oldFile: FileContents; newFile: FileContents };
 
 export function pierreDiff(
@@ -77,14 +65,6 @@ export function pierreDiff(
   );
   if ("oldFile" in params) {
     instance.render({ containerWrapper: el, oldFile: params.oldFile, newFile: params.newFile });
-  } else if (params.prerenderedHtml !== undefined) {
-    const host = createDiffsHost();
-    el.appendChild(host);
-    instance.hydrate({
-      fileContainer: host,
-      prerenderedHTML: params.prerenderedHtml,
-      fileDiff: params.fileDiff,
-    });
   } else {
     instance.render({ containerWrapper: el, fileDiff: params.fileDiff });
   }

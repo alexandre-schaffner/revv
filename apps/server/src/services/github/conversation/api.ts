@@ -14,9 +14,16 @@ import {
   GitHubApiError,
   type GitHubError,
   GitHubNotFoundError,
-} from "../../domain/errors";
-import { logError } from "../../logger";
-import { extractLogTail } from "../conversation/log-tail";
+} from "../../../domain/errors";
+import { logError } from "../../../logger";
+import { splitFullName } from "../graphql-batch";
+import {
+  type GitHubClient,
+  type GitHubHttp,
+  retryTransient,
+  withSchemaFallback,
+} from "../transport";
+import { extractLogTail } from "./log-tail";
 import {
   collectAvatarUrls,
   type MappedConversation,
@@ -31,7 +38,7 @@ import {
   type RawRollupCommits,
   type RawTimelineNode,
   toLabel,
-} from "../conversation/map";
+} from "./map";
 import {
   CODEOWNERS_QUERY,
   checkContextsPageQuery,
@@ -40,13 +47,8 @@ import {
   MODERN_TOKENS,
   TIMELINE_MAX_PAGES,
   timelinePageQuery,
-} from "./conversation-queries";
-import {
-  type GitHubClient,
-  type GitHubHttp,
-  retryTransient,
-  withSchemaFallback,
-} from "./transport";
+} from "./queries";
+import { runWrite } from "./writes";
 
 export interface RepoRef {
   readonly owner: string;
@@ -158,7 +160,7 @@ function completeCheckContexts(
   });
 }
 
-export function fetchConversation(
+function fetchConversation(
   http: GitHubHttp,
   client: GitHubClient,
   ref: RepoRef,
@@ -221,7 +223,7 @@ export function fetchConversation(
   }).pipe(retryTransient);
 }
 
-export function fetchCiRollup(
+function fetchCiRollup(
   http: GitHubHttp,
   client: GitHubClient,
   ref: RepoRef,
@@ -253,7 +255,7 @@ export function fetchCiRollup(
  * or the token can't read repository contents (a missing grant must not cost
  * the page).
  */
-export function fetchCodeowners(
+function fetchCodeowners(
   http: GitHubHttp,
   client: GitHubClient,
   ref: RepoRef,
@@ -323,7 +325,7 @@ function toAnnotation(raw: RawAnnotation): CheckAnnotation {
  * to an error: the token may lack `actions: read` (GitHub App installs), or
  * the logs may have expired.
  */
-export function fetchCheckDetails(
+function fetchCheckDetails(
   http: GitHubHttp,
   client: GitHubClient,
   ref: RepoRef,
@@ -381,7 +383,7 @@ export function fetchCheckDetails(
   }).pipe(retryTransient);
 }
 
-export function listRepoLabels(http: GitHubHttp, client: GitHubClient, ref: RepoRef) {
+function listRepoLabels(http: GitHubHttp, client: GitHubClient, ref: RepoRef) {
   return http
     .pages(client, `/repos/${ref.owner}/${ref.repo}/labels?per_page=100`, {
       maxPages: 5,
@@ -398,7 +400,7 @@ export function listRepoLabels(http: GitHubHttp, client: GitHubClient, ref: Repo
  * Users who can be assigned to (and asked to review) the PR, filtered by a
  * search string. GitHub's `assignableUsers(query:)` matches login and name.
  */
-export function searchAssignableUsers(
+function searchAssignableUsers(
   http: GitHubHttp,
   client: GitHubClient,
   ref: RepoRef,
@@ -435,7 +437,7 @@ export function searchAssignableUsers(
  * personal repo has no org, and a token without `read:org` sees none; both
  * answer an empty list rather than an error.
  */
-export function searchOrgTeams(
+function searchOrgTeams(
   http: GitHubHttp,
   client: GitHubClient,
   ref: RepoRef,
@@ -471,3 +473,27 @@ export function searchOrgTeams(
       ),
     );
 }
+
+/** Each method resolves `fullName` (`owner/repo`) itself, like every other resource. */
+export const conversationApi = (http: GitHubHttp) => {
+  const onRepo =
+    <A extends unknown[], R, E>(
+      f: (http: GitHubHttp, client: GitHubClient, ref: RepoRef, ...args: A) => Effect.Effect<R, E>,
+    ) =>
+    (
+      client: GitHubClient,
+      fullName: string,
+      ...args: A
+    ): Effect.Effect<R, E | GitHubNotFoundError> =>
+      Effect.flatMap(splitFullName(fullName), (ref) => f(http, client, ref, ...args));
+  return {
+    fetch: onRepo(fetchConversation),
+    ciRollup: onRepo(fetchCiRollup),
+    codeowners: onRepo(fetchCodeowners),
+    checkDetails: onRepo(fetchCheckDetails),
+    labels: onRepo(listRepoLabels),
+    assignableUsers: onRepo(searchAssignableUsers),
+    orgTeams: onRepo(searchOrgTeams),
+    write: onRepo(runWrite),
+  };
+};

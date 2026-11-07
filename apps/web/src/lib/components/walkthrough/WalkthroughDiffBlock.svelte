@@ -31,7 +31,7 @@ const fileDiff = $derived(
 		{#if fileDiff}
 			<div
 				class="diff-body"
-				use:pierreDiff={{ fileDiff, prerenderedHtml: block.prerenderedHtml }}
+				use:pierreDiff={{ fileDiff }}
 			></div>
 		{:else}
 			<div class="diff-body">Failed to parse diff</div>

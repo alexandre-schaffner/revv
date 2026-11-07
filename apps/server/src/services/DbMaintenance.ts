@@ -5,7 +5,8 @@ import { makeRestartableLoop } from "../effects/restartable-loop";
 import { logError } from "../logger";
 import { kvCacheRetention } from "./Cache";
 import { DbService } from "./Db";
-import { etagCacheRetention } from "./GitHubEtagCache";
+import { sessionRetention } from "./github/accounts";
+import { etagCacheRetention } from "./github/etag-cache";
 import { prArchiveRetention } from "./poll-maintenance";
 
 const SWEEP_INTERVAL_HOURS = 6;
@@ -14,6 +15,7 @@ const POLICIES: readonly RetentionPolicy[] = [
   kvCacheRetention,
   prArchiveRetention,
   etagCacheRetention,
+  sessionRetention,
 ];
 
 type DbMaintenanceService = {

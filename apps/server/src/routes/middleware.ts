@@ -1,7 +1,6 @@
 import type { ApiErrorBody } from "@revv/shared";
 import { Cause, Effect, Exit } from "effect";
 import { Elysia, type ElysiaCustomStatusResponse, status } from "elysia";
-import { auth } from "../auth";
 import { GitHubAuthError, type HttpErrorStatus, httpErrorOf } from "../domain/errors";
 import { logError } from "../logger";
 import { AppRuntime, type AppServices } from "../runtime";
@@ -11,16 +10,28 @@ import { SettingsService } from "../services/Settings";
 const unauthorized = () =>
   status(401, { error: "Unauthorized", code: "UNAUTHORIZED" } satisfies ApiErrorBody);
 
-/** The better-auth session a request's bearer token carries, or null. */
-export function sessionFromHeaders(headers: Headers) {
-  return auth.api.getSession({ headers });
+const BEARER = /^Bearer\s+(\S+)$/i;
+
+/** The local user behind a session token, or null for none, an expired one, or a DB failure. */
+export async function sessionUserId(token: string | undefined): Promise<string | null> {
+  if (!token) return null;
+  const exit = await AppRuntime.runPromiseExit(
+    Effect.flatMap(GitHubAccounts, (accounts) => accounts.sessionUser(token)),
+  );
+  if (Exit.isSuccess(exit)) return exit.value;
+  logError("auth", "session lookup failed:", Cause.pretty(exit.cause));
+  return null;
 }
 
-/** Derives the signed-in `session`; answers 401 without one. */
+function bearerToken(headers: Headers): string | undefined {
+  return BEARER.exec(headers.get("authorization") ?? "")?.[1];
+}
+
+/** Derives the signed-in `userId`; answers 401 without one. */
 export const withAuth = new Elysia({ name: "with-auth" }).derive({ as: "scoped" }, async (ctx) => {
-  const session = await sessionFromHeaders(ctx.request.headers);
-  if (!session) return unauthorized();
-  return { session };
+  const userId = await sessionUserId(bearerToken(ctx.request.headers));
+  if (userId === null) return unauthorized();
+  return { userId };
 });
 
 function queryHost(query: Record<string, unknown>): string | undefined {
@@ -41,21 +52,21 @@ export const requestAccount = (userId: string, query: Record<string, unknown>) =
   });
 
 /**
- * Derives `session` and the request's GitHub `account` (see `requestAccount`).
+ * Derives `userId` and the request's GitHub `account` (see `requestAccount`).
  *
  * It resolves the session itself instead of chaining `.use(withAuth)`:
  * Elysia deduplicates named plugins, and when `withAuth` is deduped its
- * derived `session` does not reach a sibling `derive`.
+ * derived `userId` does not reach a sibling `derive`.
  */
 export const withAccount = new Elysia({ name: "with-account" }).derive(
   { as: "scoped" },
   async (ctx) => {
-    const session = await sessionFromHeaders(ctx.request.headers);
-    if (!session) return unauthorized();
+    const userId = await sessionUserId(bearerToken(ctx.request.headers));
+    if (userId === null) return unauthorized();
     const exit = await AppRuntime.runPromiseExit(
-      requestAccount(session.user.id, ctx.query as Record<string, unknown>),
+      requestAccount(userId, ctx.query as Record<string, unknown>),
     );
-    if (Exit.isSuccess(exit)) return { session, account: exit.value };
+    if (Exit.isSuccess(exit)) return { userId, account: exit.value };
     const error = Cause.squash(exit.cause);
     if (error instanceof GitHubAuthError) return errorResponse(error);
     logError(

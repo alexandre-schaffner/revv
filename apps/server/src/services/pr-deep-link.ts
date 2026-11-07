@@ -6,7 +6,7 @@ import { asStored, localPrId, type ObservedPr } from "../domain/observed-pr";
 interface ResolvePullRequestLinkOperations<RRepository, RCached, RRemote, RWrite> {
   readonly findRepository: (
     fullName: string,
-  ) => Effect.Effect<Repository | null, never, RRepository>;
+  ) => Effect.Effect<Repository | null, DbError, RRepository>;
   readonly findCachedPullRequest: (
     id: string,
   ) => Effect.Effect<Option.Option<PullRequest>, never, RCached>;

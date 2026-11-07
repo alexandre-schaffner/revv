@@ -1,21 +1,18 @@
-import { canUserModifyComment } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { ForbiddenError, NotFoundError } from "../domain/errors";
 import { logError } from "../logger";
-import { GitHubAccounts } from "../services/github/accounts";
 import { ReviewService } from "../services/Review";
+import { humanAuthor, viewerOnPr } from "../services/review-mode";
 import { SyncService } from "../services/Sync";
 import { runRoute, withAccount } from "./middleware";
 import { ownedBy } from "./ownership";
 import { threadMessageBody } from "./thread-message";
 
-/**
- * The signed-in user's GitHub login on the account the request runs as, the
- * same identity the UI shows: who may edit, discard or publish a draft.
- */
-const viewerLogin = (accountId: string) =>
-  Effect.flatMap(GitHubAccounts, (accounts) => accounts.viewerLogin(accountId));
+/** Who the signed-in user is on the thread's PR: who may edit or discard a draft, and who writes a reply. */
+const viewerOnThread = (threadId: string) =>
+  Effect.flatMap(ReviewService, (review) => review.getThread(threadId)).pipe(
+    Effect.flatMap(({ prId }) => viewerOnPr(prId)),
+  );
 
 export const threadRoutes = new Elysia({ prefix: "/api/threads" })
   .use(withAccount)
@@ -30,11 +27,11 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
           const thread = yield* review.setStatus(ctx.params.id, ctx.body.status);
           // The local change stands when GitHub refuses it; the next pull pushes it again.
           yield* sync
-            .pushThreadStatus(ctx.params.id)
+            .pushStatus(ctx.params.id)
             .pipe(
               Effect.catch((e) =>
                 Effect.sync(() =>
-                  logError("threads", `push status of ${ctx.params.id} to GitHub:`, e.message),
+                  logError("threads", `push status of ${ctx.params.id} to GitHub:`, e),
                 ),
               ),
             );
@@ -56,25 +53,9 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
 
   .post("/:id/push", (ctx) =>
     runRoute(
-      Effect.gen(function* () {
-        const review = yield* ReviewService;
-        const [firstMessage] = yield* review.getMessages(ctx.params.id);
-        if (!firstMessage) {
-          return yield* Effect.fail(
-            new NotFoundError({ resource: "thread message", id: ctx.params.id }),
-          );
-        }
-        if (!canUserModifyComment(firstMessage, yield* viewerLogin(ctx.account.accountId))) {
-          return yield* Effect.fail(
-            new ForbiddenError({
-              message: "You can only publish your own comments or comments left by Revv",
-            }),
-          );
-        }
-
-        const sync = yield* SyncService;
-        yield* sync.pushThread(ctx.params.id);
-      }).pipe(Effect.as({ success: true })),
+      Effect.flatMap(SyncService, (sync) => sync.pushThread(ctx.params.id)).pipe(
+        Effect.as({ success: true }),
+      ),
     ),
   )
 
@@ -82,7 +63,8 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
     runRoute(
       Effect.gen(function* () {
         const review = yield* ReviewService;
-        yield* review.discardThread(ctx.params.id, yield* viewerLogin(ctx.account.accountId));
+        const { login } = yield* viewerOnThread(ctx.params.id);
+        yield* review.discardThread(ctx.params.id, login);
       }).pipe(Effect.as({ success: true })),
     ),
   )
@@ -93,12 +75,8 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
       runRoute(
         Effect.gen(function* () {
           const review = yield* ReviewService;
-          return yield* review.editDraft(
-            ctx.params.id,
-            ctx.params.messageId,
-            ctx.body.body,
-            yield* viewerLogin(ctx.account.accountId),
-          );
+          const { login } = yield* viewerOnThread(ctx.params.id);
+          return yield* review.editDraft(ctx.params.id, ctx.params.messageId, ctx.body.body, login);
         }),
       ),
     { body: t.Object({ body: t.String() }) },
@@ -108,11 +86,8 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
     runRoute(
       Effect.gen(function* () {
         const review = yield* ReviewService;
-        yield* review.discardReply(
-          ctx.params.id,
-          ctx.params.messageId,
-          yield* viewerLogin(ctx.account.accountId),
-        );
+        const { login } = yield* viewerOnThread(ctx.params.id);
+        yield* review.discardReply(ctx.params.id, ctx.params.messageId, login);
       }).pipe(Effect.as({ success: true })),
     ),
   )
@@ -123,7 +98,8 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
       runRoute(
         Effect.gen(function* () {
           const review = yield* ReviewService;
-          const { message } = yield* review.reply(ctx.params.id, ctx.body);
+          const author = humanAuthor(yield* viewerOnThread(ctx.params.id));
+          const { message } = yield* review.reply(ctx.params.id, { ...ctx.body, ...author });
           ctx.set.status = 201;
           return message;
         }),

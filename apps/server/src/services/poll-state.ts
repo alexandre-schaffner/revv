@@ -4,7 +4,7 @@
  * one full re-list per repo, one extra thread sweep per PR and an early
  * maintenance pass.
  */
-import type { PullRequest } from "@revv/shared";
+import { FRESHEN_MIN_INTERVAL_MS, type PullRequest } from "@revv/shared";
 import type { OpenPrListSignature } from "./github/pulls";
 
 /** The last list of a repo that landed in SQLite, as its signature. */
@@ -32,13 +32,6 @@ const THREAD_RECHECK_INTERVAL_MS = 30 * 60 * 1000;
 
 /** What started a cycle. `manual` is the user's refresh button. */
 export type SyncTrigger = "periodic" | "manual" | "freshen";
-
-/**
- * How recently a cycle must have started for `freshen` to skip. Every window
- * open and focus asks for one; this keeps alt-tabbing (or several windows)
- * from becoming a cycle per event.
- */
-const FRESHEN_MIN_INTERVAL_MS = 2 * 60 * 1000;
 
 /** Re-list a host that refused the stack fields again after this long. */
 const STACKLESS_RECHECK_MS = 30 * 60 * 1000;
@@ -94,17 +87,20 @@ export interface PollState {
 
   /**
    * Claim the one cycle that may run. Concurrent callers coalesce onto the
-   * one in flight; `freshen` also skips when a cycle started recently.
+   * one in flight; `freshen` also skips when a cycle started recently. A
+   * `manual` request that coalesces asks for one more cycle after the one in
+   * flight: it may be about a repo that cycle already listed past.
    */
   readonly claimCycle: (
     trigger: SyncTrigger,
     now: number,
   ) => "claimed" | "in-flight" | "fresh-enough";
-  readonly releaseCycle: () => void;
+  /** Release the cycle; true when a `manual` request coalesced onto it. */
+  readonly releaseCycle: () => boolean;
 
   /**
-   * Whether a periodic cycle has completed. The first is a baseline: it can't
-   * tell what changed since the previous server run, so it raises no
+   * Whether a cycle has completed since boot. The first is a baseline: it
+   * can't tell what changed since the previous server run, so it raises no
    * notifications.
    */
   readonly baselineDone: () => boolean;
@@ -117,6 +113,7 @@ export function makePollState(): PollState {
   const sweepMarks = new Map<string, ThreadSweepMark>();
   const lastPassAt = new Map<string, number>();
   let inFlight = false;
+  let rerunRequested = false;
   let lastCycleStartedAt = 0;
   let baseline = false;
 
@@ -159,7 +156,10 @@ export function makePollState(): PollState {
     },
 
     claimCycle: (trigger, now) => {
-      if (inFlight) return "in-flight";
+      if (inFlight) {
+        if (trigger === "manual") rerunRequested = true;
+        return "in-flight";
+      }
       if (trigger === "freshen" && now - lastCycleStartedAt < FRESHEN_MIN_INTERVAL_MS) {
         return "fresh-enough";
       }
@@ -169,6 +169,9 @@ export function makePollState(): PollState {
     },
     releaseCycle: () => {
       inFlight = false;
+      const rerun = rerunRequested;
+      rerunRequested = false;
+      return rerun;
     },
 
     baselineDone: () => baseline,

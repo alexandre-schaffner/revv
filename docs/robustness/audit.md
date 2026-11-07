@@ -204,7 +204,7 @@ The non-walkthrough envelopes are catalogued in [§4 Tangential findings](#4-tan
 | #8 commit-first | `lifecycle:complete` site at `WalkthroughJobs.ts` awaits `setStatus(..., 'complete', ...)` *then* broadcasts, with a 5s timeout-and-swallow on the broadcast. |
 | Reconnect reconciliation | Client `open` handler (on reconnect, `openCount > 1`) calls `reconcileOnReconnect()` → `fetchRepos/fetchPrs/fetchPinnedPrs` + `hydrateFromCache(selectedPrId)` + `loadSession`. Invariant #8 honored. |
 | Strong typing | `ServerEventMessage` union shared end-to-end; client `dispatch(msg: ServerEventMessage)` cases the union with an exhaustive `never` check and no `any` widening. |
-| Auth | Bearer-token-via-`?token=` query param validated against `better-auth` (`Identity`) in the SSE route; missing/invalid token → 401. An unresolvable account opens an observer-only (`"unresolved"`) connection that receives no scoped broadcasts. |
+| Auth | Bearer-token-via-`?token=` query param validated against `GitHubAccounts.sessionUser` in the SSE route; missing/invalid token → 401. An unresolvable account opens an observer-only (`"unresolved"`) connection that receives no scoped broadcasts. |
 
 ### 2.4 Findings
 

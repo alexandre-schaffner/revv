@@ -176,18 +176,23 @@ export interface StackBriefStatusChangedEnvelope {
   data: { repositoryId: string; stackNumber: number; briefId: string; status: StackBriefStatus };
 }
 
+/** Signal: a PR-list sync cycle started for the account. */
 export interface PrsSyncStartedEnvelope {
   type: "prs:sync-started";
 }
 
+/** Signal: the account's PR-list sync cycle finished; `prs:updated` carried any change. */
 export interface PrsSyncCompleteEnvelope {
   type: "prs:sync-complete";
-  data: {
-    count: number;
-    timestamp: string;
-    cached?: number;
-    refetched?: number;
-  };
+}
+
+/**
+ * Signal: the account's PR-list sync cycle failed; no `prs:sync-complete`
+ * follows. `message` is user-facing, never a raw cause.
+ */
+export interface PrsSyncFailedEnvelope {
+  type: "prs:sync-failed";
+  data: { message: string };
 }
 
 export interface ReposUpdatedEnvelope {
@@ -209,11 +214,6 @@ export interface UserUpdatedEnvelope {
     image: string | null;
     githubLogin: string | null;
   };
-}
-
-export interface ErrorEnvelope {
-  type: "error";
-  data: { code: string; message: string; retryAfter?: number };
 }
 
 export interface AuthReauthRequiredEnvelope {
@@ -317,10 +317,10 @@ export type ServerEventMessage =
   | StackBriefStatusChangedEnvelope
   | PrsSyncStartedEnvelope
   | PrsSyncCompleteEnvelope
+  | PrsSyncFailedEnvelope
   | ReposUpdatedEnvelope
   | ReposCloneStatusEnvelope
   | UserUpdatedEnvelope
-  | ErrorEnvelope
   | AuthReauthRequiredEnvelope
   | AuthReauthClearedEnvelope
   | ThreadEventMessage

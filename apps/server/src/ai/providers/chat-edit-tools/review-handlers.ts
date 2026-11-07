@@ -7,7 +7,8 @@ import { commentThreads } from "../../../db/schema/comment-threads";
 import { threadMessages } from "../../../db/schema/thread-messages";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
-import { toMessage } from "../../../services/Review";
+import { NotFoundError } from "../../../domain/errors";
+import { threadWrites } from "../../../services/Review";
 import {
   decodeCitations,
   decodeIssue,
@@ -303,9 +304,9 @@ export const addIssueCommentEditHandler: ChatEditToolHandler<AddIssueCommentEdit
       };
     }
 
-    const { thread, message } = upsertIssueComment(ctx.db, {
+    const written = upsertIssueComment(ctx.db, {
       walkthroughId: wt.id,
-      reviewSessionId: wt.reviewSessionId,
+      prId: ctx.prId,
       issueId: input.issue_id,
       filePath: input.file_path,
       startLine: input.start_line,
@@ -316,8 +317,8 @@ export const addIssueCommentEditHandler: ChatEditToolHandler<AddIssueCommentEdit
     return {
       message: `Comment posted on ${input.file_path}:${input.start_line}${
         input.end_line !== input.start_line ? `-${input.end_line}` : ""
-      } for issue ${input.issue_id}. Thread id: ${thread.id}.`,
-      threadEvents: [{ type: "thread:created", data: { prId: ctx.prId, thread, message } }],
+      } for issue ${input.issue_id}. Thread id: ${written.value.thread.id}.`,
+      threadEvents: written.envelopes,
     };
   });
 };
@@ -329,23 +330,11 @@ export const updateIssueCommentHandler: ChatEditToolHandler<UpdateIssueCommentIn
   runChatEdit(ctx, (wt) => {
     const found = editableIssueComment(ctx.db, wt.id, input.thread_message_id, "edit");
     if ("refused" in found) return found;
-    const editedAt = new Date().toISOString();
-    ctx.db
-      .update(threadMessages)
-      .set({ body: input.body, editedAt })
-      .where(eq(threadMessages.id, found.message.id))
-      .run();
+    const edited = threadWrites.editMessage(ctx.db, found.message.id, input.body);
+    if (edited instanceof NotFoundError) return { refused: `Error: ${edited.message}` };
     return {
       message: `Comment ${input.thread_message_id} updated.`,
-      threadEvents: [
-        {
-          type: "thread:message:edited",
-          data: {
-            threadId: found.thread.id,
-            message: toMessage({ ...found.message, body: input.body, editedAt }, null),
-          },
-        },
-      ],
+      threadEvents: edited.envelopes,
     };
   });
 
@@ -356,26 +345,11 @@ export const deleteIssueCommentHandler: ChatEditToolHandler<DeleteIssueCommentIn
   runChatEdit(ctx, (wt) => {
     const found = editableIssueComment(ctx.db, wt.id, input.thread_message_id, "delete");
     if ("refused" in found) return found;
-    const threadId = found.thread.id;
-    ctx.db.delete(threadMessages).where(eq(threadMessages.id, found.message.id)).run();
-
-    const threadEmptied =
-      ctx.db
-        .select({ id: threadMessages.id })
-        .from(threadMessages)
-        .where(eq(threadMessages.threadId, threadId))
-        .get() === undefined;
-    if (threadEmptied) {
-      ctx.db.delete(commentThreads).where(eq(commentThreads.id, threadId)).run();
-    }
-    const threadEvents: ThreadEventMessage[] = [
-      { type: "thread:message:deleted", data: { threadId, messageId: input.thread_message_id } },
-      ...(threadEmptied
-        ? [{ type: "thread:deleted" as const, data: { threadId } } satisfies ThreadEventMessage]
-        : []),
-    ];
+    const removed = threadWrites.removeMessage(ctx.db, found.thread.id, found.message.id);
+    if (removed instanceof NotFoundError) return { refused: `Error: ${removed.message}` };
+    const threadRemoved = removed.envelopes.some((e) => e.type === "thread:deleted");
     return {
-      message: `Comment ${input.thread_message_id} deleted${threadEmptied ? " (thread was empty and was also removed)" : ""}.`,
-      threadEvents,
+      message: `Comment ${input.thread_message_id} deleted${threadRemoved ? " with its thread (it was the thread's first message)" : ""}.`,
+      threadEvents: removed.envelopes,
     };
   });

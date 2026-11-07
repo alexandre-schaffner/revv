@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { StackMergeMode, StackMergeRun } from "@revv/shared";
 import { Effect } from "effect";
 import { GitHubApiError, type GitHubError, GitHubNetworkError } from "../../domain/errors";
-import type { GitHubStack, GitHubStackLayer } from "./map";
+import type { GitHubStack, GitHubStackLayer } from "../github/stacks";
 import { driveRun, type MergeDriverPort, type SaveEffects } from "./merge-driver";
 import { RETARGET_WAIT_MS } from "./merge-plan";
 import type { Contradiction } from "./unverified-github";

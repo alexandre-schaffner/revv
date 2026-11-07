@@ -10,6 +10,7 @@ import type { Db } from "../../../db";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
+import type { ThreadWrite } from "../../../services/Review";
 import {
   decodeIssue,
   issueId as deriveIssueId,
@@ -446,11 +447,7 @@ export const addIssueCommentHandler: WalkthroughToolHandler<AddIssueCommentInput
   const outcome = ctx.db.transaction(
     ():
       | { readonly result: WalkthroughToolResult }
-      | {
-          readonly prId: string;
-          readonly thread: CommentThread;
-          readonly message: ThreadMessage;
-        } => {
+      | ThreadWrite<{ readonly thread: CommentThread; readonly message: ThreadMessage }> => {
       const open = openForWrite(ctx.db, ctx.walkthroughId, "add_issue_comment");
       if ("refusal" in open) return { result: open.refusal };
 
@@ -481,29 +478,21 @@ export const addIssueCommentHandler: WalkthroughToolHandler<AddIssueCommentInput
         };
       }
 
-      return {
+      return upsertIssueComment(ctx.db, {
+        walkthroughId: ctx.walkthroughId,
         prId: open.row.pullRequestId,
-        ...upsertIssueComment(ctx.db, {
-          walkthroughId: ctx.walkthroughId,
-          reviewSessionId: open.row.reviewSessionId,
-          issueId: input.issue_id,
-          filePath: input.file_path,
-          startLine: input.start_line,
-          endLine: input.end_line,
-          diffSide: input.diff_side,
-          body: input.body,
-        }),
-      };
+        issueId: input.issue_id,
+        filePath: input.file_path,
+        startLine: input.start_line,
+        endLine: input.end_line,
+        diffSide: input.diff_side,
+        body: input.body,
+      });
     },
   );
   if ("result" in outcome) return outcome.result;
-  const { prId, thread, message } = outcome;
-
-  // The diff view dedupes by thread id, so a replayed upsert is harmless.
-  ctx.broadcastThreadEvent({
-    type: "thread:created",
-    data: { prId, thread, message },
-  });
+  const { thread } = outcome.value;
+  for (const msg of outcome.envelopes) ctx.broadcastThreadEvent(msg);
 
   return ok(
     `Comment posted on ${input.file_path}:${input.start_line}${

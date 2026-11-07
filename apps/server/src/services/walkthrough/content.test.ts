@@ -116,7 +116,7 @@ describe("upsertIssueComment", () => {
     const db = memoryDb();
     const params = {
       walkthroughId: "wt",
-      reviewSessionId: "session",
+      prId: "pr",
       issueId: "i1",
       filePath: "a.ts",
       startLine: 3,
@@ -126,12 +126,18 @@ describe("upsertIssueComment", () => {
     };
     const first = upsertIssueComment(db, params);
     const second = upsertIssueComment(db, { ...params, body: "second" });
-    expect(second.thread.id).toBe(first.thread.id);
-    expect(second.message.id).toBe(issueCommentMessageId(first.thread.id));
-    expect(second.message.body).toBe("second");
-    expect(second.message.editedAt).not.toBeNull();
+    const replay = upsertIssueComment(db, { ...params, body: "second" });
+    expect(second.value.thread.id).toBe(first.value.thread.id);
+    expect(second.value.message.id).toBe(issueCommentMessageId(first.value.thread.id));
+    expect(second.value.message.body).toBe("second");
+    expect(second.value.message.editedAt).not.toBeNull();
     expect(db.select().from(commentThreads).all()).toHaveLength(1);
     expect(db.select().from(threadMessages).all()).toHaveLength(1);
+    // The diff view dedupes `thread:created` by thread id, so a new body must
+    // arrive as an edit; an identical replay announces nothing.
+    expect(first.envelopes.map((e) => e.type)).toEqual(["thread:created"]);
+    expect(second.envelopes.map((e) => e.type)).toEqual(["thread:message:edited"]);
+    expect(replay.envelopes).toEqual([]);
   });
 });
 

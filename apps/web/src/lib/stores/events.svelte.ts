@@ -18,7 +18,6 @@ import * as walkthroughSizing from "$lib/walkthrough/sizing.svelte";
 import * as walkthrough from "$lib/walkthrough/store.svelte";
 import * as auth from "./auth.svelte";
 import * as conversation from "./conversation.svelte";
-import { setError } from "./errors.svelte";
 import * as mergeEligibility from "./merge-eligibility.svelte";
 import * as prs from "./prs.svelte";
 import * as repoActivity from "./repo-activity.svelte";
@@ -63,11 +62,11 @@ const CATCH_UP: Record<ServerEventMessage["type"], readonly CatchUp[] | NoCatchU
   "repo-activity:settled": [refreshAllWaiting],
   "prs:sync-started": "none: the next poll cycle's prs:sync-complete settles the spinner",
   "prs:sync-complete": "none: the next poll cycle's prs:sync-complete settles the spinner",
+  "prs:sync-failed": "none: a toast; the failed sync's spinner settles with the next cycle",
   "prs:sync-summary": "none: toasts about changes the list re-read already shows",
   "repos:updated": [repos.rereadRepos],
   "repos:clone-status": [repos.rereadRepos],
   "user:updated": [auth.onEventsReconnected],
-  error: "none: a toast; the failed sync's spinner settles with the next cycle",
   "auth:reauth-required": [auth.onEventsReconnected],
   "auth:reauth-cleared": [auth.onEventsReconnected],
   "thread:created": [review.onEventsReconnected],
@@ -174,6 +173,9 @@ function dispatch(msg: ServerEventMessage): void {
     case "prs:sync-complete":
       sync.onPrsSyncComplete();
       break;
+    case "prs:sync-failed":
+      sync.onPrsSyncFailed(msg.data);
+      break;
     case "prs:sync-summary":
       sync.onPrsSyncSummary(msg.data);
       break;
@@ -185,10 +187,6 @@ function dispatch(msg: ServerEventMessage): void {
       break;
     case "user:updated":
       auth.onUserUpdated(msg.data);
-      break;
-    case "error":
-      sync.onError(msg.data);
-      setError(msg.data);
       break;
     case "auth:reauth-required":
       auth.onAuthReauthRequired(msg.data);

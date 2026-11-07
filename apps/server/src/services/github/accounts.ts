@@ -1,5 +1,6 @@
-import { and, eq, gt, inArray } from "drizzle-orm";
+import { and, eq, gt, inArray, lt } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
+import type { RetentionPolicy } from "../../db/retention";
 import { account, repositories, session, user } from "../../db/schema";
 import {
   type DbError,
@@ -15,12 +16,12 @@ import {
 } from "../../domain/github-host";
 import { dbTry } from "../../effects/db-try";
 import { keyedSingleFlight } from "../../effects/keyed-single-flight";
-import { resolveClientId } from "../../github-oauth";
+import { clientIdForHost, clientIdIsGitHubApp } from "../../github-oauth";
 import { logError } from "../../logger";
 import { DbService } from "../Db";
 import { Realtime } from "../Realtime";
-import { migrateLegacyTokens, SecretStore, type TokenPair } from "../SecretStore";
-import { SettingsService } from "../Settings";
+import { SecretStore, type TokenPair } from "../SecretStore";
+import { AvatarCache } from "./avatars";
 import { deviceFlowScopeFor, type IssuedTokens, refreshGrant } from "./oauth";
 import { type GitHubClient, githubClient, makeHttp, type TransportObserver } from "./transport";
 import { usersApi } from "./users";
@@ -85,8 +86,9 @@ export interface ConnectedHost {
 }
 
 export interface UserProfile {
-  readonly githubLogin: string | null;
-  readonly image: string | null;
+  readonly id: string;
+  readonly name: string;
+  readonly email: string;
   readonly onboardedAt: Date | null;
 }
 
@@ -94,7 +96,18 @@ export interface UserProfile {
 const BUNDLED_HOSTS = ["github.com"] as const;
 
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** A session expires after this long unused; each day it is used pushes the expiry out again. */
+const SESSION_TTL_MS = 30 * DAY_MS;
+
+export const sessionRetention: RetentionPolicy = {
+  table: "session",
+  sweep: (db, now) =>
+    db.delete(session).where(lt(session.expiresAt, now)).returning({ id: session.id }).all().length,
+};
+
+/** What GitHub says about a token: it works, it is rejected (401), or the probe couldn't tell. */
+type TokenVerdict = "works" | "rejected" | "unknown";
 
 function newSessionToken(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
@@ -145,16 +158,17 @@ export class GitHubAccounts extends Context.Service<
      */
     readonly probeFlagged: (accountId: string) => Effect.Effect<boolean>;
     readonly profile: (accountId: string) => Effect.Effect<AccountProfile, DbError | NotFoundError>;
-    /**
-     * The login Revv treats as "me" for this account's repositories: its
-     * user's `github_login`, the one the UI shows and compares with. Not the
-     * account's own login, which can differ on GitHub Enterprise.
-     */
+    /** The login Revv treats as "me" on this account's repositories: the account's own GitHub login. */
     readonly viewerLogin: (accountId: string) => Effect.Effect<string | null, DbError>;
     /**
-     * Record what GitHub says the account's login and avatar are now. When
-     * they moved, the account's user mirror (`user.github_login` /
-     * `user.image`, what the UI shows) follows and `user:updated` goes out.
+     * Whether the account signs in through a GitHub App (whose token sees only
+     * the repos the app is installed on) rather than an OAuth App.
+     */
+    readonly signsInWithGitHubApp: (accountId: string) => Effect.Effect<boolean>;
+    /**
+     * Record what GitHub says the account's login and avatar are now, and
+     * cache the avatar. When either moved, the user mirror (`user.github_login`
+     * / `user.image`) follows and `user:updated` goes out.
      */
     readonly recordIdentity: (
       accountId: string,
@@ -175,7 +189,7 @@ export class GitHubAccounts extends Context.Service<
       { readonly userId: string; readonly sessionToken: string | null },
       GitHubError | DbError | GitHubAuthError
     >;
-    /** The user behind a live session token, or null. */
+    /** The user behind a live session token, or null. Using a session extends it (see `SESSION_TTL_MS`). */
     readonly sessionUser: (sessionToken: string) => Effect.Effect<string | null, DbError>;
     /** A new session for another local user that is signed in on this machine. */
     readonly switchTo: (targetUserId: string) => Effect.Effect<string | null, DbError>;
@@ -190,24 +204,22 @@ export class GitHubAccounts extends Context.Service<
     /** Delete the user, their accounts, sessions, tracked repositories and stored tokens. */
     readonly removeUser: (userId: string) => Effect.Effect<void, DbError>;
     readonly userProfile: (userId: string) => Effect.Effect<UserProfile | null, DbError>;
-    /** Fill in `user.github_login` / `user.image` that are missing. */
-    readonly backfillUserProfile: (
-      userId: string,
-      values: { readonly githubLogin?: string; readonly image?: string | null },
-    ) => Effect.Effect<void, DbError>;
-    /** legacy-upgrade: plaintextTokens. See `migrateLegacyTokens`. */
-    readonly migrateLegacyTokens: Effect.Effect<number>;
+    /**
+     * legacy-upgrade: plaintextTokens. Copy any plaintext tokens still in the
+     * `account.access_token` / `refresh_token` columns into the secure store,
+     * then null the columns. Idempotent. Resolves the number of accounts moved.
+     */
+    readonly migrateLegacyTokens: Effect.Effect<number, DbError>;
   }
 >()("GitHubAccounts") {}
 
 export const GitHubAccountsLive = Layer.effect(
   GitHubAccounts,
   Effect.gen(function* () {
-    const dbService = yield* DbService;
-    const { db } = dbService;
+    const { db } = yield* DbService;
     const secretStore = yield* SecretStore;
     const realtime = yield* Realtime;
-    const settings = yield* SettingsService;
+    const avatars = yield* AvatarCache;
 
     // A copy of the secure store, which costs a keychain read per call. This
     // service makes every write, so the copy is updated in the same step.
@@ -243,6 +255,7 @@ export const GitHubAccountsLive = Layer.effect(
             accessTokenExpiresAt: account.accessTokenExpiresAt,
             refreshTokenExpiresAt: account.refreshTokenExpiresAt,
             reauthRequiredAt: account.reauthRequiredAt,
+            clientId: account.clientId,
           })
           .from(account)
           .where(eq(account.id, accountId))
@@ -250,6 +263,12 @@ export const GitHubAccountsLive = Layer.effect(
       );
 
     const authFailure = (message: string) => new GitHubAuthError({ message });
+
+    /** The client the account's token was issued to; rows from before `client_id` resolve the bundled/env one. Throws without one. */
+    const issuedClientId = (row: {
+      readonly providerId: string;
+      readonly clientId: string | null;
+    }) => row.clientId ?? clientIdForHost(hostFromProviderId(row.providerId));
 
     const reauthCache = new Map<string, boolean>();
 
@@ -324,10 +343,8 @@ export const GitHubAccountsLive = Layer.effect(
         }
 
         const host = hostFromProviderId(row.providerId);
-        // The grant must use the client_id the token was minted with.
-        const saved = yield* settings.getSettings();
         const clientId = yield* Effect.try({
-          try: () => resolveClientId(host, saved),
+          try: () => issuedClientId(row),
           catch: (e) => authFailure(e instanceof Error ? e.message : String(e)),
         });
         const { status, data } = yield* refreshGrant(host, clientId, refreshToken).pipe(
@@ -466,15 +483,18 @@ export const GitHubAccountsLive = Layer.effect(
         );
       });
 
-    const tokenWorks = (accountId: string): Effect.Effect<boolean> =>
+    const probeToken = (accountId: string): Effect.Effect<TokenVerdict> =>
       Effect.gen(function* () {
         const row = yield* readRow(accountId);
         const token = (yield* tokensOf(accountId))?.accessToken;
-        if (!row || !token) return false;
+        if (!row || !token) return "rejected" as const;
         return yield* users
           .viewer(githubClient(hostFromProviderId(row.providerId), token, accountId))
-          .pipe(Effect.as(true));
-      }).pipe(Effect.orElseSucceed(() => false));
+          .pipe(
+            Effect.as("works" as const),
+            Effect.catchTag("GitHubAuthError", () => Effect.succeed("rejected" as const)),
+          );
+      }).pipe(Effect.orElseSucceed(() => "unknown" as const));
 
     const authFailures = keyedSingleFlight<string, void, never>();
 
@@ -494,7 +514,7 @@ export const GitHubAccountsLive = Layer.effect(
               Effect.orElseSucceed(() => false),
             );
             if (refreshed) return;
-            if (yield* tokenWorks(accountId)) return;
+            if ((yield* probeToken(accountId)) !== "rejected") return;
             yield* markReauthRequired(accountId);
           }),
         );
@@ -504,7 +524,7 @@ export const GitHubAccountsLive = Layer.effect(
     const probeFlagged = (accountId: string): Effect.Effect<boolean> =>
       Effect.gen(function* () {
         if (!(yield* reauthRequired(accountId))) return false;
-        if (!(yield* tokenWorks(accountId))) return true;
+        if ((yield* probeToken(accountId)) !== "works") return true;
         yield* clearReauthRequired(accountId);
         return false;
       }).pipe(
@@ -528,14 +548,15 @@ export const GitHubAccountsLive = Layer.effect(
       });
 
     const viewerLogin = (accountId: string): Effect.Effect<string | null, DbError> =>
-      dbTry("read viewer login", () =>
-        db
-          .select({ login: user.githubLogin })
-          .from(account)
-          .innerJoin(user, eq(user.id, account.userId))
-          .where(eq(account.id, accountId))
-          .get(),
-      ).pipe(Effect.map((row) => row?.login ?? null));
+      readRow(accountId).pipe(Effect.map((row) => row?.githubLogin ?? null));
+
+    const signsInWithGitHubApp = (accountId: string): Effect.Effect<boolean> =>
+      readRow(accountId).pipe(
+        Effect.flatMap((row) =>
+          row ? Effect.try(() => clientIdIsGitHubApp(issuedClientId(row))) : Effect.succeed(false),
+        ),
+        Effect.orElseSucceed(() => false),
+      );
 
     const profile = (accountId: string): Effect.Effect<AccountProfile, DbError | NotFoundError> =>
       readRow(accountId).pipe(
@@ -559,15 +580,20 @@ export const GitHubAccountsLive = Layer.effect(
       Effect.gen(function* () {
         const row = yield* readRow(accountId);
         if (!row) return;
-        if (row.githubLogin === identity.login && row.avatarUrl === identity.avatarUrl) return;
+        const host = hostFromProviderId(row.providerId);
+        const avatar = yield* avatars.ensure(host, identity.login, identity.avatarUrl);
+        const moved = row.githubLogin !== identity.login || row.avatarUrl !== identity.avatarUrl;
+        if (!moved && !avatar.changed) return;
         const now = new Date();
-        yield* dbTry("record account identity", () =>
-          db
-            .update(account)
-            .set({ githubLogin: identity.login, avatarUrl: identity.avatarUrl, updatedAt: now })
-            .where(eq(account.id, accountId))
-            .run(),
-        );
+        if (moved) {
+          yield* dbTry("record account identity", () =>
+            db
+              .update(account)
+              .set({ githubLogin: identity.login, avatarUrl: identity.avatarUrl, updatedAt: now })
+              .where(eq(account.id, accountId))
+              .run(),
+          );
+        }
         const userRow = yield* dbTry("read user", () =>
           db
             .select({
@@ -591,13 +617,14 @@ export const GitHubAccountsLive = Layer.effect(
               .run(),
           );
         }
+        const image = (yield* avatars.contents(host, [identity.login])).get(identity.login) ?? null;
         yield* realtime.toAccount(accountId, {
           type: "user:updated",
           data: {
             id: userRow.id,
             name: userRow.name,
             email: userRow.email,
-            image: identity.avatarUrl,
+            image,
             githubLogin: identity.login,
           },
         });
@@ -653,6 +680,8 @@ export const GitHubAccountsLive = Layer.effect(
           accessTokenExpiresAt: input.tokens.accessTokenExpiresAt,
           refreshTokenExpiresAt: input.tokens.refreshTokenExpiresAt,
           reauthRequiredAt: null,
+          clientId: input.clientId,
+          scope: deviceFlowScopeFor(input.clientId),
           updatedAt: now,
         };
         if (existing) {
@@ -665,7 +694,6 @@ export const GitHubAccountsLive = Layer.effect(
             ...values,
             id,
             providerId: providerIdForHost(input.host),
-            scope: deviceFlowScopeFor(input.clientId),
             createdAt: now,
           })
           .run();
@@ -745,19 +773,29 @@ export const GitHubAccountsLive = Layer.effect(
           accessToken: input.tokens.accessToken,
           refreshToken: input.tokens.refreshToken,
         });
+        yield* avatars.ensure(input.host, viewer.login, viewer.avatarUrl);
         yield* clearReauthRequired(accountId);
         const sessionToken = input.linkToUserId === null ? yield* mintSession(userId) : null;
         return { userId, sessionToken };
       });
 
     const sessionUser = (sessionToken: string): Effect.Effect<string | null, DbError> =>
-      dbTry("read session", () =>
-        db
-          .select({ userId: session.userId })
+      dbTry("read session", () => {
+        const now = new Date();
+        const row = db
+          .select({ id: session.id, userId: session.userId, expiresAt: session.expiresAt })
           .from(session)
-          .where(and(eq(session.token, sessionToken), gt(session.expiresAt, new Date())))
-          .get(),
-      ).pipe(Effect.map((row) => row?.userId ?? null));
+          .where(and(eq(session.token, sessionToken), gt(session.expiresAt, now)))
+          .get();
+        if (!row) return null;
+        if (row.expiresAt.getTime() - now.getTime() < SESSION_TTL_MS - DAY_MS) {
+          db.update(session)
+            .set({ expiresAt: new Date(now.getTime() + SESSION_TTL_MS), updatedAt: now })
+            .where(eq(session.id, row.id))
+            .run();
+        }
+        return row.userId;
+      });
 
     const switchTo = (targetUserId: string): Effect.Effect<string | null, DbError> =>
       Effect.gen(function* () {
@@ -892,8 +930,9 @@ export const GitHubAccountsLive = Layer.effect(
       dbTry("read user profile", () =>
         db
           .select({
-            githubLogin: user.githubLogin,
-            image: user.image,
+            id: user.id,
+            name: user.name,
+            email: user.email,
             onboardedAt: user.onboardedAt,
           })
           .from(user)
@@ -901,17 +940,35 @@ export const GitHubAccountsLive = Layer.effect(
           .get(),
       ).pipe(Effect.map((row) => row ?? null));
 
-    const backfillUserProfile = (
-      userId: string,
-      values: { readonly githubLogin?: string; readonly image?: string | null },
-    ): Effect.Effect<void, DbError> =>
-      dbTry("backfill user profile", () =>
+    const migrateLegacyTokens: Effect.Effect<number, DbError> = Effect.gen(function* () {
+      const rows = yield* dbTry("read plaintext tokens", () =>
         db
-          .update(user)
-          .set({ ...values, updatedAt: new Date() })
-          .where(eq(user.id, userId))
-          .run(),
+          .select({
+            id: account.id,
+            accessToken: account.accessToken,
+            refreshToken: account.refreshToken,
+          })
+          .from(account)
+          .all(),
       );
+      let migrated = 0;
+      for (const r of rows) {
+        if (!r.accessToken && !r.refreshToken) continue;
+        yield* storeTokens(r.id, {
+          accessToken: r.accessToken ?? null,
+          refreshToken: r.refreshToken ?? null,
+        });
+        yield* dbTry("null plaintext tokens", () =>
+          db
+            .update(account)
+            .set({ accessToken: null, refreshToken: null, updatedAt: new Date() })
+            .where(eq(account.id, r.id))
+            .run(),
+        );
+        migrated++;
+      }
+      return migrated;
+    });
 
     return {
       clientFor,
@@ -922,6 +979,7 @@ export const GitHubAccountsLive = Layer.effect(
       probeFlagged,
       profile,
       viewerLogin,
+      signsInWithGitHubApp,
       recordIdentity,
       signIn,
       sessionUser,
@@ -931,12 +989,7 @@ export const GitHubAccountsLive = Layer.effect(
       disconnect,
       removeUser,
       userProfile,
-      backfillUserProfile,
-      migrateLegacyTokens: migrateLegacyTokens.pipe(
-        Effect.provideService(SecretStore, secretStore),
-        Effect.provideService(DbService, dbService),
-        Effect.tap(() => Effect.sync(() => tokenCache.clear())),
-      ),
+      migrateLegacyTokens,
     };
   }),
 );

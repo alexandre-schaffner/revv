@@ -2,11 +2,11 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import type { Db } from "../db/index";
 import { prDiffFiles, pullRequests } from "../db/schema/index";
-import { type DbError, type GitHubError, GitHubRateLimitError } from "../domain/errors";
+import type { DbError, GitHubError } from "../domain/errors";
 import { dbTry } from "../effects/db-try";
 import { DbService } from "./Db";
 import { GitHubGateway } from "./github/gateway";
-import { PR_FILES_MAX_COUNT, type PrFileMeta } from "./github/pulls";
+import type { PrFileMeta } from "./github/pulls";
 import type { GitHubClient } from "./github/transport";
 import { Realtime } from "./Realtime";
 
@@ -119,44 +119,12 @@ export function toGitHubFileShape(files: readonly CachedDiffFile[]): Array<{
   }));
 }
 
-/**
- * Whether the cached rows are the whole diff, or a partial cache that has to
- * be re-fetched.
- *
- * `cachedCount` — `pullRequests.diffFilesCachedCount`, written with the rows —
- * is checked first: if the cache still holds every row the last fetch
- * produced, it is complete by definition.
- *
- * `expectedChangedFiles` (GitHub's `changed_files`) is only the fallback, for
- * rows cached before that column existed. It is not reliable on its own:
- * GitHub counts file entries, and a path whose file type changed contributes
- * two of them (`removed` + `added`) while collapsing to one row, so the gap is
- * permanent and a large PR would re-fetch every page on every view.
- */
-function hasCompleteCachedFiles(
-  cached: readonly CachedDiffFile[],
-  expectedChangedFiles?: number,
-  cachedCount?: number | null,
-): boolean {
-  if (cachedCount != null) return cached.length >= cachedCount;
-  if (expectedChangedFiles === undefined) return true;
-  return cached.length >= Math.min(expectedChangedFiles, PR_FILES_MAX_COUNT);
-}
-
-/** A rate limit with a cache in hand serves the cache: the diff, if maybe not the newest. */
-function shouldServeCachedFilesOnFetchError(
-  cached: readonly CachedDiffFile[] | null,
-  error: GitHubError,
-): cached is readonly CachedDiffFile[] {
-  return cached !== null && error instanceof GitHubRateLimitError;
-}
-
 export class DiffCacheService extends Context.Service<
   DiffCacheService,
   {
     /**
-     * A PR's diff files: the cache when it is complete for the PR's current
-     * head and base, otherwise GitHub's list, written through (and announced
+     * A PR's diff files: the cache when it holds the PR's current head and
+     * base, otherwise GitHub's list, written through (and announced
      * as `diff:cached`). `source` says which answered.
      */
     readonly getOrFetch: (
@@ -256,36 +224,22 @@ export const DiffCacheServiceLive = Layer.effect(
             .select({
               headSha: pullRequests.headSha,
               baseSha: pullRequests.baseSha,
-              changedFiles: pullRequests.changedFiles,
-              cachedCount: pullRequests.diffFilesCachedCount,
             })
             .from(pullRequests)
             .where(eq(pullRequests.id, pr.id))
             .get(),
         );
         const cached = yield* getCachedFiles(pr.id);
-        if (
-          cached !== null &&
-          hasCompleteCachedFiles(cached, stored?.changedFiles, stored?.cachedCount)
-        ) {
-          return { files: cached, source: "cache" as const };
-        }
+        if (cached !== null) return { files: cached, source: "cache" as const };
 
-        const fetched = yield* github.prs.files(client, repoFullName, pr.externalId).pipe(
-          Effect.map((list) => ({ files: toCachedDiffFiles(list), source: "github" as const })),
-          Effect.catch((err) =>
-            shouldServeCachedFilesOnFetchError(cached, err)
-              ? Effect.succeed({ files: [...cached], source: "cache" as const })
-              : Effect.fail(err),
-          ),
+        const files = toCachedDiffFiles(
+          yield* github.prs.files(client, repoFullName, pr.externalId),
         );
-        if (fetched.source === "github") {
-          yield* cacheFiles(
-            { id: pr.id, headSha: stored?.headSha ?? null, baseSha: stored?.baseSha ?? null },
-            fetched.files,
-          );
-        }
-        return fetched;
+        yield* cacheFiles(
+          { id: pr.id, headSha: stored?.headSha ?? null, baseSha: stored?.baseSha ?? null },
+          files,
+        );
+        return { files, source: "github" as const };
       });
 
     return {

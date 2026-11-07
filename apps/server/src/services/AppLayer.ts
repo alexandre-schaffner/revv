@@ -14,10 +14,10 @@ import { DbServiceLive } from "./Db";
 import { DbMaintenanceLive } from "./DbMaintenance";
 import { DiffCacheServiceLive } from "./DiffCache";
 import { ExternalIntegrationsLive } from "./ExternalIntegrations";
-import { GitHubEtagCacheLive } from "./GitHubEtagCache";
 import { BranchPushLockLive } from "./git/branch-push-lock";
 import { GitHubAccountsLive } from "./github/accounts";
 import { AvatarCacheLive } from "./github/avatars";
+import { GitHubEtagCacheLive } from "./github/etag-cache";
 import { GitHubGatewayLive } from "./github/gateway";
 import { HunkScanServiceLive } from "./HunkScan";
 import { JevServiceLive } from "./Jev";
@@ -57,9 +57,11 @@ const ReviewServiceWithDeps = ReviewServiceLive.pipe(Layer.provide(RealtimeWithD
 
 const SettingsServiceWithDeps = SettingsServiceLive.pipe(Layer.provide(DbServiceLive));
 
+const AvatarCacheWithDeps = AvatarCacheLive.pipe(Layer.provide(DbServiceLive));
+
 const GitHubAccountsWithDeps = GitHubAccountsLive.pipe(
   Layer.provide(
-    Layer.mergeAll(DbServiceLive, SecretStoreLive, RealtimeWithDeps, SettingsServiceWithDeps),
+    Layer.mergeAll(DbServiceLive, SecretStoreLive, RealtimeWithDeps, AvatarCacheWithDeps),
   ),
 );
 
@@ -72,8 +74,6 @@ const GitHubGatewayWithDeps = GitHubGatewayLive.pipe(
 const ChatSessionServiceWithDeps = ChatSessionServiceLive.pipe(Layer.provide(DbServiceLive));
 
 const ExternalIntegrationsWithDeps = ExternalIntegrationsLive.pipe(Layer.provide(DbServiceLive));
-
-const AvatarCacheWithDeps = AvatarCacheLive.pipe(Layer.provide(DbServiceLive));
 
 const DiffCacheServiceWithDeps = DiffCacheServiceLive.pipe(
   Layer.provide(Layer.mergeAll(DbServiceLive, GitHubGatewayWithDeps, RealtimeWithDeps)),

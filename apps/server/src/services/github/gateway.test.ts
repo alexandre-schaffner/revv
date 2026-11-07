@@ -5,8 +5,8 @@ import { createDb, type Db } from "../../db/index";
 import { GitHubApiError, GitHubNotFoundError, GitHubRateLimitError } from "../../domain/errors";
 import { STACK_UNSEEN, stackSeen } from "../../domain/observed-pr";
 import { DbService } from "../Db";
-import { GitHubEtagCacheLive } from "../GitHubEtagCache";
 import { GitHubAccounts } from "./accounts";
+import { GitHubEtagCacheLive } from "./etag-cache";
 import { GitHubGateway, GitHubGatewayLive } from "./gateway";
 import { type GitHubClient, githubClient } from "./transport";
 

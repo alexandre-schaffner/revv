@@ -8,6 +8,7 @@ import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { call } from "$lib/api/errors";
 import { thrownMessage } from "$lib/api/wire";
+import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { acceptWriteResult } from "$lib/stores/conversation.svelte";
 import { getThreadMessages, getThreads, loadSession } from "$lib/stores/review.svelte";
 import { markIssuesAsSubmitted } from "$lib/walkthrough/store.svelte";
@@ -33,7 +34,7 @@ export async function submitReview(
   const issueIds = issues.map((issue) => issue.id);
   // The drafts on screen, so nothing the reviewer hasn't seen goes up.
   const threadIds = getThreads()
-    .filter((t) => draftCommentBody(t, getThreadMessages(t.id)) !== null)
+    .filter((t) => draftCommentBody(t, getThreadMessages(t.id), getCurrentUserLogin()) !== null)
     .map((t) => t.id);
   try {
     const result = await call(
