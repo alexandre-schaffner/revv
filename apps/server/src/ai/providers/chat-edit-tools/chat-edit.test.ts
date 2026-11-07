@@ -10,7 +10,13 @@ import {
   walkthroughs,
 } from "../../../db/schema";
 import { blockOrder } from "../../../services/walkthrough/content";
-import { deleteSemanticStepHandler } from "./content-handlers";
+import type { ArtifactContext, ArtifactVerdict } from "../../jev/artifact-quality";
+import {
+  addBlockHandler,
+  addSemanticStepEditHandler,
+  deleteSemanticStepHandler,
+  updateBlockHandler,
+} from "./content-handlers";
 import { getWalkthroughForEditHandler } from "./read-handler";
 import { deleteIssueHandler, updateIssueHandler } from "./review-handlers";
 import type { ChatWalkthroughEditContext } from "./spec";
@@ -73,17 +79,22 @@ function seed(): Db {
   return db;
 }
 
-function context(db: Db) {
+function context(db: Db, verdict: ArtifactVerdict = { failed: [], reject: false }) {
   const published: { walkthroughId: string; events: readonly WalkthroughStreamEvent[] }[] = [];
   const threadEvents: ThreadEventMessage[] = [];
+  const judged: ArtifactContext[] = [];
   const ctx: ChatWalkthroughEditContext = {
     db,
     prId: "pr-1",
     actor: "chat:acp",
     publishEdit: (walkthroughId, events) => published.push({ walkthroughId, events }),
     broadcastThreadEvent: (msg) => threadEvents.push(msg),
+    judgeArtifact: (_html, artifact) => {
+      judged.push(artifact);
+      return Promise.resolve(verdict);
+    },
   };
-  return { ctx, published, threadEvents };
+  return { ctx, published, threadEvents, judged };
 }
 
 const lastEditedBy = (db: Db) =>
@@ -134,6 +145,71 @@ describe("chat edits", () => {
     expect(lastEditedBy(db)).toBeNull();
     expect(published).toHaveLength(0);
     expect(threadEvents).toHaveLength(0);
+  });
+});
+
+// One artifact contract: a chat edit's artifact clears the same craft bar as
+// generation's, and an unavailable judge accepts it.
+describe("chat edits of an artifact block", () => {
+  const artifact = { html: "<p>static</p>", annotation: "why" };
+  const blocksAt = (db: Db, step: number) =>
+    db
+      .select()
+      .from(walkthroughBlocks)
+      .where(eq(walkthroughBlocks.stepIndex, step))
+      .all()
+      .map((b) => b.type);
+
+  it("refuse one the craft bar rejects, writing nothing", async () => {
+    const db = seed();
+    const { ctx, published, judged } = context(db, {
+      failed: ["no live state readout", "nothing for the reader to vary"],
+      reject: true,
+    });
+
+    const added = await addBlockHandler(ctx, {
+      semantic_step_index: 1,
+      step_index: 2,
+      content: { artifact },
+    });
+    const updated = await updateBlockHandler(ctx, {
+      semantic_step_index: 1,
+      step_index: 0,
+      content: { artifact },
+    });
+    const opened = await addSemanticStepEditHandler(ctx, {
+      semantic_step_index: 2,
+      title: "Two",
+      initial_block: { artifact },
+    });
+
+    for (const result of [added, updated, opened]) {
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toContain("does not clear the craft bar");
+    }
+    expect(judged).toEqual([
+      { chapterTitle: "One", annotation: "why" },
+      { chapterTitle: "One", annotation: "why" },
+      { chapterTitle: "Two", annotation: "why" },
+    ]);
+    expect(blocksAt(db, 2)).toEqual([]);
+    expect(blocksAt(db, 0)).toEqual(["markdown"]);
+    expect(lastEditedBy(db)).toBeNull();
+    expect(published).toHaveLength(0);
+  });
+
+  it("write one the craft bar accepts", async () => {
+    const db = seed();
+    const { ctx } = context(db);
+
+    const result = await addBlockHandler(ctx, {
+      semantic_step_index: 1,
+      step_index: 2,
+      content: { artifact },
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(blocksAt(db, 2)).toEqual(["artifact"]);
   });
 });
 

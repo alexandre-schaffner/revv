@@ -230,7 +230,9 @@ agent tomorrow). Any change that violates them is wrong by construction — push
      **synchronously**, and refuse a block that fails two of the three clauses. A gate that
      rejects has to answer before the write — a block that appeared and then vanished would
      leave a hole in the chapter's `step_index` sequence — and artifacts are rare enough
-     that the round trip doesn't matter.
+     that the round trip doesn't matter. It is the one artifact contract: the chat-edit
+     tools that write a block (`add_block`, `update_block`, `add_semantic_step`) hold it to
+     the same bar (`artifactRefusal` in `ai/providers/walkthrough-blocks.ts`).
 
      Both degrade to the pre-Jev behaviour when the judgment is unavailable: an unjudged
      concern stands as written, an unjudged artifact is accepted. Judgments are cached on
@@ -277,8 +279,9 @@ agent tomorrow). Any change that violates them is wrong by construction — push
    `lastEditedAt` / `lastEditedBy` on the parent row, never change `status` or
    `lastCompletedPhase`, and broadcast `walkthrough:event` envelopes carrying a
    `lifecycle:edited` event on the global SSE stream (`GET /api/events`). GitHub-submitted issues
-   (`submittedAt!=null`) are off-limits even to the chat-edit path. The generation
-   pipeline still never mutates a completed row.
+   (`submittedAt!=null`) are off-limits even to the chat-edit path. A block they write
+   clears the same artifact craft bar as generation (invariant 4), and is accepted when the
+   judgment is unavailable. The generation pipeline still never mutates a completed row.
 
    The external coding-agent integrations (Claude Code, Codex, OpenCode,
    Cursor) are additional scoped callers of the same chat-edit handlers. Their

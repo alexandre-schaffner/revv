@@ -6,7 +6,7 @@ import {
 } from "@revv/shared";
 import { z } from "zod";
 import type { Db } from "../../../db";
-import type { ArtifactVerdict } from "../../jev/artifact-quality";
+import type { ArtifactJudge } from "../../jev/artifact-quality";
 import type { IssueCandidate } from "../../jev/contracts";
 import {
   ISSUE_COMMENT_CONTRACT,
@@ -61,14 +61,8 @@ export interface WalkthroughToolJudgments {
    */
   readonly awaitIssueJudgments: () => Promise<void>;
   readonly issueRetracted: (issueId: string) => boolean;
-  /**
-   * Holds an artifact to the craft bar. Awaited, unlike the issue judgment,
-   * since a rejecting gate must answer before the write.
-   */
-  readonly judgeArtifact: (
-    html: string,
-    context: { readonly chapterTitle: string; readonly annotation: string | null },
-  ) => Promise<ArtifactVerdict>;
+  /** Holds an artifact to the craft bar. Awaited, unlike the issue judgment. */
+  readonly judgeArtifact: ArtifactJudge;
   /** Schedule a voice check on a markdown block. Returns immediately. */
   readonly scheduleProseCheck: (markdown: string, chapterTitle: string) => void;
   /** Drain any voice advice that landed since the last tool call. */

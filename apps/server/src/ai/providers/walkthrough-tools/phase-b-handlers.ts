@@ -19,10 +19,14 @@ import {
   upsertIssue,
   upsertIssueComment,
 } from "../../../services/walkthrough/content";
-import { renderArtifactRejection } from "../../jev/artifact-quality";
 import { decodePlainText } from "../agent-text";
 import { fail, ok } from "../mcp-tool-gateway";
-import { prepareBlock, withArtifactWarnings, writeBlock } from "../walkthrough-blocks";
+import {
+  artifactRefusal,
+  prepareBlock,
+  withArtifactWarnings,
+  writeBlock,
+} from "../walkthrough-blocks";
 import { openForWrite } from "./phases";
 import type {
   AddDiffStepInput,
@@ -54,15 +58,9 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
   );
   if ("error" in prepared) return fail(prepared.error);
 
-  // Same craft bar as add_diff_step; rejecting here also rejects the
-  // chapter, since a chapter can't exist without its first block.
-  if (input.initial_block.artifact) {
-    const verdict = await ctx.jev.judgeArtifact(input.initial_block.artifact.html, {
-      chapterTitle: trimmedTitle,
-      annotation: input.initial_block.artifact.annotation,
-    });
-    if (verdict.reject) return fail(renderArtifactRejection(verdict));
-  }
+  // Refusing the block refuses the chapter: a chapter can't exist without it.
+  const refusal = await artifactRefusal(ctx.jev.judgeArtifact, prepared.block, trimmedTitle);
+  if (refusal) return fail(refusal);
 
   const semanticStep: WalkthroughSemanticStep = {
     semanticStepIndex: input.semantic_step_index,
@@ -182,16 +180,9 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
   );
   if ("error" in prepared) return fail(prepared.error);
 
-  // Craft bar runs before the write: rejecting after would leave a hole in
-  // step_index, and there's no cheap way to undo a block already read.
   const chapterTitle = chapterTitleFor(ctx.db, ctx.walkthroughId, input.semantic_step_index);
-  if (input.artifact) {
-    const verdict = await ctx.jev.judgeArtifact(input.artifact.html, {
-      chapterTitle,
-      annotation: input.artifact.annotation,
-    });
-    if (verdict.reject) return fail(renderArtifactRejection(verdict));
-  }
+  const refusal = await artifactRefusal(ctx.jev.judgeArtifact, prepared.block, chapterTitle);
+  if (refusal) return fail(refusal);
 
   const written = ctx.db.transaction(
     (): { readonly refusal: WalkthroughToolResult } | { readonly block: WalkthroughBlock } => {
