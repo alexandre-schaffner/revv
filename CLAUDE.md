@@ -268,7 +268,8 @@ agent tomorrow). Any change that violates them is wrong by construction — push
    (`walkthroughs.diff_fingerprint`) that covers the requested generation mode, the orchestrator
    imports that review into the new head's row (`carried_from_walkthrough_id`) with no agent
    run. The old row is never touched. The rule is `services/walkthrough/restack.ts`; the stack
-   overlay's `restacked` label calls the same rule.
+   overlay's `restacked` label calls the same rule, in the perspective "Review the stack"
+   would queue that layer in.
 
    **Carve-out: chat-edit is the single authorized post-completion mutation path.** After
    `status='complete'`, the chat agent's edit MCP tools (`update_overview`, `add_block`,
@@ -391,7 +392,8 @@ orchestrator decide on one pure journal check (`stackBriefCompletionBlocker`): a
 journal passes it completes even if the agent never called the gate. `status` is
 orchestrator-only and every transition is broadcast as `stack-brief:status-changed` after
 it commits. Review-the-stack (`services/stacks/StackReview.ts`) only queues walkthroughs
-through `WalkthroughJobs.startJob` (`trigger: 'stack_review'`) and asks for a brief once
+through `WalkthroughJobs.startJob` (`trigger: 'stack_review'`), each layer in its own
+perspective (`walkthrough/perspective.ts`, as the user's Generate asks), and asks for a brief once
 they settle; it owns no walkthrough or brief lifecycle. Its own row (`stack_reviews`)
 journals the queue and progress, `running` → `done` | `abandoned` (a 2-hour deadline), so a
 restart picks a review up where it was.

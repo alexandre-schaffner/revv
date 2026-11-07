@@ -41,10 +41,14 @@ export interface FinishedReview {
   readonly openIssues: ReadonlyArray<{ readonly title: string; readonly severity: string }>;
 }
 
-/** Each PR's latest finished review (see `finishedReview`), superseded since or not. */
+/**
+ * Each PR's latest finished review (see `finishedReview`), superseded since or
+ * not; with `perspectives`, only a review in the PR's perspective counts.
+ */
 export function latestFinishedReviews(
   db: Db,
   prIds: readonly string[],
+  perspectives?: ReadonlyMap<string, WalkthroughMode>,
 ): Map<string, FinishedReview> {
   if (prIds.length === 0) return new Map();
   const rows = db
@@ -65,7 +69,11 @@ export function latestFinishedReviews(
     .orderBy(desc(walkthroughs.generatedAt))
     .all();
   const latest = new Map<string, (typeof rows)[number]>();
-  for (const row of rows) if (!latest.has(row.prId)) latest.set(row.prId, row);
+  for (const row of rows) {
+    const perspective = perspectives?.get(row.prId);
+    if (perspective !== undefined && row.mode !== perspective) continue;
+    if (!latest.has(row.prId)) latest.set(row.prId, row);
+  }
 
   const ids = [...latest.values()].map((row) => row.id);
   const issues =

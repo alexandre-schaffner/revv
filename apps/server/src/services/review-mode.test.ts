@@ -1,9 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { Effect, Layer } from "effect";
 import { createDb, type Db } from "../db";
 import { account, pullRequests, repositories, user } from "../db/schema";
-import { DbService } from "./Db";
-import { resolveReviewModeForPr } from "./review-mode";
+import { reviewModeOnPr } from "./review-mode";
 
 const PR_ID = "repo-1:7";
 
@@ -66,13 +64,9 @@ function seedIdentity(params: {
   return db;
 }
 
-function runWithDb<A>(db: Db, effect: Effect.Effect<A, never, DbService>): Promise<A> {
-  return Effect.runPromise(effect.pipe(Effect.provide(Layer.succeed(DbService, { db }))));
-}
+const resolve = async (db: Db, prId = PR_ID) => reviewModeOnPr(db, prId);
 
-const resolve = (db: Db, prId = PR_ID) => runWithDb(db, resolveReviewModeForPr(prId));
-
-describe("resolveReviewModeForPr", () => {
+describe("reviewModeOnPr", () => {
   it("reports author for a PR the signed-in user wrote", async () => {
     const db = seedIdentity({ authorLogin: "alex", accountLogin: "alex" });
     expect(await resolve(db)).toBe("author");

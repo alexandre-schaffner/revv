@@ -375,15 +375,6 @@ export class WalkthroughService extends Context.Service<
     ) => Effect.Effect<Walkthrough | null, DbError>;
 
     /**
-     * The perspective of the PR's newest walkthrough row, any status, or
-     * `null` when it has none. The walkthrough perspective is the user's
-     * choice; this is the record of their last one, so `/current` reopens on
-     * the walkthrough they actually generated. Superseded rows count: after
-     * a push, the stale walkthrough keeps its perspective.
-     */
-    readonly getLatestMode: (prId: string) => Effect.Effect<WalkthroughMode | null, DbError>;
-
-    /**
      * Return a specific walkthrough for a PR, whatever its perspective. This
      * is a read-only historical report view: callers use it to display an
      * older report, not to resume or mutate the row.
@@ -914,19 +905,6 @@ export const WalkthroughServiceLive = Layer.effect(
               ),
             )?.walkthrough ?? null,
         ),
-
-      getLatestMode: (prId) =>
-        Effect.gen(function* () {
-          const row = yield* dbTry(`getLatestMode(${prId})`, () =>
-            db
-              .select({ mode: walkthroughs.mode })
-              .from(walkthroughs)
-              .where(eq(walkthroughs.pullRequestId, prId))
-              .orderBy(desc(walkthroughs.generatedAt))
-              .get(),
-          );
-          return row?.mode ?? null;
-        }),
 
       getReport: (prId, walkthroughId) =>
         dbTry("getReport", () =>

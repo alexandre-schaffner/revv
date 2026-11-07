@@ -11,10 +11,10 @@ import { logError } from "../../logger";
 import { withGitHubOrigin } from "../../observability/github-ledger/origin";
 import { DbService } from "../Db";
 import { makeStartJobMutex } from "../job-mutex";
+import { perspectiveOf } from "../walkthrough/perspective";
 import { WalkthroughJobs } from "../walkthrough/WalkthroughJobs";
-import { STACK_REVIEW_REQUEST } from "./overlay";
 import { StackBriefJobs } from "./StackBriefJobs";
-import { type StackError, StackService } from "./StackService";
+import { STACK_REVIEW_GENERATION_MODE, type StackError, StackService } from "./StackService";
 
 const MAX_LAYERS_IN_FLIGHT = 2;
 const POLL_INTERVAL = Duration.seconds(3);
@@ -107,12 +107,18 @@ export const StackReviewServiceLive = Layer.effect(
       Effect.gen(function* () {
         const layer = review.layers[review.started];
         if (!layer) return;
+        // In the layer's own perspective: on the user's own PRs that is
+        // `author`, and asking as `reviewer` would retire their reviews.
+        const mode = yield* dbTry("stack review layer perspective", () =>
+          perspectiveOf(db, layer.prId),
+        );
         const walkthroughId = yield* walkthroughJobs
           .startJob({
             prId: layer.prId,
             trigger: "stack_review",
             replace: "finished",
-            ...STACK_REVIEW_REQUEST,
+            mode,
+            generationMode: STACK_REVIEW_GENERATION_MODE,
           })
           .pipe(
             Effect.map((r) => r.walkthroughId),

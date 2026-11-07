@@ -14,12 +14,7 @@ import type { GitHubStack, GitHubStackLayer } from "../github/stacks";
 import { changedFiles } from "../walkthrough/restack";
 import type { FinishedReview } from "../walkthrough/review-reads";
 
-/**
- * What "Review the stack" asks for when it queues a layer: the overlay's
- * `restacked` verdict says whether that request carries a review over.
- */
-export const STACK_REVIEW_REQUEST = { mode: "reviewer", generationMode: "full" } as const;
-
+/** A tracked layer's reviews, in the layer's own perspective (`perspectiveOf`). */
 export interface TrackedLayer {
   readonly prId: string;
   readonly currentFingerprint: DiffFingerprint | null;
@@ -27,7 +22,7 @@ export interface TrackedLayer {
   /** The review of the PR's head that stands, finished or not. */
   readonly current: { readonly id: string; readonly status: WalkthroughStatus } | null;
   readonly latestFinished: FinishedReview | null;
-  /** A {@link STACK_REVIEW_REQUEST} run of this head would carry a finished review over. */
+  /** The run "Review the stack" queues for this head would carry a finished review over. */
   readonly carries: boolean;
 }
 

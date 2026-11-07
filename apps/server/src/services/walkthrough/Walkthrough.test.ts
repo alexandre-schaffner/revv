@@ -413,34 +413,6 @@ describe("issuesOnPr", () => {
   });
 });
 
-describe("getLatestMode", () => {
-  const latestMode = (db: Db) => runWalkthrough(db, (s) => s.getLatestMode("pr-1"));
-
-  it("is null when the PR has no walkthrough", async () => {
-    expect(await latestMode(createDb(":memory:"))).toBeNull();
-  });
-
-  it("follows the newest row, whatever its perspective", async () => {
-    const db = createDb(":memory:");
-    insertWalkthroughs(
-      db,
-      { id: "a", mode: "author", status: "complete", generatedAt: "2026-01-01T00:00:00Z" },
-      { id: "b", mode: "reviewer", status: "generating", generatedAt: "2026-01-02T00:00:00Z" },
-    );
-    expect(await latestMode(db)).toBe("reviewer");
-  });
-
-  it("counts superseded rows, so a stale walkthrough keeps its perspective", async () => {
-    const db = createDb(":memory:");
-    insertWalkthroughs(
-      db,
-      { id: "a", mode: "author", status: "complete", generatedAt: "2026-01-01T00:00:00Z" },
-      { id: "b", mode: "reviewer", status: "superseded", generatedAt: "2026-01-02T00:00:00Z" },
-    );
-    expect(await latestMode(db)).toBe("reviewer");
-  });
-});
-
 // Only one perspective is active per PR, so a switch retires the other one's
 // walkthrough. Its report must stay readable from the history.
 describe("history across perspectives", () => {
