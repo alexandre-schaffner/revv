@@ -25,6 +25,7 @@ import { type DbError, JevUnavailable } from "../../domain/errors";
 import { CacheService } from "../../services/Cache";
 import type { HunkScanSeed } from "../../services/hunk-scan/store";
 import { JEV_MODEL, JevService } from "../../services/Jev";
+import { GENERATED_TIER } from "./job-start";
 import { optionalJev } from "./optional";
 import { numericAnswerAt } from "./questions";
 import { buildHunkScanState, type FileLike, HUNK_PATCH_MAX_CHARS } from "./state";
@@ -175,7 +176,7 @@ function toTarget(file: FileLike, hunk: PatchHunk): ScanTarget {
 }
 
 /**
- * Decide which hunks to ask about. Generated (tier-0) files, hunks that add
+ * Decide which hunks to ask about. Generated-tier files, hunks that add
  * nothing, and files without a patch are recorded but skipped; the rest are
  * ranked by file tier (unscored files last, as in `filePriorityOrder`), then
  * diff order — so if Jev stops answering partway, what's missing is the least
@@ -208,7 +209,7 @@ export function selectHunks(
       const target = toTarget(file, hunk);
       const addsCode = hunk.addedLines.some((line) => line.trim() !== "");
       const skipReason: HunkSkipReason | null =
-        tier === 0 ? "generated" : addsCode ? null : "deletion_only";
+        tier === GENERATED_TIER ? "generated" : addsCode ? null : "deletion_only";
       seeds.push({
         filePath: file.filename,
         hunkIndex: hunk.index,

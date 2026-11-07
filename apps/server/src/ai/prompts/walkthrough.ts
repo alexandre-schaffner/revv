@@ -17,6 +17,7 @@ import {
   type PromptDiffSource,
   REVERTED_FILE_STATUS,
 } from "../../services/walkthrough/prompt-files";
+import { FILE_TIERS } from "../jev/job-start";
 import { fillTemplate } from "./fill-template";
 import { renderRiskTiers } from "./risk-tiers";
 import WALKTHROUGH_ARTIFACTS_PROMPT from "./walkthrough-artifacts.md" with { type: "text" };
@@ -92,20 +93,8 @@ export function buildWalkthroughSystemPrompt(mode: WalkthroughMode = REVIEW_MODE
 }
 
 function tierLabel(tier: number | null): string {
-  switch (tier) {
-    case 0:
-      return "tier 0 · generated";
-    case 1:
-      return "tier 1 · mechanical";
-    case 2:
-      return "tier 2 · routine";
-    case 3:
-      return "tier 3 · logic";
-    case 4:
-      return "tier 4 · critical";
-    default:
-      return "unscored";
-  }
+  const level = tier === null ? undefined : FILE_TIERS[tier];
+  return level === undefined ? "unscored" : `tier ${tier} · ${level.label}`;
 }
 
 function leadRange(lead: WalkthroughLead): string {
