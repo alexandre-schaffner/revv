@@ -12,7 +12,6 @@ import type {
   WalkthroughState,
 } from "@revv/shared";
 import type { Db } from "../../db";
-import { readWalkthroughLeads } from "../walkthrough-leads";
 import {
   decodeIssue,
   decodeRating,
@@ -23,6 +22,7 @@ import {
   loadWalkthroughRow,
   type WalkthroughRow,
 } from "./content";
+import { readWalkthroughLeads } from "./leads";
 
 function priorReviewOf(
   db: Db,

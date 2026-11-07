@@ -7,24 +7,18 @@
 
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import { walkthroughBlocks } from "../db/schema/walkthrough-blocks";
-import { walkthroughIssues } from "../db/schema/walkthrough-issues";
-import { walkthroughLeads } from "../db/schema/walkthrough-leads";
-import { walkthroughRatings } from "../db/schema/walkthrough-ratings";
-import { walkthroughSemanticSteps } from "../db/schema/walkthrough-semantic-steps";
-import { walkthroughs } from "../db/schema/walkthroughs";
-import { ImportError } from "../domain/errors";
-import { debug } from "../logger";
-import { DbService } from "./Db";
-import {
-  blockId,
-  blockOrder,
-  issueId,
-  normalizeProviderConfig,
-  semanticStepId,
-} from "./walkthrough/content";
-import type { WalkthroughSnapshotV2 } from "./walkthrough-cache-format";
-import { validateSnapshot } from "./walkthrough-snapshot";
+import { walkthroughBlocks } from "../../db/schema/walkthrough-blocks";
+import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
+import { walkthroughLeads } from "../../db/schema/walkthrough-leads";
+import { walkthroughRatings } from "../../db/schema/walkthrough-ratings";
+import { walkthroughSemanticSteps } from "../../db/schema/walkthrough-semantic-steps";
+import { walkthroughs } from "../../db/schema/walkthroughs";
+import { ImportError } from "../../domain/errors";
+import { debug } from "../../logger";
+import { DbService } from "../Db";
+import type { WalkthroughSnapshotV2 } from "./cache-format";
+import { blockId, blockOrder, issueId, normalizeProviderConfig, semanticStepId } from "./content";
+import { validateSnapshot } from "./snapshot";
 
 export class WalkthroughSnapshotImporter extends Context.Service<
   WalkthroughSnapshotImporter,

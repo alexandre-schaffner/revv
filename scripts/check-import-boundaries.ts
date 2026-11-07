@@ -4,14 +4,12 @@ import { dirname, join, relative } from "node:path";
 const repoRoot = import.meta.dir.replace(/\/scripts$/, "");
 
 const featureRoots = [
-  /^apps\/server\/src\/services\/WalkthroughJobs\.ts$/,
-  /^apps\/server\/src\/services\/walkthrough-[^/]+\.ts$/,
   /^apps\/server\/src\/services\/walkthrough\//,
-  /^apps\/server\/src\/services\/jobs\/agent-jobs\.ts$/,
+  /^apps\/server\/src\/services\/hunk-scan\//,
+  /^apps\/server\/src\/services\/jobs\//,
   /^apps\/server\/src\/routes\/chat(?:-|\.ts)/,
   /^apps\/server\/src\/services\/Chat[A-Za-z].*\.ts$/,
-  /^apps\/server\/src\/services\/ProjectRecapJobs\.ts$/,
-  /^apps\/server\/src\/services\/recap-[^/]+\.ts$/,
+  /^apps\/server\/src\/services\/recaps\/(?:ProjectRecapJobs|request|source-bundle)\.ts$/,
   /^apps\/server\/src\/ai\/providers\/recap(?:-|\/)/,
   /^apps\/server\/src\/services\/stacks\/(?:StackBriefJobs|StackReview)\.ts$/,
   /^apps\/server\/src\/ai\/providers\/stack-brief(?:-|\/)/,

@@ -15,7 +15,7 @@ import { journeyKeywordList } from "../../services/walkthrough/content";
 import {
   type PromptDiffSource,
   REVERTED_FILE_STATUS,
-} from "../../services/walkthrough-prompt-files";
+} from "../../services/walkthrough/prompt-files";
 import { fillTemplate } from "./fill-template";
 import { renderRiskTiers } from "./risk-tiers";
 import WALKTHROUGH_ARTIFACTS_PROMPT from "./walkthrough-artifacts.md" with { type: "text" };

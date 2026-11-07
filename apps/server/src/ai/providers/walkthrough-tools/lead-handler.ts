@@ -5,7 +5,7 @@ import type { WalkthroughLead } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughLeads } from "../../../db/schema/walkthrough-leads";
-import { findUnresolvedLeads, readWalkthroughLead } from "../../../services/walkthrough-leads";
+import { findUnresolvedLeads, readWalkthroughLead } from "../../../services/walkthrough/leads";
 import { decodePlainText } from "../agent-text";
 import { fail, ok } from "../mcp-tool-gateway";
 import { openForWrite } from "./phases";

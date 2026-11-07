@@ -5,8 +5,8 @@ import type { Db } from "../db/index";
 import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
 import type { Realtime } from "./Realtime";
-import type { WalkthroughService } from "./Walkthrough";
-import type { WalkthroughJobs } from "./WalkthroughJobs";
+import type { WalkthroughService } from "./walkthrough/Walkthrough";
+import type { WalkthroughJobs } from "./walkthrough/WalkthroughJobs";
 
 export interface CycleOutcome {
   readonly allRepos: readonly Repository[];

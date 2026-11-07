@@ -4,8 +4,8 @@
 import type { ProjectRecap, ProjectRecapStatus, RecapStreamEvent } from "@revv/shared";
 import { Effect } from "effect";
 import { AppRuntime } from "../../runtime";
-import { ProjectRecapService } from "../../services/ProjectRecap";
-import { ProjectRecapJobs } from "../../services/ProjectRecapJobs";
+import { ProjectRecapService } from "../../services/recaps/ProjectRecap";
+import { ProjectRecapJobs } from "../../services/recaps/ProjectRecapJobs";
 import { openSse, type SseChannel } from "../sse";
 
 function emitSnapshot(channel: SseChannel<RecapStreamEvent>, row: ProjectRecap): void {

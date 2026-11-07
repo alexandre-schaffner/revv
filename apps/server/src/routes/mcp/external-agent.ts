@@ -17,7 +17,7 @@ import { SyncService } from "../../services/Sync";
 import {
   describeWalkthroughRequestError,
   requestWalkthroughAtHead,
-} from "../../services/walkthrough-request";
+} from "../../services/walkthrough/request";
 import { fireAndForgetThreadEventBroadcast, fireAndForgetWalkthroughEdit } from "./publish";
 import { bindHttp, type ContextResolution, extractBearer } from "./utils";
 

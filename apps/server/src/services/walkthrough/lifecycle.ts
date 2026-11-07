@@ -13,8 +13,8 @@ import { Effect } from "effect";
 import type { Db } from "../../db";
 import type { DbError } from "../../domain/errors";
 import { withDb } from "../../effects/with-db";
-import type { RemoteWalkthroughCache } from "../RemoteWalkthroughCache";
-import type { WalkthroughService } from "../Walkthrough";
+import type { RemoteWalkthroughCache } from "./RemoteWalkthroughCache";
+import type { WalkthroughService } from "./Walkthrough";
 
 /** Why a run ended without completing, and what the user is told. */
 export interface WalkthroughFailure {

@@ -19,11 +19,11 @@ import {
   recapThemeSummaries,
   remoteUsers,
   repositories,
-} from "../db/schema/index";
-import type { RecapSourceBundle } from "../db/schema/project-recaps";
-import { type DbError, RecapNotFoundError } from "../domain/errors";
-import { dbTry } from "../effects/db-try";
-import { DbService } from "./Db";
+} from "../../db/schema/index";
+import type { RecapSourceBundle } from "../../db/schema/project-recaps";
+import { type DbError, RecapNotFoundError } from "../../domain/errors";
+import { dbTry } from "../../effects/db-try";
+import { DbService } from "../Db";
 
 function parseStats(json: string): RecapSummaryStats {
   try {

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import type { ProjectRecap } from "@revv/shared";
 import { Effect } from "effect";
-import { createDb } from "../db/index";
-import { DbError } from "../domain/errors";
-import { makeRecapSources } from "./recap-source-bundle";
+import { createDb } from "../../db/index";
+import { DbError } from "../../domain/errors";
+import { makeRecapSources } from "./source-bundle";
 
 const CLOSED_WINDOW = {
   id: "recap-1",

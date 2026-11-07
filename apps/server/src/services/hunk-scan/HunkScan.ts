@@ -10,18 +10,13 @@
 
 import type { HunkScanEventMessage, HunkScanRow, HunkScanSnapshot } from "@revv/shared";
 import { Context, Deferred, Effect, Exit, type Fiber, Layer, Option, Semaphore } from "effect";
-import { debug } from "../logger";
-import type { CacheService } from "./Cache";
-import type { DbService } from "./Db";
-import {
-  type HunkScanInput,
-  planHunkScan,
-  runHunkScan,
-  selectionFingerprint,
-} from "./hunk-scan-run";
-import { loadHunkScan } from "./hunk-scan-store";
-import type { JevService } from "./Jev";
-import { Realtime } from "./Realtime";
+import { debug } from "../../logger";
+import type { CacheService } from "../Cache";
+import type { DbService } from "../Db";
+import type { JevService } from "../Jev";
+import { Realtime } from "../Realtime";
+import { type HunkScanInput, planHunkScan, runHunkScan, selectionFingerprint } from "./run";
+import { loadHunkScan } from "./store";
 
 /**
  * Scans calling Jev at once. They share one request quota, so more would only

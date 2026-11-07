@@ -2,17 +2,17 @@ import { describe, expect, it } from "bun:test";
 import type { HunkScanEventMessage } from "@revv/shared";
 import { Deferred, Effect, Fiber, Layer } from "effect";
 import { TestClock } from "effect/testing";
-import type { FileLike } from "../ai/jev/state";
-import { createDb, type Db } from "../db/index";
-import { JevUnavailable } from "../domain/errors";
-import { BroadcasterLive } from "./Broadcaster";
-import { CacheServiceLive } from "./Cache";
-import { DbService } from "./Db";
+import type { FileLike } from "../../ai/jev/state";
+import { createDb, type Db } from "../../db/index";
+import { JevUnavailable } from "../../domain/errors";
+import { BroadcasterLive } from "../Broadcaster";
+import { CacheServiceLive } from "../Cache";
+import { DbService } from "../Db";
+import { JevService, type JevState } from "../Jev";
+import { RealtimeLive } from "../Realtime";
 import { HUNK_SCAN_JOIN_BUDGET_MS, HunkScanService, HunkScanServiceLive } from "./HunkScan";
-import { planHunkScan, runHunkScan } from "./hunk-scan-run";
-import { getHunkScan, loadHunkScan, recordHunkSignals } from "./hunk-scan-store";
-import { JevService, type JevState } from "./Jev";
-import { RealtimeLive } from "./Realtime";
+import { planHunkScan, runHunkScan } from "./run";
+import { getHunkScan, loadHunkScan, recordHunkSignals } from "./store";
 
 /** One file, `count` one-line hunks, each adding a distinct line. */
 function fileOf(filename: string, count: number): FileLike {

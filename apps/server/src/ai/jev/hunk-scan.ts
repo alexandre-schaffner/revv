@@ -24,7 +24,7 @@ import { Deferred, Effect } from "effect";
 import { type DbError, JevUnavailable } from "../../domain/errors";
 import { CacheService } from "../../services/Cache";
 import type { DbService } from "../../services/Db";
-import type { HunkScanSeed } from "../../services/hunk-scan-store";
+import type { HunkScanSeed } from "../../services/hunk-scan/store";
 import { JEV_MODEL, JevService } from "../../services/Jev";
 import { optionalJev } from "./optional";
 import { numericAnswerAt } from "./questions";

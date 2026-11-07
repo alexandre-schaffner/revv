@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { canonicalWindow, closedWindows, windowIsCurrent } from "@revv/shared";
-import { planRecapRequest } from "./recap-request";
+import { planRecapRequest } from "./request";
 
 // 2026-06-04 is a Thursday; its ISO week opens on Monday 2026-06-01.
 const NOW = new Date("2026-06-04T09:30:00.000Z");

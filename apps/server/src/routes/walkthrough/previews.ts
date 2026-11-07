@@ -10,7 +10,7 @@ import { Effect } from "effect";
 import { resolveJobStartAnswers } from "../../ai/jev/job-start";
 import type { AppServices } from "../../runtime";
 import { DiffCacheService, toGitHubFileShape } from "../../services/DiffCache";
-import { HunkScanService } from "../../services/HunkScan";
+import { HunkScanService } from "../../services/hunk-scan/HunkScan";
 import { JevService } from "../../services/Jev";
 import { PrContextService } from "../../services/PrContext";
 import { SettingsService } from "../../services/Settings";

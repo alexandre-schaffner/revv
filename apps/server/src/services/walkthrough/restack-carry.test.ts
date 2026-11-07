@@ -7,25 +7,25 @@ import {
 } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
-import { createDb, type Db } from "../db/index";
+import { createDb, type Db } from "../../db/index";
 import {
   walkthroughBlocks,
   walkthroughIssues,
   walkthroughRatings,
   walkthroughSemanticSteps,
   walkthroughs,
-} from "../db/schema";
-import { DbService } from "./Db";
-import { fingerprintFiles } from "./stacks/fingerprint";
+} from "../../db/schema";
+import { DbService } from "../Db";
+import { fingerprintFiles } from "../stacks/fingerprint";
+import { blockId, issueId, semanticStepId } from "./content";
+import { planNewRow, planRestackCarry } from "./launch-plan";
+import { makeWalkthroughLifecycle } from "./lifecycle";
+import { exportWalkthroughSnapshot } from "./snapshot";
 import { WalkthroughService, WalkthroughServiceLive } from "./Walkthrough";
 import {
   WalkthroughSnapshotImporter,
   WalkthroughSnapshotImporterLive,
 } from "./WalkthroughSnapshotImporter";
-import { blockId, issueId, semanticStepId } from "./walkthrough/content";
-import { planNewRow, planRestackCarry } from "./walkthrough/launch-plan";
-import { makeWalkthroughLifecycle } from "./walkthrough/lifecycle";
-import { exportWalkthroughSnapshot } from "./walkthrough-snapshot";
 
 const NOW = "2026-10-16T00:00:00Z";
 const FILES = [{ filename: "src/a.ts", status: "modified", patch: "@@ -1 +1 @@\n+a" }];

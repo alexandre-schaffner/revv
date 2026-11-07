@@ -1,8 +1,7 @@
 // The walkthrough orchestrator and the one owner of its lifecycle (invariants
-// #2, #11). Runs live on the durable agent-job kernel (`jobs/agent-jobs.ts`),
+// #2, #11). Runs live on the durable agent-job kernel (`../jobs/agent-jobs.ts`),
 // which owns the registry, the concurrency budget, cancel, resume-on-boot and
-// the MCP token. What is walkthrough-specific lives here and in
-// `walkthrough/`:
+// the MCP token. What is walkthrough-specific lives here and beside it:
 //
 //   • `startJob` decides, under a per-PR lock, what a request lands on: the
 //     run already live, the row already at the head, or a new row — which
@@ -13,7 +12,7 @@
 //     journal records it: its head, its launch plan, its stack. A row whose
 //     head GitHub (as last synced) has moved past is superseded instead.
 //   • A run ends `complete` exactly when the journal passes the completion
-//     check `complete_walkthrough` uses (`walkthrough/completion.ts`).
+//     check `complete_walkthrough` uses (`completion.ts`).
 //   • `emitEvent` stamps durable events with the row's seq and broadcasts
 //     live-only ones unsequenced.
 //
@@ -33,38 +32,36 @@ import {
 } from "@revv/shared";
 import { SPAN } from "@revv/shared/telemetry";
 import { Cause, Context, Effect, Layer, Option } from "effect";
-import type { JobStartStateInput } from "../ai/jev/state";
-import { withWalkthroughMetrics } from "../ai/providers/walkthrough-metrics";
+import type { JobStartStateInput } from "../../ai/jev/state";
+import { withWalkthroughMetrics } from "../../ai/providers/walkthrough-metrics";
 import {
   AiGenerationError,
   type DbError,
   type GitHubError,
   HeadShaMismatchError,
-} from "../domain/errors";
-import { dbTry } from "../effects/db-try";
-import { withDb } from "../effects/with-db";
-import { debug, logError } from "../logger";
-import { withGitHubOrigin } from "../observability/github-ledger/origin";
-import { withTraceAnchor } from "../observability/span-graft";
-import { AiService } from "./Ai";
-import { CacheService } from "./Cache";
-import { DbService } from "./Db";
-import { DiffCacheService, toGitHubFileShape } from "./DiffCache";
-import { HunkScanService } from "./HunkScan";
-import { JevService } from "./Jev";
-import { makeStartJobMutex } from "./job-mutex";
-import { type AgentRun, makeAgentJobs, type RunOutcome } from "./jobs/agent-jobs";
-import { type PrContextBasic, type PrContextError, PrContextService } from "./PrContext";
-import { Realtime } from "./Realtime";
-import { RemoteWalkthroughCache } from "./RemoteWalkthroughCache";
-import { RepoCloneService } from "./RepoClone";
-import { ReviewService } from "./Review";
-import { SettingsService } from "./Settings";
-import { StackService } from "./stacks/StackService";
-import { WalkthroughService } from "./Walkthrough";
-import { WalkthroughSnapshotImporter } from "./WalkthroughSnapshotImporter";
-import { orchestratorCompletionBlocker } from "./walkthrough/completion";
-import { loadWalkthroughRow, type WalkthroughRow } from "./walkthrough/content";
+} from "../../domain/errors";
+import { dbTry } from "../../effects/db-try";
+import { withDb } from "../../effects/with-db";
+import { debug, logError } from "../../logger";
+import { withGitHubOrigin } from "../../observability/github-ledger/origin";
+import { withTraceAnchor } from "../../observability/span-graft";
+import { AiService } from "../Ai";
+import { CacheService } from "../Cache";
+import { DbService } from "../Db";
+import { DiffCacheService, toGitHubFileShape } from "../DiffCache";
+import { HunkScanService } from "../hunk-scan/HunkScan";
+import { JevService } from "../Jev";
+import { makeStartJobMutex } from "../job-mutex";
+import { type AgentRun, makeAgentJobs, type RunOutcome } from "../jobs/agent-jobs";
+import { type PrContextBasic, type PrContextError, PrContextService } from "../PrContext";
+import { Realtime } from "../Realtime";
+import { RepoCloneService } from "../RepoClone";
+import { ReviewService } from "../Review";
+import { SettingsService } from "../Settings";
+import { StackService } from "../stacks/StackService";
+import type { WalkthroughSnapshotV2 } from "./cache-format";
+import { orchestratorCompletionBlocker } from "./completion";
+import { loadWalkthroughRow, type WalkthroughRow } from "./content";
 import {
   generatedByOf,
   launchFor,
@@ -73,26 +70,24 @@ import {
   planNewRow,
   providerConfigFor,
   type RestackCarry,
-} from "./walkthrough/launch-plan";
+} from "./launch-plan";
 import {
   CANCELLED,
   cloneFailure,
   makeWalkthroughLifecycle,
   type WalkthroughFailure,
-} from "./walkthrough/lifecycle";
-import {
-  MAX_AUTO_CONTINUATIONS,
-  runWalkthrough,
-  type WalkthroughRunInputs,
-} from "./walkthrough/run";
+} from "./lifecycle";
+import type { PromptFile } from "./prompt-files";
+import { RemoteWalkthroughCache } from "./RemoteWalkthroughCache";
+import { MAX_AUTO_CONTINUATIONS, runWalkthrough, type WalkthroughRunInputs } from "./run";
 import {
   type JudgmentServices,
   makeWalkthroughRunContext,
   type WalkthroughRunContext,
-} from "./walkthrough/run-context";
-import type { WalkthroughSnapshotV2 } from "./walkthrough-cache-format";
-import type { PromptFile } from "./walkthrough-prompt-files";
-import { exportWalkthroughSnapshot } from "./walkthrough-snapshot";
+} from "./run-context";
+import { exportWalkthroughSnapshot } from "./snapshot";
+import { WalkthroughService } from "./Walkthrough";
+import { WalkthroughSnapshotImporter } from "./WalkthroughSnapshotImporter";
 
 /** Cap on concurrent walkthrough runs. Additional runs queue on the kernel's semaphore. */
 const MAX_CONCURRENT_JOBS = 5;

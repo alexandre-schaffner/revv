@@ -23,7 +23,7 @@ import {
 import type {
   WalkthroughRequestOutcome,
   WalkthroughRequestRefusal,
-} from "../../services/walkthrough-request";
+} from "../../services/walkthrough/request";
 import { runChatEdit } from "./chat-edit-tools/helpers";
 import type { ChatWalkthroughEditContext } from "./chat-edit-tools/spec";
 import { CHAT_TOOL_SPECS } from "./chat-mcp-tools";
@@ -39,7 +39,7 @@ export interface ExternalReviewToolContext extends ChatWalkthroughEditContext {
   readonly prHeadSha: string | null;
   readonly pushReply: (messageId: string) => Promise<void>;
   readonly pushThreadStatus: (threadId: string) => Promise<void>;
-  /** Start (or join) generation through the orchestrator; see `walkthrough-request.ts`. */
+  /** Start (or join) generation through the orchestrator; see `services/walkthrough/request.ts`. */
   readonly requestWalkthrough: (input: {
     readonly headSha: string;
     readonly generationMode: WalkthroughGenerationMode;

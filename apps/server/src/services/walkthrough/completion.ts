@@ -10,7 +10,6 @@ import type { Db } from "../../db";
 import { walkthroughBlocks } from "../../db/schema/walkthrough-blocks";
 import { walkthroughRatings } from "../../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../../db/schema/walkthrough-semantic-steps";
-import { findUnresolvedLeads, renderUnresolvedLeadsError } from "../walkthrough-leads";
 import {
   findIssuesMissingInlineComment,
   isJourneyChapterText,
@@ -20,6 +19,7 @@ import {
   renderMissingInlineCommentError,
   type WalkthroughRow,
 } from "./content";
+import { findUnresolvedLeads, renderUnresolvedLeadsError } from "./leads";
 
 export interface CompletionBlocker {
   /** `hard` blocks both; `gate-only` blocks the agent's gate but not the orchestrator. */

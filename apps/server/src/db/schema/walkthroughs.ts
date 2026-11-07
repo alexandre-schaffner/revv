@@ -202,7 +202,7 @@ export const walkthroughs = sqliteTable(
     generatedByAvatarContent: text("generated_by_avatar_url"),
     /**
      * Snapshot of the agent provider config captured at job start, as JSON
-     * (`GenerationProviderConfig` in `services/walkthrough-cache-format.ts`). Lets the cache hit
+     * (`GenerationProviderConfig` in `services/walkthrough/cache-format.ts`). Lets the cache hit
      * UI render "claude-opus-4-8 • thinking: high • 1m context" without
      * relying on the live settings (which may have changed since job
      * start). Captured atomically alongside `modelUsed` and never mutated.

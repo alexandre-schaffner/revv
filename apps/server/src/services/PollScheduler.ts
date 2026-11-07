@@ -41,8 +41,8 @@ import { Realtime } from "./Realtime";
 import { RepositoryService } from "./Repository";
 import { SettingsService } from "./Settings";
 import { SyncService } from "./Sync";
-import { WalkthroughService } from "./Walkthrough";
-import { WalkthroughJobs } from "./WalkthroughJobs";
+import { WalkthroughService } from "./walkthrough/Walkthrough";
+import { WalkthroughJobs } from "./walkthrough/WalkthroughJobs";
 
 type PollSchedulerService = {
   readonly start: () => Effect.Effect<void>;

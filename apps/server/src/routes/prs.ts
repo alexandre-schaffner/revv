@@ -34,7 +34,7 @@ import { resolvePullRequestLink } from "../services/pr-deep-link";
 import { RepoCloneService } from "../services/RepoClone";
 import { RepositoryService } from "../services/Repository";
 import { ReviewService } from "../services/Review";
-import { WalkthroughService } from "../services/Walkthrough";
+import { WalkthroughService } from "../services/walkthrough/Walkthrough";
 import { runRoute, withAccount } from "./middleware";
 import { ownedBy } from "./ownership";
 

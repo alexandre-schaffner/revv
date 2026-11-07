@@ -2,7 +2,7 @@ import { Effect } from "effect";
 import { buildRecapActivity } from "../../ai/providers/recap-activity";
 import type { RecapToolContext } from "../../ai/providers/recap-tools";
 import { RECAP_TOOL_BUNDLE } from "../../ai/providers/recap-tools";
-import { ProjectRecapJobs } from "../../services/ProjectRecapJobs";
+import { ProjectRecapJobs } from "../../services/recaps/ProjectRecapJobs";
 import { bindTokenMcpRoute } from "./utils";
 
 export const mcpRecapRoute = bindTokenMcpRoute({

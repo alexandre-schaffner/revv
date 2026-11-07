@@ -14,7 +14,7 @@ import { PrContextService } from "../../../services/PrContext";
 import { PrConversationService } from "../../../services/PrConversation";
 import { type Conversation, ReviewService } from "../../../services/Review";
 import { SyncService } from "../../../services/Sync";
-import { WalkthroughService } from "../../../services/Walkthrough";
+import { WalkthroughService } from "../../../services/walkthrough/Walkthrough";
 
 export interface SubmitReviewInput {
   action: "approve" | "request_changes" | "comment";

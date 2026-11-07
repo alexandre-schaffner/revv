@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { eq } from "drizzle-orm";
 import { Cause, type Context, Effect, Layer } from "effect";
-import { createDb, type Db } from "../db/index";
-import { reviewRounds, walkthroughs } from "../db/schema";
-import { DbService } from "./Db";
+import { createDb, type Db } from "../../db/index";
+import { reviewRounds, walkthroughs } from "../../db/schema";
+import { DbService } from "../Db";
 import { WalkthroughService, WalkthroughServiceLive } from "./Walkthrough";
 
 /** Rows for PR `pr-1`, with foreign keys off so the PR / session rows needn't exist. */

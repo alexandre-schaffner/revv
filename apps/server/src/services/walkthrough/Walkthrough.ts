@@ -17,22 +17,23 @@ import type {
 } from "@revv/shared";
 import { and, asc, desc, eq, inArray, ne, type SQL } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import type { Db } from "../db";
-import { commentThreads } from "../db/schema/comment-threads";
-import { pullRequests } from "../db/schema/pull-requests";
-import { avatarOfPrLogin } from "../db/schema/remote-users";
-import { repositories } from "../db/schema/repositories";
-import { reviewRounds } from "../db/schema/review-rounds";
-import { walkthroughIssues } from "../db/schema/walkthrough-issues";
+import type { Db } from "../../db";
+import { commentThreads } from "../../db/schema/comment-threads";
+import { pullRequests } from "../../db/schema/pull-requests";
+import { avatarOfPrLogin } from "../../db/schema/remote-users";
+import { repositories } from "../../db/schema/repositories";
+import { reviewRounds } from "../../db/schema/review-rounds";
+import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
 import {
   type DiffFingerprint,
   type WalkthroughLaunchPlan,
   walkthroughs,
-} from "../db/schema/walkthroughs";
-import type { DbError } from "../domain/errors";
-import { dbTry, tryDb } from "../effects/db-try";
-import { DbService } from "./Db";
-import type { PrCommit } from "./github/pulls";
+} from "../../db/schema/walkthroughs";
+import type { DbError } from "../../domain/errors";
+import { dbTry, tryDb } from "../../effects/db-try";
+import { DbService } from "../Db";
+import type { PrCommit } from "../github/pulls";
+import type { GeneratedBy, GenerationProviderConfig } from "./cache-format";
 import {
   decodeBlock,
   decodeIssue,
@@ -43,10 +44,9 @@ import {
   finishedReview,
   isRatedAxis,
   loadContentRows,
-} from "./walkthrough/content";
-import { deriveRoundFocusTitle } from "./walkthrough/round-title";
-import type { GeneratedBy, GenerationProviderConfig } from "./walkthrough-cache-format";
-import { loadWalkthroughLeads } from "./walkthrough-leads";
+} from "./content";
+import { loadWalkthroughLeads } from "./leads";
+import { deriveRoundFocusTitle } from "./round-title";
 
 function rowToWalkthrough(
   db: Db,

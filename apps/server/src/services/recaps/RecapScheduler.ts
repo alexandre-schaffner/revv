@@ -13,14 +13,14 @@
 
 import { closedWindows, type RecapPeriod } from "@revv/shared";
 import { Cause, Context, Duration, Effect, Layer, Ref, Schedule, Stream } from "effect";
-import { makeRestartableLoop } from "../effects/restartable-loop";
-import { withDb } from "../effects/with-db";
-import { debug, logError } from "../logger";
-import { withGitHubOrigin } from "../observability/github-ledger/origin";
-import { DbService } from "./Db";
+import { makeRestartableLoop } from "../../effects/restartable-loop";
+import { withDb } from "../../effects/with-db";
+import { debug, logError } from "../../logger";
+import { withGitHubOrigin } from "../../observability/github-ledger/origin";
+import { DbService } from "../Db";
+import { RepositoryService } from "../Repository";
+import { SettingsService } from "../Settings";
 import { ProjectRecapJobs } from "./ProjectRecapJobs";
-import { RepositoryService } from "./Repository";
-import { SettingsService } from "./Settings";
 
 /** Recaps are slow-moving. */
 const RECAP_CHECK_INTERVAL_MINUTES = 15;

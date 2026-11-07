@@ -15,13 +15,13 @@ import {
 } from "@revv/shared";
 import { and, asc, eq } from "drizzle-orm";
 import { Effect } from "effect";
-import { type HunkLead, hunkScanLeads } from "../ai/jev/hunk-scan";
-import type { Db } from "../db";
-import { walkthroughLeads } from "../db/schema/walkthrough-leads";
-import { walkthroughs } from "../db/schema/walkthroughs";
-import { dbTry } from "../effects/db-try";
-import { logError } from "../logger";
-import type { PromptFilesResult } from "./walkthrough-prompt-files";
+import { type HunkLead, hunkScanLeads } from "../../ai/jev/hunk-scan";
+import type { Db } from "../../db";
+import { walkthroughLeads } from "../../db/schema/walkthrough-leads";
+import { walkthroughs } from "../../db/schema/walkthroughs";
+import { dbTry } from "../../effects/db-try";
+import { logError } from "../../logger";
+import type { PromptFilesResult } from "./prompt-files";
 
 type Row = typeof walkthroughLeads.$inferSelect;
 

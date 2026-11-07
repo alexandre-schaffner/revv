@@ -22,41 +22,41 @@ import type {
 import { rollingWindow } from "@revv/shared";
 import { SPAN } from "@revv/shared/telemetry";
 import { Context, Effect, Layer } from "effect";
-import { runRecapAgentViaAcp } from "../ai/providers/recap-acp";
-import { type RecapToolContext, recapCompletionBlocker } from "../ai/providers/recap-tools";
-import type { DbError, RecapNotFoundError } from "../domain/errors";
-import { dbTry } from "../effects/db-try";
-import { withDb } from "../effects/with-db";
-import { debug } from "../logger";
-import { withGitHubOrigin } from "../observability/github-ledger/origin";
-import { withTraceAnchor } from "../observability/span-graft";
-import { DbService } from "./Db";
-import { DiffCacheService } from "./DiffCache";
-import { GitHubGateway } from "./github/gateway";
-import { makeStartJobMutex } from "./job-mutex";
-import { makeSubscriberRegistry, type SubscriberChannel } from "./job-subscribers";
+import { runRecapAgentViaAcp } from "../../ai/providers/recap-acp";
+import { type RecapToolContext, recapCompletionBlocker } from "../../ai/providers/recap-tools";
+import type { DbError, RecapNotFoundError } from "../../domain/errors";
+import { dbTry } from "../../effects/db-try";
+import { withDb } from "../../effects/with-db";
+import { debug } from "../../logger";
+import { withGitHubOrigin } from "../../observability/github-ledger/origin";
+import { withTraceAnchor } from "../../observability/span-graft";
+import { DbService } from "../Db";
+import { DiffCacheService } from "../DiffCache";
+import { GitHubGateway } from "../github/gateway";
+import { makeStartJobMutex } from "../job-mutex";
+import { makeSubscriberRegistry, type SubscriberChannel } from "../job-subscribers";
 import {
   type AgentJobs,
   type AgentRun,
   makeAgentJobs,
   type RunEnd,
   type RunOutcome,
-} from "./jobs/agent-jobs";
+} from "../jobs/agent-jobs";
 import {
   newToolGate,
   runToolGatedTurn,
   TOOL_GATED_FAILURES,
   type ToolGate,
   toolGateHooks,
-} from "./jobs/tool-gated-run";
-import { PrContextService } from "./PrContext";
-import { PrMirror } from "./PrMirror";
+} from "../jobs/tool-gated-run";
+import { PrContextService } from "../PrContext";
+import { PrMirror } from "../PrMirror";
+import { PullRequestService } from "../PullRequest";
+import { Realtime } from "../Realtime";
+import { SettingsService } from "../Settings";
 import { ProjectRecapService } from "./ProjectRecap";
-import { PullRequestService } from "./PullRequest";
-import { Realtime } from "./Realtime";
-import { planRecapRequest, type RecapIntent } from "./recap-request";
-import { makeRecapSources } from "./recap-source-bundle";
-import { SettingsService } from "./Settings";
+import { planRecapRequest, type RecapIntent } from "./request";
+import { makeRecapSources } from "./source-bundle";
 
 /** Cap on concurrent recap jobs. Lower than walkthroughs — recap calls are heavier per turn. */
 export const MAX_CONCURRENT_RECAP_JOBS = 2;

@@ -29,11 +29,12 @@ import {
   isHunkRowPending,
 } from "@revv/shared";
 import { Effect } from "effect";
-import { type HunkSelection, scanHunks, selectHunks } from "../ai/jev/hunk-scan";
-import type { FileLike } from "../ai/jev/state";
-import { debug } from "../logger";
-import type { CacheService } from "./Cache";
-import type { DbService } from "./Db";
+import { type HunkSelection, scanHunks, selectHunks } from "../../ai/jev/hunk-scan";
+import type { FileLike } from "../../ai/jev/state";
+import { debug } from "../../logger";
+import type { CacheService } from "../Cache";
+import type { DbService } from "../Db";
+import { JevService } from "../Jev";
 import {
   closeHunkScan,
   discardHunkScan,
@@ -45,8 +46,7 @@ import {
   recordHunkSignals,
   seedHunkScan,
   toHunkScanRow,
-} from "./hunk-scan-store";
-import { JevService } from "./Jev";
+} from "./store";
 
 export interface HunkScanInput extends HunkScanKey {
   /** Full-PR patches at `headSha`, even for an incremental review, so hunk indices match the Diff tab. */

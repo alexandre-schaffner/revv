@@ -6,7 +6,7 @@ import type { Effect, Option } from "effect";
 import { Context } from "effect";
 import type { BlobCorrupt, BlobStoreUnavailable } from "../../domain/errors";
 
-/** Keys are `CACHE_METADATA_KEYS` in `../walkthrough-cache-format`. */
+/** Keys are `CACHE_METADATA_KEYS` in `../walkthrough/cache-format`. */
 export type BlobMetadata = Record<string, string>;
 
 export interface BlobRecord {

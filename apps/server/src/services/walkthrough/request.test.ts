@@ -1,8 +1,14 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Effect } from "effect";
-import { createDb, type Db } from "../db";
-import { GitHubNetworkError, HeadShaMismatchError } from "../domain/errors";
-import { DbService } from "./Db";
+import { createDb, type Db } from "../../db";
+import { GitHubNetworkError, HeadShaMismatchError } from "../../domain/errors";
+import { DbService } from "../Db";
+import {
+  describeWalkthroughRequestError,
+  MAX_RUNS_PER_HEAD,
+  MAX_RUNS_PER_PR_PER_HOUR,
+  requestWalkthroughAtHead,
+} from "./request";
 import { WalkthroughServiceLive } from "./Walkthrough";
 import {
   type StartJobError,
@@ -10,12 +16,6 @@ import {
   type StartJobResult,
   WalkthroughJobs,
 } from "./WalkthroughJobs";
-import {
-  describeWalkthroughRequestError,
-  MAX_RUNS_PER_HEAD,
-  MAX_RUNS_PER_PR_PER_HOUR,
-  requestWalkthroughAtHead,
-} from "./walkthrough-request";
 
 const OLD_HEAD = "a".repeat(40);
 const NEW_HEAD = "b".repeat(40);

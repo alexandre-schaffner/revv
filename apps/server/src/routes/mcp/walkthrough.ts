@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { TOOL_SPECS, WALKTHROUGH_TOOL_BUNDLE } from "../../ai/providers/walkthrough-tools";
-import { WalkthroughJobs } from "../../services/WalkthroughJobs";
+import { WalkthroughJobs } from "../../services/walkthrough/WalkthroughJobs";
 import { bindTokenMcpRoute } from "./utils";
 
 const TOOL_ACTIVITY = new Map(TOOL_SPECS.map((spec) => [spec.name, spec.activity]));

@@ -1,9 +1,9 @@
 import type { WalkthroughMode } from "@revv/shared";
 import { Effect } from "effect";
 import { PrContextService } from "../../services/PrContext";
-import { WalkthroughService } from "../../services/Walkthrough";
-import { WalkthroughJobs } from "../../services/WalkthroughJobs";
 import { walkthroughPerspective } from "../../services/walkthrough/perspective";
+import { WalkthroughService } from "../../services/walkthrough/Walkthrough";
+import { WalkthroughJobs } from "../../services/walkthrough/WalkthroughJobs";
 
 /**
  * GET /api/reviews/:id/walkthrough/current — full current state for the PR.

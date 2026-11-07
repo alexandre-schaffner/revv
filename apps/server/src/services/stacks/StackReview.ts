@@ -11,7 +11,7 @@ import { logError } from "../../logger";
 import { withGitHubOrigin } from "../../observability/github-ledger/origin";
 import { DbService } from "../Db";
 import { makeStartJobMutex } from "../job-mutex";
-import { WalkthroughJobs } from "../WalkthroughJobs";
+import { WalkthroughJobs } from "../walkthrough/WalkthroughJobs";
 import { StackBriefJobs } from "./StackBriefJobs";
 import { type StackError, StackService } from "./StackService";
 

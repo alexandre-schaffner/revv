@@ -6,24 +6,24 @@
 import type { ProjectRecap, RecapPeriod, RecapSummaryStats, RecapWindowBounds } from "@revv/shared";
 import { windowIsCurrent } from "@revv/shared";
 import { type Context, Effect } from "effect";
-import type { RecapSourcePrDiff, RecapSourcePrDiffFile } from "../ai/providers/recap-tools";
-import type { Db } from "../db";
+import type { RecapSourcePrDiff, RecapSourcePrDiffFile } from "../../ai/providers/recap-tools";
+import type { Db } from "../../db";
 import type {
   RecapSourceBundle,
   RecapSourcePr,
   RecapSourcePrDigest,
-} from "../db/schema/project-recaps";
-import type { DbError } from "../domain/errors";
-import type { ObservedPr } from "../domain/observed-pr";
-import { withDb } from "../effects/with-db";
-import { debug, logError } from "../logger";
-import type { DiffCacheService } from "./DiffCache";
-import type { GitHubGateway } from "./github/gateway";
-import type { GitHubClient } from "./github/transport";
-import type { PrContextService } from "./PrContext";
-import type { PrMirror } from "./PrMirror";
-import type { ArchivedPrWithWalkthrough, PullRequestService } from "./PullRequest";
-import { truncatePatchToChars } from "./patch-truncate";
+} from "../../db/schema/project-recaps";
+import type { DbError } from "../../domain/errors";
+import type { ObservedPr } from "../../domain/observed-pr";
+import { withDb } from "../../effects/with-db";
+import { debug, logError } from "../../logger";
+import type { DiffCacheService } from "../DiffCache";
+import type { GitHubGateway } from "../github/gateway";
+import type { GitHubClient } from "../github/transport";
+import type { PrContextService } from "../PrContext";
+import type { PrMirror } from "../PrMirror";
+import type { ArchivedPrWithWalkthrough, PullRequestService } from "../PullRequest";
+import { truncatePatchToChars } from "../patch-truncate";
 
 export const RECAP_DIFF_MAX_FILES_PER_PR = 25;
 export const RECAP_DIFF_MAX_PATCH_CHARS = 3000;

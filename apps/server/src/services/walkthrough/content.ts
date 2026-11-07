@@ -37,7 +37,7 @@ import { walkthroughRatings } from "../../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../db/schema/walkthroughs";
 import { toMessage, toThread } from "../Review";
-import type { GenerationProviderConfig } from "../walkthrough-cache-format";
+import type { GenerationProviderConfig } from "./cache-format";
 
 export type WalkthroughRow = typeof walkthroughs.$inferSelect;
 type SemanticStepRow = typeof walkthroughSemanticSteps.$inferSelect;

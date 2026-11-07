@@ -36,8 +36,8 @@ import type { CacheService } from "../Cache";
 import type { DbService } from "../Db";
 import type { JevService } from "../Jev";
 import { changedFiles, fingerprintFiles, isComparable } from "../stacks/fingerprint";
-import { type RestackSource, WalkthroughService } from "../Walkthrough";
-import type { GeneratedBy, GenerationProviderConfig } from "../walkthrough-cache-format";
+import type { GeneratedBy, GenerationProviderConfig } from "./cache-format";
+import { type RestackSource, WalkthroughService } from "./Walkthrough";
 
 export interface JobStartPlan {
   readonly assignedRisk: RiskLevel | null;

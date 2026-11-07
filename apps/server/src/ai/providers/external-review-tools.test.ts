@@ -7,7 +7,7 @@ import {
 } from "@revv/shared";
 import { createDb, type Db } from "../../db";
 import { EXTERNAL_AGENT_SCOPES } from "../../services/ExternalIntegrations";
-import type { WalkthroughRequestOutcome } from "../../services/walkthrough-request";
+import type { WalkthroughRequestOutcome } from "../../services/walkthrough/request";
 import {
   EXTERNAL_REVIEW_TOOL_SPECS,
   type ExternalReviewToolContext,

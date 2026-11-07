@@ -16,25 +16,25 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import type { WalkthroughMode } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Option } from "effect";
-import type { Db } from "../db/index";
-import { pullRequests } from "../db/schema/pull-requests";
-import { repositories } from "../db/schema/repositories";
-import { walkthroughs as walkthroughsTable } from "../db/schema/walkthroughs";
-import { CacheSerialization, CacheUnavailable } from "../domain/errors";
-import { debug, logError } from "../logger";
-import { BlobStore } from "./blob/BlobStore";
-import { CacheEligibility } from "./cache-eligibility";
-import { SshSigner } from "./cache-signing/index";
-import { DbService } from "./Db";
-import { SettingsService } from "./Settings";
+import type { Db } from "../../db/index";
+import { pullRequests } from "../../db/schema/pull-requests";
+import { repositories } from "../../db/schema/repositories";
+import { walkthroughs as walkthroughsTable } from "../../db/schema/walkthroughs";
+import { CacheSerialization, CacheUnavailable } from "../../domain/errors";
+import { debug, logError } from "../../logger";
+import { BlobStore } from "../blob/BlobStore";
+import { CacheEligibility } from "../cache-eligibility";
+import { SshSigner } from "../cache-signing/index";
+import { DbService } from "../Db";
+import { SettingsService } from "../Settings";
 import {
   CACHE_METADATA_KEYS,
   CACHE_SCHEMA_VERSION,
   cacheObjectKey,
   cacheSigningMessage,
   type WalkthroughSnapshotV2,
-} from "./walkthrough-cache-format";
-import { exportWalkthroughSnapshot, validateSnapshot } from "./walkthrough-snapshot";
+} from "./cache-format";
+import { exportWalkthroughSnapshot, validateSnapshot } from "./snapshot";
 
 function resolveRepo(
   db: Db,

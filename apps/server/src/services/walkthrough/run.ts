@@ -33,15 +33,15 @@ import type { AiGenerationError, DbError } from "../../domain/errors";
 import { dbTry } from "../../effects/db-try";
 import { debug } from "../../logger";
 import type { AiService } from "../Ai";
-import type { HunkScanService } from "../HunkScan";
+import type { HunkScanService } from "../hunk-scan/HunkScan";
 import { JevService } from "../Jev";
 import type { AgentRun, RunEnd } from "../jobs/agent-jobs";
 import type { RepoCloneService } from "../RepoClone";
-import { leadsRecorded, prepareFirstPassLeads } from "../walkthrough-leads";
-import { type PromptFile, resolveIncrementalPromptFiles } from "../walkthrough-prompt-files";
 import { orchestratorCompletionBlocker } from "./completion";
 import { findIssuesMissingInlineComment } from "./content";
+import { leadsRecorded, prepareFirstPassLeads } from "./leads";
 import { cloneFailure, type WalkthroughFailure } from "./lifecycle";
+import { type PromptFile, resolveIncrementalPromptFiles } from "./prompt-files";
 import type { WalkthroughRunContext } from "./run-context";
 
 /** Auto-continuations a run may take after its first turn (invariant 9). */

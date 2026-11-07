@@ -18,13 +18,13 @@
 import type { WalkthroughGenerationMode, WalkthroughMode } from "@revv/shared";
 import { and, desc, eq, gt } from "drizzle-orm";
 import { Effect } from "effect";
-import { walkthroughs } from "../db/schema/walkthroughs";
-import type { DbError } from "../domain/errors";
-import { dbTry } from "../effects/db-try";
-import { DbService } from "./Db";
+import { walkthroughs } from "../../db/schema/walkthroughs";
+import type { DbError } from "../../domain/errors";
+import { dbTry } from "../../effects/db-try";
+import { DbService } from "../Db";
+import { walkthroughPerspective } from "./perspective";
 import type { WalkthroughService } from "./Walkthrough";
 import { type StartJobError, WalkthroughJobs } from "./WalkthroughJobs";
-import { walkthroughPerspective } from "./walkthrough/perspective";
 
 /** Runs (of any status) at one head before `request_walkthrough` stops starting more. */
 export const MAX_RUNS_PER_HEAD = 3;

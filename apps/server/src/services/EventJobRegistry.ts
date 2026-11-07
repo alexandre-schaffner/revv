@@ -1,5 +1,5 @@
 import type { AcpAgentId } from "@revv/shared";
-import { logError } from "../../logger";
+import { logError } from "../logger";
 
 // Shared backbone for the onboarding install (`Onboarding.ts`) and interactive
 // login (`AgentLogin.ts`) services. Both run one process-lifetime-idempotent job

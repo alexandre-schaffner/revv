@@ -198,7 +198,7 @@ agent tomorrow). Any change that violates them is wrong by construction — push
    in `walkthrough_leads` under ids `L1…Ln` before the prompt goes out, so a resume sees the
    same set; the agent answers each with `resolve_lead` — `confirmed` with the issue it raised,
    or `rejected` with a one-line reason. The scan belongs to the PR head, not the walkthrough: `HunkScanService`
-   (`services/HunkScan.ts`) starts it when the review page loads the diff, and a walkthrough
+   (`services/hunk-scan/HunkScan.ts`) starts it when the review page loads the diff, and a walkthrough
    job for the same head joins that run or reads its result — waiting at most
    `HUNK_SCAN_JOIN_BUDGET_MS`, then starting with the leads answered so far (one run per PR,
    at most two PRs scanning at once; the scan lives in a daemon fiber, so a walkthrough Stop
