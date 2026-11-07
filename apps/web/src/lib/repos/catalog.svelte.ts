@@ -2,6 +2,7 @@
 // GitHub, their open-PR counts, and where a managed clone lands.
 
 import { api } from "$lib/api/client";
+import { call } from "$lib/api/errors";
 import { RequestState } from "$lib/stores/_types";
 import { preloadOwnerHues } from "./avatar-palette";
 
@@ -48,13 +49,10 @@ export function getAvailablePrCountsLoaded(): boolean {
 export async function fetchAvailableRepos(force = false): Promise<void> {
   catalog = RequestState.loading();
   try {
-    const { data, error } = await api.api.github.repos.get({
-      query: { force: force ? "true" : undefined },
-    });
-    if (error || !Array.isArray(data)) {
-      catalog = RequestState.error("Failed to load repositories");
-      return;
-    }
+    const data = await call(
+      api.api.github.repos.get({ query: { force: force ? "true" : undefined } }),
+      "Failed to load repositories",
+    );
     await preloadOwnerHues(data);
     catalog = RequestState.ok(data);
     void fetchAvailablePrCounts(data.map((r) => r.fullName));
@@ -69,8 +67,7 @@ async function fetchAvailablePrCounts(fullNames: string[]): Promise<void> {
     return;
   }
   try {
-    const { data, error } = await api.api.github["pr-counts"].post({ fullNames });
-    if (error) return;
+    const data = await call(api.api.github["pr-counts"].post({ fullNames }), "PR counts failed");
     prCounts = { ...prCounts, ...data.counts };
   } catch {
     // The hint is optional; the list works without counts.

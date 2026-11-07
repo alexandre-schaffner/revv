@@ -5,7 +5,8 @@ import type { MergeMethod, PullRequest } from "@revv/shared";
 import { type ReviewMode, reviewModeFor } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
+import { call } from "$lib/api/errors";
+import { thrownMessage } from "$lib/api/wire";
 import { reasonFor } from "$lib/prs/tagged-prs";
 import { getCurrentUserLogin, hasAttemptedIdentityLoad } from "$lib/stores/auth.svelte";
 
@@ -153,40 +154,19 @@ export function removeRepoPrsLocally(repoId: string): () => void {
   };
 }
 
-// The list reads are DB-only (no GitHub traffic), so they're cheap; the
-// debounce only keeps a reconnect and a focus, or a rapid alt-tab, from
-// reading twice.
-const LIST_REREAD_DEBOUNCE_MS = 4_000;
-let lastListRereadAt = 0;
-
-function rereadLists(): void {
-  const now = Date.now();
-  if (now - lastListRereadAt < LIST_REREAD_DEBOUNCE_MS) return;
-  lastListRereadAt = now;
-  void Promise.all([fetchPrs(), fetchPinnedPrs()]);
-}
-
-/** Updates broadcast while the stream was down reached no one. */
-export function onEventsReconnected(): void {
-  rereadLists();
-}
-
 /**
- * The server's poll fiber sleeps between cycles, so after the machine
- * suspends, or the app sits in the background, the list can be up to a full
- * interval stale with no event inbound to correct it.
+ * Re-read the list and pins (DB-only, cheap): after a reconnect, updates
+ * broadcast meanwhile reached no one; after a return to the window, the
+ * server's poll fiber may have slept through a suspend.
  */
-export function onWindowForeground(): void {
-  rereadLists();
+export function rereadLists(): void {
+  void Promise.all([fetchPrs(), fetchPinnedPrs()]);
 }
 
 export async function fetchPrs(): Promise<void> {
   try {
-    const { data } = await api.api.prs.get();
-    if (Array.isArray(data)) {
-      pullRequests = data;
-      void fetchArchivedPrs();
-    }
+    pullRequests = await call(api.api.prs.get(), "Failed to load pull requests");
+    void fetchArchivedPrs();
   } catch {
     // The next reconnect or focus reads the list again.
   } finally {
@@ -203,8 +183,11 @@ let archivedFetchToken = 0;
 async function fetchArchivedPrs(): Promise<void> {
   const token = ++archivedFetchToken;
   try {
-    const { data } = await api.api.prs.archived.get({ query: archivedAuthorsQuery() });
-    if (token !== archivedFetchToken || !data) return;
+    const data = await call(
+      api.api.prs.archived.get({ query: archivedAuthorsQuery() }),
+      "Failed to load the archive",
+    );
+    if (token !== archivedFetchToken) return;
     archivedPrs = [...data.prs];
     archivedNextCursor = data.nextCursor;
   } catch {
@@ -226,10 +209,13 @@ export async function fetchMoreArchived(): Promise<void> {
   // mid-flight discards this page rather than mixing stale-filter rows in.
   const token = archivedFetchToken;
   try {
-    const { data } = await api.api.prs.archived.get({
-      query: { ...archivedAuthorsQuery(), cursor: archivedNextCursor },
-    });
-    if (token !== archivedFetchToken || !data) return;
+    const data = await call(
+      api.api.prs.archived.get({
+        query: { ...archivedAuthorsQuery(), cursor: archivedNextCursor },
+      }),
+      "Failed to load the archive",
+    );
+    if (token !== archivedFetchToken) return;
     // A `pr:archived` patch may have landed between request and response.
     const existingIds = new Set(archivedPrs.map((p) => p.id));
     const fresh = data.prs.filter((p) => !existingIds.has(p.id));
@@ -256,8 +242,7 @@ export function isPrPinned(prId: string): boolean {
 
 export async function fetchPinnedPrs(): Promise<void> {
   try {
-    const { data } = await api.api.prs.pinned.get();
-    if (Array.isArray(data)) pinnedPrIds = new Set(data);
+    pinnedPrIds = new Set(await call(api.api.prs.pinned.get(), "Failed to load pins"));
   } catch {
     // The next reconnect or focus reads the pins again.
   }
@@ -267,7 +252,7 @@ export async function pinPr(prId: string): Promise<void> {
   if (pinnedPrIds.has(prId)) return;
   pinnedPrIds = new Set(pinnedPrIds).add(prId);
   try {
-    await api.api.prs.pinned.post({ prId });
+    await call(api.api.prs.pinned.post({ prId }), "Failed to pin");
   } catch {
     const next = new Set(pinnedPrIds);
     next.delete(prId);
@@ -281,7 +266,7 @@ export async function unpinPr(prId: string): Promise<void> {
   next.delete(prId);
   pinnedPrIds = next;
   try {
-    await api.api.prs.pinned({ prId }).delete();
+    await call(api.api.prs.pinned({ prId }).delete(), "Failed to unpin");
   } catch {
     pinnedPrIds = new Set(pinnedPrIds).add(prId);
   }
@@ -339,11 +324,10 @@ export async function convertPrToDraft(prId: string): Promise<void> {
   flipPrDraftLocally(prId, true);
 
   try {
-    const { error } = await api.api.prs({ id: prId })["convert-to-draft"].post();
-    if (error) throw new Error(`HTTP ${error.status}`);
+    await call(api.api.prs({ id: prId })["convert-to-draft"].post(), "Failed to convert to draft");
   } catch (e) {
     flipPrDraftLocally(prId, prevIsDraft);
-    toast.error(e instanceof Error ? e.message : "Failed to convert to draft");
+    toast.error(thrownMessage(e));
     throw e;
   }
 }
@@ -356,11 +340,13 @@ export async function markPrReadyForReview(prId: string): Promise<void> {
   flipPrDraftLocally(prId, false);
 
   try {
-    const { error } = await api.api.prs({ id: prId })["ready-for-review"].post();
-    if (error) throw new Error(`HTTP ${error.status}`);
+    await call(
+      api.api.prs({ id: prId })["ready-for-review"].post(),
+      "Failed to mark ready for review",
+    );
   } catch (e) {
     flipPrDraftLocally(prId, prevIsDraft);
-    toast.error(e instanceof Error ? e.message : "Failed to mark ready for review");
+    toast.error(thrownMessage(e));
     throw e;
   }
 }
@@ -380,10 +366,11 @@ export async function closePr(prId: string): Promise<void> {
   const pr = pullRequests.find((p) => p.id === prId);
   if (!pr) {
     // Not known locally: no optimistic move; SSE reconciles.
-    const { error } = await api.api.prs({ id: prId }).close.post();
-    if (error) {
-      toast.error(`Failed to close PR (HTTP ${error.status})`);
-      throw new Error(`HTTP ${error.status}`);
+    try {
+      await call(api.api.prs({ id: prId }).close.post(), "Failed to close PR");
+    } catch (e) {
+      toast.error(thrownMessage(e));
+      throw e;
     }
     return;
   }
@@ -396,24 +383,25 @@ export async function closePr(prId: string): Promise<void> {
   });
 
   try {
-    const { error } = await api.api.prs({ id: prId }).close.post();
-    if (error) throw new Error(`HTTP ${error.status}`);
+    await call(api.api.prs({ id: prId }).close.post(), "Failed to close PR");
   } catch (e) {
     restorePrFromArchive(pr);
-    toast.error(e instanceof Error ? e.message : "Failed to close PR");
+    toast.error(thrownMessage(e));
     throw e;
   }
 }
+
+const MERGE_FAILED = "Failed to merge pull request";
 
 export async function mergePr(prId: string, mergeMethod: MergeMethod): Promise<void> {
   const pr = pullRequests.find((p) => p.id === prId);
   if (!pr) {
     // Not known locally: no optimistic move; SSE reconciles.
-    const { error } = await api.api.prs({ id: prId }).merge.post({ mergeMethod });
-    if (error) {
-      const msg = apiErrorMessage(error, "Failed to merge pull request");
-      toast.error(msg);
-      throw new Error(msg);
+    try {
+      await call(api.api.prs({ id: prId }).merge.post({ mergeMethod }), MERGE_FAILED);
+    } catch (e) {
+      toast.error(thrownMessage(e));
+      throw e;
     }
     toast.success("Pull request merged successfully");
     return;
@@ -427,12 +415,11 @@ export async function mergePr(prId: string, mergeMethod: MergeMethod): Promise<v
   });
 
   try {
-    const { error } = await api.api.prs({ id: prId }).merge.post({ mergeMethod });
-    if (error) throw new Error(apiErrorMessage(error, "Failed to merge pull request"));
+    await call(api.api.prs({ id: prId }).merge.post({ mergeMethod }), MERGE_FAILED);
     toast.success("Pull request merged successfully");
   } catch (e) {
     restorePrFromArchive(pr);
-    toast.error(e instanceof Error ? e.message : "Failed to merge pull request");
+    toast.error(thrownMessage(e));
     throw e;
   }
 }
@@ -444,7 +431,6 @@ export function getPullRequests(): PullRequest[] {
 export function reset(): void {
   pullRequests = [];
   prsFetchAttempted = false;
-  lastListRereadAt = 0;
   archivedPrs = [];
   linkedPrs = new Map();
   archivedNextCursor = null;

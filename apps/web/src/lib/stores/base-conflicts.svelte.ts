@@ -173,8 +173,8 @@ export function resolveBaseConflicts(prId: string, expectedHeadSha: string): voi
   }).finally(() => {
     if (controller.signal.aborted) return;
     resolveStreams.delete(prId);
-    const version = checks.entry(prId).version;
-    checkBaseConflicts(prId, version === "" ? null : version, { force: true });
+    const asked = checks.argOf(prId);
+    if (asked) checkBaseConflicts(prId, asked.headSha, { force: true });
   });
 }
 

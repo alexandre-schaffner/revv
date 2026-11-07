@@ -4,7 +4,8 @@
 import type { ApiErrorCode, CloneStatus, Repository } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
-import { apiErrorBody, apiErrorMessage } from "$lib/api/errors";
+import { ApiError, call } from "$lib/api/errors";
+import { thrownMessage } from "$lib/api/wire";
 import { clearOwnerHueCache, preloadOwnerHues } from "$lib/repos/avatar-palette";
 import { requestSync } from "$lib/stores/sync.svelte";
 import { fetchPrs, removeRepoPrsLocally } from "./prs.svelte";
@@ -40,8 +41,7 @@ async function setRepositories(repos: Repository[]): Promise<void> {
 
 export async function fetchRepos(): Promise<void> {
   try {
-    const { data } = await api.api.repos.get();
-    if (Array.isArray(data)) await setRepositories(data);
+    await setRepositories(await call(api.api.repos.get(), "Failed to load repositories"));
   } catch {
     // The next reconnect or focus reads the list again.
   } finally {
@@ -65,25 +65,9 @@ export function onReposCloneStatus(data: {
   );
 }
 
-// The read is DB-only and cheap; the debounce only keeps a reconnect and a
-// focus, or a rapid alt-tab, from reading twice.
-const REREAD_DEBOUNCE_MS = 4_000;
-let lastRereadAt = 0;
-
-function rereadRepos(): void {
-  const now = Date.now();
-  if (now - lastRereadAt < REREAD_DEBOUNCE_MS) return;
-  lastRereadAt = now;
+/** Re-read the list (DB-only, cheap) after a reconnect or a return to the window. */
+export function rereadRepos(): void {
   void fetchRepos();
-}
-
-/** Updates broadcast while the stream was down reached no one. */
-export function onEventsReconnected(): void {
-  rereadRepos();
-}
-
-export function onWindowForeground(): void {
-  rereadRepos();
 }
 
 export type AddRepoBody =
@@ -117,14 +101,15 @@ function accessAction(value: unknown): AddRepoError["action"] {
 
 export async function addRepo(input: AddRepoInput): Promise<void> {
   const body = typeof input === "string" ? { fullName: input } : input;
-  const { error } = await api.api.repos.post(body);
-  if (error) {
-    const refusal = apiErrorBody(error);
+  try {
+    await call(api.api.repos.post(body), "Failed to add repository");
+  } catch (e) {
+    if (!(e instanceof ApiError)) throw e;
     throw new AddRepoError(
-      apiErrorMessage(error, "Failed to add repository"),
-      refusal?.code ?? null,
-      typeof refusal?.detail === "string" ? refusal.detail : null,
-      accessAction(refusal?.action),
+      e.message,
+      e.code,
+      typeof e.body?.detail === "string" ? e.body.detail : null,
+      accessAction(e.body?.action),
     );
   }
   await fetchRepos();
@@ -147,15 +132,14 @@ export async function deleteRepo(id: string): Promise<void> {
   const restorePrs = removeRepoPrsLocally(id);
 
   try {
-    const { error } = await api.api.repos({ id }).delete();
-    if (error) throw new Error(apiErrorMessage(error, "Failed to remove repository"));
+    await call(api.api.repos({ id }).delete(), "Failed to remove repository");
   } catch (e) {
     toast.dismiss(toastId);
     if (repo && !repositories.some((r) => r.id === id)) {
       repositories = [...repositories.slice(0, index), repo, ...repositories.slice(index)];
     }
     restorePrs();
-    toast.error(e instanceof Error ? e.message : "Failed to remove repository");
+    toast.error(thrownMessage(e));
     throw e;
   }
 
@@ -166,12 +150,12 @@ export async function deleteRepo(id: string): Promise<void> {
 
 export async function retryClone(id: string): Promise<void> {
   // The spinner shows at once; the server's background clone then broadcasts
-  // `repos:clone-status`. A failed POST leaves the indicator actionable.
+  // `repos:clone-status`. A refused POST gets none, so it leaves the indicator actionable.
   onReposCloneStatus({ repoId: id, status: "pending", error: "" });
   try {
-    await api.api.repos({ id })["retry-clone"].post();
+    await call(api.api.repos({ id })["retry-clone"].post(), "Failed to retry clone");
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Failed to retry clone";
+    const msg = thrownMessage(e);
     onReposCloneStatus({ repoId: id, status: "error", error: msg });
     toast.error(msg);
     throw e;
@@ -183,5 +167,4 @@ export function reset(): void {
   clearOwnerHueCache();
   repositories = [];
   reposFetchAttempted = false;
-  lastRereadAt = 0;
 }

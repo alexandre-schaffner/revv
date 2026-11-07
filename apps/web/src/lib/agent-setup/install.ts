@@ -1,7 +1,7 @@
 import type { AcpAgentId, InstallEvent } from "@revv/shared";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
-import { SseHttpError, streamSse } from "$lib/api/sse-stream";
+import { call } from "$lib/api/errors";
+import { sseErrorMessage, streamSse } from "$lib/api/sse-stream";
 
 export type AgentInstallState =
   | { kind: "idle" }
@@ -25,9 +25,7 @@ export function appendAgentInstallLog(
 }
 
 async function startAgentInstall(agent: AcpAgentId): Promise<{ jobId: string }> {
-  const { data, error } = await api.api.onboarding.install.post({ agent });
-  if (error) throw new Error(apiErrorMessage(error, "Failed to start installer"));
-  return data;
+  return call(api.api.onboarding.install.post({ agent }), "Failed to start installer");
 }
 
 export async function runAgentInstall(
@@ -43,6 +41,7 @@ export async function runAgentInstall(
       onEvent,
     });
   } catch (e) {
-    throw e instanceof SseHttpError ? new Error(`Stream failed (HTTP ${e.status})`) : e;
+    const message = sseErrorMessage(e, "The installer stream was refused");
+    throw message === null ? e : new Error(message);
   }
 }

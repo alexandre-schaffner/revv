@@ -5,7 +5,8 @@ mock.module("$lib/session/token.svelte", () => ({
   authHeaders: () => ({ Authorization: "Bearer t" }),
 }));
 
-const { SseFrameError, SseHttpError, SseIdleError, streamSse } = await import("./sse-stream");
+const { SseFrameError, SseHttpError, SseIdleError, sseError, sseErrorMessage, streamSse } =
+  await import("./sse-stream");
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -149,5 +150,37 @@ describe("streamSse", () => {
     const pending = collect({ signal: ctrl.signal, idleTimeoutMs: null }).catch((e: unknown) => e);
     ctrl.abort();
     expect(await pending).toMatchObject({ name: "AbortError" });
+  });
+});
+
+describe("sseError", () => {
+  it("keeps a refusal's code, details and wording", () => {
+    const err = new SseHttpError(409, "Conflict", {
+      code: "WORKTREE_BLOCKED",
+      message: "Commit first",
+      commits: ["a"],
+    });
+    expect(sseError(err, "Refused")).toEqual({
+      code: "WORKTREE_BLOCKED",
+      message: "Commit first",
+      commits: ["a"],
+    });
+  });
+
+  it("words a bodyless refusal with the fallback and status", () => {
+    expect(sseError(new SseHttpError(500, "Internal", null), "Refused")).toEqual({
+      code: "UNKNOWN",
+      message: "Refused (HTTP 500)",
+    });
+  });
+
+  it("maps frame errors, idle timeouts and connection drops; an abort is no error", () => {
+    expect(sseError(new SseFrameError("GENERATION_ERROR", "boom"), "x")).toEqual({
+      code: "GENERATION_ERROR",
+      message: "boom",
+    });
+    expect(sseError(new SseIdleError(90_000), "x")?.code).toBe("NETWORK_ERROR");
+    expect(sseErrorMessage(new TypeError("Load failed"), "x")).toMatch(/^Lost connection/);
+    expect(sseErrorMessage(new DOMException("aborted", "AbortError"), "x")).toBeNull();
   });
 });

@@ -8,20 +8,14 @@ import { fetchAvailableAgents, fetchSessionContext } from "./api";
 // exist before the first message. It is heavier than a plain read, so it runs
 // once per PR, on the first composer focus; a failed warm stays retryable.
 const warmed = new Set<string>();
-const warming = new Set<string>();
 
-const contexts = createResource<string, ChatSessionContext>({
+const contexts = createResource<{ readonly warm: boolean }, ChatSessionContext>({
   freshForMs: Number.POSITIVE_INFINITY,
   keepDataOnError: true,
-  fetch: async (prId) => {
-    const warm = warming.has(prId);
-    try {
-      const context = await fetchSessionContext(prId, { warm });
-      if (warm) warmed.add(prId);
-      return { status: "ok", data: context };
-    } finally {
-      if (warm) warming.delete(prId);
-    }
+  fetch: async (prId, { warm }) => {
+    const context = await fetchSessionContext(prId, { warm });
+    if (warm) warmed.add(prId);
+    return { status: "ok", data: context };
   },
 });
 
@@ -39,7 +33,7 @@ export function getChatSessionContext(prId: string): ChatSessionContext | null {
 }
 
 export function loadChatSessionContext(prId: string): void {
-  void contexts.load(prId, prId);
+  void contexts.load(prId, { warm: false });
 }
 
 /**
@@ -47,13 +41,13 @@ export function loadChatSessionContext(prId: string): void {
  * commands and full repo file list exist only once that turn has ended.
  */
 export function refreshChatSessionContext(prId: string): void {
-  void contexts.refresh(prId, prId);
+  void contexts.refresh(prId, { warm: false });
 }
 
 export function warmChatSessionContext(prId: string): void {
-  if (warmed.has(prId) || warming.has(prId)) return;
-  warming.add(prId);
-  void contexts.refresh(prId, prId);
+  if (warmed.has(prId)) return;
+  if (contexts.entry(prId).loading && contexts.argOf(prId)?.warm) return;
+  void contexts.refresh(prId, { warm: true });
 }
 
 export function getChatMentionPaths(
@@ -79,5 +73,4 @@ export function reset(): void {
   contexts.reset();
   planModes.reset();
   warmed.clear();
-  warming.clear();
 }

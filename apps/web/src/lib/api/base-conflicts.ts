@@ -1,7 +1,7 @@
 import type { BaseConflictFrame, BaseConflictsCheck } from "@revv/shared";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
-import { SseHttpError, streamSse } from "$lib/api/sse-stream";
+import { call } from "$lib/api/errors";
+import { SseHttpError, sseErrorMessage, streamSse } from "$lib/api/sse-stream";
 import { thrownMessage } from "$lib/api/wire";
 
 export async function fetchBaseConflicts(
@@ -9,12 +9,11 @@ export async function fetchBaseConflicts(
   force: boolean,
 ): Promise<{ ok: true; check: BaseConflictsCheck } | { ok: false; message: string }> {
   try {
-    const { data, error } = await api.api
-      .prs({ id: prId })
-      ["base-conflicts"].get({ query: force ? { force: "1" } : {} });
-    if (error)
-      return { ok: false, message: apiErrorMessage(error, "Couldn't check for conflicts") };
-    return { ok: true, check: data };
+    const check = await call(
+      api.api.prs({ id: prId })["base-conflicts"].get({ query: force ? { force: "1" } : {} }),
+      "Couldn't check for conflicts",
+    );
+    return { ok: true, check };
   } catch (e) {
     return { ok: false, message: thrownMessage(e) };
   }
@@ -49,12 +48,9 @@ export async function streamBaseConflictResolve(
       },
     });
   } catch (e) {
-    if (callbacks.signal?.aborted) return;
-    if (e instanceof SseHttpError) {
-      callbacks.onError(e.serverMessage ?? `Couldn't start (HTTP ${e.status})`);
-    } else if (!sawResult) {
-      callbacks.onError(thrownMessage(e));
-    }
+    const message = sseErrorMessage(e, "Couldn't start");
+    if (callbacks.signal?.aborted || message === null) return;
+    if (e instanceof SseHttpError || !sawResult) callbacks.onError(message);
     return;
   }
   if (!sawResult) callbacks.onError("Lost the connection before the run finished");

@@ -8,7 +8,8 @@ import {
 import { toast } from "svelte-sonner";
 import { goto } from "$app/navigation";
 import { api } from "$lib/api/client";
-import { bodyMessage } from "$lib/api/errors";
+import { apiErrorCode, call } from "$lib/api/errors";
+import { type EdenData, thrownMessage } from "$lib/api/wire";
 import { fetchDefaultCloneBaseDir, getDefaultCloneBaseDir } from "$lib/repos/catalog.svelte";
 import { switchSession } from "$lib/session/lifecycle.svelte";
 import {
@@ -187,44 +188,36 @@ async function resolveActiveLocator(locator: PullRequestLocator): Promise<void> 
     }
   }, 250);
 
+  let result: EdenData<(typeof api.api.prs)["resolve-link"]["post"]>;
   try {
-    const { data: result, error } = await api.api.prs["resolve-link"].post(locator, {
-      fetch: { signal: controller.signal },
-    });
-    if (version !== requestVersion) return;
-
-    if (error?.status === 401) {
+    result = await call(
+      api.api.prs["resolve-link"].post(locator, { fetch: { signal: controller.signal } }),
+      "The local Revv server could not resolve this link",
+    );
+  } catch (error) {
+    if (controller.signal.aborted || version !== requestVersion) return;
+    const code = apiErrorCode(error);
+    if (code === "UNAUTHORIZED" || code === "GITHUB_AUTH_ERROR") {
       await showAccountRecovery(locator);
-      return;
-    }
-    if (error?.status === 403) {
+    } else {
       state = {
         kind: "error",
         locator,
-        reason: "forbidden",
-        message: `The selected account does not have access to ${locatorLabel(locator)}.`,
+        reason: code === "FORBIDDEN" ? "forbidden" : code === "NOT_FOUND" ? "not-found" : "network",
+        message:
+          code === "FORBIDDEN"
+            ? `The selected account does not have access to ${locatorLabel(locator)}.`
+            : code === "NOT_FOUND"
+              ? `${locatorLabel(locator)} may have been deleted, or the link may be out of date.`
+              : thrownMessage(error),
       };
-      return;
     }
-    if (error?.status === 404) {
-      state = {
-        kind: "error",
-        locator,
-        reason: "not-found",
-        message: `${locatorLabel(locator)} may have been deleted, or the link may be out of date.`,
-      };
-      return;
-    }
-    if (error) {
-      state = {
-        kind: "error",
-        locator,
-        reason: "network",
-        message: bodyMessage(error.value) ?? "The local Revv server could not resolve this link.",
-      };
-      return;
-    }
+    finishResolution(version);
+    return;
+  }
+  if (version !== requestVersion) return;
 
+  try {
     if (result.status === "account_mismatch") {
       await showAccountRecovery(locator);
       return;
@@ -244,19 +237,17 @@ async function resolveActiveLocator(locator: PullRequestLocator): Promise<void> 
     state = { kind: "idle" };
     await goto(`/review/${result.pullRequest.id}`);
   } catch (error) {
-    if (controller.signal.aborted || version !== requestVersion) return;
-    state = {
-      kind: "error",
-      locator,
-      reason: "network",
-      message: error instanceof Error ? error.message : "Revv could not reach its local server.",
-    };
+    if (version !== requestVersion) return;
+    state = { kind: "error", locator, reason: "network", message: thrownMessage(error) };
   } finally {
-    if (version === requestVersion) {
-      activeRequest = null;
-      clearLoadingTimer();
-    }
+    finishResolution(version);
   }
+}
+
+function finishResolution(version: number): void {
+  if (version !== requestVersion) return;
+  activeRequest = null;
+  clearLoadingTimer();
 }
 
 export async function openPrDeepLink(rawUrl: string): Promise<void> {

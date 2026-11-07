@@ -4,6 +4,8 @@
 
 import type { WalkthroughMode } from "@revv/shared";
 import { api } from "$lib/api/client";
+import { ApiError, call } from "$lib/api/errors";
+import { thrownMessage } from "$lib/api/wire";
 import { startingEntry } from "./reducer";
 import {
   clearPendingAction,
@@ -55,17 +57,14 @@ async function requestStart(
   generationMode: GenerationMode,
 ): Promise<string | null> {
   try {
-    const { data, error } = await api.api
-      .reviews({ id: prId })
-      .walkthrough.start.post({ mode, generationMode });
-    if (error) {
-      failStart(prId, `Failed to start walkthrough (HTTP ${error.status}).`);
-      return null;
-    }
-    return data && "walkthroughId" in data ? data.walkthroughId : null;
+    const { walkthroughId } = await call(
+      api.api.reviews({ id: prId }).walkthrough.start.post({ mode, generationMode }),
+      "Failed to start walkthrough",
+    );
+    return walkthroughId;
   } catch (e) {
-    wtTrace("lifecycle", `start prId=${prId} error=${e instanceof Error ? e.message : String(e)}`);
-    failStart(prId, "Failed to start walkthrough");
+    wtTrace("lifecycle", `start prId=${prId} error=${thrownMessage(e)}`);
+    failStart(prId, e instanceof ApiError ? e.message : "Failed to start walkthrough");
     return null;
   }
 }
@@ -169,30 +168,26 @@ export function resume(prId: string, mode: WalkthroughMode = getSelectedMode(prI
         e.streamError = message;
         e.streamEndReason = null;
       });
+    let walkthroughId: string;
     try {
-      const { data, error } = await api.api.reviews({ id: prId }).walkthrough.resume.post({ mode });
-      if (error) {
-        // The route's typed errors don't list it, but a missing row answers 404.
-        const status: number = error.status;
-        if (status === 404) {
-          // Nothing to resume: review the head afresh.
-          await runRegenerate(prId, mode, "incremental");
-          return;
-        }
-        failResume(`Failed to resume walkthrough (HTTP ${status}).`);
-        return;
-      }
-      const walkthroughId = data && "walkthroughId" in data ? data.walkthroughId : null;
-      if (walkthroughId) {
-        updateEntry(prId, (e) => {
-          e.walkthroughId = walkthroughId;
-        });
-      }
+      ({ walkthroughId } = await call(
+        api.api.reviews({ id: prId }).walkthrough.resume.post({ mode }),
+        "Failed to resume walkthrough",
+      ));
     } catch (err) {
-      failResume(
-        `Failed to resume walkthrough: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      if (!(err instanceof ApiError)) {
+        failResume(`Failed to resume walkthrough: ${thrownMessage(err)}`);
+      } else if (err.code === "NOT_FOUND") {
+        // Nothing to resume: review the head afresh.
+        await runRegenerate(prId, mode, "incremental");
+      } else {
+        failResume(err.message);
+      }
+      return;
     }
+    updateEntry(prId, (e) => {
+      e.walkthroughId = walkthroughId;
+    });
   });
 }
 

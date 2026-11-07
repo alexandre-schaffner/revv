@@ -3,7 +3,7 @@
 
 import type { Team } from "@revv/shared";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
+import { call } from "$lib/api/errors";
 import { createResource } from "./resource";
 
 /**
@@ -14,9 +14,8 @@ import { createResource } from "./resource";
 const teams = createResource<string, Team[]>({
   freshForMs: Number.POSITIVE_INFINITY,
   fetch: async (_key, org) => {
-    const { data, error } = await api.api.github.teams({ org }).get();
-    if (error) return { status: "error", error: apiErrorMessage(error, "Failed to load teams") };
-    return { status: "ok", data: data && "teams" in data ? data.teams : [] };
+    const { teams } = await call(api.api.github.teams({ org }).get(), "Failed to load teams");
+    return { status: "ok", data: teams };
   },
 });
 

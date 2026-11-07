@@ -6,6 +6,8 @@ import type {
 } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
+import { call } from "$lib/api/errors";
+import { thrownMessage } from "$lib/api/wire";
 
 // Per-PR last-successful-thread-sync timestamps (ISO). The bottom bar's
 // "Synced Xm ago" reflects the currently selected PR's entry, not a global.
@@ -94,21 +96,25 @@ export function onWindowForeground(streamOpen: boolean): void {
 export async function requestSync(): Promise<void> {
   prListSyncing = true;
   try {
-    await api.api.prs.sync.post();
-  } catch {
+    await call(api.api.prs.sync.post(), "Failed to sync pull requests");
+  } catch (e) {
     prListSyncing = false;
-    toast.error("Failed to sync pull requests");
+    toast.error(thrownMessage(e));
   }
 }
 
 export function requestThreadSync(prId: string): void {
   markThreadsSyncing(prId);
-  void api.api
-    .prs({ id: prId })
-    ["sync-threads"].post()
-    .catch(() => {
-      setSyncError(prId, "Failed to reach server");
-    });
+  void postThreadSync(prId);
+}
+
+/** `threads:synced` or `threads:sync-error` clears the spinner; a refused ask never gets either. */
+async function postThreadSync(prId: string): Promise<void> {
+  try {
+    await call(api.api.prs({ id: prId })["sync-threads"].post(), "Failed to sync comments");
+  } catch (e) {
+    setSyncError(prId, thrownMessage(e));
+  }
 }
 
 /**
@@ -124,23 +130,16 @@ export function requestThreadSync(prId: string): void {
 export function requestFullSync(prId: string): void {
   markThreadsSyncing(prId);
   prListSyncing = true;
-  void api.api
-    .prs({ id: prId })
-    .refresh.post()
-    .catch(() => {
-      toast.error("Failed to refresh pull request");
+  void call(api.api.prs({ id: prId }).refresh.post(), "Failed to refresh pull request")
+    .catch((e: unknown) => {
+      toast.error(thrownMessage(e));
     })
     .finally(() => {
       // This request is awaited server-side, so its completion IS the signal —
       // there's no `prs:sync-complete` coming to release the spinner.
       prListSyncing = false;
     });
-  void api.api
-    .prs({ id: prId })
-    ["sync-threads"].post()
-    .catch(() => {
-      setSyncError(prId, "Failed to reach server");
-    });
+  void postThreadSync(prId);
 }
 
 // Per-PR debounce for `refreshPrHead`. The call reaches GitHub, so a rapid
@@ -180,12 +179,9 @@ export function refreshPrHead(prId: string): void {
     if (now - at >= HEAD_REFRESH_DEBOUNCE_MS) lastHeadRefreshAt.delete(id);
   }
   lastHeadRefreshAt.set(prId, now);
-  void api.api
-    .prs({ id: prId })
-    .refresh.post()
-    .catch(() => {
-      lastHeadRefreshAt.delete(prId);
-    });
+  void call(api.api.prs({ id: prId }).refresh.post(), "Refresh failed").catch(() => {
+    lastHeadRefreshAt.delete(prId);
+  });
 }
 
 // Client-side throttle for `freshenPrList`, matching the server's: it skips a

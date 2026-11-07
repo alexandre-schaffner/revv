@@ -1,6 +1,6 @@
 import type { RepoActivity, RepoPrFlow } from "@revv/shared";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
+import { call } from "$lib/api/errors";
 import { RequestState } from "$lib/stores/_types";
 import { createResource } from "./resource";
 
@@ -23,18 +23,10 @@ const activity = createResource<void, Omit<RepoActivityData, "commitsPending">>(
   waitForSignalMs: 3 * 60_000,
   keepDataOnError: true,
   fetch: async (repoId) => {
-    const res = await api.api
-      .repos({ id: repoId })
-      .activity.get()
-      .catch(() => null);
-    if (!res) return { status: "error", error: "Couldn't reach the Revv server" };
-    const { data, error } = res;
-    if (error) {
-      return {
-        status: "error",
-        error: apiErrorMessage(error, "Couldn't load activity from GitHub"),
-      };
-    }
+    const data = await call(
+      api.api.repos({ id: repoId }).activity.get(),
+      "Couldn't load activity from GitHub",
+    );
     const commits = data.commits.status === "ready" ? data.commits : null;
     return commits
       ? { status: "ok", data: { commits, flow: data.flow } }
@@ -60,11 +52,6 @@ export function onRepoActivitySettled(data: { repoId: string; ready: boolean }):
   if (activity.entry(data.repoId).request.status === "idle") return;
   if (data.ready) void activity.refresh(data.repoId, undefined);
   else activity.giveUp(data.repoId);
-}
-
-/** A `repo-activity:settled` sent while the stream was down reached no one: ask again. */
-export function onEventsReconnected(): void {
-  for (const repoId of activity.waitingKeys()) void activity.refresh(repoId, undefined);
 }
 
 export function reset(): void {

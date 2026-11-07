@@ -4,19 +4,19 @@ import type {
   ProjectRecapSummary,
   RecapPeriod,
 } from "@revv/shared";
-import { recapSummaryOf } from "@revv/shared";
+import { MAX_RECAP_PAGE_LIMIT, recapSummaryOf } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
+import { call } from "$lib/api/errors";
+import { thrownMessage } from "$lib/api/wire";
 import { createResource } from "$lib/stores/resource";
 import { monthGridRange } from "./period-window";
 import { abortRecapStream } from "./stream.svelte";
 
 /**
- * Recap summaries per repository, newest `generatedAt` first. This is every
- * summary loaded so far (the calendar loads arbitrary historical months), not
- * one page, so a row the server later supersedes lingers until reload: every
- * consumer must filter out `status === "superseded"`.
+ * Recap summaries per repository, newest `generatedAt` first: every summary
+ * loaded so far (the calendar loads arbitrary historical months), not one
+ * page. A row leaves as soon as it is superseded.
  */
 let recapsByRepo = $state<Map<string, ProjectRecapSummary[]>>(new Map());
 
@@ -102,7 +102,9 @@ function mergeSummaries(
 ): ProjectRecapSummary[] {
   const byId = new Map(current.map((r) => [r.id, r]));
   for (const r of incoming) byId.set(r.id, r);
-  return [...byId.values()].sort((a, b) => (a.generatedAt < b.generatedAt ? 1 : -1));
+  return [...byId.values()]
+    .filter((r) => r.status !== "superseded")
+    .sort((a, b) => (a.generatedAt < b.generatedAt ? 1 : -1));
 }
 
 export async function fetchRecapsForRepo(repoId: string): Promise<void> {
@@ -111,8 +113,10 @@ export async function fetchRecapsForRepo(repoId: string): Promise<void> {
 
 async function readRepoRecaps(repoId: string) {
   try {
-    const { data, error } = await api.api.repos({ id: repoId }).recaps.get({ query: {} });
-    if (error) throw new Error(apiErrorMessage(error, "Failed to load recaps"));
+    const data = await call(
+      api.api.repos({ id: repoId }).recaps.get({ query: {} }),
+      "Failed to load recaps",
+    );
     // Merge, don't replace: this runs on every generate, and replacing would
     // drop every historical month the calendar has loaded.
     recapsByRepo = updateEntry(recapsByRepo, repoId, (cur) =>
@@ -120,7 +124,7 @@ async function readRepoRecaps(repoId: string) {
     );
     return { status: "ok", data: true } as const;
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Failed to load recaps";
+    const message = thrownMessage(e);
     toast.error(message);
     return { status: "error", error: message } as const;
   }
@@ -129,12 +133,8 @@ async function readRepoRecaps(repoId: string) {
 /**
  * Fetch every recap whose window falls inside a calendar month's 6×7 grid. A
  * month already loaded or in flight is a no-op, so prefetches can fire freely.
- *
- * `limit: "100"` (`MAX_RECAP_PAGE_LIMIT` on the server) is load-bearing, not
- * defensive. The default page limit is 30, but a 42-day grid can hold 42 daily
- * + 6 weekly = 48 rows. At the default the server would silently truncate and
- * hand back a `nextCursor` this caller has nowhere to put — so the calendar
- * would show phantom gaps. One page always suffices at 100.
+ * It asks for the largest page: at the server's default limit a grid's rows
+ * would be truncated, with a `nextCursor` this caller has nowhere to put.
  *
  * Unlike {@link fetchRecapsForRepo} this never raises a toast: it runs as a
  * background prefetch of adjacent months, and a failed warm-up must not throw
@@ -148,19 +148,19 @@ export async function fetchRecapsForMonth(repoId: string, monthKey: string): Pro
 async function readMonthRecaps(repoId: string, monthKey: string) {
   try {
     const { from, to } = monthGridRange(monthKey);
-    const { data, error } = await api.api
-      .repos({ id: repoId })
-      .recaps.get({ query: { from, to, limit: "100" } });
-    if (error) {
-      return { status: "error", error: apiErrorMessage(error, "No recaps returned") } as const;
-    }
+    const data = await call(
+      api.api
+        .repos({ id: repoId })
+        .recaps.get({ query: { from, to, limit: String(MAX_RECAP_PAGE_LIMIT) } }),
+      "No recaps returned",
+    );
     recapsByRepo = updateEntry(recapsByRepo, repoId, (cur) =>
       mergeSummaries(cur ?? [], data.recaps),
     );
     return { status: "ok", data: true } as const;
   } catch (e) {
     console.warn(`[recaps] failed to load ${monthKey} for repo ${repoId}`, e);
-    return { status: "error", error: String(e) } as const;
+    return { status: "error", error: thrownMessage(e) } as const;
   }
 }
 
@@ -175,12 +175,11 @@ export async function loadRecap(recapId: string, options?: { force?: boolean }):
 
 async function readRecap(recapId: string) {
   try {
-    const { data, error } = await api.api.recaps({ id: recapId }).get();
-    if (error) throw new Error(apiErrorMessage(error, "Failed to load recap"));
+    const data = await call(api.api.recaps({ id: recapId }).get(), "Failed to load recap");
     recapDetailById = setEntry(recapDetailById, recapId, data);
     return { status: "ok", data: true } as const;
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Failed to load recap";
+    const message = thrownMessage(e);
     toast.error(message);
     return { status: "error", error: message } as const;
   }
@@ -198,15 +197,15 @@ export async function generateRecap(
     if (options?.periodStart !== undefined) body.periodStart = options.periodStart;
     if (options?.periodEnd !== undefined) body.periodEnd = options.periodEnd;
     const query = options?.regenerate ? { regenerate: "true" } : {};
-    const { data, error } = await api.api
-      .repos({ id: repoId })
-      .recaps.generate.post(body, { query });
-    if (error) throw new Error(apiErrorMessage(error, "Failed to start recap"));
+    const data = await call(
+      api.api.repos({ id: repoId }).recaps.generate.post(body, { query }),
+      "Failed to start recap",
+    );
     // Refresh the list so the new placeholder row appears.
     void fetchRecapsForRepo(repoId);
     return data;
   } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to start recap");
+    toast.error(thrownMessage(e));
     return null;
   }
 }
@@ -215,11 +214,12 @@ export async function regenerateRecap(recapId: string): Promise<{ recapId: strin
   if (pendingActions.map.has(recapId)) return null;
   setPending(recapId, "regenerate");
   try {
-    const { data, error } = await api.api.recaps({ id: recapId }).regenerate.post();
-    if (error) throw new Error(apiErrorMessage(error, "Failed to regenerate recap"));
-    return data;
+    return await call(
+      api.api.recaps({ id: recapId }).regenerate.post(),
+      "Failed to regenerate recap",
+    );
   } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to regenerate recap");
+    toast.error(thrownMessage(e));
     return null;
   } finally {
     clearPending(recapId);
@@ -231,13 +231,12 @@ export async function stopRecap(recapId: string): Promise<boolean> {
   setPending(recapId, "stop");
   try {
     abortRecapStream(recapId);
-    const { error } = await api.api.recaps({ id: recapId }).stop.post();
-    if (error) throw new Error(apiErrorMessage(error, "Failed to stop recap"));
+    await call(api.api.recaps({ id: recapId }).stop.post(), "Failed to stop recap");
     // The server broadcasts the stop too; the UI doesn't wait for it.
     patchRecapStatus(recapId, null, { status: "stopped", errorMessage: null, completedAt: null });
     return true;
   } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to stop recap");
+    toast.error(thrownMessage(e));
     return false;
   } finally {
     clearPending(recapId);
@@ -269,8 +268,11 @@ function patchRecapStatus(recapId: string, repoId: string | null, patch: StatusP
     [...recapsByRepo].find(([, list]) => list.some((r) => r.id === recapId))?.[0] ??
     null;
   if (owner !== null) {
-    recapsByRepo = updateEntry(recapsByRepo, owner, (current) =>
-      (current ?? []).map((row) => (row.id === recapId ? { ...row, ...patch } : row)),
+    recapsByRepo = updateEntry(recapsByRepo, owner, (current = []) =>
+      mergeSummaries(
+        current,
+        current.filter((row) => row.id === recapId).map((row) => ({ ...row, ...patch })),
+      ),
     );
   }
   const existing = recapDetailById.get(recapId);
@@ -284,21 +286,18 @@ export function onRecapAdded(data: { recap: ProjectRecap }): void {
 
   const list = recapsByRepo.get(recap.repositoryId);
   if (!list) return;
-  const summary = recapSummaryOf(recap);
-  const idx = list.findIndex((r) => r.id === recap.id);
-  if (idx >= 0) {
-    recapsByRepo = updateEntry(recapsByRepo, recap.repositoryId, () => [
-      ...list.slice(0, idx),
-      summary,
-      ...list.slice(idx + 1),
-    ]);
-    return;
-  }
-  const insertAt = list.findIndex((r) => r.generatedAt < summary.generatedAt);
-  recapsByRepo = updateEntry(recapsByRepo, recap.repositoryId, () => {
-    if (insertAt < 0) return [...list, summary];
-    return [...list.slice(0, insertAt), summary, ...list.slice(insertAt)];
-  });
+  recapsByRepo = setEntry(
+    recapsByRepo,
+    recap.repositoryId,
+    mergeSummaries(list, [recapSummaryOf(recap)]),
+  );
+}
+
+/** `recap:*` events sent while the stream was down reached no one: re-read what's loaded. */
+export function onEventsReconnected(): void {
+  repoReads.refreshAll();
+  monthReads.refreshAll();
+  detailReads.refreshAll();
 }
 
 export function reset(): void {

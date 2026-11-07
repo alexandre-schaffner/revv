@@ -14,7 +14,8 @@ import {
   type UserSettings,
 } from "@revv/shared";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
+import { call } from "$lib/api/errors";
+import { thrownMessage } from "$lib/api/wire";
 import { createResource } from "./resource";
 
 export type ModelOption = { label: string; value: string };
@@ -36,8 +37,10 @@ let loaded = $state<UserSettings | null>(null);
 const models = createResource<AcpAgentId, ModelOption[]>({
   keepDataOnError: true,
   fetch: async (_key, agent) => {
-    const { data, error } = await api.api.settings.models.get({ query: { agent } });
-    if (error) return { status: "error", error: apiErrorMessage(error, "Couldn't load models") };
+    const data = await call(
+      api.api.settings.models.get({ query: { agent } }),
+      "Couldn't load models",
+    );
     return { status: "ok", data: data.models };
   },
 });
@@ -124,8 +127,7 @@ export function isAutoEffortOffered(): boolean {
 
 export async function fetchSettings(): Promise<void> {
   try {
-    const { data } = await api.api.settings.get();
-    if (data) loaded = data;
+    loaded = await call(api.api.settings.get(), "Couldn't load settings");
   } catch {
     // Unreachable server: keep what we have; the defaults render meanwhile.
   }
@@ -149,12 +151,11 @@ export async function updateSettings(
   // order. The response body is ignored for the same reason.
   if (loaded) loaded = applySettingsUpdate(loaded, patch);
   try {
-    const { error } = await api.api.settings.put(patch);
-    if (error) throw new Error(apiErrorMessage(error, "Couldn't save settings"));
+    await call(api.api.settings.put(patch), "Couldn't save settings");
   } catch (e) {
     if (options.strict) {
       loaded = previous;
-      throw e instanceof Error ? e : new Error(String(e));
+      throw e;
     }
   }
 }
@@ -195,12 +196,11 @@ export async function fetchAgentStatus(
   options: { refresh?: boolean } = {},
 ): Promise<AgentStatusReport | null> {
   try {
-    const { data } = await api.api.onboarding["agent-status"].get({
-      query: options.refresh ? { refresh: "1" } : {},
-    });
-    if (!data) return agentStatus;
-    agentStatus = data;
-    return data;
+    agentStatus = await call(
+      api.api.onboarding["agent-status"].get({ query: options.refresh ? { refresh: "1" } : {} }),
+      "Couldn't read the agent's status",
+    );
+    return agentStatus;
   } catch {
     return agentStatus;
   }
@@ -212,16 +212,8 @@ export async function fetchAgentStatus(
 
 export async function runAgentCheck(agent: AcpAgentId): Promise<AgentCheckResult> {
   try {
-    const { data, error } = await api.api.agent.check.post({ agent });
-    if (error) {
-      return { ok: false, error: `Revv's service answered HTTP ${error.status}.`, guidance: null };
-    }
-    return data;
+    return await call(api.api.agent.check.post({ agent }), "Revv's service refused the check");
   } catch (err) {
-    return {
-      ok: false,
-      error: err instanceof Error ? err.message : "Revv's service is unreachable.",
-      guidance: null,
-    };
+    return { ok: false, error: thrownMessage(err), guidance: null };
   }
 }

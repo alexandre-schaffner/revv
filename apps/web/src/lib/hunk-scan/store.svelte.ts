@@ -14,11 +14,9 @@ import type {
   HunkScanStatus,
 } from "@revv/shared";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
-import { getLoadedHeadSha } from "$lib/stores/diff-files.svelte";
+import { call } from "$lib/api/errors";
+import { DIFF_FILL_WAIT_MS } from "$lib/review/diff-cache";
 import { type Answer, createResource } from "$lib/stores/resource";
-import { getSelectedPrId } from "$lib/stores/route.svelte";
-import { DIFF_FILL_WAIT_MS } from "$lib/walkthrough/sizing.svelte";
 import { type EventsSinceAsked, mergeHydratedHunkScan, reduceHunkScanEvent } from "./reducers";
 
 /** What a settled ask learned: TypeSafe is off, or the scan came back. */
@@ -86,15 +84,15 @@ export function getHunkScanForFile(
  * the client always asks rather than skipping a scan it holds as ended.
  * `pending` (the diff isn't cached yet) waits for the server's `diff:cached`.
  */
-const asks = createResource<{ prId: string }, EnsureOutcome>({
+const asks = createResource<{ prId: string; headSha: string }, EnsureOutcome>({
   waitForSignalMs: DIFF_FILL_WAIT_MS,
   gaveUpError: "The PR's diff never reached the cache.",
   fetch: async (key, { prId }): Promise<Answer<EnsureOutcome>> => {
     const since = markEvents(key);
-    const { data: result, error } = await api.api.reviews({ id: prId })["hunk-scan"].post();
-    if (error) {
-      return { status: "error", error: apiErrorMessage(error, "First pass request failed") };
-    }
+    const result = await call(
+      api.api.reviews({ id: prId })["hunk-scan"].post(),
+      "First pass request failed",
+    );
     if (result.status === "pending") return { status: "pending" };
     if (result.status === "off") return { status: "ok", data: "off" };
     // The server answers for the head it holds, which a pull may have moved.
@@ -108,26 +106,20 @@ const asks = createResource<{ prId: string }, EnsureOutcome>({
 });
 
 export function ensureHunkScan(prId: string, headSha: string): Promise<void> {
-  return asks.load(entryKey(prId, headSha), { prId }).then(() => undefined);
+  return asks.load(entryKey(prId, headSha), { prId, headSha }).then(() => undefined);
 }
 
 export function onDiffCached(data: { prId: string; headSha: string }): void {
-  const key = entryKey(data.prId, data.headSha);
-  if (asks.isWaiting(key)) void asks.refresh(key, { prId: data.prId });
+  asks.refreshWaiting((_key, ask) => ask.prId === data.prId && ask.headSha === data.headSha);
 }
 
 /**
- * Rows that streamed during a dropped connection are gone, and so is any
- * `diff:cached`: re-ask for the PR on screen and for every waiting ask.
+ * Rows a running scan streamed during a dropped connection are gone, and so
+ * is its `hunk-scan:complete`: re-ask every scan last seen running. Asks
+ * waiting on `diff:cached` are re-asked by the router, before this runs.
  */
 export function onEventsReconnected(): void {
-  const prId = getSelectedPrId();
-  const headSha = prId ? getLoadedHeadSha(prId) : null;
-  if (prId && headSha) void ensureHunkScan(prId, headSha);
-  for (const key of asks.waitingKeys()) {
-    const waitingPrId = key.slice(0, key.lastIndexOf("@"));
-    if (waitingPrId !== prId) void asks.refresh(key, { prId: waitingPrId });
-  }
+  asks.refreshAll((key) => !asks.isWaiting(key) && entries.get(key)?.status === "running");
 }
 
 export function reset(): void {

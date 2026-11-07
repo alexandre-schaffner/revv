@@ -1,7 +1,7 @@
 import type { Repository } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
+import { call } from "$lib/api/errors";
 import {
   fetchAvailableRepos,
   getAvailableRepos,
@@ -125,8 +125,10 @@ export class LocalClone {
     }
     this.inspecting = true;
     try {
-      const { data, error } = await api.api.repos["inspect-local"].post({ path });
-      if (error) throw new Error(apiErrorMessage(error, "Failed to inspect local repository"));
+      const data = await call(
+        api.api.repos["inspect-local"].post({ path }),
+        "Failed to inspect local repository",
+      );
       this.#inspection = {
         path,
         isGitRepo: data.isGitRepo,

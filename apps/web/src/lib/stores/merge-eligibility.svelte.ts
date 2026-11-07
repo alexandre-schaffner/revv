@@ -1,6 +1,7 @@
 import type { CiRollupState, MergeEligibility, PrConversation, ReviewDecision } from "@revv/shared";
 import { isMergeStateSettling } from "@revv/shared";
 import { api } from "$lib/api/client";
+import { call } from "$lib/api/errors";
 import { createResource } from "./resource";
 
 /** Everything a mergeability answer depends on that Revv observes. Equal questions share one answer. */
@@ -21,9 +22,10 @@ const answers = createResource<void, MergeEligibility>({
   freshForMs: 15_000,
   waitForSignalMs: 30_000,
   fetch: async (prId) => {
-    const { data: eligibility, error } = await api.api.prs({ id: prId })["merge-eligibility"].get();
-    if (error || !eligibility || !("mergeStateStatus" in eligibility))
-      return { status: "error", error: "Couldn't check whether this can be merged" };
+    const eligibility = await call(
+      api.api.prs({ id: prId })["merge-eligibility"].get(),
+      "Couldn't check whether this can be merged",
+    );
     return isMergeStateSettling(eligibility.mergeStateStatus)
       ? { status: "pending", data: eligibility }
       : { status: "ok", data: eligibility };
@@ -62,11 +64,6 @@ export function askMergeEligibility(question: MergeQuestion): void {
 
 export function onPrMergeEligibility(data: { prId: string; eligibility: MergeEligibility }): void {
   answers.put(data.prId, data.eligibility);
-}
-
-/** A `pr:merge-eligibility` sent while the stream was down reached no one: ask again. */
-export function onEventsReconnected(): void {
-  for (const prId of answers.waitingKeys()) void answers.refresh(prId, undefined);
 }
 
 export function reset(): void {

@@ -25,7 +25,7 @@ import type {
 import { ciHasPending, hydrateConversationAvatars } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
+import { ApiError, call } from "$lib/api/errors";
 import { thrownMessage } from "$lib/api/wire";
 import {
   addAssigneesPatch,
@@ -149,14 +149,16 @@ function accept(prId: string, conversation: PrConversation, stale: boolean): voi
   });
 }
 
-function describeFailure(error: { status: number; value?: unknown }): string {
-  if (error.status === 429) return "GitHub's rate limit is exhausted. Try again shortly.";
-  // A 502 is any upstream failure GitHub answered badly, not only an outage;
-  // the server's own wording says which.
-  return apiErrorMessage(
-    error,
-    error.status === 502 ? "GitHub couldn't be reached" : "Request failed",
-  );
+/** A failed GitHub request, worded for this tab. */
+function describeFailure(e: unknown): string {
+  if (e instanceof ApiError) {
+    if (e.status === 429) return "GitHub's rate limit is exhausted. Try again shortly.";
+    // A 502 is any upstream failure GitHub answered badly, not only an outage;
+    // the server's own wording says which.
+    if (e.status === 502 && e.serverMessage === undefined)
+      return "GitHub couldn't be reached (HTTP 502)";
+  }
+  return thrownMessage(e);
 }
 
 /**
@@ -173,9 +175,12 @@ export async function loadConversation(
 /** The server's cached snapshot, which costs GitHub nothing. */
 async function loadSnapshot(prId: string): Promise<void> {
   try {
-    const { data } = await api.api.prs({ id: prId }).conversation.cached.get();
-    if (data && "conversation" in data && data.conversation) {
-      accept(prId, hydrateConversationAvatars(data.conversation), getConversation(prId).stale);
+    const { conversation } = await call(
+      api.api.prs({ id: prId }).conversation.cached.get(),
+      "Snapshot failed",
+    );
+    if (conversation) {
+      accept(prId, hydrateConversationAvatars(conversation), getConversation(prId).stale);
     }
   } catch {
     // Whoever asked has something better to fall back on.
@@ -201,8 +206,7 @@ async function fetchConversation(prId: string): Promise<Answer<true>> {
   };
 
   try {
-    const { data, error } = await api.api.prs({ id: prId }).conversation.get();
-    if (error) return failed(describeFailure(error));
+    const data = await call(api.api.prs({ id: prId }).conversation.get(), "Request failed");
     // A write began meanwhile; this answer may predate it.
     if ((writeGeneration.get(prId) ?? 0) !== generation && dataOf(prId) !== null) {
       return { status: "ok", data: true };
@@ -212,15 +216,14 @@ async function fetchConversation(prId: string): Promise<Answer<true>> {
       ? { status: "error", error: "GitHub couldn't be reached" }
       : { status: "ok", data: true };
   } catch (e) {
-    return failed(thrownMessage(e));
+    return failed(describeFailure(e));
   }
 }
 
 /** Re-read only the CI rollup; cheap enough to poll. Null when the ask failed. */
 async function refreshChecks(prId: string): Promise<{ rollup: CiRollup | null } | null> {
   try {
-    const { data, error } = await api.api.prs({ id: prId }).checks.get();
-    if (error) return null;
+    const data = await call(api.api.prs({ id: prId }).checks.get(), "Checks failed");
     const rollup = data.rollup;
     const ciAccess = data.access;
     updateData(prId, (c) => ({ ...c, ci: rollup, ciAccess }));
@@ -246,14 +249,13 @@ export async function loadCheckDetails(prId: string, checkRunId: number): Promis
     });
   put(RequestState.loading());
   try {
-    const { data, error } = await api.api.prs({ id: prId }).checks({ checkRunId }).get();
-    if (error) {
-      put(RequestState.error(describeFailure(error)));
-      return;
-    }
-    put(RequestState.ok(data));
+    put(
+      RequestState.ok(
+        await call(api.api.prs({ id: prId }).checks({ checkRunId }).get(), "Request failed"),
+      ),
+    );
   } catch (e) {
-    put(RequestState.error(thrownMessage(e)));
+    put(RequestState.error(describeFailure(e)));
   }
 }
 
@@ -271,21 +273,21 @@ function refreshSettledDetails(prId: string, rollup: CiRollup | null): void {
 }
 
 export async function loadReviewerOptions(prId: string, q: string): Promise<ReviewerOptions> {
-  const { data, error } = await api.api.prs({ id: prId })["reviewer-options"].get({ query: { q } });
-  if (error) throw new Error(apiErrorMessage(error, "Reviewer options failed"));
-  return data;
+  return call(
+    api.api.prs({ id: prId })["reviewer-options"].get({ query: { q } }),
+    "Reviewer options failed",
+  );
 }
 
 export async function loadAssigneeOptions(prId: string, q: string): Promise<ActorOption[]> {
-  const { data, error } = await api.api.prs({ id: prId })["assignee-options"].get({ query: { q } });
-  if (error || !Array.isArray(data)) throw new Error("Assignee options failed");
-  return data;
+  return call(
+    api.api.prs({ id: prId })["assignee-options"].get({ query: { q } }),
+    "Assignee options failed",
+  );
 }
 
 export async function loadLabelOptions(prId: string): Promise<PrLabel[]> {
-  const { data, error } = await api.api.prs({ id: prId })["label-options"].get();
-  if (error || !Array.isArray(data)) throw new Error("Label options failed");
-  return data;
+  return call(api.api.prs({ id: prId })["label-options"].get(), "Label options failed");
 }
 
 const POLL_FIRST_MS = 20_000;
@@ -429,21 +431,18 @@ async function applyWrite(
 
   let result: ConversationWriteResult;
   try {
-    const { data, error } = await api.api.prs({ id: prId }).conversation.writes.post(write);
-    if (error || !data || !("conversation" in data)) {
-      // GitHub's refusal of this write answers 403 (the server's error table).
-      const status: number | undefined = error?.status;
-      if (status === 403) {
-        return fail(
-          "GitHub refused this change for your account. Open the PR on GitHub to make it.",
-          true,
-        );
-      }
-      return fail(error ? describeFailure(error) : "GitHub didn't accept the change.", false);
-    }
-    result = data;
+    result = await call(
+      api.api.prs({ id: prId }).conversation.writes.post(write),
+      "GitHub didn't accept the change",
+    );
   } catch (e) {
-    return fail(e instanceof Error ? e.message : "GitHub couldn't be reached.", false);
+    if (e instanceof ApiError && e.code === "FORBIDDEN") {
+      return fail(
+        "GitHub refused this change for your account. Open the PR on GitHub to make it.",
+        true,
+      );
+    }
+    return fail(describeFailure(e), false);
   }
 
   acceptWriteResult(prId, result);
@@ -551,6 +550,11 @@ export function onPrConversationUpdated(data: { prId: string; fetchedAt: string 
   const current = dataOf(data.prId);
   if (current && current.fetchedAt >= data.fetchedAt) return;
   void loadSnapshot(data.prId);
+}
+
+/** A `pr:conversation-updated` sent while the stream was down reached no one. */
+export function onEventsReconnected(): void {
+  for (const prId of entries.keys()) void loadSnapshot(prId);
 }
 
 export function reset(): void {
