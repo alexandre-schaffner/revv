@@ -16,7 +16,7 @@ import { initGsap } from "$lib/motion";
 import { detachSession, restoreSession, startSession } from "$lib/session/lifecycle.svelte";
 import { getUser } from "$lib/stores/auth.svelte";
 import { getSelectedPrId } from "$lib/stores/route.svelte";
-import { fetchAllModels, fetchSettings } from "$lib/stores/settings.svelte";
+import { fetchSettings } from "$lib/stores/settings.svelte";
 import { initShortcuts } from "$lib/stores/shortcuts.svelte";
 import { setSidebarView } from "$lib/stores/sidebar.svelte";
 import { initTheme } from "$lib/stores/theme.svelte";
@@ -41,9 +41,8 @@ $effect(() => {
   if (userId) untrack(() => startSession(userId));
 });
 
-// `onMount`, not `$effect`: `restoreSession()` and `fetchAllModels()` read the
-// auth token before their first `await`, so an effect would re-run on every
-// token change (sign-in, account switch), re-arming the updater into a
+// `onMount`, not `$effect`: `restoreSession()` reads the auth token before
+// its first `await`, so an effect would re-run on every token change (sign-in, account switch), re-arming the updater into a
 // duplicate "Update available" toast.
 onMount(() => {
   initGsap();
@@ -65,7 +64,6 @@ onMount(() => {
     });
 
   restoreSession();
-  void fetchAllModels();
   void fetchSettings().then(() => {
     // So the first update check doesn't compete with the initial PR sync
     // for network.

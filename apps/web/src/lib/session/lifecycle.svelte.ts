@@ -43,8 +43,10 @@ import { reset as resetReview } from "$lib/stores/review.svelte";
 import { reset as resetReviewNav } from "$lib/stores/review-nav.svelte";
 import { isOnAccountPage } from "$lib/stores/route.svelte";
 import {
+  fetchAllModels,
   fetchSettings,
   getGithubHost,
+  resetModels,
   setGithubConfig,
   updateSettings,
 } from "$lib/stores/settings.svelte";
@@ -69,10 +71,12 @@ let switchingTo = $state<string | null>(null);
 let sessionHost: string | undefined;
 
 /**
- * Every store that holds account data. A new one adds its reset here.
- * Settings are not on the list: the server keeps one machine-wide row.
+ * Every store that holds data read under the session. A new one adds its
+ * reset here. The settings row is not on the list: the server keeps one
+ * machine-wide row, which onboarding reads before anyone signs in.
  */
 function resetAccountStores(): void {
+  resetModels();
   resetPrs();
   resetPrFilters();
   resetRepos();
@@ -127,7 +131,13 @@ function beginSession(userId: string): void {
   }
   sessionUserId = userId;
   connect(sessionHost);
-  void Promise.allSettled([fetchSettings(), fetchPrs(), fetchRepos(), fetchPinnedPrs()]);
+  void Promise.allSettled([
+    fetchSettings(),
+    fetchAllModels(),
+    fetchPrs(),
+    fetchRepos(),
+    fetchPinnedPrs(),
+  ]);
 }
 
 function stopSession(): void {

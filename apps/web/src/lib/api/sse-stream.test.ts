@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it, jest, mock } from "bun:test";
+import { tokenStub } from "$lib/test-stubs";
 
 mock.module("$lib/api/base-url", () => ({ API_BASE_URL: "http://test" }));
-mock.module("$lib/session/token.svelte", () => ({
-  authHeaders: () => ({ Authorization: "Bearer t" }),
-}));
+mock.module("$lib/session/token.svelte", tokenStub);
 
 const { SseFrameError, SseHttpError, SseIdleError, sseError, sseErrorMessage, streamSse } =
   await import("./sse-stream");

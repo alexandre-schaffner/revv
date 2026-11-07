@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, mock, setSystemTime } from "bun:test";
-import { DEFAULT_USER_SETTINGS } from "@revv/shared";
+import { settingsStub, tokenStub } from "$lib/test-stubs";
 
 const calls: string[] = [];
 const hook =
@@ -53,15 +53,8 @@ const focusWindow = (): void => {
 };
 
 mock.module("$lib/api/base-url", () => ({ API_BASE_URL: "http://test" }));
-mock.module("$lib/session/token.svelte", () => ({
-  getToken: () => "t",
-  authHeaders: () => ({ Authorization: "Bearer t" }),
-}));
-mock.module("./settings.svelte", () => ({
-  getSettings: () => DEFAULT_USER_SETTINGS,
-  getGithubHost: () => DEFAULT_USER_SETTINGS.githubHost,
-  isSettingsLoaded: () => false,
-}));
+mock.module("$lib/session/token.svelte", tokenStub);
+mock.module("./settings.svelte", settingsStub);
 mock.module("$lib/walkthrough/store.svelte", () => ({
   onEventsOpened: hook("walkthrough.open"),
   onEventsReconnected: hook("walkthrough.reconnect"),
