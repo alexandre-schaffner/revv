@@ -410,7 +410,8 @@ export type WalkthroughEndReason = (typeof WALKTHROUGH_END_REASONS)[number];
  * expected to use the linked prior walkthrough and the new commit range as its
  * starting point.
  */
-export type WalkthroughGenerationMode = "full" | "incremental";
+export const WALKTHROUGH_GENERATION_MODES = ["full", "incremental"] as const;
+export type WalkthroughGenerationMode = (typeof WALKTHROUGH_GENERATION_MODES)[number];
 
 export interface WalkthroughReviewRound {
   id: string;

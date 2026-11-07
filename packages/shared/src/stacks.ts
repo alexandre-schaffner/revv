@@ -193,7 +193,8 @@ export interface StackBrief {
 }
 
 /** `remaining`: layers without a current walkthrough. `all`: every open layer. */
-export type StackReviewScope = "remaining" | "all";
+export const STACK_REVIEW_SCOPES = ["remaining", "all"] as const;
+export type StackReviewScope = (typeof STACK_REVIEW_SCOPES)[number];
 
 export interface StackReviewStarted {
   /** PR numbers queued, bottom-up. */

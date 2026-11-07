@@ -34,9 +34,11 @@ export function isThreadResolved(status: string): boolean {
   return status === "resolved" || status === "wont_fix";
 }
 
-export type AuthorRole = "reviewer" | "coder" | "ai_agent";
+export const AUTHOR_ROLES = ["reviewer", "coder", "ai_agent"] as const;
+export type AuthorRole = (typeof AUTHOR_ROLES)[number];
 
-export type MessageType = "comment" | "reply" | "suggestion" | "resolution";
+export const MESSAGE_TYPES = ["comment", "reply", "suggestion", "resolution"] as const;
+export type MessageType = (typeof MESSAGE_TYPES)[number];
 
 export interface CommentThread {
   id: string;

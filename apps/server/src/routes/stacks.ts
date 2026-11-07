@@ -1,4 +1,4 @@
-import { isOpenLayer } from "@revv/shared";
+import { isOpenLayer, MERGE_METHODS } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { logError } from "../logger";
@@ -10,8 +10,9 @@ import { StackRebaseService } from "../services/stacks/StackRebase";
 import { StackService } from "../services/stacks/StackService";
 import { runRoute, withAccount } from "./middleware";
 import { ownedBy } from "./ownership";
+import { literalUnion } from "./schemas";
 
-const mergeMethod = t.Union([t.Literal("merge"), t.Literal("squash"), t.Literal("rebase")]);
+const mergeMethod = literalUnion(MERGE_METHODS);
 
 export const stackRoutes = new Elysia({ prefix: "/api/prs" })
   .use(withAccount)

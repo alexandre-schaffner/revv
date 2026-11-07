@@ -5,7 +5,8 @@
  * Session-level: `plan` keeps every turn in plan mode until the user toggles
  * back to `default` or approves a plan.
  */
-export type InteractionMode = "default" | "plan";
+export const INTERACTION_MODES = ["default", "plan"] as const;
+export type InteractionMode = (typeof INTERACTION_MODES)[number];
 
 /** How many prompts the chat's empty state offers for a PR. */
 export const CHAT_SUGGESTION_COUNT = 3;
