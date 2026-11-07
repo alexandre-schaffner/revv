@@ -16,14 +16,28 @@ import { runRoute, withAuth } from "./middleware";
 
 /**
  * The host and client_id a device-flow request targets: the request's own,
- * else the settings host and the client ID saved for it.
+ * else the settings host. The client is the request's, else the one the
+ * caller's account on that host was issued to (re-signing an account in is
+ * keyed by the account, not by the machine's host), else the one saved for
+ * the host.
  */
-const signInTarget = (hostOverride: string | undefined, clientIdOverride: string | undefined) =>
+const signInTarget = (body: {
+  readonly host?: string;
+  readonly client_id?: string;
+  readonly session_token?: string;
+}) =>
   Effect.gen(function* () {
     const settings = yield* SettingsService;
+    const accounts = yield* GitHubAccounts;
     const saved = yield* settings.getSettings();
-    const host = normalizeGithubHost(hostOverride ?? "") || (yield* settings.githubHost());
-    const clientId = yield* resolveClientId(host, saved, clientIdOverride);
+    const host = normalizeGithubHost(body.host ?? "") || (yield* settings.githubHost());
+    const callerId = body.session_token ? yield* accounts.sessionUser(body.session_token) : null;
+    const issued = callerId === null ? null : yield* accounts.issuedClientIdOn(callerId, host);
+    const clientId = yield* resolveClientId(
+      host,
+      saved,
+      body.client_id?.trim() || issued || undefined,
+    );
     return { host, clientId };
   });
 
@@ -52,7 +66,7 @@ const deviceFlowRoutes = new Elysia()
     ({ body }) =>
       runRoute(
         Effect.gen(function* () {
-          const target = yield* signInTarget(body?.host, body?.client_id);
+          const target = yield* signInTarget(body ?? {});
           const answer = yield* requestDeviceCode(target.host, target.clientId);
           if (!answer.ok) {
             logError(
@@ -89,7 +103,11 @@ const deviceFlowRoutes = new Elysia()
       ),
     {
       body: t.Optional(
-        t.Object({ host: t.Optional(t.String()), client_id: t.Optional(t.String()) }),
+        t.Object({
+          host: t.Optional(t.String()),
+          client_id: t.Optional(t.String()),
+          session_token: t.Optional(t.String()),
+        }),
       ),
     },
   )

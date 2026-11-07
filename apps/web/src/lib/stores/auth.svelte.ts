@@ -95,9 +95,39 @@ let authRestoreExhausted = $state(false);
 
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** The first account that must sign in again: what the blocking re-sign-in modal asks for. */
-export function getReauthRequired(): Account | null {
-  return reauthAsked(accounts);
+const reauths = $derived(reauthAsked(accounts, identity?.host ?? null));
+/** The host of a waiting account the user chose to sign in again from the account menu. */
+let reauthOpenedFor = $state<string | null>(null);
+
+/**
+ * The account the re-sign-in modal asks for: the shown host's, which blocks
+ * the window, else a waiting one the user opened, which they can dismiss.
+ */
+export function getReauthPrompt(): {
+  readonly account: Account;
+  readonly blocking: boolean;
+} | null {
+  if (reauths.blocking) return { account: reauths.blocking, blocking: true };
+  const host = reauthOpenedFor;
+  const opened = host === null ? undefined : accountOn(reauths.waiting, host);
+  return opened ? { account: opened, blocking: false } : null;
+}
+
+/** Accounts on hosts this window doesn't show that must sign in again: they wait in the account menu. */
+export function getWaitingReauths(): readonly Account[] {
+  return reauths.waiting;
+}
+
+/** Sign a waiting account in again, in the dismissible re-sign-in modal. */
+export function openReauth(host: string): void {
+  reauthOpenedFor = host;
+  void signIn(host);
+}
+
+export function closeReauth(): void {
+  reauthOpenedFor = null;
+  clearError();
+  cancelSignIn();
 }
 
 export function onAuthReauthRequired(data: AuthReauthRequiredEnvelope["data"]): void {
@@ -192,6 +222,7 @@ export function clearIdentity(): void {
   // The re-auth modal reads the accounts, so a dead session must not strand
   // it with no session behind it.
   accounts = [];
+  reauthOpenedFor = null;
   localAccounts = [];
   localAccountsLoaded = false;
   error = null;
@@ -260,14 +291,19 @@ export async function signIn(host?: string, clientId?: string): Promise<boolean>
   signInErrorCode = null;
   isLoading = true;
   try {
-    const data = await call(
-      api.api.auth.device.init.post(
-        host ? { host, ...(clientId ? { client_id: clientId } : {}) } : undefined,
-      ),
-      "Sign-in request failed",
-    ).catch((e: unknown) => {
-      throw e instanceof ApiError ? signInRefusal(e) : e;
-    });
+    // A signed-in caller sends its session, so re-signing one of its accounts
+    // in uses the client that account was issued to.
+    const token = getToken();
+    const body = {
+      ...(host ? { host } : {}),
+      ...(host && clientId ? { client_id: clientId } : {}),
+      ...(token ? { session_token: token } : {}),
+    };
+    const data = await call(api.api.auth.device.init.post(body), "Sign-in request failed").catch(
+      (e: unknown) => {
+        throw e instanceof ApiError ? signInRefusal(e) : e;
+      },
+    );
     deviceFlow = {
       userCode: data.user_code,
       verificationUri: data.verification_uri,
@@ -346,6 +382,7 @@ async function poll(): Promise<void> {
         // broadcasts `auth:reauth-cleared`, but clearing here avoids modal
         // flicker.
         accounts = withReauth(accounts, { host: deviceFlow.host, reauthRequired: false });
+        reauthOpenedFor = null;
         deviceFlow = null;
         await surfaceWindow();
         return;

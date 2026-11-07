@@ -120,12 +120,12 @@ function fixture() {
 }
 
 describe("PrConversationService", () => {
-  it("reads the snapshot with the token of the account that owns the PR", async () => {
+  it("reads the snapshot without the owning account's token", async () => {
     const { db, tokenReads, run } = fixture();
     try {
       const snapshot = await run(Effect.flatMap(PrConversationService, (s) => s.cached("b-pr")));
       expect(snapshot).toBeNull();
-      expect(tokenReads).toEqual(["b-account"]);
+      expect(tokenReads).toEqual([]);
     } finally {
       db.$client.close();
     }

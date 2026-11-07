@@ -414,6 +414,13 @@
       "when": 1795100000000,
       "tag": "0550_repo_clone_written",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "6",
+      "when": 1795200000000,
+      "tag": "0560_pinned_prs_order_not_unique",
+      "breakpoints": true
     }
   ]
 }

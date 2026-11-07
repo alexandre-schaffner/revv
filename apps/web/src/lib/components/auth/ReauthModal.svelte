@@ -2,19 +2,22 @@
 import { GITHUB_CLIENT_ID_HINT, isLikelyGitHubClientId, isPublicGitHub } from "@revv/shared";
 import GithubLogo from "phosphor-svelte/lib/GithubLogo";
 import WarningCircle from "phosphor-svelte/lib/WarningCircle";
+import X from "phosphor-svelte/lib/X";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import {
+  closeReauth,
   getDeviceFlow,
   getError,
   getIsLoading,
-  getReauthRequired,
+  getReauthPrompt,
   getSignInErrorCode,
   signIn,
 } from "$lib/stores/auth.svelte";
-import { setGithubConfigStrict } from "$lib/stores/settings.svelte";
 import DeviceCodePanel from "./DeviceCodePanel.svelte";
 
-const reauth = $derived(getReauthRequired());
+const prompt = $derived(getReauthPrompt());
+const reauth = $derived(prompt?.account ?? null);
+const dismissible = $derived(prompt !== null && !prompt.blocking);
 const deviceFlow = $derived(getDeviceFlow());
 const error = $derived(getError());
 const signInErrorCode = $derived(getSignInErrorCode());
@@ -22,7 +25,7 @@ const isLoading = $derived(getIsLoading());
 
 let clientId = $state("");
 let clientIdError = $state<string | null>(null);
-let isSavingClientId = $state(false);
+let isStartingWithClientId = $state(false);
 
 const needsClientId = $derived(
   Boolean(
@@ -31,15 +34,24 @@ const needsClientId = $derived(
 );
 
 function startReauth(): void {
-  // Re-auth against the same GitHub host the expired account belongs to so
-  // GHE accounts land on the right instance.
-  void signIn(reauth?.host ?? undefined);
+  if (reauth) void signIn(reauth.host);
 }
 
-async function saveClientIdAndRetry(): Promise<void> {
+function dismiss(): void {
+  clientIdError = null;
+  closeReauth();
+}
+
+function onWindowKeydown(event: KeyboardEvent): void {
+  if (dismissible && event.key === "Escape") dismiss();
+}
+
+// The typed id is this sign-in's input only: the poll stores it on the
+// account, and the machine-wide settings row (and so the active host) stays.
+async function retryWithClientId(): Promise<void> {
   const host = reauth?.host;
   const trimmed = clientId.trim();
-  if (!host || !trimmed || isSavingClientId) return;
+  if (!host || !trimmed || isStartingWithClientId) return;
 
   clientIdError = null;
   if (!isLikelyGitHubClientId(trimmed)) {
@@ -47,20 +59,19 @@ async function saveClientIdAndRetry(): Promise<void> {
     return;
   }
 
-  isSavingClientId = true;
+  isStartingWithClientId = true;
   try {
-    await setGithubConfigStrict(host, trimmed);
-    const started = await signIn(host);
+    const started = await signIn(host, trimmed);
     if (!started) {
       clientIdError = getError() ?? "Failed to start sign-in. Check the client ID and try again.";
     }
-  } catch (e) {
-    clientIdError = e instanceof Error ? e.message : String(e);
   } finally {
-    isSavingClientId = false;
+    isStartingWithClientId = false;
   }
 }
 </script>
+
+<svelte:window onkeydown={onWindowKeydown} />
 
 {#if reauth}
 	<div
@@ -72,9 +83,19 @@ async function saveClientIdAndRetry(): Promise<void> {
 		aria-labelledby="reauth-title"
 	>
 		<div
-			class="flex w-full max-w-md flex-col items-center gap-5 rounded-xl border border-border bg-bg-elevated p-8 text-center shadow-xl"
+			class="relative flex w-full max-w-md flex-col items-center gap-5 rounded-xl border border-border bg-bg-elevated p-8 text-center shadow-xl"
 			in:gsapFadeY={{ y: 12, duration: tokens.smooth }}
 		>
+			{#if dismissible}
+				<button
+					class="absolute top-3 right-3 flex size-7 cursor-pointer items-center justify-center rounded-md text-text-muted hover:bg-bg-tertiary hover:text-text-primary"
+					onclick={dismiss}
+					aria-label="Not now"
+					title="Not now"
+				>
+					<X size={14} />
+				</button>
+			{/if}
 			<div class="flex size-12 items-center justify-center rounded-full bg-warning/10 text-warning">
 				<WarningCircle size={28} weight="fill" />
 			</div>
@@ -110,7 +131,7 @@ async function saveClientIdAndRetry(): Promise<void> {
 						class="flex w-full flex-col gap-3 text-left"
 						onsubmit={(e) => {
 							e.preventDefault();
-							void saveClientIdAndRetry();
+							void retryWithClientId();
 						}}
 					>
 						<label class="flex flex-col gap-1.5 text-xs font-medium text-text-secondary">
@@ -131,10 +152,10 @@ async function saveClientIdAndRetry(): Promise<void> {
 						<button
 							class="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-border bg-bg-tertiary px-4 py-2.5 text-sm font-medium text-text-primary transition-colors hover:bg-bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
 							type="submit"
-							disabled={isSavingClientId || clientId.trim().length === 0}
+							disabled={isStartingWithClientId || clientId.trim().length === 0}
 						>
 							<GithubLogo size={18} />
-							Save and sign in
+							Sign in
 						</button>
 					</form>
 				{:else}

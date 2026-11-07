@@ -292,8 +292,10 @@ success "Installed → $dest_app"
 #     REVV_GITHUB_CLIENT_ID=<your-oauth-app-client-id> bash
 #
 # They persist to $REVV_SUPPORT_DIR/github.conf so `revv update` rewrites the
-# desktop server configuration with the same overrides; when unset, a stale
-# conf is wiped so the bundled defaults win.
+# desktop server configuration with the same overrides. When unset, the conf
+# is removed, but an override an earlier install wrote into
+# desktop-server.json stays (its env is carried over); remove GITHUB_HOST /
+# GITHUB_CLIENT_ID there to go back to the bundled defaults.
 mkdir -p "$REVV_SUPPORT_DIR"
 if [[ -n "${REVV_GITHUB_HOST:-}" || -n "${REVV_GITHUB_CLIENT_ID:-}" ]]; then
   {

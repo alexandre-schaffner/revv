@@ -1,20 +1,28 @@
 <script lang="ts">
-import { sameGithubHost } from "@revv/shared";
+import { githubHostLabel, sameGithubHost } from "@revv/shared";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import Check from "phosphor-svelte/lib/Check";
 import Gear from "phosphor-svelte/lib/Gear";
 import SignOut from "phosphor-svelte/lib/SignOut";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import User from "phosphor-svelte/lib/User";
+import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import Avatar from "$lib/components/shared/Avatar.svelte";
 import {
   Content as PopoverContent,
   Root as PopoverRoot,
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
+import { gsapFade, tokens } from "$lib/motion";
 import { type AccountEntry, accountEntries } from "$lib/session/account-entries";
 import { getSwitchingTo, signOut, switchSession } from "$lib/session/lifecycle.svelte";
-import { getIsSwitching, getLocalAccounts, getUser } from "$lib/stores/auth.svelte";
+import {
+  getIsSwitching,
+  getLocalAccounts,
+  getUser,
+  getWaitingReauths,
+  openReauth,
+} from "$lib/stores/auth.svelte";
 import { getGithubHost } from "$lib/stores/settings.svelte";
 import { openSettings } from "$lib/stores/settingsModal.svelte";
 
@@ -32,6 +40,13 @@ const isSwitching = $derived(getIsSwitching());
 const switchingTo = $derived(getSwitchingTo());
 
 const displayAvatar = $derived(user?.image ?? null);
+const waitingReauths = $derived(getWaitingReauths());
+
+function needsReauth(entry: AccountEntry): boolean {
+  return (
+    entry.userId === user?.id && waitingReauths.some((a) => sameGithubHost(a.host, entry.host))
+  );
+}
 
 function isEntryActive(entry: AccountEntry): boolean {
   return sameGithubHost(entry.host, getGithubHost()) && entry.githubLogin === user?.githubLogin;
@@ -41,6 +56,11 @@ async function handleSwitchEntry(entry: AccountEntry): Promise<void> {
   if (isEntryActive(entry) || isSwitching) return;
   await switchSession(entry.userId, entry.host);
   open = false;
+}
+
+function handleReauth(host: string): void {
+  open = false;
+  openReauth(host);
 }
 
 function handleSettings(): void {
@@ -68,6 +88,14 @@ function handleSignOut(): void {
 				<span class="user-avatar-spinner" aria-hidden="true">
 					<Spinner size={collapsed ? 12 : 14} class="spin-icon motion-essential-spin" />
 				</span>
+			{:else if waitingReauths.length > 0}
+				<span
+					class="user-reauth-badge"
+					title="An account needs to sign in again"
+					in:gsapFade={{ duration: tokens.quick }}
+				>
+					<WarningCircle size={12} weight="fill" />
+				</span>
 			{/if}
 		</span>
 		<span class="user-text" class:user-text--gone={collapsed} aria-hidden={collapsed || undefined}>
@@ -84,6 +112,17 @@ function handleSignOut(): void {
 		align="start"
 		side="top"
 	>
+		{#if waitingReauths.length > 0}
+			{#each waitingReauths as account (account.host)}
+				<button class="menu-row menu-row--warning" onclick={() => handleReauth(account.host)}>
+					<WarningCircle size={13} weight="fill" class="menu-row-icon menu-row-icon--warning" />
+					<span class="menu-row-label">Sign in again</span>
+					<span class="menu-row-hint">{account.githubLogin ?? githubHostLabel(account.host)}</span>
+				</button>
+			{/each}
+			<div class="menu-divider"></div>
+		{/if}
+
 		{#each entries as entry (entry.key)}
 			{@const active = isEntryActive(entry)}
 			{@const switching = switchingTo === entry.key}
@@ -111,6 +150,8 @@ function handleSignOut(): void {
 				<span class="acct-status-slot">
 					{#if switching}
 						<Spinner size={12} class="acct-spinner motion-essential-spin" />
+					{:else if needsReauth(entry)}
+						<WarningCircle size={12} weight="fill" class="acct-warning" aria-label="Needs to sign in again" />
 					{:else if active}
 						<Check size={12} class="acct-check" />
 					{/if}
@@ -172,6 +213,16 @@ function handleSignOut(): void {
 
 	.user-avatar-wrap--switching :global(.user-avatar) {
 		opacity: 0.4;
+	}
+
+	.user-reauth-badge {
+		position: absolute;
+		right: -3px;
+		bottom: -3px;
+		display: flex;
+		border-radius: 999px;
+		background: var(--color-bg-secondary);
+		color: var(--color-warning);
 	}
 
 	.user-avatar-spinner {
@@ -325,6 +376,10 @@ function handleSignOut(): void {
 		color: var(--color-accent);
 	}
 
+	:global(.acct-warning) {
+		color: var(--color-warning);
+	}
+
 	:global(.acct-spinner) {
 		color: var(--color-text-muted);
 	}
@@ -372,6 +427,20 @@ function handleSignOut(): void {
 
 	:global(.menu-row-label) {
 		flex: 1;
+	}
+
+	:global(.menu-row-icon--warning),
+	:global(.menu-row--warning:hover .menu-row-icon--warning) {
+		color: var(--color-warning);
+	}
+
+	.menu-row-hint {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 10px;
+		color: var(--color-text-muted);
 	}
 
 </style>
