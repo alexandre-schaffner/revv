@@ -1,7 +1,9 @@
 <script lang="ts">
 import type { ProjectRecap, RecapPeriod } from "@revv/shared";
 import type { Snippet } from "svelte";
-import { buildRecapHeader, formatLines, formatTheme, paletteLookup, scrollToTheme } from "./themes";
+import { buildRecapHeader, formatTheme, paletteLookup, scrollToTheme } from "$lib/recaps/themes";
+import { now } from "$lib/utils/clock.svelte";
+import { formatCount } from "$lib/utils/format-count";
 
 interface Props {
   recap: ProjectRecap | null;
@@ -13,7 +15,7 @@ interface Props {
 
 let { recap, period, archive = undefined }: Props = $props();
 
-const header = $derived(buildRecapHeader(recap, period));
+const header = $derived(buildRecapHeader(recap, period, now(60_000)));
 </script>
 
 <header class="hero-big">
@@ -52,9 +54,9 @@ const header = $derived(buildRecapHeader(recap, period));
       <div class="stat">
         <dt>Lines changed</dt>
         <dd class="lines">
-          <span class="plus">+{formatLines(header.totalAdded)}</span>
+          <span class="plus">+{formatCount(header.totalAdded)}</span>
           <span class="slash">/</span>
-          <span class="minus">−{formatLines(header.totalRemoved)}</span>
+          <span class="minus">−{formatCount(header.totalRemoved)}</span>
         </dd>
       </div>
     </dl>

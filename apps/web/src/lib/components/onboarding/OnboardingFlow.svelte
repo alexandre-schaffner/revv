@@ -1,4 +1,5 @@
 <script lang="ts">
+import { githubHostLabel } from "@revv/shared";
 import { onMount } from "svelte";
 import type { DotmatrixVariant } from "$lib/components/ui/dotmatrix";
 import { gsapEnter, tokens } from "$lib/motion";
@@ -15,33 +16,16 @@ import StepWelcome from "./StepWelcome.svelte";
 
 type StepId = "welcome" | "host" | "signin" | "repo" | "agent" | "done";
 
-interface Props {
-  onFinish: () => void;
-}
-
-let { onFinish }: Props = $props();
-
-const isGhe = $derived((getGithubHost() ?? "github.com") !== "github.com");
-const signinMeta = $derived<StepMeta>({
-  chapter: "Chapter II · Key",
-  title: "Sign in to",
-  titleItalic: isGhe ? `${getGithubHost()}.` : "GitHub.",
-  spinnerVariant: "square-2",
-});
+const githubHost = $derived(getGithubHost());
 
 const ORDER: StepId[] = ["welcome", "host", "signin", "repo", "agent", "done"];
 
 const isReplay = isOnboardingReplay();
 
-// Resume point: derived from observable state so a mid-flow reload or
-// kill -9 lands the user on the right step without local persistence.
-let initialStep = $state<StepId>("welcome");
 let mounted = $state(false);
 
 onMount(async () => {
   try {
-    // Make sure we have a settings snapshot before resolving the resume
-    // point — getGithubHost() returns null until the store has data.
     if (!isSettingsLoaded()) {
       await fetchSettings();
     }
@@ -57,21 +41,9 @@ onMount(async () => {
       await fetchRepos();
     }
 
-    if (isReplay) {
-      initialStep = "welcome";
-    } else {
-      const host = getGithubHost();
-      const authed = getIsAuthenticated();
-
-      if (authed && host) {
-        initialStep = "repo";
-      } else if (authed && !host) {
-        initialStep = "host";
-      } else {
-        initialStep = "welcome";
-      }
-    }
-    current = initialStep;
+    // Resume from observable state, so a mid-flow reload or kill -9 lands on
+    // the right step without local persistence.
+    current = !isReplay && getIsAuthenticated() ? "repo" : "welcome";
   } catch {
     // On bootstrap failure, fall back to the welcome step so the user
     // can at least begin the flow instead of seeing a blank screen.
@@ -117,7 +89,7 @@ interface StepMeta {
   spinnerVariant: DotmatrixVariant;
 }
 
-const meta: Record<StepId, StepMeta> = {
+const meta = $derived<Record<StepId, StepMeta>>({
   welcome: {
     chapter: "Prologue",
     title: "A slower way",
@@ -133,7 +105,7 @@ const meta: Record<StepId, StepMeta> = {
   signin: {
     chapter: "Chapter II · Key",
     title: "Sign in to",
-    titleItalic: "GitHub.",
+    titleItalic: `${githubHostLabel(githubHost)}.`,
     spinnerVariant: "square-2",
   },
   repo: {
@@ -154,13 +126,12 @@ const meta: Record<StepId, StepMeta> = {
     titleItalic: "begin.",
     spinnerVariant: "square-14",
   },
-};
+});
 </script>
 
 {#if mounted}
-	{@const m = current === 'signin' ? signinMeta : meta[current]}
+	{@const m = meta[current]}
 	<OnboardingShell
-		stepId={current}
 		stepIndex={stepIndex}
 		totalSteps={ORDER.length}
 		chapter={m.chapter}
@@ -175,13 +146,13 @@ const meta: Record<StepId, StepMeta> = {
 				{:else if current === 'host'}
 					<StepHost onContinue={advance} onBack={goBack} />
 				{:else if current === 'signin'}
-					<StepSignIn onBack={goBack} githubHost={getGithubHost() ?? 'github.com'} />
+					<StepSignIn onBack={goBack} {githubHost} />
 				{:else if current === 'repo'}
-					<StepRepo onContinue={advance} onBack={goBack} onSkip={advance} isGhe={isGhe} />
+					<StepRepo onContinue={advance} onBack={goBack} onSkip={advance} />
 				{:else if current === 'agent'}
 					<StepAgent onContinue={advance} onBack={goBack} onSkip={advance} />
 				{:else if current === 'done'}
-					<StepDone onFinish={onFinish} />
+					<StepDone />
 				{/if}
 			</div>
 		{/key}

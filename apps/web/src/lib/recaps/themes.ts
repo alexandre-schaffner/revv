@@ -1,20 +1,9 @@
 import type { ProjectRecap, RecapPeriod, RecapPrEntry, RecapSummaryStats } from "@revv/shared";
 import { prefersReducedMotion } from "$lib/motion";
-import { formatRecapTitle, openSpan, recapSpan } from "$lib/recaps/period-window";
+import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { hash32 } from "$lib/utils/hash";
-
-function relativeFromNow(iso: string): string {
-  const t = new Date(iso).getTime();
-  if (!Number.isFinite(t)) return "—";
-  const seconds = Math.max(0, Math.round((Date.now() - t) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
-}
+import { RECAP_PERIOD_COPY } from "./copy";
+import { formatRecapTitle, openSpan, recapSpan } from "./period-window";
 
 /** The recap lede allows `<strong>` and `<em>` only: everything else is escaped. */
 export function sanitizeLedeHtml(raw: string): string {
@@ -24,10 +13,6 @@ export function sanitizeLedeHtml(raw: string): string {
     .replace(/&lt;\/strong&gt;/gi, "</strong>")
     .replace(/&lt;em&gt;/gi, "<em>")
     .replace(/&lt;\/em&gt;/gi, "</em>");
-}
-
-export function formatLines(n: number): string {
-  return n.toLocaleString("en-US");
 }
 
 /**
@@ -98,13 +83,20 @@ export interface RecapHeader {
   readonly palette: Map<string, string>;
 }
 
-/** Shared by the body-column hero and the sticky sidebar, so they never drift. */
-export function buildRecapHeader(recap: ProjectRecap | null, period: RecapPeriod): RecapHeader {
+/**
+ * Shared by the body-column hero and the sticky sidebar, so they never drift.
+ * `nowMs` is a reactive clock, so "synced 3m ago" keeps counting.
+ */
+export function buildRecapHeader(
+  recap: ProjectRecap | null,
+  period: RecapPeriod,
+  nowMs: number,
+): RecapHeader {
   const themes = recap ? orderThemes(recap.entries) : [];
   return {
-    eyebrow: period === "daily" ? "Daily recap" : "Weekly recap",
+    eyebrow: RECAP_PERIOD_COPY[period].title,
     title: formatRecapTitle(recap ? recapSpan(recap) : openSpan(period)),
-    syncedRelative: recap ? relativeFromNow(recap.generatedAt) : null,
+    syncedRelative: recap ? formatRelativeTime(recap.generatedAt, { now: nowMs }) : null,
     stats: recap?.summaryStats ?? null,
     totalAdded: recap?.totalLinesAdded ?? 0,
     totalRemoved: recap?.totalLinesRemoved ?? 0,

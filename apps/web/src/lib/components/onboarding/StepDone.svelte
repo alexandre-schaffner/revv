@@ -2,47 +2,17 @@
 import { onMount } from "svelte";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import { gsapEnter, tokens } from "$lib/motion";
-import { completeOnboarding, endOnboardingReplay, getIsOnboarded } from "$lib/stores/auth.svelte";
+import { completeOnboarding, endOnboardingReplay } from "$lib/stores/auth.svelte";
 
-interface Props {
-  onFinish: () => void;
-}
-
-let { onFinish }: Props = $props();
+// Long enough to read the closing message; completing swaps the gate to the app.
+const READ_DELAY_MS = 2200;
 
 onMount(() => {
-  let attempts = 0;
-  const maxAttempts = 5;
-
-  async function tryComplete() {
+  const timer = setTimeout(() => {
     endOnboardingReplay();
-    try {
-      await completeOnboarding();
-    } catch {
-      // Retry below will handle it
-    }
-    if (getIsOnboarded()) {
-      onFinish();
-      return;
-    }
-    // Retry if not yet onboarded (token/user may not be ready)
-    attempts++;
-    if (attempts < maxAttempts) {
-      retryTimer = setTimeout(tryComplete, 1000);
-    } else {
-      // Force finish after max retries — the gate will handle it
-      onFinish();
-    }
-  }
-
-  // Initial delay for the user to read the closing message
-  let retryTimer: ReturnType<typeof setTimeout> | undefined;
-  const initialTimer = setTimeout(tryComplete, 2200);
-
-  return () => {
-    clearTimeout(initialTimer);
-    if (retryTimer) clearTimeout(retryTimer);
-  };
+    void completeOnboarding();
+  }, READ_DELAY_MS);
+  return () => clearTimeout(timer);
 });
 </script>
 

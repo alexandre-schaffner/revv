@@ -1,11 +1,11 @@
 <script lang="ts">
+import { githubHostLabel, isPublicGitHub } from "@revv/shared";
 import CaretLeft from "phosphor-svelte/lib/CaretLeft";
 import Check from "phosphor-svelte/lib/Check";
 import Copy from "phosphor-svelte/lib/Copy";
 import { onMount } from "svelte";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import { gsapEnter } from "$lib/motion";
-import { githubHostLabel } from "$lib/session/github-host";
 import {
   cancelSignIn,
   clearError,
@@ -19,12 +19,12 @@ import ContinueArrow from "./ContinueArrow.svelte";
 
 interface Props {
   onBack?: () => void;
-  githubHost?: string;
+  githubHost: string;
 }
 
-let { onBack, githubHost = "github.com" }: Props = $props();
+let { onBack, githubHost }: Props = $props();
 
-const isGhe = $derived(githubHost !== "github.com");
+const isGhe = $derived(!isPublicGitHub(githubHost));
 const hostLabel = $derived(githubHostLabel(githubHost));
 
 const error = $derived(getError());

@@ -13,6 +13,8 @@ export interface ExternalIntegrationStatus {
   /** The account-scoped client entry still exists on disk. */
   readonly clientConfigured: boolean;
   readonly clientName: string;
+  /** The slash command the connect added to the agent, or null when it adds none. */
+  readonly command: string | null;
   readonly createdAt: string | null;
   readonly lastUsedAt: string | null;
   readonly expiresAt: string | null;

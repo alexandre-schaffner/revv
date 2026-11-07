@@ -1,7 +1,7 @@
 import { onDestroy } from "svelte";
 import { isTextEditingKeyTarget } from "$lib/utils";
 import { fuzzyScore } from "$lib/utils/fuzzy";
-import { type Command, findBoundCommand, isAvailable } from "./command-keys";
+import { type Command, findBoundCommand, isAvailable, shortcutGlyphs } from "./command-keys";
 
 // Later registrations shadow earlier ones on the same keys, so a page can
 // take over a binding for as long as it is mounted.
@@ -16,6 +16,12 @@ export function registerCommands(commands: readonly Command[]): () => void {
 
 export function useCommands(commands: readonly Command[]): void {
   onDestroy(registerCommands(commands));
+}
+
+/** The glyphs of a registered command's binding, for UI hints; empty when it has none. */
+export function commandShortcut(id: string): string[] {
+  const keys = registered.find((cmd) => cmd.id === id)?.keys;
+  return keys ? shortcutGlyphs(keys) : [];
 }
 
 /** Runs the command bound to a ⌘ combo. Returns whether the event was taken. */

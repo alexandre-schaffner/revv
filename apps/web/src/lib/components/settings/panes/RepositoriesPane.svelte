@@ -17,7 +17,7 @@ export const pane = defineSettingsPane({
 </script>
 
 <script lang="ts">
-import type { Repository } from "@revv/shared";
+import { isPublicGitHub, type Repository } from "@revv/shared";
 import Plus from "phosphor-svelte/lib/Plus";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import Trash from "phosphor-svelte/lib/Trash";
@@ -45,7 +45,7 @@ function handleAddRepository(): void {
 
 function repoHint(repo: Repository): string | undefined {
   const parts: string[] = [];
-  if (repo.githubHost !== "github.com") parts.push(repo.githubHost);
+  if (!isPublicGitHub(repo.githubHost)) parts.push(repo.githubHost);
   if (!repo.managed && repo.clonePath) parts.push(`Linked to ${repo.clonePath}`);
   return parts.length > 0 ? parts.join(" · ") : undefined;
 }

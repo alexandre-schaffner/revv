@@ -1,13 +1,9 @@
 <script lang="ts">
-import {
-  ACP_AGENTS,
-  type AcpAgentId,
-  type AgentStatus,
-  type AgentStatusReport,
-} from "@revv/shared";
+import { ACP_AGENTS, type AcpAgentId, type AgentStatusReport } from "@revv/shared";
 import { RadioGroup } from "bits-ui";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import Warning from "phosphor-svelte/lib/Warning";
+import { agentReadiness } from "$lib/agent-setup/readiness";
 import {
   endAgentSignIn,
   getAgentInstall,
@@ -15,8 +11,8 @@ import {
   startAgentInstall,
   startAgentSignIn,
 } from "$lib/agent-setup/store.svelte";
+import AgentLoginTerminal from "$lib/components/agent-setup/AgentLoginTerminal.svelte";
 import { acpAgentIcon } from "$lib/components/icons/acpAgentIcon";
-import AgentLoginTerminal from "$lib/components/onboarding/AgentLoginTerminal.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { fetchAgentStatus } from "$lib/stores/settings.svelte";
 import StatusDot from "../primitives/StatusDot.svelte";
@@ -40,17 +36,6 @@ let { row, selected, status, loading, onSelect }: Props = $props();
 const install = $derived(getAgentInstall());
 const signingInAgent = $derived(getSigningInAgent());
 
-type Tone = "success" | "warning" | "danger" | "muted";
-
-function statusFor(s: AgentStatus | null | undefined): { tone: Tone; label: string } {
-  if (!s) return { tone: "muted", label: loading ? "Checking…" : "Not checked" };
-  if (!s.installed) return { tone: "muted", label: "Not installed" };
-  if (!s.authed) return { tone: "warning", label: "Needs sign-in" };
-  return s.verified
-    ? { tone: "success", label: "Connected" }
-    : { tone: "warning", label: "Configured" };
-}
-
 function handleChange(value: string): void {
   const agent = ACP_AGENTS.find((a) => a.id === value);
   if (agent && agent.id !== selected) onSelect(agent.id);
@@ -72,7 +57,7 @@ async function onLoginDone(): Promise<void> {
 >
 	{#each ACP_AGENTS as agent (agent.id)}
 		{@const s = status?.agents[agent.id] ?? null}
-		{@const st = statusFor(s)}
+		{@const readiness = agentReadiness(s)}
 		{@const Icon = acpAgentIcon(agent.icon)}
 		{@const isSelected = agent.id === selected}
 		<div class="provider">
@@ -84,7 +69,7 @@ async function onLoginDone(): Promise<void> {
 						<span class="provider-name">{agent.label}</span>
 						<span class="provider-description">{agent.description}</span>
 					</span>
-					<StatusDot tone={st.tone} label={st.label} />
+					<StatusDot tone={readiness.tone} label={!s && loading ? "Checking…" : readiness.label} />
 				{/snippet}
 			</RadioGroup.Item>
 
@@ -341,19 +326,18 @@ async function onLoginDone(): Promise<void> {
 	}
 
 	.provider-login-terminal {
-		--ob-bg: var(--color-bg-secondary);
-		--ob-border: var(--color-border-subtle);
-		--ob-border-btn: var(--color-border);
-		--ob-error: var(--color-danger);
-		--ob-hover-subtle: var(--color-bg-primary);
-		--ob-row-highlight: color-mix(in srgb, var(--color-accent) 14%, transparent);
-		--ob-text: var(--color-text-primary);
-		--ob-text-body: var(--color-text-secondary);
-		--ob-text-dimmed: var(--color-text-muted);
-		--ob-text-heading: var(--color-text-primary);
-		--ob-text-italic: var(--color-accent);
-		--ob-text-label: var(--color-danger);
-		--ob-text-muted: var(--color-text-muted);
+		--terminal-bg: var(--color-bg-secondary);
+		--terminal-surface: var(--color-bg-primary);
+		--terminal-border: var(--color-border-subtle);
+		--terminal-error-border: var(--color-danger);
+		--terminal-fg: var(--color-text-primary);
+		--terminal-heading: var(--color-text-primary);
+		--terminal-body: var(--color-text-secondary);
+		--terminal-muted: var(--color-text-muted);
+		--terminal-dim: var(--color-text-muted);
+		--terminal-accent: var(--color-accent);
+		--terminal-danger: var(--color-danger);
+		--terminal-selection: color-mix(in srgb, var(--color-accent) 14%, transparent);
 		padding: 12px;
 		border: 1px solid var(--color-border-subtle);
 		border-radius: 8px;

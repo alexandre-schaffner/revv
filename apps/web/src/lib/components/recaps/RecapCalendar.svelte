@@ -8,6 +8,7 @@ import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import { untrack } from "svelte";
 import { goto } from "$app/navigation";
 import { gsapFade, gsapPress } from "$lib/motion";
+import { RECAP_PERIOD_COPY } from "$lib/recaps/copy";
 import {
   addUtcDays,
   dayKeyToUtcDate,
@@ -15,7 +16,7 @@ import {
   mondayKeyOf,
   monthGrid,
   monthKeyOf,
-  recapSlotKey,
+  recapSlotIndex,
   shiftMonth,
   slotKeyFor,
   slotSpan,
@@ -24,6 +25,7 @@ import {
   windowPath,
 } from "$lib/recaps/period-window";
 import { fetchRecapsForMonth, getMonthRecapsLoading } from "$lib/recaps/store.svelte";
+import { now } from "$lib/utils/clock.svelte";
 import RecapButton from "./RecapButton.svelte";
 
 /**
@@ -52,17 +54,8 @@ interface Props {
 
 let { repoId, period, recaps, activeRecapId = null, initialDayKey, onLeave }: Props = $props();
 
-// A page left open across UTC midnight must re-paint the today ring, so the
-// current day key is state on a slow tick rather than a one-shot constant.
-let nowKey = $state(utcDateKey(new Date()));
-
-$effect(() => {
-  const id = setInterval(() => {
-    const next = utcDateKey(new Date());
-    if (next !== nowKey) nowKey = next;
-  }, 60_000);
-  return () => clearInterval(id);
-});
+// A page left open across UTC midnight must re-paint the today ring.
+const nowKey = $derived(utcDateKey(new Date(now(60_000))));
 
 const currentMonth = $derived(monthKeyOf(nowKey));
 
@@ -120,20 +113,8 @@ const weekdayLabels = $derived(
   (grid.weeks[0] ?? []).map((k) => WEEKDAY_FMT.format(dayKeyToUtcDate(k))),
 );
 
-/**
- * `slotKey → recap`, holding daily *and* weekly rows at once so toggling the
- * period costs nothing and triggers no refetch. When two rows share a slot
- * the newest generation wins.
- */
-const slotIndex = $derived.by(() => {
-  const map = new Map<string, ProjectRecapSummary>();
-  for (const r of recaps) {
-    const key = recapSlotKey(r);
-    const existing = map.get(key);
-    if (!existing || r.generatedAt > existing.generatedAt) map.set(key, r);
-  }
-  return map;
-});
+// Daily *and* weekly rows at once, so toggling the period triggers no refetch.
+const slotIndex = $derived(recapSlotIndex(recaps));
 
 type SlotKind = "complete" | "generating" | "error" | "empty";
 
@@ -332,7 +313,7 @@ $effect(() => {
 						class="calendar-grid"
 						class:calendar-grid--weekly={period === "weekly"}
 						role="grid"
-						aria-label="{period === 'daily' ? 'Daily' : 'Weekly'} recap calendar, {monthLabel} UTC"
+						aria-label="{RECAP_PERIOD_COPY[period].label} recap calendar, {monthLabel} UTC"
 						onkeydown={onGridKeydown}
 					>
 						<thead>

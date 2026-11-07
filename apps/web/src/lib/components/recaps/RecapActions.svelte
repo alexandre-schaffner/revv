@@ -1,16 +1,17 @@
 <script lang="ts">
 import type { RecapPeriod } from "@revv/shared";
-import PenNib from "phosphor-svelte/lib/PenNib";
-import Spinner from "phosphor-svelte/lib/Spinner";
+import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import GenActionBar from "$lib/components/shared/GenActionBar.svelte";
-import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
-import { Shimmer } from "$lib/components/ui/shimmer";
+import type { GenActionCopy } from "$lib/components/shared/gen-action";
+import { RECAP_PERIOD_COPY } from "$lib/recaps/copy";
+import RecapGeneratePill from "./RecapGeneratePill.svelte";
 import type { RecapController } from "./recap-controller.svelte";
 
 /**
- * The floating actions over a recap: Stop / Resume / Regenerate for the recap
- * on screen, and, when that recap covers an older window, a way to ask for the
- * current one, which otherwise sits thousands of pixels up the page.
+ * The floating actions over a recap, shown in the shell while this is
+ * mounted: Stop / Regenerate for the recap on screen, and, when that recap
+ * covers an older window, a way to ask for the current one, which otherwise
+ * sits thousands of pixels up the page.
  */
 interface Props {
   controller: RecapController;
@@ -21,45 +22,41 @@ interface Props {
 
 let { controller, period, ongenerated }: Props = $props();
 
-const currentWindow = $derived(period === "daily" ? "today's" : "this week's");
+const GEN_COPY: GenActionCopy = {
+  regenerate: "Write this recap again, with everything that has happened since",
+  stale: "Write this recap again for the same window",
+};
 
-async function onGenerate(): Promise<void> {
+const current = $derived(RECAP_PERIOD_COPY[period].current);
+
+useShellChrome(() => ({ actions: controller.hasActions ? actions : undefined }));
+
+async function generateCurrent(): Promise<void> {
   const result = await controller.generate(period);
   if (result) ongenerated?.(result.recapId);
 }
 </script>
 
-{#if controller.offersCurrentWindow || controller.actionState}
+{#snippet actions()}
 	<div class="actions-float">
 		<div class="actions-row" role="toolbar" aria-label="Recap actions">
 			{#if controller.offersCurrentWindow}
-				<GlassPill
-					variant="accent"
-					onclick={onGenerate}
-					disabled={controller.generating}
-					title="Write a brand-new recap for {currentWindow} {period} window. The recap below stays as-is."
-				>
-					{#if controller.generating}
-						<Spinner size={14} class="motion-essential-spin" aria-hidden="true" />
-					{:else}
-						<PenNib size={16} aria-hidden="true" />
-					{/if}
-					<Shimmer active={!controller.generating}>
-						{controller.generating
-							? `Generating ${currentWindow} recap…`
-							: `Generate ${currentWindow} recap`}
-					</Shimmer>
-				</GlassPill>
+				<RecapGeneratePill
+					label="Generate {current} recap"
+					busyLabel="Generating {current} recap…"
+					title="Write a brand-new recap for {current} {period} window. The recap below stays as-is."
+					run={generateCurrent}
+				/>
 			{/if}
 			{#if controller.actionState}
 				<GenActionBar
 					uiState={controller.actionState}
 					pendingAction={controller.pendingAction}
+					copy={GEN_COPY}
 					onStop={() => controller.stop()}
-					onResume={() => controller.regenerate()}
 					onRegenerate={() => controller.regenerate()}
 				/>
 			{/if}
 		</div>
 	</div>
-{/if}
+{/snippet}

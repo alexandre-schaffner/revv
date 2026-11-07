@@ -2,7 +2,7 @@
 // creator/team filter, and the per-repo order the list shows.
 
 import type { PullRequest } from "@revv/shared";
-import { loginsMatch } from "@revv/shared";
+import { isReviewRequestedFrom } from "$lib/prs/tagged-prs";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { fuzzyScore } from "$lib/utils/fuzzy";
 import { getPullRequests, isPrPinned, setArchiveAuthors } from "./prs.svelte";
@@ -49,9 +49,7 @@ const groupedByRepo = $derived(Map.groupBy(filteredPrs, (pr) => pr.repositoryId)
 const needsYourReviewByRepo = $derived.by((): Map<string, PullRequest[]> => {
   const login = getCurrentUserLogin();
   if (!login) return new Map();
-  const needsReview = filteredPrs.filter((pr) =>
-    pr.requestedReviewers.some((r) => loginsMatch(r, login)),
-  );
+  const needsReview = filteredPrs.filter((pr) => isReviewRequestedFrom(pr, login));
   return Map.groupBy(needsReview, (pr) => pr.repositoryId);
 });
 

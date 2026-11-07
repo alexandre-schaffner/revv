@@ -5,11 +5,11 @@ import FolderOpen from "phosphor-svelte/lib/FolderOpen";
 import GithubLogo from "phosphor-svelte/lib/GithubLogo";
 import LinkSimple from "phosphor-svelte/lib/LinkSimple";
 import { untrack } from "svelte";
-import { toastAddRepoError } from "$lib/components/shared/add-repo-toast";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import { gsapEnter, tokens } from "$lib/motion";
 import { filterRepos, isRepoSlug, majorityOwner } from "$lib/repos/add-repo";
 import { getTrackedRepo, LocalClone, useAvailableRepos } from "$lib/repos/add-repo.svelte";
+import { toastAddRepoError } from "$lib/repos/add-repo-toast";
 import {
   type AvailableRepo,
   getAvailableRepos,
@@ -21,10 +21,9 @@ interface Props {
   onContinue: () => void;
   onBack?: () => void;
   onSkip?: () => void;
-  isGhe?: boolean;
 }
 
-let { onContinue, onBack, onSkip, isGhe = false }: Props = $props();
+let { onContinue, onBack, onSkip }: Props = $props();
 
 const catalog = useAvailableRepos();
 const clone = new LocalClone();
@@ -89,7 +88,7 @@ function advanceFromClone(): void {
   onContinue();
 }
 
-let canLink = $derived(clone.linkable && !isAdding);
+let canLink = $derived(clone.linkableName !== null && !isAdding);
 let actionVerb = $derived(addingMode === "link" ? "Linking" : "Cloning");
 
 let filtered = $derived(filterRepos(getAvailableRepos(), search).slice(0, 20));
@@ -133,8 +132,8 @@ function submitManual(slug: string): void {
 }
 
 function submitLink(): void {
-  const fullName = clone.fullName;
-  if (!canLink || fullName === null) return;
+  const fullName = clone.linkableName;
+  if (isAdding || fullName === null) return;
   const clonePath = clone.path.trim();
   void startAdding(fullName, "link", () => addRepo({ fullName, mode: "link", clonePath }));
 }
@@ -157,7 +156,7 @@ function handleKey(e: KeyboardEvent) {
     const slug = search.trim();
     if (repo) {
       select(repo);
-    } else if (isRepoSlug(slug) && !isGhe) {
+    } else if (isRepoSlug(slug)) {
       submitManual(slug);
     }
   }
@@ -212,28 +211,19 @@ function handlePathKey(e: KeyboardEvent) {
 					</button>
 				</div>
 
-				{#if clone.isGitRepo === false}
+				{#if clone.status.kind === "not-git"}
 					<p class="path-hint path-hint--danger">The selected folder is not a git repository.</p>
-				{:else if clone.alreadyTracked}
+				{:else if clone.status.kind === "tracked"}
 					<p class="path-hint path-hint--danger">This repository is already tracked.</p>
-				{:else if clone.isGitRepo === true && clone.fullName !== null}
+				{:else if clone.status.kind === "recognized"}
 					<p class="path-hint path-hint--ok">
 						<CheckCircle size={12} />
-						<span>Recognized as <code>{clone.fullName}</code>.</span>
+						<span>Recognized as <code>{clone.status.fullName}</code>.</span>
 					</p>
-				{:else if clone.isGitRepo === true}
+				{:else if clone.status.kind === "foreign-origin"}
 					<p class="path-hint path-hint--danger">
 						This clone's <code>origin</code> remote doesn't point at a repository on this GitHub host.
 					</p>
-				{:else if clone.remotes.length > 0}
-					<div class="remote-list">
-						{#each clone.remotes.slice(0, 3) as remote (`${remote.name}-${remote.url}`)}
-							<div class="remote-row">
-								<span>{remote.name}</span>
-								<code>{remote.url}</code>
-							</div>
-						{/each}
-					</div>
 				{:else}
 					<p class="path-hint">Choose a local checkout. Revv detects the GitHub repository from its origin remote.</p>
 				{/if}
@@ -292,7 +282,7 @@ function handlePathKey(e: KeyboardEvent) {
 					<input
 						class="search"
 						type="text"
-						placeholder={isGhe ? 'Search repositories…' : 'Search or enter owner/repo…'}
+						placeholder="Search or enter owner/repo…"
 						aria-label="Search repositories"
 						bind:value={search}
 						onkeydown={handleKey}
@@ -622,8 +612,7 @@ function handlePathKey(e: KeyboardEvent) {
 		flex-shrink: 0;
 	}
 
-	.path-hint code,
-	.remote-row code {
+	.path-hint code {
 		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 		font-style: normal;
 		font-size: 11px;
@@ -639,30 +628,6 @@ function handlePathKey(e: KeyboardEvent) {
 
 	.path-hint--ok code {
 		color: var(--ob-text-heading);
-	}
-
-	.remote-list {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-		margin-top: -4px;
-	}
-
-	.remote-row {
-		display: grid;
-		grid-template-columns: 58px minmax(0, 1fr);
-		gap: 8px;
-		align-items: center;
-		color: var(--ob-text-muted);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 10.5px;
-	}
-
-	.remote-row code {
-		overflow: hidden;
-		color: var(--ob-text-label);
-		text-overflow: ellipsis;
-		white-space: nowrap;
 	}
 
 	.repo-actions {

@@ -53,12 +53,8 @@ export function isSettingsLoaded(): boolean {
   return loaded !== null;
 }
 
-/**
- * `null` until settings have loaded. Onboarding reads this to choose between
- * the Welcome step (no host picked yet) and resuming at Sign-In.
- */
-export function getGithubHost(): string | null {
-  return loaded?.githubHost ?? null;
+export function getGithubHost(): string {
+  return getSettings().githubHost;
 }
 
 export function getGithubClientId(): string {

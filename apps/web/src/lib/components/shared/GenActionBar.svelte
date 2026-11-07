@@ -1,14 +1,4 @@
 <script module lang="ts">
-/** Normalised lifecycle state for any generation pipeline
- *  (walkthrough, recap, etc.). */
-export type GenActionState =
-  | { kind: "empty"; label?: string }
-  | { kind: "streaming" }
-  | { kind: "resumable" }
-  | { kind: "error" }
-  | { kind: "complete" }
-  | { kind: "stale"; label?: string };
-
 /** One perspective a fresh run can be written from (walkthrough: reviewer /
  *  author). */
 interface GenPerspectiveOption<P extends string> {
@@ -34,20 +24,24 @@ import StopCircle from "phosphor-svelte/lib/StopCircle";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import GlassSplitPill from "$lib/components/ui/glass-pill/GlassSplitPill.svelte";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
+import type { GenActionCopy, GenActionState, GenPendingAction } from "./gen-action";
+
+// Renders a pill only for the actions its caller supplies.
 
 interface Props {
   uiState: GenActionState;
-  /** In-flight destructive action (regenerate, resume, stop). */
-  pendingAction: string | null;
-  /** Optional override for the disabled-state tooltip.
-   *  Use when an external condition (e.g. chat streaming) blocks actions. */
+  pendingAction: GenPendingAction | null;
+  /** Something outside the bar (e.g. a streaming chat) blocks the actions; this is why. */
   disabledTitle?: string | undefined;
-  onStop?: () => void;
-  onResume?: () => void;
-  /** `perspective` is the caret's pick; absent from the main segment. */
-  onGenerate?: (perspective?: T) => void;
+  copy: GenActionCopy;
+  onStop: () => void;
+  /** Resume after a stop, Retry after an error. Absent: those states offer Regenerate alone. */
+  onResume?: (() => void) | undefined;
+  /** `perspective` is the caret's pick; absent from the main segment. Absent: Generate regenerates. */
+  onGenerate?: ((perspective?: T) => void) | undefined;
   onRegenerate: (perspective?: T) => void;
-  onRegenerateFromScratch?: (perspective?: T) => void;
+  /** Absent: a complete or stale document offers its main pill alone. */
+  onRegenerateFromScratch?: ((perspective?: T) => void) | undefined;
   /** Puts a perspective caret on every pill that starts a fresh run
    *  (Generate, From scratch, Regenerate after a stop). Absent → plain pills
    *  (recaps). */
@@ -58,6 +52,7 @@ let {
   uiState,
   pendingAction,
   disabledTitle,
+  copy,
   onStop,
   onResume,
   onGenerate,
@@ -66,18 +61,16 @@ let {
   perspective,
 }: Props = $props();
 
-const destructiveDisabled = $derived(pendingAction !== null);
+const PENDING_TITLE: Record<GenPendingAction, string> = {
+  start: "Starting…",
+  regenerate: "Regenerating…",
+  resume: "Resuming…",
+  stop: "Stopping…",
+};
+
+const destructiveDisabled = $derived(pendingAction !== null || disabledTitle !== undefined);
 const destructiveTitle = $derived(
-  disabledTitle ??
-    (pendingAction === "regenerate"
-      ? "Regenerating…"
-      : pendingAction === "resume"
-        ? "Resuming…"
-        : pendingAction === "stop"
-          ? "Stopping…"
-          : pendingAction === "start"
-            ? "Starting…"
-            : undefined),
+  disabledTitle ?? (pendingAction ? PENDING_TITLE[pendingAction] : undefined),
 );
 
 function generate(next?: T): void {
@@ -86,7 +79,7 @@ function generate(next?: T): void {
 }
 
 /** A run in another perspective is always a fresh one. */
-function regenerateFromScratch(next?: T): void {
+function regenerateFresh(next?: T): void {
   if (onRegenerateFromScratch) onRegenerateFromScratch(next);
   else onRegenerate(next);
 }
@@ -121,20 +114,22 @@ function regenerateFromScratch(next?: T): void {
 {/snippet}
 
 {#snippet fromScratchMenu(close: () => void)}
-	{@render perspectiveRows(close, regenerateFromScratch)}
+	{@render perspectiveRows(close, regenerateFresh)}
 {/snippet}
 
-{#snippet fromScratch(title: string)}
-	<GlassSplitPill
-		disabled={destructiveDisabled}
-		title={destructiveTitle ?? title}
-		onclick={() => regenerateFromScratch()}
-		menuLabel="Start from scratch in another perspective"
-		menu={perspective ? fromScratchMenu : undefined}
-	>
-		<ArrowCounterClockwise size={16} />
-		From scratch
-	</GlassSplitPill>
+{#snippet fromScratch(which: "complete" | "stale")}
+	{#if onRegenerateFromScratch}
+		<GlassSplitPill
+			disabled={destructiveDisabled}
+			title={destructiveTitle ?? copy.fromScratch?.[which]}
+			onclick={() => regenerateFresh()}
+			menuLabel="Start from scratch in another perspective"
+			menu={perspective ? fromScratchMenu : undefined}
+		>
+			<ArrowCounterClockwise size={16} />
+			From scratch
+		</GlassSplitPill>
+	{/if}
 {/snippet}
 
 <!-- After a stop or an error, Regenerate replaces the draft; its caret starts
@@ -168,13 +163,13 @@ function regenerateFromScratch(next?: T): void {
     {#if uiState.kind === "empty"}
       <GlassSplitPill
         disabled={destructiveDisabled}
-        title={destructiveTitle ?? uiState.label ?? "Generate walkthrough"}
+        title={destructiveTitle ?? uiState.label}
         onclick={() => generate()}
         menuLabel="Generate in another perspective"
         menu={perspective ? generateMenu : undefined}
       >
         <PenNib size={16} />
-        {uiState.label ?? "Generate walkthrough"}
+        {uiState.label}
       </GlassSplitPill>
     {:else if uiState.kind === "streaming"}
       <GlassPill
@@ -187,47 +182,51 @@ function regenerateFromScratch(next?: T): void {
         {pendingAction === "stop" ? "Stopping…" : "Stop generation"}
       </GlassPill>
     {:else if uiState.kind === "resumable"}
-      <GlassPill
-        disabled={destructiveDisabled}
-        title={destructiveTitle ?? "Resume generation from where it stopped"}
-        onclick={onResume}
-        aria-label="Resume generation"
-      >
-        <Play size={16} fill="currentColor" />
-        Resume
-      </GlassPill>
+      {#if onResume}
+        <GlassPill
+          disabled={destructiveDisabled}
+          title={destructiveTitle ?? "Resume generation from where it stopped"}
+          onclick={onResume}
+          aria-label="Resume generation"
+        >
+          <Play size={16} fill="currentColor" />
+          Resume
+        </GlassPill>
+      {/if}
       {@render replaceDraft()}
     {:else if uiState.kind === "error"}
-      <GlassPill
-        disabled={destructiveDisabled}
-        title={destructiveTitle ?? "Retry generation after error"}
-        onclick={onResume}
-        aria-label="Retry generation"
-      >
-        <ArrowCounterClockwise size={16} />
-        Retry
-      </GlassPill>
+      {#if onResume}
+        <GlassPill
+          disabled={destructiveDisabled}
+          title={destructiveTitle ?? "Retry generation after error"}
+          onclick={onResume}
+          aria-label="Retry generation"
+        >
+          <ArrowCounterClockwise size={16} />
+          Retry
+        </GlassPill>
+      {/if}
       {@render replaceDraft()}
     {:else if uiState.kind === "complete"}
       <GlassPill
         disabled={destructiveDisabled}
-        title={destructiveTitle ?? "Refresh this report using the current review as context"}
+        title={destructiveTitle ?? copy.regenerate}
         onclick={() => onRegenerate()}
       >
         <ArrowsClockwise size={16} />
         Regenerate
       </GlassPill>
-      {@render fromScratch("Generate a fresh review without using the prior report")}
+      {@render fromScratch("complete")}
     {:else if uiState.kind === "stale"}
       <GlassPill
         disabled={destructiveDisabled}
-        title={destructiveTitle ?? "Review only what changed since the last reviewed commit"}
+        title={destructiveTitle ?? copy.stale}
         onclick={() => onRegenerate()}
       >
         <ArrowsClockwise size={16} />
-        {uiState.label ?? "Review new commits"}
+        {uiState.label}
       </GlassPill>
-      {@render fromScratch("Generate a fresh review for the latest commit")}
+      {@render fromScratch("stale")}
     {/if}
     </span>
   {/key}

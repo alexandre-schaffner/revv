@@ -37,7 +37,7 @@ import SettingsPane from "../primitives/SettingsPane.svelte";
 import SettingsRow from "../primitives/SettingsRow.svelte";
 
 const user = $derived(getUser());
-const host = $derived(getGithubHost() ?? "github.com");
+const host = $derived(getGithubHost());
 
 let showDeleteConfirm = $state(false);
 let deleting = $state(false);

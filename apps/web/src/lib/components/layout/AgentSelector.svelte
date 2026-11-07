@@ -2,20 +2,15 @@
 import { ACP_AGENTS, type AcpAgentId, type AgentStatus } from "@revv/shared";
 import Check from "phosphor-svelte/lib/Check";
 import { onMount } from "svelte";
+import { type AgentTone, agentReadiness } from "$lib/agent-setup/readiness";
+import { selectAgent } from "$lib/agent-setup/store.svelte";
 import { acpAgentIcon } from "$lib/components/icons/acpAgentIcon";
 import {
   Content as PopoverContent,
   Root as PopoverRoot,
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
-import {
-  agentChange,
-  fetchAgentStatus,
-  fetchModels,
-  getAgentStatus,
-  getSettings,
-  updateSettings,
-} from "$lib/stores/settings.svelte";
+import { fetchAgentStatus, getAgentStatus, getSettings } from "$lib/stores/settings.svelte";
 import SelectTrigger from "./SelectTrigger.svelte";
 
 let open = $state(false);
@@ -24,10 +19,8 @@ let currentId = $derived(getSettings().aiAgent);
 let current = $derived(ACP_AGENTS.find((a) => a.id === currentId));
 let currentLabel = $derived(current?.label ?? "Agent");
 let CurrentIcon = $derived(acpAgentIcon(current?.icon ?? "generic"));
-// `$derived`, not a `$state` copy: settings, onboarding and the embedded login
-// all refresh this, and a snapshot taken at construction would never see them.
 let status = $derived(getAgentStatus());
-let currentStatus = $derived(status?.agents[currentId] ?? null);
+let currentReadiness = $derived(agentReadiness(status?.agents[currentId]));
 
 // The dot paints long before the popover is opened, so prime it here — otherwise
 // a ready agent shows "Not checked" grey until the user opens this menu.
@@ -40,28 +33,20 @@ $effect(() => {
   void fetchAgentStatus();
 });
 
-function isReady(s: AgentStatus | null | undefined): boolean {
-  return !!s?.installed && s.authed;
-}
+const DOT_CLASS: Record<AgentTone, string> = {
+  success: "bg-success",
+  warning: "bg-warning",
+  muted: "bg-text-muted",
+};
 
-function statusLabel(s: AgentStatus | null | undefined): string {
-  if (!s) return "Not checked";
-  if (!s.installed) return "Not installed";
-  if (!s.authed) return "Needs sign-in";
-  return s.authLabel;
-}
-
-function statusDotClass(s: AgentStatus | null | undefined): string {
-  if (!s) return "bg-text-muted";
-  if (isReady(s) && s.verified) return "bg-success";
-  return "bg-warning";
+/** A ready agent names how it is signed in. */
+function statusLabel(s: AgentStatus | undefined): string {
+  const readiness = agentReadiness(s);
+  return readiness.ready && s ? s.authLabel : readiness.label;
 }
 
 function select(id: AcpAgentId) {
-  // opencode's catalog is dynamic — kick off a fetch so the cascade can pick a
-  // real default model (and the model selector renders without a round-trip).
-  if (id === "opencode") void fetchModels("opencode");
-  void updateSettings(agentChange(id));
+  void selectAgent(id);
   open = false;
 }
 </script>
@@ -70,7 +55,7 @@ function select(id: AcpAgentId) {
 	<PopoverTrigger>
 		<SelectTrigger label={currentLabel}>
 			{#snippet icon()}
-				<div class={`h-1.5 w-1.5 rounded-full ${statusDotClass(currentStatus)}`}></div>
+				<div class={`h-1.5 w-1.5 rounded-full ${DOT_CLASS[currentReadiness.tone]}`}></div>
 				<CurrentIcon size={12} class="text-text-muted" />
 			{/snippet}
 		</SelectTrigger>
@@ -78,13 +63,13 @@ function select(id: AcpAgentId) {
 	<PopoverContent class="w-64 p-1" align="start" side="top">
 		{#each ACP_AGENTS as opt (opt.id)}
 			{@const OptIcon = acpAgentIcon(opt.icon)}
-			{@const optStatus = status?.agents[opt.id] ?? null}
+			{@const optStatus = status?.agents[opt.id]}
 			<button
 				class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
 				onclick={() => select(opt.id)}
 			>
 				<OptIcon size={12} class="text-text-muted" />
-				<span class={`h-1.5 w-1.5 shrink-0 rounded-full ${statusDotClass(optStatus)}`}></span>
+				<span class={`h-1.5 w-1.5 shrink-0 rounded-full ${DOT_CLASS[agentReadiness(optStatus).tone]}`}></span>
 				<span class="min-w-0 flex-1 text-left">
 					<span class="block truncate text-text-primary">{opt.label}</span>
 					<span class="block truncate text-[11px] text-text-muted">{statusLabel(optStatus)}</span>

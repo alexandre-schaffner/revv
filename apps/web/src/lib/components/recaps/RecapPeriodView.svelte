@@ -1,17 +1,13 @@
 <script lang="ts">
 import type { ProjectRecapSummary, RecapPeriod } from "@revv/shared";
-import PenNib from "phosphor-svelte/lib/PenNib";
-import Spinner from "phosphor-svelte/lib/Spinner";
-import { untrack } from "svelte";
-import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
-import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
-import { Shimmer } from "$lib/components/ui/shimmer";
+import { RECAP_PERIOD_COPY } from "$lib/recaps/copy";
 import { formatRecapRange, openSpan, pickLatestByWindow } from "$lib/recaps/period-window";
-import { fetchRecapsForRepo, getRecapLoading, getRecapsForRepo } from "$lib/recaps/store.svelte";
+import { useRecapsForRepo } from "$lib/recaps/store.svelte";
 import DotMatrixLoader from "./DotMatrixLoader.svelte";
 import RecapActions from "./RecapActions.svelte";
 import RecapArchivePopover from "./RecapArchivePopover.svelte";
 import RecapDetail from "./RecapDetail.svelte";
+import RecapGeneratePill from "./RecapGeneratePill.svelte";
 import { RecapController } from "./recap-controller.svelte";
 
 interface Props {
@@ -21,20 +17,9 @@ interface Props {
 
 let { repoId, period }: Props = $props();
 
-const periodLabel = $derived(period === "daily" ? "Daily" : "Weekly");
-const periodLabelLower = $derived(period === "daily" ? "daily" : "weekly");
-
-// Fetch the recap list for this repo. The list reducer hydrates from SSE
-// envelopes so navigating between periods doesn't re-hit the network.
-$effect(() => {
-  const id = repoId;
-  if (id) {
-    void untrack(() => fetchRecapsForRepo(id));
-  }
-});
-
-const recaps = $derived(getRecapsForRepo(repoId));
-const listLoading = $derived(getRecapLoading(repoId));
+const copy = $derived(RECAP_PERIOD_COPY[period]);
+const repoRecaps = useRecapsForRepo(() => repoId);
+const recaps = $derived(repoRecaps.list);
 
 // Latest non-superseded recap for this period — by *window*, not by
 // generation time. Generating a recap for a day three weeks back would
@@ -48,11 +33,6 @@ const controller = new RecapController(
 );
 
 const periodEyebrow = $derived(`${formatRecapRange(openSpan(period))} · UTC`);
-const generateNoun = $derived(period === "daily" ? "today's" : "this week's");
-
-useShellChrome(() => ({
-  actions: controller.offersCurrentWindow || controller.actionState ? recapActions : undefined,
-}));
 </script>
 
 <div class="period-view">
@@ -66,16 +46,16 @@ useShellChrome(() => ({
 		/>
 	{:else if latest && controller.loading}
 		<div class="loader-fullscreen">
-			<DotMatrixLoader label="Loading {periodLabelLower} recap" />
+			<DotMatrixLoader label="Loading {copy.adjective} recap" />
 		</div>
-	{:else if listLoading && recaps.length === 0}
+	{:else if repoRecaps.loading && recaps.length === 0}
 		<div class="loader-fullscreen">
 			<DotMatrixLoader label="Loading recaps" />
 		</div>
 	{:else}
 		<header class="period-hero">
 			<span class="period-eyebrow">{periodEyebrow}</span>
-			<h1 class="period-title">{periodLabel} recap</h1>
+			<h1 class="period-title">{copy.title}</h1>
 			<p class="period-lede">
 				{#if period === "daily"}
 					A snapshot of every pull request that opened, moved, or shipped
@@ -86,23 +66,12 @@ useShellChrome(() => ({
 				{/if}
 			</p>
 			<div class="period-cta">
-				<GlassPill
-					variant="accent"
-					onclick={() => controller.generate(period)}
-					disabled={controller.generating}
-					title="Have the agent write a fresh {periodLabelLower} recap"
-				>
-					{#if controller.generating}
-						<Spinner size={14} class="motion-essential-spin" aria-hidden="true" />
-					{:else}
-						<PenNib size={16} aria-hidden="true" />
-					{/if}
-					<Shimmer active={!controller.generating}>
-						{controller.generating
-							? `Generating ${generateNoun} recap…`
-							: `Generate ${generateNoun} recap`}
-					</Shimmer>
-				</GlassPill>
+				<RecapGeneratePill
+					label="Generate {copy.current} recap"
+					busyLabel="Generating {copy.current} recap…"
+					title="Have the agent write a fresh {copy.adjective} recap"
+					run={() => controller.generate(period)}
+				/>
 				{@render archivePopover()}
 			</div>
 		</header>
@@ -118,9 +87,7 @@ useShellChrome(() => ({
 	/>
 {/snippet}
 
-{#snippet recapActions()}
-	<RecapActions {controller} {period} />
-{/snippet}
+<RecapActions {controller} {period} />
 
 <style>
 	.period-view {

@@ -20,9 +20,9 @@ import { fullWindow, type RecapPeriod, startOfUtcIsoWeek, windowIsCurrent } from
  * (`"YYYY-MM"`); both sort chronologically as plain strings.
  */
 
-/** Compare bounds through {@link utcDayKey}, not as raw ISO strings. */
 export interface RecapWindow {
   period: RecapPeriod;
+  /** ISO 8601 UTC. */
   periodStart: string;
   periodEnd: string;
 }
@@ -30,8 +30,8 @@ export interface RecapWindow {
 export const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEK_MS = 7 * DAY_MS;
 
-export function utcDayKey(value: string): string {
-  return value.slice(0, 10);
+export function utcDayKey(iso: string): string {
+  return iso.slice(0, 10);
 }
 
 export function utcDateKey(d: Date): string {
@@ -55,8 +55,8 @@ export function addUtcDays(key: string, n: number): string {
   return utcDateKey(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + n)));
 }
 
-export function monthKeyOf(value: string): string {
-  return utcDayKey(value).slice(0, 7);
+export function monthKeyOf(iso: string): string {
+  return utcDayKey(iso).slice(0, 7);
 }
 
 export function shiftMonth(monthKey: string, delta: number): string {
@@ -107,6 +107,23 @@ export function monthGridRange(monthKey: string): { from: string; to: string } {
 
 export function recapSlotKey(r: RecapWindow): string {
   return `${r.period}:${utcDayKey(r.periodStart)}`;
+}
+
+/**
+ * `slotKey → recap`. Superseded rows are skipped (the merged store cache keeps
+ * them around), and when two rows share a slot the newest generation wins.
+ */
+export function recapSlotIndex<T extends RecapWindow & { status: string; generatedAt: string }>(
+  recaps: readonly T[],
+): Map<string, T> {
+  const index = new Map<string, T>();
+  for (const r of recaps) {
+    if (r.status === "superseded") continue;
+    const key = recapSlotKey(r);
+    const existing = index.get(key);
+    if (!existing || r.generatedAt > existing.generatedAt) index.set(key, r);
+  }
+  return index;
 }
 
 export function slotKeyFor(period: RecapPeriod, anchorDayKey: string): string {
@@ -164,6 +181,7 @@ export function pickLatestByWindow<T extends RecapWindow & { status: string; gen
 ): T | null {
   let best: T | null = null;
   for (const r of recaps) {
+    if (r.status === "superseded") continue;
     if (period !== undefined && r.period !== period) continue;
     if (best === null) {
       best = r;

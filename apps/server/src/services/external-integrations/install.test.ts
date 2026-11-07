@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { EXTERNAL_AGENT_PROVIDERS, type ExternalAgentProvider } from "@revv/shared";
 import {
   type BridgeInstallInput,
@@ -108,6 +108,19 @@ describe.each([...EXTERNAL_AGENT_PROVIDERS])("%s install", (provider: ExternalAg
     expect(() => {
       integrationInstaller.uninstall();
     }).not.toThrow();
+  });
+});
+
+describe("activation command", () => {
+  it("is the slash command the installed prompt or command file registers", () => {
+    const home = temporaryHome();
+    for (const provider of ["codex", "opencode"] as const) {
+      const { command, locations } = installer(provider, home);
+      expect(command).toBe(`revv-address-feedback-${ACCOUNT_KEY}`);
+      expect(locations.some((path) => basename(path) === `${command}.md`)).toBe(true);
+    }
+    expect(installer("claude-code", home).command).toBeNull();
+    expect(installer("cursor", home).command).toBeNull();
   });
 });
 

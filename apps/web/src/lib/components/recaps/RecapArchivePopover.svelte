@@ -3,6 +3,7 @@ import type { ProjectRecapSummary, RecapPeriod } from "@revv/shared";
 import CalendarDots from "phosphor-svelte/lib/CalendarDots";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import * as Popover from "$lib/components/ui/popover";
+import { RECAP_PERIOD_COPY } from "$lib/recaps/copy";
 import RecapCalendar from "./RecapCalendar.svelte";
 
 /**
@@ -34,7 +35,7 @@ let open = $state(false);
 // Just "Archive": the trigger sits beside a "DAILY RECAP" eyebrow and the date
 // itself, so repeating the period here is noise.
 const triggerLabel = $derived(label ?? "Archive");
-const unit = $derived(period === "daily" ? "day" : "week");
+const unit = $derived(RECAP_PERIOD_COPY[period].unit);
 
 // A hand-off out of the calendar (another recap, a generation) leaves this
 // popover hanging over a page that is no longer underneath it.

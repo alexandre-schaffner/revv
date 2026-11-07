@@ -1,11 +1,10 @@
-import type { Repository } from "@revv/shared";
+import { isPublicGitHub, type Repository } from "@revv/shared";
 import { and, eq, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import type { Db } from "../db/index";
 import { repositories } from "../db/schema/index";
 import { avatarOfHostLogin } from "../db/schema/remote-users";
 import { type DbError, NotFoundError, ValidationError } from "../domain/errors";
-import { isPublicGitHub } from "../domain/github-host";
 import { tryDb } from "../effects/db-try";
 import { DbService } from "./Db";
 

@@ -7,6 +7,7 @@ import type { Snippet } from "svelte";
 import ThoughtsReveal from "$lib/components/agent-activity/ThoughtsReveal.svelte";
 import { Button } from "$lib/components/ui/button";
 import { heroMorph } from "$lib/motion";
+import { RECAP_PERIOD_COPY } from "$lib/recaps/copy";
 import type { RecapStreamEntry } from "$lib/recaps/stream.svelte";
 import DotMatrixLoader from "./DotMatrixLoader.svelte";
 import RecapBody from "./RecapBody.svelte";
@@ -144,7 +145,7 @@ function formatCompletedAt(iso: string): string {
             <WarningCircle size={16} weight="fill" aria-hidden="true" />
             <div>
               <p class="error-title">Generation stopped.</p>
-              <p class="error-hint">Click "Resume" to keep going, or "Regenerate" to start fresh.</p>
+              <p class="error-hint">Click "Regenerate" to start again.</p>
             </div>
           </div>
         {:else if isError}
@@ -152,7 +153,7 @@ function formatCompletedAt(iso: string): string {
             <WarningCircle size={16} weight="fill" aria-hidden="true" />
             <div>
               <p class="error-title">Generation failed.</p>
-              <p class="error-hint">{recap.errorMessage ?? 'Click "Retry" to try again.'}</p>
+              <p class="error-hint">{recap.errorMessage ?? 'Click "Regenerate" to try again.'}</p>
             </div>
           </div>
         {:else if isSuperseded}
@@ -161,7 +162,7 @@ function formatCompletedAt(iso: string): string {
           </div>
         {:else if isEmptyComplete}
           <div class="empty-card">
-            <p class="empty-title">No PRs merged on this {effectivePeriod === "daily" ? "day" : "week"}.</p>
+            <p class="empty-title">No PRs merged on this {RECAP_PERIOD_COPY[effectivePeriod].unit}.</p>
           </div>
         {:else if isComplete}
           <RecapBody recap={recap} />

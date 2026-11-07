@@ -40,13 +40,19 @@ export const REASON_LABEL: Record<TaggedReason, string> = {
  */
 export function reasonFor(pr: PullRequest, login: string | null): TaggedReason | null {
   if (!login) return null;
-  // `loginsMatch`, not `===`/`includes`: GitHub logins are case-insensitive and
-  // the casing we hold for the viewer comes from a different endpoint than the
-  // casing on the PR. An exact match drops rows out of the queue silently.
-  if (pr.requestedReviewers.some((r) => loginsMatch(r, login))) return "review";
+  if (isReviewRequestedFrom(pr, login)) return "review";
   if (loginsMatch(pr.authorLogin, login)) return "yours";
   if (pr.mentionedUsers.some((m) => loginsMatch(m, login))) return "mentioned";
   return null;
+}
+
+/**
+ * `loginsMatch`, not `===`/`includes`: GitHub logins are case-insensitive and
+ * the casing we hold for the viewer comes from a different endpoint than the
+ * casing on the PR. An exact match drops rows out of the queue silently.
+ */
+export function isReviewRequestedFrom(pr: PullRequest, login: string): boolean {
+  return pr.requestedReviewers.some((r) => loginsMatch(r, login));
 }
 
 export function toTaggedRows(prs: readonly PullRequest[], login: string | null): TaggedRow[] {

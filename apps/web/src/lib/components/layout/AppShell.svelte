@@ -212,14 +212,9 @@ function onRightHandleDblClick(): void {
 			</div>
 		{/if}
 		<div class="main-content">
-			<!--
-				Re-mounts on every navigation so the page transition fires without
-				touching the persistent .main-content (hiding it would hide every
-				fixed chrome child). page-transitions.ts finds it by data-page-root
-				for Flip morphs.
-			-->
+			<!-- Re-mounts on every navigation so the page transition fires. -->
 			{#key page.url.pathname}
-				<div class="page-slot" data-page-root in:pageEnter>
+				<div class="page-slot" in:pageEnter>
 					{@render children()}
 				</div>
 			{/key}
@@ -395,6 +390,23 @@ function onRightHandleDblClick(): void {
 		min-height: 0;
 		overflow: hidden;
 		display: flex;
+	}
+
+	/* pointer-events:none lets clicks through the padding around the pills. */
+	.tabs-float {
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		display: flex;
+		justify-content: center;
+		padding: 10px 0 8px;
+		z-index: 10;
+		pointer-events: none;
+	}
+
+	:where(.tabs-float) :global(*) {
+		pointer-events: auto;
 	}
 
 	.page-slot {

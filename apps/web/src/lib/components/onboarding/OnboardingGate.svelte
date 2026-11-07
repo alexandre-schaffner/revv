@@ -63,10 +63,6 @@ const ready = $derived(getToken() === null ? getLocalAccountsLoaded() : hasUser)
 let showApp = $derived(authed && onboarded);
 let showPicker = $derived(!authed && hasLocalConnectedAccount && !getAccountPickerDismissed());
 
-function handleFinish() {
-  // StepDone has already kicked the local `onboardedAt` flip
-}
-
 function handleAppError(error: unknown): void {
   console.error("App shell failed to render", error);
 }
@@ -177,7 +173,7 @@ function errorMessage(error: unknown): string {
 		<AccountPicker onNewAccount={dismissAccountPicker} />
 	{:else}
 		<div out:gsapFade={{ duration: tokens.smooth }}>
-			<OnboardingFlow onFinish={handleFinish} />
+			<OnboardingFlow />
 		</div>
 	{/if}
 {/if}

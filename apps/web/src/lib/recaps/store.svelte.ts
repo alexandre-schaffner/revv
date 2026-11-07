@@ -5,6 +5,7 @@ import type {
   RecapPeriod,
 } from "@revv/shared";
 import { MAX_RECAP_PAGE_LIMIT, recapSummaryOf } from "@revv/shared";
+import { untrack } from "svelte";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { call } from "$lib/api/errors";
@@ -59,11 +60,11 @@ export function getRecapPendingAction(recapId: string): RecapPendingAction | nul
   return pendingActions.map.get(recapId) ?? null;
 }
 
-export function getRecapsForRepo(repoId: string): ProjectRecapSummary[] {
+function getRecapsForRepo(repoId: string): ProjectRecapSummary[] {
   return recapsByRepo.get(repoId) ?? [];
 }
 
-export function getRecapLoading(repoId: string): boolean {
+function getRecapLoading(repoId: string): boolean {
   return repoReads.entry(repoId).loading;
 }
 
@@ -107,7 +108,7 @@ function mergeSummaries(
     .sort((a, b) => (a.generatedAt < b.generatedAt ? 1 : -1));
 }
 
-export async function fetchRecapsForRepo(repoId: string): Promise<void> {
+async function fetchRecapsForRepo(repoId: string): Promise<void> {
   await repoReads.load(repoId);
 }
 
@@ -307,4 +308,27 @@ export function reset(): void {
   monthReads.reset();
   detailReads.reset();
   pendingActions.map = new Map();
+}
+
+/**
+ * A repo's recap summaries, asked for when the calling component mounts or
+ * its repo changes; the recap SSE handlers keep them fresh after that. Call
+ * during component init.
+ */
+export function useRecapsForRepo(getRepoId: () => string): {
+  readonly list: ProjectRecapSummary[];
+  readonly loading: boolean;
+} {
+  $effect(() => {
+    const repoId = getRepoId();
+    if (repoId) untrack(() => void fetchRecapsForRepo(repoId));
+  });
+  return {
+    get list() {
+      return getRecapsForRepo(getRepoId());
+    },
+    get loading() {
+      return getRecapLoading(getRepoId());
+    },
+  };
 }

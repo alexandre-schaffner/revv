@@ -8,7 +8,6 @@ import Notebook from "phosphor-svelte/lib/Notebook";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import { untrack } from "svelte";
-import { page } from "$app/state";
 import { api } from "$lib/api/client";
 import type { EdenData } from "$lib/api/wire";
 import { setActiveTab } from "$lib/stores/pr-view-state.svelte";
@@ -37,16 +36,13 @@ let fetchError = $state(false);
 
 // The commit list doubles as the walkthrough history: a commit a walkthrough
 // reviewed up to (`round.toSha`) loads that report into the walkthrough tab.
-// Only on the PR's own review page, where GuidedWalkthrough renders the pick.
-
-const onReviewPage = $derived(page.params.prId === pr.id);
-const displayedWalkthroughId = $derived(onReviewPage ? getDisplayedWalkthroughId(pr.id) : null);
+// `pr` is the route's, so this only ever renders on its review page.
+const displayedWalkthroughId = $derived(getDisplayedWalkthroughId(pr.id));
 
 // Newest first, so a commit's first report is the one its row opens. A run
 // stopped or superseded before its overview has nothing to show, so it's left
 // out rather than opening onto an empty page.
 const reportRounds = $derived.by((): WalkthroughReviewRound[] => {
-  if (!onReviewPage) return [];
   const rounds = getReviewRounds(pr.id)?.rounds ?? [];
   return rounds
     .filter((round) => round.visibility !== "hidden")
@@ -143,7 +139,7 @@ $effect(() => {
     }
     fetchData(prId, headSha);
     // Refresh the report list too: a round can finish while the menu is shut.
-    if (untrack(() => onReviewPage)) void loadReviewRounds(prId);
+    void loadReviewRounds(prId);
   }
 });
 </script>
@@ -230,15 +226,13 @@ $effect(() => {
 							{/if}
 						</span>
 						<!-- walkthrough marker: the commit a report reviewed up to -->
-						{#if onReviewPage}
-							<span class="flex w-3 shrink-0 justify-end text-text-muted">
-								{#if active}
-									<Check size={12} class="text-text-primary" />
-								{:else if primary}
-									<Notebook size={12} />
-								{/if}
-							</span>
-						{/if}
+						<span class="flex w-3 shrink-0 justify-end text-text-muted">
+							{#if active}
+								<Check size={12} class="text-text-primary" />
+							{:else if primary}
+								<Notebook size={12} />
+							{/if}
+						</span>
 					{/snippet}
 					{#if primary}
 						<DropdownMenu.Item

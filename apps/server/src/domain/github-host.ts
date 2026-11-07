@@ -1,3 +1,4 @@
+import { isPublicGitHub } from "@revv/shared";
 import { serverEnv } from "../config";
 
 const PREFIX = "github:";
@@ -21,10 +22,6 @@ export function providerIdsForHost(host: string): string[] {
   return host === serverEnv.githubHost
     ? [providerIdForHost(host), LEGACY_GITHUB_PROVIDER_ID]
     : [providerIdForHost(host)];
-}
-
-export function isPublicGitHub(host: string): boolean {
-  return host === "github.com";
 }
 
 /** github.com's REST API lives on `api.github.com`; a GitHub Enterprise host's on `api.<host>`. */

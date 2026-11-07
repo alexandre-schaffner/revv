@@ -28,6 +28,7 @@ import { SegmentedControl, type SegmentedOption } from "$lib/components/ui/segme
 import { gsapPop } from "$lib/motion";
 import { getSettings, updateSettings } from "$lib/stores/settings.svelte";
 import { getCommitHash } from "$lib/updater/client";
+import { copyFeedback } from "$lib/utils/copy-feedback.svelte";
 import { runCheck as runUpdaterCheck } from "$lib/updater/service";
 import SettingsGroup from "../primitives/SettingsGroup.svelte";
 import SettingsPane from "../primitives/SettingsPane.svelte";
@@ -80,26 +81,7 @@ async function handleCheckNow(): Promise<void> {
   }
 }
 
-const COPIED_HOLD_MS = 1400;
-let copied = $state(false);
-let copiedTimer: ReturnType<typeof setTimeout> | null = null;
-
-$effect(() => () => {
-  if (copiedTimer) clearTimeout(copiedTimer);
-});
-
-async function copyHash(): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(commitHash);
-  } catch {
-    return;
-  }
-  copied = true;
-  if (copiedTimer) clearTimeout(copiedTimer);
-  copiedTimer = setTimeout(() => {
-    copied = false;
-  }, COPIED_HOLD_MS);
-}
+const clipboard = copyFeedback(1400);
 </script>
 
 <SettingsPane {pane}>
@@ -133,14 +115,14 @@ async function copyHash(): Promise<void> {
 				<Button
 					variant="ghost"
 					size="icon-sm"
-					onclick={copyHash}
-					aria-label={copied ? 'Copied' : 'Copy commit hash'}
+					onclick={() => clipboard.copy(commitHash)}
+					aria-label={clipboard.copied ? 'Copied' : 'Copy commit hash'}
 					title="Copy commit hash"
 				>
 					<span class="copy-slot">
-						{#key copied}
+						{#key clipboard.copied}
 							<span class="copy-glyph" in:gsapPop>
-								{#if copied}
+								{#if clipboard.copied}
 									<Check size={13} />
 								{:else}
 									<Copy size={13} />

@@ -3,6 +3,7 @@ import {
   EXTERNAL_AGENT_PROVIDER_NAMES,
   EXTERNAL_AGENT_PROVIDERS,
   type ExternalAgentProvider,
+  type ExternalIntegrationStatus,
 } from "@revv/shared";
 import PlugsConnected from "phosphor-svelte/lib/PlugsConnected";
 import {
@@ -54,14 +55,15 @@ function statusFor(provider: ExternalAgentProvider) {
 }
 
 /** What the user still has to do in the agent itself after a connect. */
-function activation(provider: ExternalAgentProvider, clientName: string): string {
-  switch (provider) {
+function activation(status: ExternalIntegrationStatus): string {
+  const { clientName, command } = status;
+  switch (status.provider) {
     case "claude-code":
       return `Run /reload-plugins in an open session, or restart Claude Code. Server: ${clientName}.`;
     case "codex":
-      return `Restart Codex, then use /revv-address-feedback-${clientName.slice(5)}.`;
+      return `Restart Codex, then use /${command}.`;
     case "opencode":
-      return `Restart opencode, then use /revv-address-feedback-${clientName.slice(5)}.`;
+      return `Restart opencode, then use /${command}.`;
     case "cursor":
       return `Reload the Cursor window, then enable “${clientName}” under Settings → MCP.`;
   }
@@ -135,7 +137,7 @@ function metaLine(lastUsedAt: string | null, expiresAt: string | null): string |
 					</Button>
 				{/snippet}
 				{#if status?.connected}
-					<p class="integration-activation">{activation(provider, status.clientName)}</p>
+					<p class="integration-activation">{activation(status)}</p>
 				{/if}
 			</SettingsRow>
 		{/each}

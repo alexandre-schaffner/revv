@@ -10,7 +10,7 @@ interface Props {
 let { repo }: Props = $props();
 </script>
 
-<header class="project-header" data-active-repo={repo?.id ?? ""}>
+<header class="project-header">
 	{#if repo}
 		<div class="project-meta">
 			<div class="project-title-row">

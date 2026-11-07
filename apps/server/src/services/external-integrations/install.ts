@@ -287,12 +287,17 @@ export interface CodexPaths {
   readonly promptFile: string;
 }
 
+/** The slash command the Codex prompt and the opencode command file register. */
+function addressFeedbackCommand(accountKey: string): string {
+  return `revv-address-feedback-${accountKey}`;
+}
+
 export function codexPaths(accountKey: string, home: string = homedir()): CodexPaths {
   const codexHome = process.env.CODEX_HOME?.trim() || join(home, ".codex");
   return {
     installDir: join(home, ".revv", "codex", accountKey),
     configFile: join(codexHome, "config.toml"),
-    promptFile: join(codexHome, "prompts", `revv-address-feedback-${accountKey}.md`),
+    promptFile: join(codexHome, "prompts", `${addressFeedbackCommand(accountKey)}.md`),
   };
 }
 
@@ -522,7 +527,7 @@ export function openCodePaths(accountKey: string, home: string = homedir()): Ope
   return {
     installDir: join(home, ".revv", "opencode", accountKey),
     configFile: existsSync(jsonFile) || !existsSync(jsoncFile) ? jsonFile : jsoncFile,
-    commandFile: join(configDir, "command", `revv-address-feedback-${accountKey}.md`),
+    commandFile: join(configDir, "command", `${addressFeedbackCommand(accountKey)}.md`),
   };
 }
 
@@ -586,6 +591,8 @@ function uninstallCursor(paths: CursorPaths, serverName: string): void {
 export interface ExternalIntegrationInstaller {
   /** Account-scoped name shown in the agent's MCP configuration. */
   readonly clientName: string;
+  /** The slash command the install adds to the agent, or null when it adds none. */
+  readonly command: string | null;
   /** Files and directories this install owns, shown to the user on connect. */
   readonly locations: readonly string[];
   readonly install: (input: BridgeInstallInput) => void;
@@ -605,6 +612,7 @@ export function externalIntegrationInstaller(
       const paths = claudeCodePaths(accountKey, home);
       return {
         clientName: serverName,
+        command: null,
         locations: [paths.installDir],
         install: (input) => installClaudeCode(input, paths, serverName),
         uninstall: () => removeManagedDirectory(paths.installDir),
@@ -615,6 +623,7 @@ export function externalIntegrationInstaller(
       const paths = codexPaths(accountKey, home);
       return {
         clientName: serverName,
+        command: addressFeedbackCommand(accountKey),
         locations: [paths.configFile, paths.promptFile],
         install: (input) => installCodex(input, paths, serverName),
         uninstall: () => uninstallCodex(paths, serverName),
@@ -625,6 +634,7 @@ export function externalIntegrationInstaller(
       const paths = openCodePaths(accountKey, home);
       return {
         clientName: serverName,
+        command: addressFeedbackCommand(accountKey),
         locations: [paths.configFile, paths.commandFile],
         install: (input) => installOpenCode(input, paths, serverName),
         uninstall: () => uninstallOpenCode(paths, serverName),
@@ -635,6 +645,7 @@ export function externalIntegrationInstaller(
       const paths = cursorPaths(accountKey, home);
       return {
         clientName: serverName,
+        command: null,
         locations: [paths.configFile],
         install: (input) => installCursor(input, paths, serverName),
         uninstall: () => uninstallCursor(paths, serverName),

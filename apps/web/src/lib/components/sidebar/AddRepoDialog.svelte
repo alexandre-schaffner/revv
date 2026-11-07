@@ -4,8 +4,6 @@ import CloudArrowDown from "phosphor-svelte/lib/CloudArrowDown";
 import FolderOpen from "phosphor-svelte/lib/FolderOpen";
 import * as Dialog from "$lib/components/ui/dialog/index.js";
 import { gsapFade, gsapFadeY, gsapPress, tokens } from "$lib/motion";
-import { fetchDefaultCloneBaseDir } from "$lib/repos/catalog.svelte";
-import { readStored, STORAGE_KEYS, textCodec, writeStored } from "$lib/stores/persisted.svelte";
 import AddRepoForm from "./AddRepoForm.svelte";
 import LinkRepoForm from "./LinkRepoForm.svelte";
 import RepoDialogHeader from "./RepoDialogHeader.svelte";
@@ -21,9 +19,6 @@ let {
 type View = "choose" | "clone" | "link";
 
 let view = $state<View>("choose");
-// Empty = "use the server's default base" (shown as the placeholder, fetched
-// from the server). Only a user-chosen custom base is ever held here.
-let cloneBasePath = $state("");
 
 // Reset to the source chooser *before* the reopened modal paints. $effect.pre
 // runs ahead of the dialog content's DOM update in the same flush, so when
@@ -33,16 +28,7 @@ let cloneBasePath = $state("");
 $effect.pre(() => {
   if (!open) return;
   view = "choose";
-  void fetchDefaultCloneBaseDir();
-  cloneBasePath = readStored(STORAGE_KEYS.lastCloneBase, textCodec, null) ?? "";
 });
-
-function rememberCloneBase(path: string): void {
-  cloneBasePath = path;
-  // Persist only an explicit custom base; an empty value means "default", which
-  // we never want to pin (it would survive a later server-default change).
-  writeStored(STORAGE_KEYS.lastCloneBase, textCodec, path);
-}
 </script>
 
 <Dialog.Root {open} {onOpenChange}>
@@ -93,13 +79,7 @@ function rememberCloneBase(path: string): void {
             <ArrowLeft size={12} />
             <span>Sources</span>
           </button>
-          <AddRepoForm
-            onClose={() => onOpenChange(false)}
-            showLocation
-            {cloneBasePath}
-            onCloneBasePathChange={(path) => (cloneBasePath = path)}
-            onCloneSuccess={rememberCloneBase}
-          />
+          <AddRepoForm onClose={() => onOpenChange(false)} />
         </div>
       {:else}
         <div
