@@ -4,7 +4,6 @@ import {
   type FileDiffMetadata,
   type FileDiffOptions,
   FileDiff as PierreFileDiff,
-  parseDiffFromFile,
 } from "@pierre/diffs";
 import { FileTree, type GitStatusEntry } from "@pierre/trees";
 import { PIERRE_THEME } from "@revv/shared";
@@ -32,6 +31,7 @@ import {
   removeProposedComment,
   updateProposedComment,
 } from "$lib/chat/proposed.svelte";
+import { proposedFileDiffs } from "$lib/chat/proposed-diff";
 import { isChatStreaming } from "$lib/chat/timeline.svelte";
 import { sendProposedFeedback } from "$lib/chat/turn.svelte";
 import AnnotationCommentInput from "$lib/components/review/AnnotationCommentInput.svelte";
@@ -57,43 +57,8 @@ function requestClose() {
   onOpenChange(false);
 }
 
-// Build non-partial FileDiffMetadata from full file pairs. `isPartial: false`
-// is what unlocks the line-info separator's expand controls — Pierre gates
-// `isExpandable` on `!fileDiff.isPartial` (DiffHunksRenderer.js).
-// Binary files (server returns both contents as null) get skipped entirely.
 const files: FileDiffMetadata[] = $derived(
-  fileContents == null
-    ? []
-    : (() => {
-        const out: FileDiffMetadata[] = [];
-        for (let i = 0; i < fileContents.length; i++) {
-          const f = fileContents[i];
-          if (!f || f.binary) continue;
-          const oldName = f.oldPath ?? f.path;
-          const newName = f.path;
-          const cacheKeyBase = `chat-diff-${sha}-${i}`;
-          try {
-            const meta = parseDiffFromFile(
-              {
-                name: oldName,
-                contents: f.oldContent ?? "",
-                cacheKey: `${cacheKeyBase}-old`,
-              },
-              {
-                name: newName,
-                contents: f.newContent ?? "",
-                cacheKey: `${cacheKeyBase}-new`,
-              },
-            );
-            out.push(meta);
-          } catch {
-            // `parseDiffFromFile` throws on identical inputs ("if the files
-            // are the same maybe?"). For a rename with no content change we
-            // still want the file listed.
-          }
-        }
-        return out;
-      })(),
+  fileContents == null ? [] : proposedFileDiffs(sha, fileContents),
 );
 
 const paths = $derived(files.map((f) => f.name));
