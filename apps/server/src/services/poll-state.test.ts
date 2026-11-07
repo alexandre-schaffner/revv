@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { rankThreadSweep, type ThreadSweepMark } from "./poll-state";
+import { makePollState, rankThreadSweep, type ThreadSweepMark } from "./poll-state";
 
 const NOW = Date.parse("2026-06-04T12:00:00.000Z");
 const MINUTE = 60 * 1000;
@@ -36,5 +36,26 @@ describe("rankThreadSweep", () => {
       ["older", true],
       ["newer", true],
     ]);
+  });
+});
+
+describe("claimCycle", () => {
+  it("queues one more cycle when a manual sync coalesces onto the one in flight", () => {
+    const state = makePollState();
+    expect(state.claimCycle("periodic", NOW)).toBe("claimed");
+    expect(state.claimCycle("manual", NOW)).toBe("in-flight");
+    expect(state.claimCycle("manual", NOW)).toBe("in-flight");
+    expect(state.releaseCycle()).toBe(true);
+    expect(state.claimCycle("manual", NOW)).toBe("claimed");
+    expect(state.releaseCycle()).toBe(false);
+  });
+
+  it("drops a coalesced freshen or periodic request", () => {
+    const state = makePollState();
+    expect(state.claimCycle("manual", NOW)).toBe("claimed");
+    expect(state.claimCycle("freshen", NOW)).toBe("in-flight");
+    expect(state.claimCycle("periodic", NOW)).toBe("in-flight");
+    expect(state.releaseCycle()).toBe(false);
+    expect(state.claimCycle("freshen", NOW + MINUTE)).toBe("fresh-enough");
   });
 });

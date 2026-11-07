@@ -237,8 +237,8 @@ exhaustively switch on `msg.type` with `noUncheckedIndexedAccess`-friendly types
 field means every consumer needs to know which arms carry it.
 
 **Canonical example.** `packages/shared/src/events.ts:59–320` defines 30+ message arms, all
-conforming to `{ type, data? }`. Signal-only arms (`prs:sync-started` at `:74`) omit `data`;
-payload-bearing arms (`prs:sync-complete` at `:78`) carry a structured `data` object.
+conforming to `{ type, data? }`. Signal-only arms (`prs:sync-started`) omit `data`;
+payload-bearing arms (`prs:sync-failed`) carry a structured `data` object.
 
 **Anti-pattern.** `{ type: "thing-happened", thing: { ... } }` (flat `thing` instead of nested
 in `data`). Or `{ event: "thing-happened", data: ... }` (`event` instead of `type`).
@@ -309,9 +309,8 @@ invariant #8.
 (enforced by `check:import-boundaries`). Feature events carry per-account data and MUST be
 addressed to an account: `toAccount(accountId, msg)`, or `toRepo(repoId, msg)` /
 `toPr(prId, msg)`, which resolve the owning account in one place. `toAll(msg)` fans out to every
-connected client and is reserved for server-global sync-lifecycle signals — today the generic
-`error` envelope used for sync failures (`SYNC_ERROR` / `THREAD_SYNC_ERROR` codes), emitted
-from `PollScheduler.ts`.
+connected client and is reserved for server-global signals; nothing sends one today (the PR
+sync's lifecycle and failure signals go to the accounts the cycle syncs).
 
 **Why.** A data-bearing envelope (`prs:updated`, recap, thread, walkthrough) sent with
 `toAll` leaks one account's data to every connected client. Scoping is a security

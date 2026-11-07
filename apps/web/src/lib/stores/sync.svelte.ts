@@ -1,8 +1,9 @@
-import type {
-  ErrorEnvelope,
-  SyncChange,
-  ThreadsSyncErrorEnvelope,
-  ThreadsSyncedEnvelope,
+import {
+  FRESHEN_MIN_INTERVAL_MS,
+  type PrsSyncFailedEnvelope,
+  type SyncChange,
+  type ThreadsSyncErrorEnvelope,
+  type ThreadsSyncedEnvelope,
 } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
@@ -48,8 +49,9 @@ export function onPrsSyncComplete(): void {
 }
 
 /** A sync failure is terminal for that sync, and no `prs:sync-complete` follows it. */
-export function onError(data: ErrorEnvelope["data"]): void {
-  if (data.code === "SYNC_ERROR") prListSyncing = false;
+export function onPrsSyncFailed({ message }: PrsSyncFailedEnvelope["data"]): void {
+  prListSyncing = false;
+  toast.error(message, { duration: 6000 });
 }
 
 export function onPrsSyncSummary(changes: SyncChange[]): void {
@@ -188,11 +190,8 @@ export function refreshPrHead(prId: string): void {
     });
 }
 
-// Client-side throttle for `freshenPrList`, matching the server's: it skips a
-// freshen when any sync cycle started in the last 2 minutes, so asking more
-// often only spends requests. Every window focus calls this, so without it a
-// burst of alt-tabs is a burst of POSTs.
-const FRESHEN_MIN_INTERVAL_MS = 2 * 60 * 1000;
+// Every window focus calls `freshenPrList`; without the throttle a burst of
+// alt-tabs is a burst of POSTs the server would skip anyway.
 let lastFreshenAt = 0;
 
 /**

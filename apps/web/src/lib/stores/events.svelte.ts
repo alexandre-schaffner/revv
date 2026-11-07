@@ -17,7 +17,6 @@ import * as walkthroughSizing from "$lib/walkthrough/sizing.svelte";
 import * as walkthrough from "$lib/walkthrough/store.svelte";
 import * as auth from "./auth.svelte";
 import * as conversation from "./conversation.svelte";
-import { setError } from "./errors.svelte";
 import * as mergeEligibility from "./merge-eligibility.svelte";
 import * as prs from "./prs.svelte";
 import * as repoActivity from "./repo-activity.svelte";
@@ -125,6 +124,9 @@ function dispatch(msg: ServerEventMessage): void {
     case "prs:sync-complete":
       sync.onPrsSyncComplete();
       break;
+    case "prs:sync-failed":
+      sync.onPrsSyncFailed(msg.data);
+      break;
     case "prs:sync-summary":
       sync.onPrsSyncSummary(msg.data);
       break;
@@ -136,10 +138,6 @@ function dispatch(msg: ServerEventMessage): void {
       break;
     case "user:updated":
       auth.onUserUpdated(msg.data);
-      break;
-    case "error":
-      sync.onError(msg.data);
-      setError(msg.data);
       break;
     case "auth:reauth-required":
       auth.onAuthReauthRequired(msg.data);

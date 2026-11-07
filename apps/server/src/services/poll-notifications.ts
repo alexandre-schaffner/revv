@@ -23,7 +23,6 @@ export interface CycleViewers {
   readonly repoToAccountId: ReadonlyMap<string, string>;
   /** The viewer login of each account (`GitHubAccounts.viewerLogin`). */
   readonly viewerLoginByAccount: ReadonlyMap<string, string | null>;
-  readonly userIdByAccount: ReadonlyMap<string, string>;
 }
 
 /** The notification-worthy differences between the pre-sync rows and this cycle's. */
@@ -118,7 +117,6 @@ export const announceSyncChanges = (
       if (change.kind !== "review_requested") continue;
       const pr = allPrs.find((p) => p.id === change.prId);
       if (!pr || pr.headSha === null) continue;
-      if (!viewers.userIdByAccount.has(changeAccountByPrId.get(pr.id) ?? "")) continue;
       const uncached = yield* withDb(
         svc.db,
         svc.walkthroughService.getCached(pr.id, pr.headSha),
