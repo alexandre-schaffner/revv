@@ -165,7 +165,7 @@ detect_platform() {
 }
 
 # Sets and exports REVV_SUPPORT_DIR, REVV_SRC_DIR, REVV_LOG_DIR,
-# REVV_LAUNCH_AGENT_PLIST, REVV_CLI_DIR, REVV_AUTH_KEY.
+# REVV_LAUNCH_AGENT_PLIST, REVV_CLI_DIR.
 revv_paths() {
   : "${PLATFORM:=$(uname -s)}"
   # bash 3.2 (macOS /bin/bash) lacks ${VAR,,}; lowercase via tr.
@@ -183,35 +183,8 @@ revv_paths() {
   esac
   REVV_SRC_DIR="${REVV_INSTALL_DIR:-$REVV_SUPPORT_DIR/src}"
   REVV_CLI_DIR="${REVV_CLI_DIR:-$HOME/.local/bin}"
-  REVV_AUTH_KEY="${REVV_AUTH_KEY:-$REVV_SUPPORT_DIR/auth.key}"
   export REVV_SUPPORT_DIR REVV_SRC_DIR REVV_LOG_DIR
-  export REVV_LAUNCH_AGENT_PLIST REVV_CLI_DIR REVV_AUTH_KEY
-}
-
-# The server reads this key at startup (loadOrCreateAuthSecret in
-# apps/server/src/auth.ts).
-ensure_auth_key() {
-  revv_paths
-  if [[ -s "$REVV_AUTH_KEY" ]]; then
-    success "Auth key already present"
-    return 0
-  fi
-  mkdir -p "$REVV_SUPPORT_DIR"
-  chmod 700 "$REVV_SUPPORT_DIR" 2>/dev/null || true
-  local secret=""
-  if check_cmd openssl; then
-    secret="$(openssl rand -hex 32)"
-  elif check_cmd xxd; then
-    secret="$(head -c 32 /dev/urandom | xxd -p -c 32)"
-  else
-    secret="$(LC_ALL=C tr -dc 'a-f0-9' </dev/urandom | head -c 64)"
-  fi
-  if [[ ${#secret} -lt 32 ]]; then
-    fail "Could not generate an auth key (no openssl/xxd/urandom available)"
-  fi
-  printf '%s' "$secret" > "$REVV_AUTH_KEY"
-  chmod 600 "$REVV_AUTH_KEY"
-  success "Generated auth key at $REVV_AUTH_KEY"
+  export REVV_LAUNCH_AGENT_PLIST REVV_CLI_DIR
 }
 
 ensure_xcode_clt() {

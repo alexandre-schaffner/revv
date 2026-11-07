@@ -248,15 +248,10 @@ if [[ "$MODE" == "dev" ]]; then
   printf '  %sStart developing:%s\n' "$REVV_BOLD" "$REVV_RESET"
   printf '    %s$%s make dev             %s# all services (web, server, Tauri)%s\n' "$REVV_DIM" "$REVV_RESET" "$REVV_DIM" "$REVV_RESET"
   printf '    %s$%s make dev-server      %s# API only (port 45679)%s\n\n' "$REVV_DIM" "$REVV_RESET" "$REVV_DIM" "$REVV_RESET"
-  printf '  On first server start, Revv generates an auth key at:\n'
-  printf '    %s\n' "${REVV_AUTH_KEY:-$HOME/Library/Application Support/Revv/auth.key}"
   printf '  No .env file is required for normal use — see .env.example for\n'
   printf '  optional overrides (custom GitHub client_id, DB path, etc.).\n\n'
   exit 0
 fi
-
-step "Ensuring auth key"
-ensure_auth_key
 
 _resolve_install_release_tag() {
   if [[ -n "${REVV_RELEASE_TAG:-}" ]]; then
@@ -414,7 +409,6 @@ printf '%s\n' "$REVV_RESET"
 printf '  %sApp:%s        %s\n'    "$REVV_BOLD" "$REVV_RESET" "$dest_app"
 printf '  %sSource:%s     %s\n'    "$REVV_BOLD" "$REVV_RESET" "$PROJECT_ROOT"
 printf '  %sServer:%s     owned by Revv (http://localhost:45678)\n' "$REVV_BOLD" "$REVV_RESET"
-printf '  %sAuth key:%s   %s\n'    "$REVV_BOLD" "$REVV_RESET" "$REVV_AUTH_KEY"
 printf '  %sLogs:%s       %s\n'    "$REVV_BOLD" "$REVV_RESET" "$REVV_LOG_DIR"
 printf '\n  %sManage with the revv CLI:%s\n' "$REVV_BOLD" "$REVV_RESET"
 printf '    %s$%s revv status      show app + server status\n'    "$REVV_DIM" "$REVV_RESET"
