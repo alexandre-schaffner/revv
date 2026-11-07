@@ -1,16 +1,17 @@
 <script lang="ts">
-import { isIssueResolved, isPublishableDraftComment, isThreadResolved } from "@revv/shared";
+import { isIssueResolved, isThreadResolved } from "@revv/shared";
 import { toast } from "svelte-sonner";
-import { sendChatMessage } from "$lib/chat/turn.svelte";
+import { submitChatMessage } from "$lib/chat/turn.svelte";
 import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import ReviewActionBar from "$lib/components/review/chrome/ReviewActionBar.svelte";
+import { IssueSelection } from "$lib/review/issue-selection.svelte";
 import { type ReviewAction, submitReview } from "$lib/review/submit-review";
+import { postableThreadCount } from "$lib/review/threads";
 import { getActiveTab } from "$lib/stores/pr-view-state.svelte";
-import { deleteThread, getThreadMessages, getThreads } from "$lib/stores/review.svelte";
-import { jumpToDiffLine, jumpToWalkthroughBlock } from "$lib/stores/review-nav.svelte";
+import { deleteThread, getThreads } from "$lib/stores/review.svelte";
 import { setRightPanelOpen } from "$lib/stores/sidebar.svelte";
 import { outstandingItemsPhrase } from "$lib/walkthrough/issues";
-import { getBlocks, getIssueSignal } from "$lib/walkthrough/store.svelte";
+import { getIssueSignal } from "$lib/walkthrough/store.svelte";
 import ApproveWithIssuesDialog from "./ApproveWithIssuesDialog.svelte";
 import { buildAddressIssuesPrompt } from "./address-issues-prompt";
 import CommentsPanel from "./spec-panel/CommentsPanel.svelte";
@@ -27,29 +28,9 @@ const issueSignal = $derived(getIssueSignal(prId));
 const issues = $derived(issueSignal.shown);
 const filteredIssues = $derived(issueSignal.filtered);
 const unresolvedIssues = $derived(issues.filter((issue) => !isIssueResolved(issue)));
-const threads = $derived(getThreads());
-const unresolvedThreads = $derived(threads.filter((t) => !isThreadResolved(t.status)));
-const blocks = $derived(getBlocks(prId));
+const unresolvedThreads = $derived(getThreads(prId).filter((t) => !isThreadResolved(t.status)));
 
-let selectedIssueIds = $state<Set<string>>(new Set());
-// Each issue carries its server-side `submittedAt`, so the "already posted"
-// treatment survives reloads, PR switches and restarts.
-const submittedIssueIds = $derived(
-  new Set(issues.filter((i) => i.submittedAt != null).map((i) => i.id)),
-);
-const selectableIssueIds = $derived(
-  new Set(
-    unresolvedIssues.filter((issue) => !submittedIssueIds.has(issue.id)).map((issue) => issue.id),
-  ),
-);
-const selectedIssues = $derived(unresolvedIssues.filter((issue) => selectedIssueIds.has(issue.id)));
-
-// External-agent edits can resolve an issue while this view is mounted.
-// Normalize the selection immediately so no later action can submit a stale id.
-$effect(() => {
-  const next = new Set([...selectedIssueIds].filter((id) => selectableIssueIds.has(id)));
-  if (next.size !== selectedIssueIds.size) selectedIssueIds = next;
-});
+const selection = new IssueSelection(() => issues);
 let submitting = $state<ReviewAction | null>(null);
 let approveDialogOpen = $state(false);
 
@@ -66,14 +47,8 @@ function handleApproveClick(): void {
   void submit("approve");
 }
 
-const selectedCount = $derived(selectedIssues.length);
-
-// Unresolved threads with a message `submitReview` would post, so the
-// Comment button's enabled state matches what gets sent.
-const pendingCommentCount = $derived(
-  unresolvedThreads.filter((t) => getThreadMessages(t.id).some(isPublishableDraftComment)).length,
-);
-const canComment = $derived(selectedCount > 0 || pendingCommentCount > 0);
+const selectedCount = $derived(selection.selected.length);
+const canComment = $derived(selectedCount > 0 || postableThreadCount(prId) > 0);
 
 const approveBlockerSummary = $derived(
   outstandingItemsPhrase(unresolvedIssues.length, unresolvedThreads.length),
@@ -83,7 +58,7 @@ async function submit(action: ReviewAction): Promise<void> {
   if (submitting) return;
   submitting = action;
   try {
-    if (await submitReview(prId, action, selectedIssues)) selectedIssueIds = new Set();
+    if (await submitReview(prId, action, selection.selected)) selection.clear();
   } finally {
     submitting = null;
   }
@@ -91,38 +66,16 @@ async function submit(action: ReviewAction): Promise<void> {
 
 /**
  * The chat agent addresses the selected issues as commits on its worktree's
- * working branch; the user then picks which to keep from the chat panel's
- * proposed-changes strip.
+ * working branch, after any turn already running; the user then picks which
+ * to keep from the chat panel's proposed-changes strip.
  */
 function generateChanges(): void {
-  const selected = selectedIssues;
-  if (selected.length === 0) {
+  if (selectedCount === 0) {
     toast.error("Select at least one issue to address.");
     return;
   }
-  const prompt = buildAddressIssuesPrompt(selected);
   setRightPanelOpen(true);
-  sendChatMessage({ prId, message: prompt });
-}
-
-const allIssuesSelected = $derived(
-  selectableIssueIds.size > 0 && [...selectableIssueIds].every((id) => selectedIssueIds.has(id)),
-);
-
-function toggleIssue(id: string) {
-  if (!selectableIssueIds.has(id)) return;
-  const next = new Set(selectedIssueIds);
-  if (next.has(id)) next.delete(id);
-  else next.add(id);
-  selectedIssueIds = next;
-}
-
-function toggleAllIssues() {
-  if (allIssuesSelected) {
-    selectedIssueIds = new Set();
-  } else {
-    selectedIssueIds = new Set(selectableIssueIds);
-  }
+  submitChatMessage(prId, buildAddressIssuesPrompt(selection.selected), []);
 }
 
 useShellChrome(() => ({
@@ -136,6 +89,7 @@ useShellChrome(() => ({
 	     changes"; with none it's a plain comment review. Either way the line
 	     comments ride along. -->
 	<ReviewActionBar
+		{prId}
 		{submitting}
 		{selectedCount}
 		{canComment}
@@ -148,32 +102,20 @@ useShellChrome(() => ({
 {/snippet}
 
 <div class="your-review">
-	<IssuesPanel
-		{issues}
-		{filteredIssues}
-		selectedIds={selectedIssueIds}
-		submittedIds={submittedIssueIds}
-		onToggleSelect={toggleIssue}
-		onToggleSelectAll={toggleAllIssues}
-		onFileClick={jumpToDiffLine}
-		{blocks}
-		onBlockJump={jumpToWalkthroughBlock}
-	/>
+	<IssuesPanel {prId} {issues} {filteredIssues} {selection} />
 
 	<CommentsPanel
+		{prId}
 		threads={unresolvedThreads}
-		{getThreadMessages}
-		onJump={jumpToDiffLine}
 		onDiscard={(threadId) => void deleteThread(threadId)}
 	/>
 </div>
 
 <ApproveWithIssuesDialog
 	bind:open={approveDialogOpen}
+	{prId}
 	issues={unresolvedIssues}
 	pendingThreads={unresolvedThreads}
-	{getThreadMessages}
-	onfileclick={(path, line) => jumpToDiffLine(path, line)}
 	onconfirm={() => void submit('approve')}
 />
 

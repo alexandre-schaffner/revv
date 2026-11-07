@@ -3,12 +3,7 @@
  * File and step links live in the expanded body so the row has no nested
  * click targets.
  */
-import {
-  ISSUE_SEVERITY_LABEL,
-  issueResolutionLabel,
-  type WalkthroughBlock,
-  type WalkthroughIssue,
-} from "@revv/shared";
+import { ISSUE_SEVERITY_LABEL, issueResolutionLabel, type WalkthroughIssue } from "@revv/shared";
 import Check from "phosphor-svelte/lib/Check";
 import { Checkbox } from "$lib/components/ui/checkbox";
 import { enterOnce } from "$lib/motion";
@@ -16,34 +11,33 @@ import IssueExpandedBody from "./IssueExpandedBody.svelte";
 import SpecRow from "./SpecRow.svelte";
 
 interface Props {
+  prId: string;
   issue: WalkthroughIssue;
   /** Ticked for the next submit. */
-  selected: boolean;
+  selected?: boolean;
   /** Already posted to GitHub. */
   submitted: boolean;
+  /** Shown for reading only: no selection checkbox. */
+  readOnly?: boolean;
   open: boolean;
   /** Rows sharing a group cascade in together. */
   cascadeGroup: string;
-  onToggleSelect: () => void;
+  onToggleSelect?: (() => void) | undefined;
   onToggleOpen: () => void;
-  onFileClick?: ((filePath: string, line: number) => void) | undefined;
   onTriggerRef?: ((el: HTMLElement | null) => void) | undefined;
-  blocks: WalkthroughBlock[];
-  onBlockJump?: ((blockId: string) => void) | undefined;
 }
 
 let {
+  prId,
   issue,
-  selected,
+  selected = false,
   submitted,
+  readOnly = false,
   open,
   cascadeGroup,
   onToggleSelect,
   onToggleOpen,
-  onFileClick,
   onTriggerRef,
-  blocks,
-  onBlockJump,
 }: Props = $props();
 
 /** Compiler-style prefix (like TS2345's leading letter), tabular so rows line up. */
@@ -64,7 +58,7 @@ const motionKey = $derived(`spec-row:issue:${issue.id}`);
 
 function handleCheckedChange(): void {
   if (submitted || resolved) return;
-  onToggleSelect();
+  onToggleSelect?.();
 }
 
 function stopPropagation(e: MouseEvent): void {
@@ -98,7 +92,7 @@ function stopPropagation(e: MouseEvent): void {
                 <span class="staged-check" aria-hidden="true">
                     <Check size={13} />
                 </span>
-            {:else}
+            {:else if !readOnly}
                 <Checkbox
                     checked={selected}
                     aria-label="Include in submit"
@@ -126,7 +120,7 @@ function stopPropagation(e: MouseEvent): void {
         {/snippet}
 
         {#snippet content()}
-            <IssueExpandedBody {issue} {blocks} {onFileClick} {onBlockJump} />
+            <IssueExpandedBody {prId} {issue} />
         {/snippet}
     </SpecRow>
 </div>

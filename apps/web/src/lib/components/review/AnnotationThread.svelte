@@ -11,6 +11,7 @@ import Clock from "phosphor-svelte/lib/Clock";
 import PaperPlaneTilt from "phosphor-svelte/lib/PaperPlaneTilt";
 import type { Attachment } from "svelte/attachments";
 import Markdown from "$lib/components/markdown/Markdown.svelte";
+import { canDiscardThread } from "$lib/review/threads";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import AnnotationCommentInput from "./AnnotationCommentInput.svelte";
@@ -18,13 +19,12 @@ import MessageAvatar from "./MessageAvatar.svelte";
 
 interface Props {
   thread: CommentThread;
-  messages: ThreadMessage[];
+  messages: readonly ThreadMessage[];
   onReply?: () => void;
   onResolve?: () => void;
   onReopen?: () => void;
   onDiscard?: () => void;
   onDiscardReply?: (messageId: string) => void;
-  onApplySuggestion?: (suggestion: string) => void;
   onEditMessage?: (messageId: string, body: string) => void;
   onPush?: (() => void | Promise<void>) | undefined;
   isReplying?: boolean;
@@ -41,7 +41,6 @@ let {
   onReopen,
   onDiscard,
   onDiscardReply,
-  onApplySuggestion,
   onEditMessage,
   onPush,
   isReplying = false,
@@ -52,11 +51,8 @@ let {
 
 const isResolved = $derived(isThreadResolved(thread.status));
 const currentUserLogin = $derived(getCurrentUserLogin());
-const firstMessage = $derived(messages[0] ?? null);
-const canDiscardThread = $derived(
-  isPending && firstMessage !== null && canUserModifyComment(firstMessage, currentUserLogin),
-);
-const canPushThread = $derived(canDiscardThread && onPush !== undefined);
+const canDiscard = $derived(canDiscardThread(thread, messages, currentUserLogin));
+const canPushThread = $derived(canDiscard && onPush !== undefined);
 
 function canModifyMessage(message: ThreadMessage): boolean {
   return canUserModifyComment(message, currentUserLogin);
@@ -187,11 +183,8 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 						Code suggestion
 					</div>
 					<pre class="suggestion-code">{msg.codeSuggestion}</pre>
-					{#if !isResolved && onApplySuggestion && msg.codeSuggestion}
-						{@const suggestion = msg.codeSuggestion}
-						<button class="apply-btn" onclick={() => onApplySuggestion?.(suggestion)}>
-							Apply suggestion
-						</button>
+					{#if !isResolved && onResolve}
+						<button class="apply-btn" onclick={() => onResolve?.()}>Resolve</button>
 					{/if}
 				</div>
 			{/if}
@@ -226,7 +219,7 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 				{isReplying ? 'Cancel' : 'Add reply...'}
 			</button>
 		{/if}
-		{#if canDiscardThread && onDiscard}
+		{#if canDiscard && onDiscard}
 			<button
 				class="footer-link footer-link--danger"
 				onclick={onDiscard}

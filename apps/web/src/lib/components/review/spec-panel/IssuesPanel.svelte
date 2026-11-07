@@ -3,12 +3,17 @@
  * The walkthrough's issues as a lint-diagnostics panel: one flat list sorted
  * critical → warning → info. `x` toggles the focused row's selection.
  */
-import { isIssueResolved, type WalkthroughBlock, type WalkthroughIssue } from "@revv/shared";
+import type { WalkthroughIssue } from "@revv/shared";
 import CheckSquare from "phosphor-svelte/lib/CheckSquare";
 import Square from "phosphor-svelte/lib/Square";
 import Warning from "phosphor-svelte/lib/Warning";
 import LowSignalDisclosure from "$lib/components/walkthrough/LowSignalDisclosure.svelte";
 import SeverityIcon from "$lib/components/walkthrough/SeverityIcon.svelte";
+import {
+  type IssueSelection,
+  isIssueSelectable,
+  isIssueSubmitted,
+} from "$lib/review/issue-selection.svelte";
 import { countBySeverity, sortBySeverity } from "$lib/walkthrough/issues";
 import { createExpandState } from "./expand-state.svelte";
 import IssueRow from "./IssueRow.svelte";
@@ -19,51 +24,23 @@ import SpecPanel from "./SpecPanel.svelte";
 import SpecSummaryBar from "./SpecSummaryBar.svelte";
 
 interface Props {
+  prId: string;
   issues: readonly WalkthroughIssue[];
   /** Issues rated low signal. Read-only, behind a disclosure, outside the selection model — select-all must never post something the reader didn't see. */
   filteredIssues?: readonly WalkthroughIssue[];
-  /** Selected for submit. Owned by YourReview so it survives remounts and PR switches. */
-  selectedIds: Set<string>;
-  /** Already posted. Owned by YourReview, like `selectedIds`. */
-  submittedIds: Set<string>;
-  onToggleSelect: (id: string) => void;
-  onToggleSelectAll: () => void;
-  onFileClick: (filePath: string, line: number) => void;
-  blocks: WalkthroughBlock[];
-  onBlockJump: (blockId: string) => void;
+  /** Owned by YourReview so it survives remounts. */
+  selection: IssueSelection;
 }
 
-let {
-  issues,
-  filteredIssues = [],
-  selectedIds,
-  submittedIds,
-  onToggleSelect,
-  onToggleSelectAll,
-  onFileClick,
-  blocks,
-  onBlockJump,
-}: Props = $props();
+let { prId, issues, filteredIssues = [], selection }: Props = $props();
 
 const sortedIssues = $derived(sortBySeverity(issues));
 
-function isSelectable(issue: WalkthroughIssue): boolean {
-  return !isIssueResolved(issue) && !submittedIds.has(issue.id);
-}
-
-const tally = $derived.by(() => {
-  let selected = 0;
-  let submittable = 0;
-  for (const issue of issues) {
-    if (!isIssueResolved(issue) && selectedIds.has(issue.id)) selected++;
-    if (isSelectable(issue)) submittable++;
-  }
-  return { ...countBySeverity(issues), selected, submittable };
+const tally = $derived({
+  ...countBySeverity(issues),
+  selected: selection.selected.length,
+  submittable: selection.selectableCount,
 });
-
-const allSelected = $derived(
-  tally.submittable > 0 && issues.every((i) => !isSelectable(i) || selectedIds.has(i.id)),
-);
 
 const expand = createExpandState(() => issues.map((i) => i.id), null);
 
@@ -73,14 +50,14 @@ let onlyUnselected = $state(false);
 const visibleIssues = $derived.by(() => {
   let list = sortedIssues;
   if (onlyCritical) list = list.filter((i) => i.severity === "critical");
-  if (onlyUnselected) list = list.filter((i) => isSelectable(i) && !selectedIds.has(i.id));
+  if (onlyUnselected) list = list.filter((i) => isIssueSelectable(i) && !selection.has(i.id));
   return list;
 });
 
 const keys = createRowKeys({
-  order: () => visibleIssues.filter(isSelectable).map((i) => i.id),
+  order: () => visibleIssues.filter(isIssueSelectable).map((i) => i.id),
   toggleAll: () => expand.toggleAll(),
-  rowKeys: { x: (id) => onToggleSelect(id) },
+  rowKeys: { x: (id) => selection.toggle(id) },
 });
 </script>
 
@@ -103,9 +80,9 @@ const keys = createRowKeys({
             ]}
             action={tally.submittable > 0
                 ? {
-                      label: allSelected ? "Clear" : "Select all",
-                      icon: allSelected ? Square : CheckSquare,
-                      onclick: onToggleSelectAll,
+                      label: selection.allSelected ? "Clear" : "Select all",
+                      icon: selection.allSelected ? Square : CheckSquare,
+                      onclick: () => selection.toggleAll(),
                   }
                 : undefined}
         >
@@ -150,16 +127,14 @@ const keys = createRowKeys({
             <div class="issue-rows" role="list">
                 {#each visibleIssues as issue (issue.id)}
                     <IssueRow
+                        {prId}
                         {issue}
-                        selected={selectedIds.has(issue.id) && !isIssueResolved(issue)}
-                        submitted={submittedIds.has(issue.id)}
+                        selected={selection.has(issue.id)}
+                        submitted={isIssueSubmitted(issue)}
                         open={expand.isOpen(issue.id)}
                         cascadeGroup="issue-rows"
-                        onToggleSelect={() => onToggleSelect(issue.id)}
+                        onToggleSelect={() => selection.toggle(issue.id)}
                         onToggleOpen={() => expand.toggle(issue.id)}
-                        {onFileClick}
-                        {blocks}
-                        {onBlockJump}
                         onTriggerRef={keys.trigger(issue.id)}
                     />
                 {/each}
@@ -172,16 +147,13 @@ const keys = createRowKeys({
                     <div class="issue-rows" role="list">
                         {#each filteredIssues as issue (issue.id)}
                             <IssueRow
+                                {prId}
                                 {issue}
-                                selected={false}
-                                submitted={true}
+                                readOnly
+                                submitted={isIssueSubmitted(issue)}
                                 open={expand.isOpen(issue.id)}
                                 cascadeGroup="low-signal-issue-rows"
-                                onToggleSelect={() => {}}
                                 onToggleOpen={() => expand.toggle(issue.id)}
-                                {onFileClick}
-                                {blocks}
-                                {onBlockJump}
                             />
                         {/each}
                     </div>

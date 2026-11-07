@@ -1,4 +1,4 @@
-import { draftCommentBody, isPublishableDraftComment } from "@revv/shared";
+import { draftCommentBody, isPublishableDraftComment, pendingReplies } from "@revv/shared";
 import { Effect } from "effect";
 import { GitHubApiError, GitHubNetworkError, ValidationError } from "../../../domain/errors";
 import { logError } from "../../../logger";
@@ -228,15 +228,9 @@ export function submitGithubReviewHandler(prId: string, body: SubmitReviewInput)
     // The reviewer's replies on threads GitHub already has, one at a time so
     // each thread's replies land in the order they were written.
     const after = yield* review.getConversation(pr.id);
-    const pendingReplies = after.threads
-      .filter((t) => t.externalCommentId !== null)
-      .flatMap((t) =>
-        (after.messages[t.id] ?? []).filter(
-          (m) => m.externalId === null && m.authorRole === "reviewer",
-        ),
-      );
+    const replies = after.threads.flatMap((t) => pendingReplies(t, after.messages[t.id] ?? []));
     let failedReplies = 0;
-    for (const reply of pendingReplies) {
+    for (const reply of replies) {
       yield* sync.pushReply(reply.id).pipe(
         Effect.catch((e) =>
           logged(`push reply ${reply.id}`)(e).pipe(

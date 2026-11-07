@@ -55,3 +55,15 @@ export function draftCommentBody(
     .join("\n\n");
   return body === "" ? null : body;
 }
+
+/**
+ * The reviewer's replies a submit pushes on a thread GitHub already has: the
+ * ones not on GitHub yet.
+ */
+export function pendingReplies<M extends DraftReviewMessage>(
+  thread: DraftThread,
+  messages: readonly M[],
+): M[] {
+  if (thread.externalCommentId === null) return [];
+  return messages.filter((m) => m.externalId === null && m.authorRole === "reviewer");
+}
