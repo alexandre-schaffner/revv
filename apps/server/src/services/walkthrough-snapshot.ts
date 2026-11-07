@@ -15,6 +15,7 @@ import {
   decodeStringArray,
   decodeTokenUsage,
   loadContentRows,
+  normalizeProviderConfig,
 } from "./walkthrough/content";
 import {
   CACHE_SCHEMA_VERSION,
@@ -112,13 +113,9 @@ export function exportWalkthroughSnapshot(db: Db, params: ExportParams): Walkthr
     repoFullName: params.repoFullName,
     prHeadSha: row.prHeadSha,
     generatedBy,
-    providerConfig: decodeProviderConfig(row.providerConfig, row.modelUsed) ?? {
-      provider: "claude-code",
-      model: row.modelUsed,
-      thinkingEffort: null,
-      contextWindow: null,
-      maxTurns: 60,
-    },
+    providerConfig:
+      decodeProviderConfig(row.providerConfig, row.modelUsed) ??
+      normalizeProviderConfig({}, row.modelUsed),
     modelUsed: row.modelUsed,
     tokenUsage: decodeTokenUsage(row.tokenUsage),
     summary: row.summary,

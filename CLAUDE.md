@@ -262,8 +262,11 @@ agent tomorrow). Any change that violates them is wrong by construction — push
    including resumes, the agent calls `get_walkthrough_state(walkthrough_id)` first.
 7. **Walkthroughs are immutable per head SHA during generation.** The 4-phase generation
    pipeline never mutates a walkthrough row for the same head SHA — a new commit produces
-   a new walkthrough row, and the old is marked `'superseded'` with a `superseded_by`
-   back-reference.
+   a new walkthrough row, and the old is marked `'superseded'`. `superseded_by` names the
+   replacing row only when that row was created at the old one's key (a do-over at the same
+   head); a head move or a Regenerate retires rows before any replacement exists, so it
+   stays NULL by design. A resume runs a row at its own head, never the PR's current one: a
+   row whose PR has moved on is superseded instead.
 
    The snapshot importer that hydrates team-cache hits also carries a review over a pure
    restack: when a stacked layer's new head has a fingerprint identical to a finished review's
@@ -317,9 +320,12 @@ agent tomorrow). Any change that violates them is wrong by construction — push
     set by `WalkthroughJobs` (`services/walkthrough/lifecycle.ts`), which also records why
     a run ended without completing (`walkthroughs.end_reason`, `WalkthroughEndReason`).
 12. **`complete_walkthrough` is a validation gate.** Asserts `last_completed_phase = 'D'`
-    AND all 9 axes rated AND summary/sentiment non-empty AND ≥1 diff step AND the chapter
-    rules AND every line-anchored concern commented. The gate and the orchestrator decide
-    on one journal check (`walkthroughCompletionBlockers`, `services/walkthrough/completion.ts`):
+    AND summary/sentiment non-empty AND ≥1 diff step AND the chapter rules (the reviewer
+    journey chapter at index 0, no orphan block, no empty chapter) AND all 9 axes rated with
+    a rationale AND every line-anchored concern commented. The requirements are one list
+    (`services/walkthrough/completion.ts`); the tool's description and the system prompt
+    render from it. The gate and the orchestrator decide on one journal check
+    (`walkthroughCompletionBlockers`):
     a run's turn reports only how it ended, and the run is `complete` exactly when the
     journal passes. The check's lead blocker is the tool's alone: the orchestrator
     completes a run with unresolved leads, so a skipped hint never costs the review.
@@ -358,7 +364,8 @@ agent tomorrow). Any change that violates them is wrong by construction — push
 Walkthroughs, recaps and stack briefs all run on one durable agent-job kernel
 (`makeAgentJobs`, `services/jobs/agent-jobs.ts`): the registry, concurrency, launch,
 cancel, the MCP token (TTL derived from the turn ceiling), the run's verdict (a user Stop
-settles `stopped`, a supersede leaves the row to its superseder, an unasked-for
+settles as the pipeline's stop — a walkthrough ends `error` with end reason `cancelled`,
+still resumable; a recap `stopped` —, a supersede leaves the row to its superseder, an unasked-for
 interrupt leaves it `generating`, otherwise the journal check decides) and the one resume
 policy (a journal that already passes completes without a rerun; otherwise the attempt is
 counted first). Each pipeline supplies its journal reads and its `settle`. Boot work runs
@@ -381,13 +388,14 @@ journal passes it completes even if the agent never called the gate. `status` is
 orchestrator-only and every transition is broadcast as `stack-brief:status-changed` after
 it commits. Review-the-stack (`services/stacks/StackReview.ts`) only queues walkthroughs
 through `WalkthroughJobs.startJob` (`trigger: 'stack_review'`) and asks for a brief once
-they settle; it owns no lifecycle. Its queue and progress are journaled (`stack_reviews`),
-so a restart picks a review up where it was.
+they settle; it owns no walkthrough or brief lifecycle. Its own row (`stack_reviews`)
+journals the queue and progress, `running` → `done` | `abandoned` (a 2-hour deadline), so a
+restart picks a review up where it was.
 
 ### Implications for new agent features (e.g., PRD-05)
 
-New agent subsystems must mirror this architecture: durable `*_jobs` table with `status` +
-phase enum + `resumeAttempts`, MCP tool surface with phase preconditions, orchestrator
+New agent subsystems must mirror this architecture: a durable journal row that is the job
+(`status` + phase enum + `resume_attempts`), MCP tool surface with phase preconditions, orchestrator
 owns lifecycle, resume-on-boot — by running on the agent-job kernel (`makeAgentJobs`) with
 one journal completion check shared by the gate and the orchestrator. If you find yourself adding in-memory state that couldn't
 survive a `kill -9`, stop — you're building on sand.

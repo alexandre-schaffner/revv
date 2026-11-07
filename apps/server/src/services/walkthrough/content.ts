@@ -230,18 +230,19 @@ export function decodeProviderConfig(
 ): GenerationProviderConfig | null {
   if (!raw) return null;
   try {
-    return normalizeProviderConfig(JSON.parse(raw), modelUsed);
+    const value: unknown = JSON.parse(raw);
+    return isRecord(value) ? normalizeProviderConfig(value, modelUsed) : null;
   } catch {
     return null;
   }
 }
 
-/** A provider snapshot as any version of Revv wrote it, in today's vocabulary. */
-export function normalizeProviderConfig(
-  value: unknown,
-  modelUsed: string,
-): GenerationProviderConfig | null {
-  if (!isRecord(value)) return null;
+/**
+ * A provider snapshot as any version of Revv wrote it, in today's vocabulary;
+ * fields it lacks take the defaults of the oldest rows.
+ */
+export function normalizeProviderConfig(raw: unknown, modelUsed: string): GenerationProviderConfig {
+  const value = isRecord(raw) ? raw : {};
   return {
     provider: providerAgent(value.provider),
     model: typeof value.model === "string" ? value.model : modelUsed,
