@@ -109,8 +109,8 @@ export const StackMergeServiceLive = Layer.effect(
     const prIdsFor = (repositoryId: string, numbers: readonly number[]) =>
       dbTry("stack merge PR lookup", () => prIdsByNumber(db, repositoryId, numbers));
 
-    const announce = (accountId: string, run: StackMergeRun) =>
-      realtime.toAccount(accountId, { type: "stack-merge:progress", data: run });
+    const announce = (run: StackMergeRun) =>
+      realtime.toRepo(run.repositoryId, { type: "stack-merge:progress", data: run });
 
     /** Every merge Revv made goes through the mirror, as a single PR's merge does. */
     const markMerged = (repositoryId: string, numbers: readonly number[]) =>
@@ -198,7 +198,7 @@ export const StackMergeServiceLive = Layer.effect(
               }),
             );
             if (!kept) return "ended";
-            yield* announce(ctx.accountId, run);
+            yield* announce(run);
             if (merged.length > 0) {
               yield* markMerged(run.repositoryId, merged).pipe(
                 Effect.catch((err) =>
@@ -240,7 +240,7 @@ export const StackMergeServiceLive = Layer.effect(
                     updatedAt: new Date().toISOString(),
                   }),
                 );
-                if (failed) yield* announce(ctx.accountId, toRun(failed));
+                if (failed) yield* announce(toRun(failed));
               }).pipe(
                 Effect.catch((err) =>
                   Effect.sync(() =>
@@ -348,7 +348,6 @@ export const StackMergeServiceLive = Layer.effect(
                 status: run.status,
                 layersBaseFirst: [...run.layers],
                 error: null,
-                accountId: ctx.accountId,
                 createdAt: now,
                 updatedAt: now,
               })
@@ -364,7 +363,7 @@ export const StackMergeServiceLive = Layer.effect(
             }),
           );
         }
-        yield* announce(ctx.accountId, run);
+        yield* announce(run);
         yield* launch(ctx, run);
         return run;
       });
@@ -386,7 +385,7 @@ export const StackMergeServiceLive = Layer.effect(
           }),
         );
         const run = toRun(updated ?? (yield* loadRun(runId)));
-        yield* announce(row.accountId, run);
+        yield* announce(run);
         return run;
       });
 
@@ -428,7 +427,7 @@ export const StackMergeServiceLive = Layer.effect(
           );
         }
         const run = toRun(updated);
-        yield* announce(ctx.accountId, run);
+        yield* announce(run);
         yield* launch(ctx, run);
         return run;
       });
