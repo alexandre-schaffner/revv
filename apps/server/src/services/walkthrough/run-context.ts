@@ -98,17 +98,23 @@ export function makeWalkthroughRunContext(input: {
         // Claimed synchronously so two blocks written back to back can't both
         // take the last slot.
         if (!prose.claimSample()) return;
-        judgments.track(
-          runJudgment(
-            judgeProse(markdown, chapterTitle).pipe(
-              Effect.flatMap((advice) =>
-                Effect.sync(() => {
-                  if (advice !== null) prose.post(advice);
-                }),
-              ),
+        // Not tracked with the issue judgments: advice gates nothing, so the
+        // completion gate's drain mustn't wait on it.
+        runJudgment(
+          judgeProse(markdown, chapterTitle).pipe(
+            Effect.flatMap((advice) =>
+              Effect.sync(() => {
+                if (advice !== null) prose.post(advice);
+              }),
             ),
           ),
-        );
+        ).catch((err: unknown) => {
+          logError(
+            "walkthrough-run",
+            `prose check crashed for ${walkthroughId}:`,
+            err instanceof Error ? err.message : String(err),
+          );
+        });
       },
       takeProseAdvice: prose.take,
     },
