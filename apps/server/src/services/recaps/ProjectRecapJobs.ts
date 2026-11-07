@@ -13,7 +13,6 @@
 // writes go through the recap MCP tool handlers in `ai/providers/recap-tools/`.
 
 import type {
-  ProjectRecap,
   ProjectRecapStatus,
   RecapPeriod,
   RecapStreamEvent,
@@ -226,13 +225,14 @@ export const ProjectRecapJobsLive = Layer.effect(
           }
           subscribers.fanOut(run.id, run.context, event);
         };
+        // A DB error ends the run as a crash, never as "not found".
         const recap = yield* recapService
           .getById(run.id)
-          .pipe(Effect.catch(() => Effect.succeed(null)));
+          .pipe(Effect.catchTag("RecapNotFoundError", () => Effect.succeed(null)));
         if (!recap) return { kind: "failed", failure: "Recap row not found" };
         const repo = yield* prCtx
           .getRepo(recap.repositoryId)
-          .pipe(Effect.catch(() => Effect.succeed(null)));
+          .pipe(Effect.catchTag("NotFoundError", () => Effect.succeed(null)));
         if (!repo) {
           return { kind: "failed", failure: "Repository not found — cannot build source bundle" };
         }
@@ -261,9 +261,7 @@ export const ProjectRecapJobsLive = Layer.effect(
           return { kind: "complete" };
         }
 
-        const priorRecaps: ReadonlyArray<ProjectRecap> = yield* recapService
-          .getLatestForRepo(recap.repositoryId, { limit: 5 })
-          .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<ProjectRecap>)));
+        const priorRecaps = yield* recapService.getLatestForRepo(recap.repositoryId, { limit: 5 });
 
         const repoClient = yield* Effect.cached(sources.repoClient(recap.repositoryId));
         const runContext = yield* Effect.context<never>();
@@ -342,9 +340,11 @@ export const ProjectRecapJobsLive = Layer.effect(
         const mutex = yield* windowMutex.acquire(`${repoId}:${period}:${window.periodStart}`);
         return yield* mutex.withPermits(1)(
           Effect.gen(function* () {
-            const existing = yield* recapService
-              .findActiveForPeriod(repoId, period, window.periodStart)
-              .pipe(Effect.catch(() => Effect.succeed(null)));
+            const existing = yield* recapService.findActiveForPeriod(
+              repoId,
+              period,
+              window.periodStart,
+            );
             const plan = planRecapRequest({
               intent: request.intent,
               period,
