@@ -17,12 +17,11 @@ import {
 } from "../../prompts/review-copy-contract";
 import type { McpToolResult } from "../mcp-tool-gateway";
 import {
-  artifactBlockField,
   blockRefSchema,
+  blockVariantFields,
+  chapterOpeningBlockSchema,
   citationSchema,
-  codeBlockSchema,
   confidenceSchema,
-  diffBlockSchema,
   ratingAxisSchema,
   severityCalibration,
   severitySchema,
@@ -100,39 +99,6 @@ const setOverviewSchema = z.object({
     ),
 });
 
-const semanticStepInitialBlockSchema = z
-  .object({
-    markdown: z
-      .object({
-        content: z
-          .string()
-          .describe(
-            `GitHub-flavored markdown for the chapter's opening block, budget 150 WORDS. Use headings, \`inline code\`, lists, tables, blockquotes and fenced snippets for STRUCTURE; **bold** is a line-start label, never mid-sentence emphasis. This is the first thing the reader sees in the chapter, so open on the point rather than on a preamble. ${PROSE_VOICE_CONTRACT}`,
-          ),
-      })
-      .nullable()
-      .optional()
-      .describe(
-        "Use for narrative/explanatory opening content. Mutually exclusive with `code`, `diff`, and `artifact`.",
-      ),
-    code: codeBlockSchema
-      .nullable()
-      .optional()
-      .describe(
-        `Use for source-code excerpts. Mutually exclusive with \`markdown\`, \`diff\`, and \`artifact\`. Annotation REQUIRED (1–3 sentences, 45 words); code without annotation is a wall of code. ${PROSE_VOICE_CONTRACT}`,
-      ),
-    diff: diffBlockSchema
-      .nullable()
-      .optional()
-      .describe(
-        `Use for unified-diff hunks. Mutually exclusive with \`markdown\`, \`code\`, and \`artifact\`. Annotation REQUIRED (1–3 sentences, 45 words). ${PROSE_VOICE_CONTRACT}`,
-      ),
-    artifact: artifactBlockField,
-  })
-  .describe(
-    "REQUIRED. Exactly one of { markdown, code, diff, artifact }. Becomes the chapter's step_index=0 block, written atomically with the chapter itself.",
-  );
-
 const addSemanticStepSchema = z.object({
   semantic_step_index: z.coerce
     .number()
@@ -155,7 +121,7 @@ const addSemanticStepSchema = z.object({
     .describe(
       "Optional 1–2 sentence prelude rendered under the chapter title. Use to frame what the reader is about to learn in this chapter. Omit (or set null) when the title is self-explanatory.",
     ),
-  initial_block: semanticStepInitialBlockSchema,
+  initial_block: chapterOpeningBlockSchema,
 });
 
 /**
@@ -177,32 +143,7 @@ const addDiffStepSchema = z.object({
     .describe(
       "Monotonic zero-based index for this atomic block *within* its parent chapter. Restart at 0 in each new chapter. Required. Upsert key: a retry with the same (semantic_step_index, step_index) replaces (not duplicates) the prior row.",
     ),
-  markdown: z
-    .object({
-      content: z
-        .string()
-        .describe(
-          `GitHub-flavored markdown, budget 150 WORDS. Use the toolkit for STRUCTURE, not for volume: headings (## / ###), **bold** labels, \`inline code\` for identifiers and paths, bulleted / numbered lists, tables, > blockquotes, [links](url), and \`\`\`fenced\`\`\` snippets for tiny illustrative code. Give each fact its own line or list item. A dense paragraph the reader must parse linearly is the failure mode. Over 150 words, split into two blocks or cut the weaker half. ${PROSE_VOICE_CONTRACT}`,
-        ),
-    })
-    .nullable()
-    .optional()
-    .describe(
-      "Use for narrative/explanatory content. Mutually exclusive with `code`, `diff`, and `artifact`.",
-    ),
-  code: codeBlockSchema
-    .nullable()
-    .optional()
-    .describe(
-      "Use for source-code excerpts. Mutually exclusive with `markdown`, `diff`, and `artifact`. Annotations on issue-target blocks must be LONG (multi-paragraph).",
-    ),
-  diff: diffBlockSchema
-    .nullable()
-    .optional()
-    .describe(
-      "Use for unified-diff hunks. Mutually exclusive with `markdown`, `code`, and `artifact`. Annotations on issue-target blocks must be LONG (multi-paragraph).",
-    ),
-  artifact: artifactBlockField,
+  ...blockVariantFields,
 });
 
 const flagIssueSchema = z.object({

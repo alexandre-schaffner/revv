@@ -21,12 +21,11 @@ import {
 } from "../../prompts/review-copy-contract";
 import type { McpToolResult } from "../mcp-tool-gateway";
 import {
-  artifactBlockField,
   blockRefSchema,
+  blockVariantFields,
+  chapterOpeningBlockSchema,
   citationSchema,
-  codeBlockSchema,
   confidenceSchema,
-  diffBlockSchema,
   ratingAxisSchema,
   severityCalibration,
   severitySchema,
@@ -59,33 +58,9 @@ export type ChatEditToolHandler<TInput> = (
   input: TInput,
 ) => Promise<ChatEditToolResult>;
 
-/** Exactly one variant, as `add_diff_step` takes it. */
-export const blockContentSchema = z
-  .object({
-    markdown: z
-      .object({ content: z.string() })
-      .nullable()
-      .optional()
-      .describe(
-        `Use for narrative/explanatory content, budget 150 WORDS. Mutually exclusive with \`code\`, \`diff\`, and \`artifact\`. ${PROSE_VOICE_CONTRACT}`,
-      ),
-    code: codeBlockSchema
-      .nullable()
-      .optional()
-      .describe(
-        "Use for source-code excerpts. Mutually exclusive with `markdown`, `diff`, and `artifact`.",
-      ),
-    diff: diffBlockSchema
-      .nullable()
-      .optional()
-      .describe(
-        "Use for unified-diff hunks. Mutually exclusive with `markdown`, `code`, and `artifact`.",
-      ),
-    artifact: artifactBlockField,
-  })
-  .describe(
-    "REQUIRED. Exactly one of { markdown, code, diff, artifact } — the same shape add_diff_step uses.",
-  );
+const blockContentSchema = z
+  .object(blockVariantFields)
+  .describe("REQUIRED. Exactly one of { markdown, code, diff, artifact }.");
 
 /**
  * Appended to every `semantic_step_index` that targets an existing chapter.
@@ -128,7 +103,7 @@ export const addSemanticStepEditSchema = z.object({
     .nullable()
     .optional()
     .describe("Optional 1–2 sentence prelude rendered under the title."),
-  initial_block: blockContentSchema,
+  initial_block: chapterOpeningBlockSchema,
 });
 
 export const updateSemanticStepSchema = z.object({
