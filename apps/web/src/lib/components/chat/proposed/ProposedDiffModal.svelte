@@ -9,6 +9,7 @@ import { FileTree, type GitStatusEntry } from "@pierre/trees";
 import { PIERRE_THEME } from "@revv/shared";
 import Chat from "phosphor-svelte/lib/Chat";
 import Columns from "phosphor-svelte/lib/Columns";
+import FileDashed from "phosphor-svelte/lib/FileDashed";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
 import PaperPlaneRight from "phosphor-svelte/lib/PaperPlaneRight";
 import Rows from "phosphor-svelte/lib/Rows";
@@ -31,7 +32,7 @@ import {
   removeProposedComment,
   updateProposedComment,
 } from "$lib/chat/proposed.svelte";
-import { proposedFileDiffs } from "$lib/chat/proposed-diff";
+import { type ProposedFile, proposedFiles } from "$lib/chat/proposed-diff";
 import { isChatStreaming } from "$lib/chat/timeline.svelte";
 import { sendProposedFeedback } from "$lib/chat/turn.svelte";
 import AnnotationCommentInput from "$lib/components/review/AnnotationCommentInput.svelte";
@@ -57,25 +58,13 @@ function requestClose() {
   onOpenChange(false);
 }
 
-const files: FileDiffMetadata[] = $derived(
-  fileContents == null ? [] : proposedFileDiffs(sha, fileContents),
+const files: ProposedFile[] = $derived(
+  fileContents == null ? [] : proposedFiles(sha, fileContents),
 );
 
-const paths = $derived(files.map((f) => f.name));
+const paths = $derived(files.map((f) => f.path));
 
-function statusFromType(type: FileDiffMetadata["type"]): GitStatusEntry["status"] {
-  if (type === "new") return "added";
-  if (type === "deleted") return "deleted";
-  if (type === "rename-pure" || type === "rename-changed") return "renamed";
-  return "modified";
-}
-
-const gitStatus: GitStatusEntry[] = $derived(
-  files.map((f) => ({
-    path: f.name,
-    status: statusFromType(f.type),
-  })),
-);
+const gitStatus: GitStatusEntry[] = $derived(files.map(({ path, status }) => ({ path, status })));
 
 let treeHostEl: HTMLElement | undefined = $state();
 let scrollEl: HTMLDivElement | undefined = $state();
@@ -243,7 +232,7 @@ function cleanUpDiff(instance: PierreFileDiff<CommentMeta>): void {
 }
 
 function mountFileDiff(idx: number, el: HTMLDivElement, diffStyle: "unified" | "split") {
-  const file = files[idx];
+  const file = files[idx]?.diff;
   if (!file) return;
   const options = buildOptions(file, diffStyle);
   const instance = new PierreFileDiff<CommentMeta>(options, workerManager);
@@ -258,7 +247,7 @@ function mountFileDiff(idx: number, el: HTMLDivElement, diffStyle: "unified" | "
 
 // An action rather than `bind:this` into an array: Svelte 5 types indexed binds
 // strictly, and `destroy` cleans up if the modal closes mid-mount.
-function captureDiffEl(el: HTMLDivElement, index: number) {
+function captureFileEl(el: HTMLDivElement, index: number) {
   diffWrapperEls[index] = el;
   if (!diffInstances[index]) {
     mountFileDiff(
@@ -291,7 +280,7 @@ $effect(() => {
   }
   for (let i = 0; i < files.length; i++) {
     const inst = diffInstances[i];
-    const file = files[i];
+    const file = files[i]?.diff;
     if (!inst || !file) continue;
     try {
       inst.render({ lineAnnotations: annotationsFor(file), forceRender: true });
@@ -547,8 +536,16 @@ onDestroy(() => {
 					{:else if files.length === 0}
 						<div class="empty">No file changes in this commit.</div>
 					{:else}
-						{#each files as file, i (file.name)}
-							<div class="diff-block" use:captureDiffEl={i}></div>
+						{#each files as file, i (file.path)}
+							{#if file.diff}
+								<div class="diff-block" use:captureFileEl={i}></div>
+							{:else}
+								<div class="diff-block binary-file" use:captureFileEl={i}>
+									<FileDashed size={14} />
+									<span class="binary-path" title={file.path}>{file.path}</span>
+									<span class="binary-note">Binary file not shown</span>
+								</div>
+							{/if}
 						{/each}
 					{/if}
 				</div>
@@ -822,6 +819,29 @@ onDestroy(() => {
 		   scrollbars instead of one modal-level scroll. */
 		flex-shrink: 0;
 		background: var(--color-bg-secondary);
+	}
+
+	.binary-file {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 10px 12px;
+		font-size: 12px;
+		color: var(--color-text-muted);
+	}
+
+	.binary-path {
+		font-family: var(--font-mono);
+		color: var(--color-text-secondary);
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.binary-note {
+		margin-left: auto;
+		flex-shrink: 0;
 	}
 
 	.empty {
