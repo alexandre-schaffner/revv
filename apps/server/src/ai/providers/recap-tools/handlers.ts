@@ -195,9 +195,7 @@ export const getRepoContextHandler: RecapToolHandler<GetRepoContextInput> = asyn
 function sanitizeLede(raw: string): string {
   return raw
     .split(ALLOWED_LEDE_TAG)
-    .map((part, index) =>
-      index % 2 === 1 ? part.toLowerCase() : part.replace(/<[^<>]*>/g, "").replace(/[<>]/g, ""),
-    )
+    .map((part, index) => (index % 2 === 1 ? part.toLowerCase() : withoutTags(part)))
     .join("")
     .replace(/\s+/g, " ")
     .trim();
@@ -205,6 +203,18 @@ function sanitizeLede(raw: string): string {
 
 /** Bare `<strong>` / `<em>` open and close tags; attributes never survive. */
 const ALLOWED_LEDE_TAG = /(<\/?(?:strong|em)>)/i;
+
+/** Drops every `<…>` span, nested ones included, and any stray bracket. */
+function withoutTags(text: string): string {
+  let out = "";
+  let depth = 0;
+  for (const ch of text) {
+    if (ch === "<") depth++;
+    else if (ch === ">") depth = Math.max(0, depth - 1);
+    else if (depth === 0) out += ch;
+  }
+  return out;
+}
 
 function requireGenerating(ctx: RecapToolContext, action: string): RecapToolResult | null {
   const row = ctx.db
