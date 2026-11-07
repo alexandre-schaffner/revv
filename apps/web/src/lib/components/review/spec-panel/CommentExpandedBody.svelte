@@ -1,25 +1,27 @@
 <script lang="ts">
-import { type CommentThread, canUserModifyComment, type ThreadMessage } from "@revv/shared";
+import type { CommentThread } from "@revv/shared";
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import Trash from "phosphor-svelte/lib/Trash";
 import Markdown from "$lib/components/markdown/Markdown.svelte";
+import { canDiscardThread, lineRangeLabel } from "$lib/review/threads";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
+import { getThreadMessages } from "$lib/stores/review.svelte";
+import { openInDiff } from "$lib/stores/review-nav.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import MessageAvatar from "../MessageAvatar.svelte";
 
 interface Props {
+  prId: string;
   threads: readonly CommentThread[];
-  getThreadMessages: (threadId: string) => ThreadMessage[];
-  onJump?: ((filePath: string, line: number) => void) | undefined;
-  /** Only offered for threads not yet pushed to GitHub (externalCommentId == null). */
+  /** Offered on the drafts `canDiscardThread` allows. */
   onDiscard?: ((threadId: string) => void) | undefined;
 }
 
-let { threads, getThreadMessages, onJump, onDiscard }: Props = $props();
+let { prId, threads, onDiscard }: Props = $props();
 const currentUserLogin = $derived(getCurrentUserLogin());
 
 const threadEntries = $derived(
-  threads.map((thread) => ({ thread, messages: getThreadMessages(thread.id) })),
+  threads.map((thread) => ({ thread, messages: getThreadMessages(prId, thread.id) })),
 );
 </script>
 
@@ -28,20 +30,18 @@ const threadEntries = $derived(
         <div class="thread-block">
             <div class="thread-head">
                 <span class="thread-line" aria-label="Line {entry.thread.startLine}">
-                    :{entry.thread.startLine}{#if entry.thread.endLine && entry.thread.endLine !== entry.thread.startLine}-{entry.thread.endLine}{/if}
+                    {lineRangeLabel(entry.thread)}
                 </span>
-                {#if onJump}
-                    <button
-                        type="button"
-                        class="thread-jump"
-                        onclick={() => onJump?.(entry.thread.filePath, entry.thread.startLine)}
-                        title="Jump to diff line {entry.thread.startLine}"
-                    >
-                        <span class="thread-jump-label">jump</span>
-                        <ArrowUpRight size={11} aria-hidden="true" />
-                    </button>
-                {/if}
-                {#if onDiscard && entry.thread.externalCommentId == null && entry.messages[0] && canUserModifyComment(entry.messages[0], currentUserLogin)}
+                <button
+                    type="button"
+                    class="thread-jump"
+                    onclick={() => openInDiff(prId, entry.thread.filePath, entry.thread.startLine)}
+                    title="Jump to diff line {entry.thread.startLine}"
+                >
+                    <span class="thread-jump-label">jump</span>
+                    <ArrowUpRight size={11} aria-hidden="true" />
+                </button>
+                {#if onDiscard && canDiscardThread(entry.thread, entry.messages, currentUserLogin)}
                     <button
                         type="button"
                         class="thread-discard"

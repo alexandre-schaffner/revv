@@ -4,13 +4,15 @@ import { buildGitPatchHeader, type DiffBlock, splitHunks } from "@revv/shared";
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import { pierreDiff } from "$lib/pierre/mount";
-import { jumpToDiffLine } from "$lib/stores/review-nav.svelte";
+import { openInDiff } from "$lib/stores/review-nav.svelte";
 
 interface Props {
+  /** The PR the walkthrough reviews; the header opens the block's file in its diff. */
+  prId: string;
   block: DiffBlock;
 }
 
-let { block }: Props = $props();
+let { prId, block }: Props = $props();
 
 /** Where clicking the header lands in the Diff tab: the first hunk's new-side start. */
 const targetLine = $derived(splitHunks(block.patch)[0]?.newStart ?? 1);
@@ -22,7 +24,7 @@ const fileDiff = $derived(
 
 <div class="annotated-block">
 	<div class="diff-panel">
-		<button class="diff-header" onclick={() => jumpToDiffLine(block.filePath, targetLine)}>
+		<button class="diff-header" onclick={() => openInDiff(prId, block.filePath, targetLine)}>
 			<FileBadge filePath={block.filePath} />
 			<span class="diff-header-right">
 				<span class="diff-jump-icon"><ArrowUpRight size={11} /></span>

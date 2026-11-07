@@ -4,6 +4,7 @@ import CaretDown from "phosphor-svelte/lib/CaretDown";
 import type { Snippet } from "svelte";
 import Markdown from "$lib/components/markdown/Markdown.svelte";
 import { type EnterCascade, enterOnce } from "$lib/motion";
+import { walkthroughAnchor } from "$lib/stores/review-nav.svelte";
 import { worstSeverity } from "$lib/walkthrough/issues";
 import WalkthroughArtifactBlock from "./WalkthroughArtifactBlock.svelte";
 import WalkthroughCodeBlock from "./WalkthroughCodeBlock.svelte";
@@ -11,6 +12,7 @@ import WalkthroughDiffBlock from "./WalkthroughDiffBlock.svelte";
 import type { ChapterEntry } from "./walkthrough-view.svelte";
 
 interface Props {
+  prId: string;
   section: WalkthroughSemanticStep;
   entries: ChapterEntry[];
   blockSeverity: ReadonlyMap<string, IssueSeverity>;
@@ -32,6 +34,7 @@ interface Props {
 }
 
 let {
+  prId,
   section,
   entries,
   blockSeverity,
@@ -128,7 +131,7 @@ $effect(() => {
 						aria-hidden="true"
 					></span>
 					<div
-						id="step-{block.id}"
+						id={walkthroughAnchor.block(block.id)}
 						class="block-wrapper"
 						data-severity={selected}
 						data-col="content"
@@ -138,9 +141,9 @@ $effect(() => {
 						{#if block.type === 'markdown'}
 							<Markdown source={block.content} trust="agent" />
 						{:else if block.type === 'code'}
-							<WalkthroughCodeBlock {block} />
+							<WalkthroughCodeBlock {prId} {block} />
 						{:else if block.type === 'diff'}
-							<WalkthroughDiffBlock {block} />
+							<WalkthroughDiffBlock {prId} {block} />
 						{:else if block.type === 'artifact'}
 							<WalkthroughArtifactBlock {block} />
 						{/if}

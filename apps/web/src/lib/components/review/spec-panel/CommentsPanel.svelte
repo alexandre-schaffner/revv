@@ -3,9 +3,10 @@
  * Unresolved comment threads, one row per file; the open row lists every
  * thread on that file. Rows start expanded.
  */
-import type { CommentThread, ThreadMessage } from "@revv/shared";
+import type { CommentThread } from "@revv/shared";
 import Chat from "phosphor-svelte/lib/Chat";
 import Circle from "phosphor-svelte/lib/Circle";
+import { getThreadMessages } from "$lib/stores/review.svelte";
 import CommentRow from "./CommentRow.svelte";
 import { createExpandState } from "./expand-state.svelte";
 import { groupThreadsByFile } from "./group-threads";
@@ -16,18 +17,17 @@ import SpecPanel from "./SpecPanel.svelte";
 import SpecSummaryBar from "./SpecSummaryBar.svelte";
 
 interface Props {
+  prId: string;
   threads: readonly CommentThread[];
-  getThreadMessages: (threadId: string) => ThreadMessage[];
-  onJump: (filePath: string, line: number) => void;
   onDiscard?: ((threadId: string) => void) | undefined;
 }
 
-let { threads, getThreadMessages, onJump, onDiscard }: Props = $props();
+let { prId, threads, onDiscard }: Props = $props();
 
 let onlyWithReplies = $state(false);
 
 function hasReplies(thread: CommentThread): boolean {
-  return (getThreadMessages(thread.id)?.length ?? 0) > 1;
+  return getThreadMessages(prId, thread.id).length > 1;
 }
 
 const withRepliesCount = $derived(threads.filter(hasReplies).length);
@@ -77,12 +77,11 @@ const keys = createRowKeys({ order: () => groupPaths, toggleAll: () => expand.to
             <ul class="comment-rows" role="list">
                 {#each visibleGroups as group (group.filePath)}
                     <CommentRow
+                        {prId}
                         filePath={group.filePath}
                         threads={group.threads}
-                        {getThreadMessages}
                         open={expand.isOpen(group.filePath)}
                         onToggleOpen={() => expand.toggle(group.filePath)}
-                        {onJump}
                         {onDiscard}
                         onTriggerRef={keys.trigger(group.filePath)}
                     />

@@ -6,25 +6,19 @@ import { Button } from "$lib/components/ui/button";
 import * as Dialog from "$lib/components/ui/dialog";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import SeverityIcon from "$lib/components/walkthrough/SeverityIcon.svelte";
+import { getThreadMessages } from "$lib/stores/review.svelte";
+import { openInDiff } from "$lib/stores/review-nav.svelte";
 import { countBySeverity, outstandingItemsPhrase } from "$lib/walkthrough/issues";
 
 interface Props {
   open: boolean;
-  issues: WalkthroughIssue[];
-  pendingThreads: CommentThread[];
-  getThreadMessages?: (threadId: string) => { body: string }[];
-  onfileclick?: (filePath: string, line: number) => void;
+  prId: string;
+  issues: readonly WalkthroughIssue[];
+  pendingThreads: readonly CommentThread[];
   onconfirm: () => void;
 }
 
-let {
-  open = $bindable(),
-  issues,
-  pendingThreads,
-  getThreadMessages = () => [],
-  onfileclick = undefined,
-  onconfirm,
-}: Props = $props();
+let { open = $bindable(), prId, issues, pendingThreads, onconfirm }: Props = $props();
 
 const severityCounts = $derived(countBySeverity(issues));
 const threadCount = $derived(pendingThreads.length);
@@ -35,7 +29,7 @@ const description = $derived(
 
 function handleFileClick(filePath: string, line: number): void {
   open = false;
-  onfileclick?.(filePath, line);
+  openInDiff(prId, filePath, line);
 }
 
 function handleConfirm(): void {
@@ -120,7 +114,7 @@ function handleCancel(): void {
 				<div class="section-label">Unresolved comments</div>
 				<ul class="issue-list">
 					{#each pendingThreads as thread (thread.id)}
-						{@const firstMessage = getThreadMessages(thread.id)[0]}
+						{@const firstMessage = getThreadMessages(prId, thread.id)[0]}
 						<li class="issue-row">
 							<span class="severity-icon severity-thread">
 								<Chat size={13} />

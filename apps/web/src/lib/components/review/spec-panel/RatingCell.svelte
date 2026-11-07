@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { RatingAxis, WalkthroughBlock, WalkthroughRating } from "@revv/shared";
+import type { RatingAxis, WalkthroughRating } from "@revv/shared";
 import { RATING_AXIS_LABELS } from "@revv/shared";
 import Check from "phosphor-svelte/lib/Check";
 import Spinner from "phosphor-svelte/lib/Spinner";
@@ -14,16 +14,15 @@ import { synthesize } from "./rating-synthesis";
 export type CellState = "queued" | "running" | "resolved";
 
 interface Props {
+  prId: string;
   axis: RatingAxis;
   rating: WalkthroughRating | null;
   state: CellState;
-  blocks: WalkthroughBlock[];
-  onJump: (blockId: string) => void;
   /** Bound upward for the grid's arrow-key navigation. */
   triggerRef?: HTMLElement | null;
 }
 
-let { axis, rating, state, blocks, onJump, triggerRef = $bindable(null) }: Props = $props();
+let { prId, axis, rating, state, triggerRef = $bindable(null) }: Props = $props();
 
 const axisLabel = $derived(RATING_AXIS_LABELS[axis]);
 
@@ -117,7 +116,7 @@ const isDisabled = $derived(state !== "resolved");
                 <!-- Popover.Content portals to <body>, out of reach of the
                      cell's verdict tokens, so the body re-applies them. -->
                 <div class="popover-body cell--{rating.verdict}">
-                    <RatingExpandedBody {rating} {blocks} {onJump} />
+                    <RatingExpandedBody {prId} {rating} />
                 </div>
             {/if}
         </Popover.Content>

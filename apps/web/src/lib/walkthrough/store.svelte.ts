@@ -37,6 +37,7 @@ import {
   type WalkthroughUiState,
   walkthroughUiState,
 } from "./reducer";
+import { stepLabels } from "./steps";
 import { wtTrace } from "./trace";
 
 // SvelteMap writes notify only when the stored reference changes: an entry is
@@ -108,6 +109,20 @@ export function getIsHydrating(prId: string): boolean {
 
 export function getBlocks(prId: string): WalkthroughBlock[] {
   return entries.get(prId)?.blocks ?? [];
+}
+
+const stepLabelsByEntry = new WeakMap<WalkthroughEntry, Map<string, string>>();
+
+/** "Ch N · Step M" for a block on the PR's walkthrough page; null when it isn't on it. */
+export function getStepLabel(prId: string, blockId: string): string | null {
+  const entry = entries.get(prId);
+  if (!entry) return null;
+  let labels = stepLabelsByEntry.get(entry);
+  if (!labels) {
+    labels = stepLabels(entry.semanticSteps, entry.blocks);
+    stepLabelsByEntry.set(entry, labels);
+  }
+  return labels.get(blockId) ?? null;
 }
 
 function getIssues(prId: string): WalkthroughIssue[] {

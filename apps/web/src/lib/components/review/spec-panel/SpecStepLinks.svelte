@@ -1,53 +1,44 @@
-<script module lang="ts">
-import type { WalkthroughBlock } from "@revv/shared";
-
-interface StepLink {
-  blockId: string;
-  /** 1-based position in the walkthrough. */
-  stepN: number;
-}
-
-/** Ids that no longer resolve to a block are dropped: they'd have nowhere to jump. */
-export function resolveStepLinks(
-  blockIds: readonly string[],
-  blocks: readonly WalkthroughBlock[],
-): StepLink[] {
-  const out: StepLink[] = [];
-  for (const blockId of blockIds) {
-    const idx = blocks.findIndex((b) => b.id === blockId);
-    if (idx >= 0) out.push({ blockId, stepN: idx + 1 });
-  }
-  return out;
-}
-</script>
-
 <script lang="ts">
+// Chips that jump to the walkthrough blocks something cites, labelled the way
+// the walkthrough labels them ("Ch 2 · Step 3"). Blocks no longer on the page
+// have nowhere to jump and get no chip.
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
+import { jumpToWalkthroughBlock } from "$lib/stores/review-nav.svelte";
+import { getStepLabel } from "$lib/walkthrough/store.svelte";
 
 interface Props {
-  links: StepLink[];
-  onJump: (blockId: string) => void;
+  prId: string;
+  blockIds: readonly string[];
   /** `row` tints the chips with the row's `--c-gutter-color`. */
   tone: "neutral" | "row";
 }
 
-let { links, onJump, tone }: Props = $props();
+let { prId, blockIds, tone }: Props = $props();
+
+const links = $derived(
+  blockIds.flatMap((blockId) => {
+    const label = getStepLabel(prId, blockId);
+    return label ? [{ blockId, label }] : [];
+  }),
+);
 </script>
 
+{#if links.length > 0}
 <ul class="step-links">
-    {#each links as { blockId, stepN } (blockId)}
+    {#each links as { blockId, label } (blockId)}
         <li>
             <button
                 type="button"
                 class="step-link step-link--{tone}"
-                onclick={() => onJump(blockId)}
+                onclick={() => jumpToWalkthroughBlock(blockId)}
             >
                 <ArrowUpRight size={tone === "row" ? 10 : 11} aria-hidden="true" />
-                step {stepN}
+                {label}
             </button>
         </li>
     {/each}
 </ul>
+{/if}
 
 <style>
     .step-links {
@@ -69,7 +60,6 @@ let { links, onJump, tone }: Props = $props();
         font-size: 10.5px;
         font-weight: 600;
         letter-spacing: 0.02em;
-        text-transform: lowercase;
         cursor: pointer;
         transition:
             border-color var(--duration-snap) var(--ease-soft),

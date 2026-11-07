@@ -1,24 +1,21 @@
 <script lang="ts">
-import type { Confidence, WalkthroughBlock, WalkthroughRating } from "@revv/shared";
+import type { Confidence, WalkthroughRating } from "@revv/shared";
 import { RATING_AXIS_LABELS } from "@revv/shared";
 import Markdown from "$lib/components/markdown/Markdown.svelte";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import * as Tooltip from "$lib/components/ui/tooltip";
-import { jumpToDiffLine } from "$lib/stores/review-nav.svelte";
+import { openInDiff } from "$lib/stores/review-nav.svelte";
 import SpecExpandedBody from "./SpecExpandedBody.svelte";
 import SpecReferences from "./SpecReferences.svelte";
 import SpecSection from "./SpecSection.svelte";
-import SpecStepLinks, { resolveStepLinks } from "./SpecStepLinks.svelte";
+import SpecStepLinks from "./SpecStepLinks.svelte";
 
 interface Props {
+  prId: string;
   rating: WalkthroughRating;
-  blocks: WalkthroughBlock[];
-  onJump: (blockId: string) => void;
 }
 
-let { rating, blocks, onJump }: Props = $props();
-
-const stepLinks = $derived(resolveStepLinks(rating.blockIds, blocks));
+let { prId, rating }: Props = $props();
 
 const details = $derived(rating.details?.trim() ? rating.details : null);
 
@@ -90,7 +87,7 @@ const confidenceLabels: Record<Confidence, string> = {
                                                     startLine={citation.startLine}
                                                     endLine={citation.endLine}
                                                     onclick={() =>
-                                                        jumpToDiffLine(citation.filePath, citation.startLine)}
+                                                        openInDiff(prId, citation.filePath, citation.startLine)}
                                                 />
                                             </span>
                                         {/snippet}
@@ -102,7 +99,7 @@ const confidenceLabels: Record<Confidence, string> = {
                                     filePath={citation.filePath}
                                     startLine={citation.startLine}
                                     endLine={citation.endLine}
-                                    onclick={() => jumpToDiffLine(citation.filePath, citation.startLine)}
+                                    onclick={() => openInDiff(prId, citation.filePath, citation.startLine)}
                                 />
                             {/if}
                         </li>
@@ -112,9 +109,7 @@ const confidenceLabels: Record<Confidence, string> = {
         </SpecSection>
     {/if}
 
-    {#if stepLinks.length > 0}
-        <SpecStepLinks links={stepLinks} {onJump} tone="neutral" />
-    {/if}
+    <SpecStepLinks {prId} blockIds={rating.blockIds} tone="neutral" />
 </SpecExpandedBody>
 
 <style>

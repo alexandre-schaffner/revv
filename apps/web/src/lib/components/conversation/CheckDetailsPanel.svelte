@@ -10,7 +10,7 @@ import Markdown from "$lib/components/markdown/Markdown.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import type { RequestState } from "$lib/stores/_types";
 import { getChangedPaths } from "$lib/stores/diff-files.svelte";
-import { jumpToDiffLine } from "$lib/stores/review-nav.svelte";
+import { openInDiff } from "$lib/stores/review-nav.svelte";
 import { copyFeedback } from "$lib/utils/copy-feedback.svelte";
 
 interface Props {
@@ -80,7 +80,7 @@ function copyLog(details: CheckDetails): void {
 										type="button"
 										class="annotation-path"
 										title="Show in the diff"
-										onclick={() => jumpToDiffLine(annotation.path, annotation.startLine)}
+										onclick={() => openInDiff(prId, annotation.path, annotation.startLine)}
 									>
 										{annotation.path}:{annotation.startLine}
 									</button>

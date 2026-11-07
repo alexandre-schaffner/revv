@@ -3,27 +3,25 @@
 import {
   EXTERNAL_AGENT_PROVIDER_NAMES,
   issueResolutionLabel,
-  type WalkthroughBlock,
   type WalkthroughIssue,
 } from "@revv/shared";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
+import { openInDiff } from "$lib/stores/review-nav.svelte";
+import { getStepLabel } from "$lib/walkthrough/store.svelte";
 import SpecExpandedBody from "./SpecExpandedBody.svelte";
 import SpecReferences from "./SpecReferences.svelte";
 import SpecSection from "./SpecSection.svelte";
-import SpecStepLinks, { resolveStepLinks } from "./SpecStepLinks.svelte";
+import SpecStepLinks from "./SpecStepLinks.svelte";
 
 interface Props {
+  prId: string;
   issue: WalkthroughIssue;
-  blocks: WalkthroughBlock[];
-  onFileClick?: ((filePath: string, line: number) => void) | undefined;
-  /** Step chips render only when this is supplied. */
-  onBlockJump?: ((blockId: string) => void) | undefined;
 }
 
-let { issue, blocks, onFileClick, onBlockJump }: Props = $props();
+let { prId, issue }: Props = $props();
 
 const resolutionLabel = $derived(issueResolutionLabel(issue.resolutionStatus));
-const stepLinks = $derived(onBlockJump ? resolveStepLinks(issue.blockIds, blocks) : []);
+const hasStepLinks = $derived(issue.blockIds.some((id) => getStepLabel(prId, id) !== null));
 </script>
 
 <SpecExpandedBody>
@@ -59,7 +57,7 @@ const stepLinks = $derived(onBlockJump ? resolveStepLinks(issue.blockIds, blocks
         </SpecSection>
     {/if}
 
-    {#if issue.filePath || (stepLinks.length > 0 && onBlockJump)}
+    {#if issue.filePath || hasStepLinks}
         <SpecSection label="references">
             {#if issue.filePath}
                 {@const filePath = issue.filePath}
@@ -69,16 +67,12 @@ const stepLinks = $derived(onBlockJump ? resolveStepLinks(issue.blockIds, blocks
                             {filePath}
                             startLine={issue.startLine}
                             endLine={issue.endLine}
-                            onclick={onFileClick
-                                ? () => onFileClick(filePath, issue.startLine ?? 1)
-                                : undefined}
+                            onclick={() => openInDiff(prId, filePath, issue.startLine ?? 1)}
                         />
                     </li>
                 </SpecReferences>
             {/if}
-            {#if stepLinks.length > 0 && onBlockJump}
-                <SpecStepLinks links={stepLinks} onJump={onBlockJump} tone="row" />
-            {/if}
+            <SpecStepLinks {prId} blockIds={issue.blockIds} tone="row" />
         </SpecSection>
     {/if}
 </SpecExpandedBody>
