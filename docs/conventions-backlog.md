@@ -47,10 +47,21 @@ fetch, typed failures for every caller, the entry dropped on settle) without lea
 - team cache: `cache-eligibility.ts`, beside `cache-signing/` and `blob/` (`Cache.ts` is the
   generic kv cache every feature reads through, not a team-cache file)
 - no folder yet:
-  - poll: `PollScheduler.ts`, `poll-{gate,maintenance,notifications,open-prs,state}.ts`
+  - poll: `PollScheduler.ts`, `poll-{gate,maintenance,notifications,open-prs,state}.ts`,
+    `pr-diff-stats.ts` (only `poll-open-prs.ts` uses it), `poll-test-support.ts` (the poll
+    tests' fixtures)
   - PR mirror: `PrMirror.ts`, `pr-head-move.ts`, `pr-head-moves.ts` (which only the mirror and its listeners use)
   - review: `Review.ts`, `review-submit.ts`, `review-mode.ts`, `github-review-comment.ts`, `Sync.ts`, `diff-anchors.ts`
   - onboarding: `Onboarding.ts`, `AgentLogin.ts`, `EventJobRegistry.ts` (which only those two use)
+  - realtime: `Realtime.ts`, `Broadcaster.ts` (its transport; only `Realtime.ts` and the
+    `/api/events` route use it)
+
+Not violations, listed so the inventory of flat files is complete: one-file services, which
+§2.7 keeps flat. `AppLayer.ts`, `Ai.ts`, `Cache.ts`, `Db.ts`, `DbMaintenance.ts`,
+`DiffCache.ts`, `Jev.ts`, `merge-eligibility.ts`, `patch-truncate.ts`, `pinned-prs.ts`,
+`pr-deep-link.ts`, `pr-file-prerender.ts`, `PrContext.ts`, `PrConversation.ts`,
+`PullRequest.ts`, `repo-access.ts`, `RepoActivity.ts`, `Repository.ts`, `SecretStore.ts`,
+`Settings.ts`.
 
 **Fix shape.** Moves plus import rewrites, one feature per PR, with the feature roots in
 `scripts/check-import-boundaries.ts` following. Mechanical, but it touches every importer, so
