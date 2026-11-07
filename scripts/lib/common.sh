@@ -514,7 +514,6 @@ write_desktop_server_config() {
       REVV_CLAUDE_BIN: claude || previousEnv.REVV_CLAUDE_BIN || "",
       REVV_OPENCODE_BIN: opencode || previousEnv.REVV_OPENCODE_BIN || "",
       REVV_CODEX_BIN: codex || previousEnv.REVV_CODEX_BIN || "",
-      CODEX_PATH: codex || previousEnv.CODEX_PATH || previousEnv.REVV_CODEX_BIN || "",
     };
     if (host) env.GITHUB_HOST = host;
     if (clientId) env.GITHUB_CLIENT_ID = clientId;
