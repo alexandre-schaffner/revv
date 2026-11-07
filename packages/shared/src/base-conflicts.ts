@@ -52,15 +52,20 @@ export type AgentProgressFrame =
 /**
  * Frames of a one-shot conflict-resolve run (the chat push's resolve-and-push,
  * the base sync); it ends with one `result`. `Pushed` is what each flow
- * reports about the push it made.
+ * reports about the push it made. `stopped`: the user stopped the run before
+ * it pushed, and what it did is backed out.
  */
 export type ResolveFrame<Pushed> =
   | { readonly kind: "status"; readonly message: string }
   | { readonly kind: "conflict-files"; readonly files: readonly string[] }
   | AgentProgressFrame
+  | ResolveResult<Pushed>;
+
+export type ResolveResult<Pushed> =
   | ({ readonly kind: "result"; readonly status: "pushed"; readonly newSha: string } & Pushed)
   | { readonly kind: "result"; readonly status: "remote-changed"; readonly branch: string }
-  | { readonly kind: "result"; readonly status: "failed"; readonly message: string };
+  | { readonly kind: "result"; readonly status: "failed"; readonly message: string }
+  | { readonly kind: "result"; readonly status: "stopped" };
 
 /** Frames streamed by `POST /api/prs/:id/base-conflicts/resolve`. */
 export type BaseConflictFrame = ResolveFrame<{

@@ -359,3 +359,16 @@ export function resolveConflictsAndPush(
   );
   return controller;
 }
+
+/**
+ * Stop the PR's resolve-and-push while its agent works. Its stream still ends
+ * in a result: `stopped` once the agent branch is back where it was. False
+ * when nothing was stoppable: the run already got to its push.
+ */
+export async function stopResolveAndPush(prId: string): Promise<boolean> {
+  const data = await call(
+    chat(prId)["proposed-changes"]["resolve-and-push"].stop.post(),
+    "Couldn't stop the agent",
+  );
+  return data.stopped;
+}

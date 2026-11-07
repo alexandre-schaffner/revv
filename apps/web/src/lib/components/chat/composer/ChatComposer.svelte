@@ -1,12 +1,14 @@
 <script lang="ts">
 // The message box: text with `/` command and `@` file completion, file
-// attachments (checked when added), the plan-mode toggle, and send / stop.
+// attachments (checked when added), the plan-mode toggle, and send / stop
+// (the running turn, or the agent resolving a push's conflicts).
 import ArrowUp from "phosphor-svelte/lib/ArrowUp";
 import MapTrifold from "phosphor-svelte/lib/MapTrifold";
 import Paperclip from "phosphor-svelte/lib/Paperclip";
 import Stop from "phosphor-svelte/lib/Stop";
 import { toast } from "svelte-sonner";
 import { admitAttachments, encodeAttachments, type PendingAttachment } from "$lib/chat/attachments";
+import { isResolvingPush, isStoppingResolve, stopResolvingPush } from "$lib/chat/proposed.svelte";
 import {
   getChatMentionPaths,
   getChatSessionContext,
@@ -38,6 +40,8 @@ let editor: ComposerEditor | undefined = $state();
 let fileInput: HTMLInputElement | undefined = $state();
 
 const isStreaming = $derived(isChatStreaming(prId));
+const isResolving = $derived(isResolvingPush(prId));
+const canStop = $derived(isStreaming || isResolving);
 const interactionMode = $derived(getInteractionMode(prId));
 const planModeAvailable = $derived(isPlanModeAvailable());
 const commands = $derived(getChatSessionContext(prId)?.commands ?? []);
@@ -80,12 +84,14 @@ async function submit(): Promise<void> {
   }
 }
 
-// The button stops a running turn; Enter in the editor always sends (queued
-// behind the running turn).
+// The button stops a running turn or conflict resolve; Enter in the editor
+// always sends (queued behind the running turn).
 function handleFormSubmit(e: SubmitEvent): void {
   e.preventDefault();
   if (isStreaming) {
     abortChatTurn(prId);
+  } else if (isResolving) {
+    void stopResolvingPush(prId);
   } else {
     void submit();
   }
@@ -196,12 +202,13 @@ function togglePlanMode(): void {
 			data-slot="prompt-input-submit"
 			type="submit"
 			size="icon-sm"
-			variant={isStreaming ? "outline" : "default"}
+			variant={canStop ? "outline" : "default"}
 			class="shrink-0"
-			disabled={!isStreaming && isEmpty}
-			aria-label={isStreaming ? "Stop" : "Send"}
+			disabled={canStop ? isResolving && isStoppingResolve(prId) : isEmpty}
+			aria-label={canStop ? "Stop" : "Send"}
+			title={isResolving && !isStreaming ? "Stop resolving the conflicts" : undefined}
 		>
-			{#if isStreaming}
+			{#if canStop}
 				<Stop class="size-3" />
 			{:else}
 				<ArrowUp class="size-3.5" />

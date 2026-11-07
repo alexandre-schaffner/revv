@@ -16,6 +16,7 @@ import {
   pushProposedChanges,
   rebaseProposedCommits,
   resolveConflictsAndPush,
+  stopResolveAndPush,
 } from "./api";
 import { appendItem, isChatStreaming, writeTurn } from "./timeline.svelte";
 
@@ -44,7 +45,7 @@ export interface PushConflict {
   branch: string;
 }
 
-type BranchOp = "push" | "resolve" | "rebase" | "batch";
+type BranchOp = "push" | "resolve" | "stop-resolve" | "rebase" | "batch";
 type CommitOp = "discard" | "cherry-pick";
 
 interface ProposedEntry {
@@ -141,6 +142,11 @@ export function isPushingProposed(prId: string): boolean {
 
 export function isResolvingPush(prId: string): boolean {
   return entry(prId).busy.has("resolve");
+}
+
+/** A Stop of the PR's resolve-and-push was asked for and its run hasn't ended yet. */
+export function isStoppingResolve(prId: string): boolean {
+  return entry(prId).busy.has("stop-resolve");
 }
 
 export function isRebasingProposed(prId: string): boolean {
@@ -312,6 +318,7 @@ export function resolveAndPushProposed(prId: string): Promise<void> {
       turn.seal(error);
       resolveControllers.delete(prId);
       setBusy(prId, "resolve", false);
+      setBusy(prId, "stop-resolve", false);
       resolve();
     };
     const controller = resolveConflictsAndPush(prId, {
@@ -339,6 +346,9 @@ export function resolveAndPushProposed(prId: string): Promise<void> {
           void refreshProposedChanges(prId);
         } else if (result.status === "remote-changed") {
           toast.error(`The PR branch (${result.branch}) moved during push. Sync and retry.`);
+        } else if (result.status === "stopped") {
+          statusRow("Stopped. The agent's commits are back as they were.");
+          void refreshProposedChanges(prId);
         } else {
           toast.error(result.message);
         }
@@ -351,6 +361,24 @@ export function resolveAndPushProposed(prId: string): Promise<void> {
     });
     resolveControllers.set(prId, controller);
   });
+}
+
+/**
+ * Stop the PR's resolve-and-push while its agent works. The run's stream
+ * reports the end; a run already pushing finishes.
+ */
+export async function stopResolvingPush(prId: string): Promise<void> {
+  if (!isResolvingPush(prId) || isStoppingResolve(prId)) return;
+  setBusy(prId, "stop-resolve", true);
+  try {
+    if (!(await stopResolveAndPush(prId))) {
+      setBusy(prId, "stop-resolve", false);
+      toast.message("Nothing to stop: the agent isn't working on this push right now.");
+    }
+  } catch (e) {
+    setBusy(prId, "stop-resolve", false);
+    toast.error(thrownMessage(e));
+  }
 }
 
 /**

@@ -38,4 +38,13 @@ export const prBaseConflictsRoutes = new Elysia({ prefix: "/api/prs" })
         ).pipe(Effect.map(pipeToSse)),
       ),
     { body: t.Object({ expectedHeadSha: t.String({ pattern: "^[0-9a-f]{40}$" }) }) },
+  )
+
+  // Stops the run above while its agent works; it carries on without a client.
+  .post("/:id/base-conflicts/resolve/stop", (ctx) =>
+    runRoute(
+      Effect.flatMap(BaseConflictsService, (s) => s.stop(ctx.params.id)).pipe(
+        Effect.map((stopped) => ({ stopped })),
+      ),
+    ),
   );
