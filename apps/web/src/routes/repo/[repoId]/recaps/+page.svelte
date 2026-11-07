@@ -33,7 +33,7 @@ useCommands(
   })),
 );
 
-useShellChrome(() => ({ tabs: periodTabs }));
+useShellChrome(() => ({ tabs: { snippet: periodTabs, key: repoId } }));
 </script>
 
 {#snippet periodTabs()}

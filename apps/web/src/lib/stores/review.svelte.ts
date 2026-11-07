@@ -1,5 +1,4 @@
-// The review of the PR on screen: its comment threads and their messages.
-// Only one PR's review is on screen at a time.
+// The review of each open PR: its comment threads and their messages.
 
 import type {
   CommentThread,
@@ -12,78 +11,108 @@ import type {
   ThreadsSyncedEnvelope,
   ThreadUpdatedEnvelope,
 } from "@revv/shared";
+import { SvelteMap } from "svelte/reactivity";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
-import { getSelectedPrId } from "$lib/stores/route.svelte";
+import { call } from "$lib/api/errors";
+import { thrownMessage } from "$lib/api/wire";
 import { refreshPrHead, requestThreadSync } from "$lib/stores/sync.svelte";
 import { createResource } from "./resource";
 
-let shownPrId: string | null = null;
-let wantedPrId: string | null = null;
+interface PrReview {
+  readonly threads: readonly CommentThread[];
+  readonly messages: Readonly<Record<string, readonly ThreadMessage[]>>;
+}
 
-const reviews = createResource<string, true>({
+const EMPTY_REVIEW: PrReview = { threads: [], messages: {} };
+const NO_THREADS: readonly CommentThread[] = [];
+const NO_MESSAGES: readonly ThreadMessage[] = [];
+
+const reviews = new SvelteMap<string, PrReview>();
+/** The PRs whose review is open; a read for a PR released meanwhile is dropped. */
+const followed = new Set<string>();
+
+function readReview(prId: string) {
+  return call(api.api.reviews.active({ prId }).get(), "Failed to load review session");
+}
+
+const loads = createResource<void, true>({
   freshForMs: 60_000,
   fetch: async (prId) => {
-    const { data, error } = await api.api.reviews.active({ prId }).get();
-    if (prId !== wantedPrId) return { status: "error", error: "Superseded" };
-    if (error) {
-      console.error("[review] Failed to load review:", error);
-      toast.error("Failed to load review session");
-      return { status: "error", error: "Failed to load review session" };
+    let data: Awaited<ReturnType<typeof readReview>>;
+    try {
+      data = await readReview(prId);
+    } catch (e) {
+      if (!followed.has(prId)) return { status: "error", error: "Released" };
+      console.error("[review] Failed to load review:", e);
+      const message = thrownMessage(e);
+      toast.error(message);
+      return { status: "error", error: message };
     }
-    if (shownPrId !== null && shownPrId !== prId) reviews.invalidate(shownPrId);
-    shownPrId = prId;
-    threads = data.threads;
-    threadMessages = { ...data.messages };
-    threadsVersion++;
+    if (!followed.has(prId)) return { status: "error", error: "Released" };
+    reviews.set(prId, { threads: data.threads, messages: { ...data.messages } });
     return { status: "ok", data: true };
   },
 });
 
-function dropShownReview(): void {
-  shownPrId = null;
-  threads = [];
-  threadMessages = {};
-  threadsVersion++;
+function review(prId: string): PrReview {
+  return reviews.get(prId) ?? EMPTY_REVIEW;
 }
 
-/** Forget every review; a read still in flight can't write back. */
-export function clearSession(): void {
-  reviews.reset();
-  wantedPrId = null;
-  dropShownReview();
+function updateReview(prId: string, update: (r: PrReview) => PrReview): void {
+  if (!reviews.has(prId)) return;
+  reviews.set(prId, update(review(prId)));
+}
+
+/** The open PR holding `threadId`, if any. */
+function prOfThread(threadId: string): string | null {
+  for (const [prId, r] of reviews) {
+    if (r.threads.some((t) => t.id === threadId)) return prId;
+  }
+  return null;
+}
+
+function updateThreadReview(threadId: string, update: (r: PrReview) => PrReview): void {
+  const prId = prOfThread(threadId);
+  if (prId) updateReview(prId, update);
+}
+
+function withMessages(
+  r: PrReview,
+  threadId: string,
+  update: (messages: readonly ThreadMessage[]) => readonly ThreadMessage[],
+): PrReview {
+  return { ...r, messages: { ...r.messages, [threadId]: update(r.messages[threadId] ?? []) } };
 }
 
 /**
- * Load a PR's review: every comment thread with its messages. Another PR's
- * threads leave the screen at once. Callers that just mutated server state
- * (e.g. submitting a review) pass `force`, otherwise stale local rows (missing
- * the externalId stamped on just-pushed comments) would survive and get
- * re-submitted as duplicates.
+ * Load a PR's review: every comment thread with its messages. Callers that
+ * just mutated server state (e.g. submitting a review) pass `force`,
+ * otherwise stale local rows (missing the externalId stamped on just-pushed
+ * comments) would survive and get re-submitted as duplicates.
  */
 export async function loadSession(prId: string, force = false): Promise<void> {
-  if (shownPrId !== null && shownPrId !== prId) dropShownReview();
-  wantedPrId = prId;
-  await (force ? reviews.refresh(prId, prId) : reviews.load(prId, prId));
+  followed.add(prId);
+  await (force ? loads.refresh(prId, undefined) : loads.load(prId, undefined));
 }
 
-let threads = $state<CommentThread[]>([]);
-let threadMessages = $state<Record<string, ThreadMessage[]>>({});
-// Monotonic counter bumped on every thread mutation. Consumed inside reactive
-// derivations that need to force-recompute (e.g. DiffViewer's annotations),
-// because @pierre/diffs caches annotations by metadata reference.
-let threadsVersion = $state(0);
-
-export function getThreadsVersion(): number {
-  return threadsVersion;
+/** Forget the review of `prId`; a read still in flight can't write it back. */
+export function releaseSession(prId: string): void {
+  followed.delete(prId);
+  loads.invalidate(prId);
+  reviews.delete(prId);
 }
 
-export function getThreads(): CommentThread[] {
-  return threads;
+export function getThreads(prId: string): readonly CommentThread[] {
+  return reviews.get(prId)?.threads ?? NO_THREADS;
 }
 
-export function getThreadMessages(threadId: string): ThreadMessage[] {
-  return threadMessages[threadId] ?? [];
+export function getThreadsForFile(prId: string, filePath: string): CommentThread[] {
+  return getThreads(prId).filter((t) => t.filePath === filePath);
+}
+
+export function getThreadMessages(prId: string, threadId: string): readonly ThreadMessage[] {
+  return reviews.get(prId)?.messages[threadId] ?? NO_MESSAGES;
 }
 
 export interface NewThread {
@@ -94,62 +123,76 @@ export interface NewThread {
   body: string;
 }
 
-/**
- * Start a comment thread on a line range. Pessimistic: waits for the server's
- * ids. Returns null when no PR is on screen or the server refused.
- */
-export async function addThread(params: NewThread): Promise<CommentThread | null> {
-  if (!shownPrId) {
-    console.error("[review] No review on screen — cannot create thread");
-    return null;
-  }
-
-  const { data, error } = await api.api.reviews({ id: shownPrId }).threads.post({
-    filePath: params.filePath,
-    startLine: params.startLine,
-    endLine: params.endLine,
-    diffSide: params.diffSide,
-    message: { body: params.body, messageType: "comment" },
+function addThreadLocally(prId: string, thread: CommentThread, message: ThreadMessage): void {
+  updateReview(prId, (r) => {
+    const threads = r.threads.some((t) => t.id === thread.id) ? r.threads : [...r.threads, thread];
+    return withMessages({ ...r, threads }, thread.id, (existing) =>
+      existing.some((m) => m.id === message.id) ? existing : [...existing, message],
+    );
   });
+}
 
-  if (error) {
-    console.error("[review] Failed to create thread:", error);
+/** Start a comment thread on a line range. Pessimistic: waits for the server's ids. */
+export async function addThread(prId: string, params: NewThread): Promise<CommentThread | null> {
+  let data: { thread: CommentThread; message: ThreadMessage };
+  try {
+    data = await call(
+      api.api.reviews({ id: prId }).threads.post({
+        filePath: params.filePath,
+        startLine: params.startLine,
+        endLine: params.endLine,
+        diffSide: params.diffSide,
+        message: { body: params.body, messageType: "comment" },
+      }),
+      "Failed to create thread",
+    );
+  } catch (e) {
+    console.error("[review] Failed to create thread:", e);
     return null;
   }
 
-  const { thread, message } = data;
   // The SSE broadcast may have landed first.
-  if (!threads.some((t) => t.id === thread.id)) {
-    threads = [...threads, thread];
-    threadMessages = { ...threadMessages, [thread.id]: [message] };
-    threadsVersion++;
-  }
-  return thread;
+  addThreadLocally(prId, data.thread, data.message);
+  return data.thread;
+}
+
+function addMessageLocally(threadId: string, message: ThreadMessage): void {
+  updateThreadReview(threadId, (r) =>
+    withMessages(r, threadId, (existing) =>
+      existing.some((m) => m.id === message.id) ? existing : [...existing, message],
+    ),
+  );
 }
 
 /** Reply on a thread. Pessimistic: waits for the server's id. */
 export async function addThreadMessage(threadId: string, body: string): Promise<void> {
-  const { data, error } = await api.api
-    .threads({ id: threadId })
-    .messages.post({ body, messageType: "reply" });
-
-  if (error) {
-    console.error("[review] Failed to add message:", error);
+  let message: ThreadMessage;
+  try {
+    message = await call(
+      api.api.threads({ id: threadId }).messages.post({ body, messageType: "reply" }),
+      "Failed to add reply",
+    );
+  } catch (e) {
+    console.error("[review] Failed to add message:", e);
     return;
   }
 
   // The SSE broadcast may have landed first.
-  const existing = threadMessages[threadId] ?? [];
-  if (!existing.some((m) => m.id === data.id)) {
-    threadMessages = { ...threadMessages, [threadId]: [...existing, data] };
-  }
+  addMessageLocally(threadId, message);
 }
 
 type ThreadStatusFields = Pick<CommentThread, "status" | "resolvedAt">;
 
 function patchThread(threadId: string, fields: ThreadStatusFields): void {
-  threads = threads.map((t) => (t.id === threadId ? { ...t, ...fields } : t));
-  threadsVersion++;
+  updateThreadReview(threadId, (r) => ({
+    ...r,
+    threads: r.threads.map((t) => (t.id === threadId ? { ...t, ...fields } : t)),
+  }));
+}
+
+function findThread(threadId: string): CommentThread | null {
+  const prId = prOfThread(threadId);
+  return prId ? (review(prId).threads.find((t) => t.id === threadId) ?? null) : null;
 }
 
 /** Optimistic: on failure only this thread's status fields go back. */
@@ -158,16 +201,20 @@ async function setThreadStatus(
   next: ThreadStatusFields,
   failure: string | null,
 ): Promise<void> {
-  const thread = threads.find((t) => t.id === threadId);
+  const thread = findThread(threadId);
   if (!thread) return;
   const previous: ThreadStatusFields = { status: thread.status, resolvedAt: thread.resolvedAt };
   patchThread(threadId, next);
   const status = next.status === "open" ? "open" : "resolved";
-  const { error } = await api.api.threads({ id: threadId }).patch({ status });
-  if (error) {
-    console.error(`[review] Failed to set thread ${status}, reverting:`, error);
+  try {
+    await call(
+      api.api.threads({ id: threadId }).patch({ status }),
+      failure ?? "Failed to reopen thread",
+    );
+  } catch (e) {
+    console.error(`[review] Failed to set thread ${status}, reverting:`, e);
     patchThread(threadId, previous);
-    if (failure) toast.error(failure);
+    if (failure) toast.error(thrownMessage(e));
   }
 }
 
@@ -188,42 +235,23 @@ export function onThreadUpdated({
   status,
   resolvedAt,
 }: ThreadUpdatedEnvelope["data"]): void {
-  threads = threads.map((t) => (t.id === threadId ? { ...t, status, resolvedAt } : t));
-  threadsVersion++;
+  patchThread(threadId, { status, resolvedAt });
 }
 
 export function onThreadCreated({ prId, thread, message }: ThreadCreatedEnvelope["data"]): void {
-  if (prId !== shownPrId) return;
-  if (!threads.some((t) => t.id === thread.id)) {
-    threads = [...threads, thread];
-    threadsVersion++;
-  }
-  const existing = threadMessages[thread.id] ?? [];
-  if (!existing.some((m) => m.id === message.id)) {
-    threadMessages = { ...threadMessages, [thread.id]: [...existing, message] };
-  }
+  addThreadLocally(prId, thread, message);
 }
 
 /** A new message; a changed one comes as `thread:message:edited`. */
 export function onThreadMessage({ threadId, message }: ThreadMessageEnvelope["data"]): void {
-  if (!threads.some((t) => t.id === threadId)) return;
-  const existing = threadMessages[threadId] ?? [];
-  if (existing.some((m) => m.id === message.id)) return;
-  threadMessages = {
-    ...threadMessages,
-    [threadId]: [...existing, message],
-  };
-}
-
-export function getThreadsForFile(filePath: string): CommentThread[] {
-  return threads.filter((t) => t.filePath === filePath);
+  addMessageLocally(threadId, message);
 }
 
 function removeThreadLocally(threadId: string): void {
-  threads = threads.filter((t) => t.id !== threadId);
-  const { [threadId]: _, ...rest } = threadMessages;
-  threadMessages = rest;
-  threadsVersion++;
+  updateThreadReview(threadId, (r) => {
+    const { [threadId]: _, ...messages } = r.messages;
+    return { threads: r.threads.filter((t) => t.id !== threadId), messages };
+  });
 }
 
 /**
@@ -231,19 +259,26 @@ function removeThreadLocally(threadId: string): void {
  * its messages come back where they were, unless an event re-added them.
  */
 export async function deleteThread(threadId: string): Promise<boolean> {
-  const index = threads.findIndex((t) => t.id === threadId);
-  const thread = threads[index];
-  const messages = threadMessages[threadId];
+  const prId = prOfThread(threadId);
+  const before = prId ? review(prId) : null;
+  const index = before?.threads.findIndex((t) => t.id === threadId) ?? -1;
+  const thread = before?.threads[index];
+  const messages = before?.messages[threadId];
   removeThreadLocally(threadId);
 
-  const { error } = await api.api.threads({ id: threadId }).delete();
-  if (error) {
-    if (thread && !threads.some((t) => t.id === threadId)) {
-      threads = [...threads.slice(0, index), thread, ...threads.slice(index)];
-      if (messages) threadMessages = { ...threadMessages, [threadId]: messages };
-      threadsVersion++;
+  try {
+    await call(api.api.threads({ id: threadId }).delete(), "Failed to discard comment");
+  } catch (e) {
+    if (prId && thread) {
+      updateReview(prId, (r) => {
+        if (r.threads.some((t) => t.id === threadId)) return r;
+        const threads = [...r.threads.slice(0, index), thread, ...r.threads.slice(index)];
+        return messages
+          ? { threads, messages: { ...r.messages, [threadId]: messages } }
+          : { ...r, threads };
+      });
     }
-    toast.error("Failed to discard comment");
+    toast.error(thrownMessage(e));
     return false;
   }
   return true;
@@ -251,13 +286,15 @@ export async function deleteThread(threadId: string): Promise<boolean> {
 
 /** Push one local draft comment to GitHub under the active account's identity. */
 export async function pushThreadToGitHub(threadId: string): Promise<boolean> {
-  const { error } = await api.api.threads({ id: threadId }).push.post();
-  if (error) {
-    toast.error("Failed to send comment to GitHub");
+  const prId = prOfThread(threadId);
+  try {
+    await call(api.api.threads({ id: threadId }).push.post(), "Failed to send comment to GitHub");
+  } catch (e) {
+    toast.error(thrownMessage(e));
     return false;
   }
 
-  if (shownPrId !== null) await loadSession(shownPrId, true);
+  if (prId) await loadSession(prId, true);
   toast.success("Comment sent to GitHub");
   return true;
 }
@@ -270,22 +307,20 @@ export function onThreadMessageEdited({
   threadId,
   message,
 }: ThreadMessageEditedEnvelope["data"]): void {
-  threadMessages = {
-    ...threadMessages,
-    [threadId]: (threadMessages[threadId] ?? []).map((m) => (m.id === message.id ? message : m)),
-  };
+  updateThreadReview(threadId, (r) =>
+    withMessages(r, threadId, (existing) =>
+      existing.map((m) => (m.id === message.id ? message : m)),
+    ),
+  );
 }
 
 export function onThreadMessageDeleted({
   threadId,
   messageId,
 }: ThreadMessageDeletedEnvelope["data"]): void {
-  const existing = threadMessages[threadId];
-  if (!existing) return;
-  threadMessages = {
-    ...threadMessages,
-    [threadId]: existing.filter((m) => m.id !== messageId),
-  };
+  updateThreadReview(threadId, (r) =>
+    withMessages(r, threadId, (existing) => existing.filter((m) => m.id !== messageId)),
+  );
 }
 
 /**
@@ -295,37 +330,39 @@ export function onThreadMessageDeleted({
  * so it only shows when this is expected to succeed.
  */
 export async function deleteThreadMessage(threadId: string, messageId: string): Promise<boolean> {
-  const existing = threadMessages[threadId] ?? [];
+  const prId = prOfThread(threadId);
+  const existing = prId ? (review(prId).messages[threadId] ?? []) : [];
   const index = existing.findIndex((m) => m.id === messageId);
   const message = existing[index];
-  threadMessages = {
-    ...threadMessages,
-    [threadId]: existing.filter((m) => m.id !== messageId),
-  };
+  onThreadMessageDeleted({ threadId, messageId });
 
-  const { error } = await api.api.threads({ id: threadId }).messages({ messageId }).delete();
-
-  if (error) {
-    const current = threadMessages[threadId];
-    if (message && current && !current.some((m) => m.id === messageId)) {
-      threadMessages = {
-        ...threadMessages,
-        [threadId]: [...current.slice(0, index), message, ...current.slice(index)],
-      };
+  try {
+    await call(
+      api.api.threads({ id: threadId }).messages({ messageId }).delete(),
+      "Failed to discard reply",
+    );
+  } catch (e) {
+    if (message) {
+      updateThreadReview(threadId, (r) =>
+        withMessages(r, threadId, (current) =>
+          current.some((m) => m.id === messageId)
+            ? current
+            : [...current.slice(0, index), message, ...current.slice(index)],
+        ),
+      );
     }
-    toast.error("Failed to discard reply");
+    toast.error(thrownMessage(e));
     return false;
   }
   return true;
 }
 
 function setMessageBody(threadId: string, messageId: string, body: string): void {
-  threadMessages = {
-    ...threadMessages,
-    [threadId]: (threadMessages[threadId] ?? []).map((m) =>
-      m.id === messageId ? { ...m, body } : m,
+  updateThreadReview(threadId, (r) =>
+    withMessages(r, threadId, (existing) =>
+      existing.map((m) => (m.id === messageId ? { ...m, body } : m)),
     ),
-  };
+  );
 }
 
 /** Edit the body of a pending thread's first message. Optimistic: on failure the old body comes back. */
@@ -334,50 +371,45 @@ export async function editThreadMessage(
   messageId: string,
   body: string,
 ): Promise<boolean> {
-  const previous = threadMessages[threadId]?.find((m) => m.id === messageId)?.body;
+  const prId = prOfThread(threadId);
+  const previous = prId
+    ? review(prId).messages[threadId]?.find((m) => m.id === messageId)?.body
+    : undefined;
   setMessageBody(threadId, messageId, body);
 
-  const { error } = await api.api.threads({ id: threadId }).messages({ messageId }).patch({ body });
-  if (error) {
+  try {
+    await call(
+      api.api.threads({ id: threadId }).messages({ messageId }).patch({ body }),
+      "Failed to save edit",
+    );
+  } catch (e) {
     if (previous !== undefined) setMessageBody(threadId, messageId, previous);
-    toast.error("Failed to save edit");
+    toast.error(thrownMessage(e));
     return false;
   }
   return true;
 }
 
-export async function applyCommentSuggestion(threadId: string, suggestion: string): Promise<void> {
-  const messages = threadMessages[threadId];
-  if (!messages || messages.length === 0) return;
-
-  const updated = messages.map((msg, i) =>
-    i === 0 ? { ...msg, codeSuggestion: suggestion } : msg,
-  );
-  threadMessages = { ...threadMessages, [threadId]: updated };
-
-  await resolveThread(threadId);
-}
-
 /**
  * The server only emits this when the pull actually moved something (or the
- * user asked for the sync), so the PR on screen re-reads its session even
+ * user asked for the sync), so an open review re-reads its session even
  * inside the freshness window.
  */
 export function onThreadsSynced({ prId }: ThreadsSyncedEnvelope["data"]): void {
-  if (prId === getSelectedPrId()) void loadSession(prId, true);
+  if (followed.has(prId)) void loadSession(prId, true);
 }
 
 /**
  * Thread events sent while the stream was down are gone. The session read is
- * DB-only, so the PR on screen also asks GitHub for its threads and its head
+ * DB-only, so each open review also asks GitHub for its threads and its head
  * (a dropped connection may have hidden a push).
  */
 export function onEventsReconnected(): void {
-  const prId = getSelectedPrId();
-  if (!prId) return;
-  requestThreadSync(prId);
-  void loadSession(prId, true);
-  refreshPrHead(prId);
+  for (const prId of followed) {
+    requestThreadSync(prId);
+    void loadSession(prId, true);
+    refreshPrHead(prId);
+  }
 }
 
 /**
@@ -385,10 +417,11 @@ export function onEventsReconnected(): void {
  * and a DB read can't see a commit the poll fiber hasn't fetched yet.
  */
 export function onWindowForeground(): void {
-  const prId = getSelectedPrId();
-  if (prId) refreshPrHead(prId);
+  for (const prId of followed) refreshPrHead(prId);
 }
 
 export function reset(): void {
-  clearSession();
+  followed.clear();
+  loads.reset();
+  reviews.clear();
 }

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { StackLayer, StackReviewScope, StackReviewStarted } from "@revv/shared";
-import { isOpenLayer, stackKey } from "@revv/shared";
+import { isOpenLayer, layerReviewState, stackKey } from "@revv/shared";
 import { and, eq, inArray } from "drizzle-orm";
 import { Cause, Context, Duration, Effect, Layer } from "effect";
 import { stackReviews } from "../../db/schema/stack-reviews";
@@ -38,13 +38,12 @@ export function planStackReview(
       untracked.push(layer.number);
       continue;
     }
-    const { review } = layer;
     if (scope === "remaining") {
-      if (review.kind === "generating") {
-        watching.push(review.walkthroughId);
+      if (layer.review.kind === "generating") {
+        watching.push(layer.review.walkthroughId);
         continue;
       }
-      if (review.kind === "complete" && review.reviewedHeadSha === layer.headSha) continue;
+      if (layerReviewState(layer) === "reviewed") continue;
     }
     queue.push({ number: layer.number, prId: layer.prId });
   }

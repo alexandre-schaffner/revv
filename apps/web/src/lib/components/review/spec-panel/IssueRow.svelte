@@ -3,12 +3,7 @@
  * File and step links live in the expanded body so the row has no nested
  * click targets.
  */
-import {
-  ISSUE_SEVERITY_LABEL,
-  issueResolutionLabel,
-  type WalkthroughBlock,
-  type WalkthroughIssue,
-} from "@revv/shared";
+import { ISSUE_SEVERITY_LABEL, issueResolutionLabel, type WalkthroughIssue } from "@revv/shared";
 import Check from "phosphor-svelte/lib/Check";
 import { Checkbox } from "$lib/components/ui/checkbox";
 import { enterOnce } from "$lib/motion";
@@ -16,34 +11,33 @@ import IssueExpandedBody from "./IssueExpandedBody.svelte";
 import SpecRow from "./SpecRow.svelte";
 
 interface Props {
+  prId: string;
   issue: WalkthroughIssue;
   /** Ticked for the next submit. */
-  selected: boolean;
+  selected?: boolean;
   /** Already posted to GitHub. */
   submitted: boolean;
+  /** Shown for reading only: no selection checkbox. */
+  readOnly?: boolean;
   open: boolean;
   /** Rows sharing a group cascade in together. */
   cascadeGroup: string;
-  onToggleSelect: () => void;
+  onToggleSelect?: (() => void) | undefined;
   onToggleOpen: () => void;
-  onFileClick?: ((filePath: string, line: number) => void) | undefined;
   onTriggerRef?: ((el: HTMLElement | null) => void) | undefined;
-  blocks: WalkthroughBlock[];
-  onBlockJump?: ((blockId: string) => void) | undefined;
 }
 
 let {
+  prId,
   issue,
-  selected,
+  selected = false,
   submitted,
+  readOnly = false,
   open,
   cascadeGroup,
   onToggleSelect,
   onToggleOpen,
-  onFileClick,
   onTriggerRef,
-  blocks,
-  onBlockJump,
 }: Props = $props();
 
 /** Compiler-style prefix (like TS2345's leading letter), tabular so rows line up. */
@@ -64,7 +58,7 @@ const motionKey = $derived(`spec-row:issue:${issue.id}`);
 
 function handleCheckedChange(): void {
   if (submitted || resolved) return;
-  onToggleSelect();
+  onToggleSelect?.();
 }
 
 function stopPropagation(e: MouseEvent): void {
@@ -73,7 +67,8 @@ function stopPropagation(e: MouseEvent): void {
 </script>
 
 <div
-    class="issue-row issue-row--{issue.severity}"
+    class="issue-row"
+    data-severity={issue.severity}
     class:issue-row--submitted={submitted}
     class:issue-row--resolved={resolved}
     class:issue-row--selected={selected}
@@ -97,7 +92,7 @@ function stopPropagation(e: MouseEvent): void {
                 <span class="staged-check" aria-hidden="true">
                     <Check size={13} />
                 </span>
-            {:else}
+            {:else if !readOnly}
                 <Checkbox
                     checked={selected}
                     aria-label="Include in submit"
@@ -109,7 +104,7 @@ function stopPropagation(e: MouseEvent): void {
 
         {#snippet label()}
             <span
-                class="severity-code severity-code--{issue.severity}"
+                class="severity-code"
                 title={ISSUE_SEVERITY_LABEL[issue.severity]}
             >
                 {severityCode[issue.severity]}
@@ -125,34 +120,18 @@ function stopPropagation(e: MouseEvent): void {
         {/snippet}
 
         {#snippet content()}
-            <IssueExpandedBody {issue} {blocks} {onFileClick} {onBlockJump} />
+            <IssueExpandedBody {prId} {issue} />
         {/snippet}
     </SpecRow>
 </div>
 
 <style>
+    /* The scorecard's palette, so an issue gutter matches a concern /
+       blocker cell. */
     .issue-row {
-        --c-gutter-color: var(--color-border);
-        --c-row-bg: var(--color-bg-elevated);
-        --c-gutter-flash: var(--c-gutter-color);
-    }
-
-    /* Same `--color-score-*` palette as the scorecard, so an issue gutter
-       matches a concern / blocker cell. */
-    .issue-row--critical {
-        --c-gutter-color: var(--color-score-blocker-icon);
-        --c-row-bg: var(--color-score-blocker-bg);
-        --c-gutter-flash: color-mix(in srgb, var(--color-score-blocker-icon) 70%, white);
-    }
-    .issue-row--warning {
-        --c-gutter-color: var(--color-score-concern-icon);
-        --c-row-bg: var(--color-score-concern-bg);
-        --c-gutter-flash: color-mix(in srgb, var(--color-score-concern-icon) 70%, white);
-    }
-    .issue-row--info {
-        --c-gutter-color: var(--color-score-info-icon);
-        --c-row-bg: var(--color-score-info-bg);
-        --c-gutter-flash: color-mix(in srgb, var(--color-score-info-icon) 70%, white);
+        --c-gutter-color: var(--severity-score-icon);
+        --c-row-bg: var(--severity-score-bg);
+        --c-gutter-flash: color-mix(in srgb, var(--severity-score-icon) 70%, white);
     }
     .issue-row--resolved {
         --c-gutter-color: var(--color-success);
@@ -192,22 +171,9 @@ function stopPropagation(e: MouseEvent): void {
         min-width: 2ch;
         font-variant-numeric: tabular-nums;
         flex-shrink: 0;
-    }
-
-    .severity-code--critical {
-        color: var(--color-score-blocker-label);
-        background: color-mix(in srgb, var(--color-score-blocker-bg) 85%, transparent);
-        border: 1px solid color-mix(in srgb, var(--color-score-blocker-border) 35%, transparent);
-    }
-    .severity-code--warning {
-        color: var(--color-score-concern-label);
-        background: color-mix(in srgb, var(--color-score-concern-bg) 85%, transparent);
-        border: 1px solid color-mix(in srgb, var(--color-score-concern-border) 35%, transparent);
-    }
-    .severity-code--info {
-        color: var(--color-score-info-label);
-        background: color-mix(in srgb, var(--color-score-info-bg) 85%, transparent);
-        border: 1px solid color-mix(in srgb, var(--color-score-info-border) 35%, transparent);
+        color: var(--severity-score-label);
+        background: color-mix(in srgb, var(--severity-score-bg) 85%, transparent);
+        border: 1px solid color-mix(in srgb, var(--severity-score-border) 35%, transparent);
     }
 
     .issue-title {

@@ -5,7 +5,7 @@
 
 import { decorationAction } from "$lib/markdown/decorate";
 import type { ReviewFile } from "$lib/stores/diff-files.svelte";
-import { openFileInDiff } from "$lib/stores/review-nav.svelte";
+import { openInDiff } from "$lib/stores/review-nav.svelte";
 import { basename } from "$lib/utils/path";
 import { createFileGlyph } from "./file-glyph";
 
@@ -112,46 +112,51 @@ function decorate(node: HTMLElement, files: ReadonlyArray<ReviewFile> | null): v
   }
 }
 
-function open(target: HTMLElement): void {
+function open(prId: string, target: HTMLElement): void {
   const path = target.getAttribute(REF_PATH_ATTR);
   if (!path) return;
   const lineAttr = target.getAttribute(REF_LINE_ATTR);
-  const line = lineAttr ? Number(lineAttr) : undefined;
-  openFileInDiff(path, line);
+  openInDiff(prId, path, lineAttr ? Number(lineAttr) : undefined);
+}
+
+/** The PR whose changed files a message's references resolve against. */
+export interface ReviewFilesScope {
+  readonly prId: string;
+  readonly files: ReadonlyArray<ReviewFile>;
 }
 
 /**
- * The bound value is the review's file set, or null to leave the markdown
- * inert. A new file set re-decorates.
+ * The bound value is the PR's file set, or null to leave the markdown inert.
+ * A new file set re-decorates.
  */
-export const fileReferences = decorationAction<ReadonlyArray<ReviewFile> | null>((node) => {
-  let files: ReadonlyArray<ReviewFile> | null = null;
+export const fileReferences = decorationAction<ReviewFilesScope | null>((node) => {
+  let scope: ReviewFilesScope | null = null;
 
   const target = (e: Event): HTMLElement | null => {
-    if (!files) return null;
+    if (!scope) return null;
     const ref = (e.target as HTMLElement | null)?.closest<HTMLElement>(`.${REF_CLASS}`);
     return ref && node.contains(ref) ? ref : null;
   };
   const onClick = (e: MouseEvent): void => {
     const ref = target(e);
-    if (!ref) return;
+    if (!ref || !scope) return;
     e.preventDefault();
-    open(ref);
+    open(scope.prId, ref);
   };
   const onKeydown = (e: KeyboardEvent): void => {
     if (e.key !== "Enter" && e.key !== " ") return;
     const ref = target(e);
-    if (!ref) return;
+    if (!ref || !scope) return;
     e.preventDefault();
-    open(ref);
+    open(scope.prId, ref);
   };
   node.addEventListener("click", onClick);
   node.addEventListener("keydown", onKeydown);
 
   return {
     apply(next) {
-      files = next;
-      decorate(node, files);
+      scope = next;
+      decorate(node, scope?.files ?? null);
     },
     destroy() {
       node.removeEventListener("click", onClick);

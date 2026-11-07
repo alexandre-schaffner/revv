@@ -37,20 +37,16 @@ export interface BlockPhaseFields {
    * Only `'diff_analysis'` is written: Phase A lives on `Walkthrough.summary`
    * and Phase C on `Walkthrough.sentiment`.
    */
-  phase?: WalkthroughBlockPhase;
-  /**
-   * Monotonic, zero-based index of the parent semantic step. Required when
-   * `phase === 'diff_analysis'`.
-   */
-  semanticStepIndex?: number;
+  phase: WalkthroughBlockPhase;
+  /** Monotonic, zero-based index of the parent semantic step. */
+  semanticStepIndex: number;
   /**
    * Monotonic, zero-based atomic-block index *within* the parent semantic
-   * step. Restarts at 0 in each section. Required when
-   * `phase === 'diff_analysis'`. The persistence key is
+   * step. Restarts at 0 in each section. The persistence key is
    * `(walkthroughId, phase, semanticStepIndex, stepIndex)` — retries with
    * the same identity are idempotent upserts.
    */
-  stepIndex?: number;
+  stepIndex: number;
 }
 
 export interface MarkdownBlock extends BlockPhaseFields {

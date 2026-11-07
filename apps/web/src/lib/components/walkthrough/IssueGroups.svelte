@@ -24,7 +24,7 @@ const groups = $derived(groupIssuesBySeverityWithIndex(issues));
 <div class="issue-groups" class:issue-groups--compact={density === 'compact'}>
 	{#each groups as group (group.severity)}
 		<div class="issue-group">
-			<div class="issue-group-header issue-group-header--{group.severity}">
+			<div class="issue-group-header" data-severity={group.severity}>
 				<span class="issue-group-dot"></span>
 				<span class="issue-group-label">{group.label}</span>
 				<span class="issue-group-count">{group.issues.length}</span>
@@ -78,10 +78,6 @@ const groups = $derived(groupIssuesBySeverityWithIndex(issues));
 		font-variant-numeric: tabular-nums;
 		font-weight: 500;
 	}
-
-	.issue-group-header--critical { --severity-color: var(--color-danger); }
-	.issue-group-header--warning { --severity-color: var(--color-warning); }
-	.issue-group-header--info { --severity-color: var(--color-accent); }
 
 	.issue-group-list {
 		display: flex;

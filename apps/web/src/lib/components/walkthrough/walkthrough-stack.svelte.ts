@@ -1,6 +1,6 @@
+import { readStackPlace } from "$lib/stacks/place";
+import { type MarginNotes, marginNotes, type StackPlace } from "$lib/stacks/stack-margin";
 import { getPrById } from "$lib/stores/prs.svelte";
-import { readStackPlace } from "../margin/place";
-import { type MarginNotes, marginNotes, type StackPlace } from "../margin/stack-margin";
 
 interface WalkthroughPage {
   readonly chapters: readonly { readonly index: number; readonly files: readonly string[] }[];
@@ -16,7 +16,7 @@ export class WalkthroughStack {
 
   constructor(prId: () => string, page: () => WalkthroughPage) {
     this.isStacked = $derived(getPrById(prId())?.stack != null);
-    this.place = $derived(this.isStacked ? readStackPlace(prId()) : null);
+    this.place = $derived(readStackPlace(prId()));
     this.notes = $derived.by(() => {
       if (!this.place) return null;
       const { issues, chapters } = page();

@@ -1,6 +1,6 @@
 <script lang="ts">
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
-import { getIsLoadingFiles, getReviewFiles } from "$lib/stores/diff-files.svelte";
+import { getLoadedFiles, getReviewFiles } from "$lib/stores/diff-files.svelte";
 import { enterScrollMode, getActivePanel } from "$lib/stores/focus-mode.svelte";
 import {
   getActiveFilePath,
@@ -14,9 +14,10 @@ import { getFileSearchQuery, getSidebarView, setFileSearchQuery } from "$lib/sto
 import PierreFileTree from "./PierreFileTree.svelte";
 import SidebarFilesSearch from "./SidebarFilesSearch.svelte";
 
-const reviewFiles = $derived(getReviewFiles());
+const prId = $derived(getSelectedPrId());
+const reviewFiles = $derived(prId ? getLoadedFiles(prId) : []);
 const repoPaths = $derived(reviewFiles.map((f) => f.path));
-const status = $derived(getIsLoadingFiles() ? "loading" : "ready");
+const status = $derived(prId && getReviewFiles(prId).status === "loading" ? "loading" : "ready");
 const activePath = $derived(getActiveFilePath());
 const shouldFocus = $derived(getSidebarView() === "files");
 const panelActive = $derived(getActivePanel() === "sidebar");

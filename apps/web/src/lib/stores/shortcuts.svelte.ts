@@ -1,5 +1,5 @@
 import { goto } from "$app/navigation";
-import type { Command } from "./command-keys";
+import type { Command, KeyBinding } from "./command-keys";
 import { dispatchCommandKey, registerCommands } from "./commands.svelte";
 import { copySelectedPrLink } from "./pr-link.svelte";
 import { getSelectedPrId } from "./route.svelte";
@@ -15,6 +15,9 @@ import {
 import { setDiffThemePreference, setThemePreference } from "./theme.svelte";
 
 export type PaletteMode = "search" | "command";
+
+/** "Next layer up the stack"; the stack hand-off card prints it. */
+export const STACK_NEXT_KEYS: KeyBinding = { code: "ArrowUp", alt: true };
 
 let cmdHeld = $state(false);
 export function getCmdHeld(): boolean {
@@ -187,7 +190,7 @@ const APP_COMMANDS: readonly Command[] = [
     id: "stack:next",
     label: "Stack: Next Layer",
     category: "Stack",
-    keys: { code: "ArrowUp", alt: true },
+    keys: STACK_NEXT_KEYS,
     keywords: ["up", "above", "layer", "stacked"],
     when: inStack,
     notInTextFields: true,

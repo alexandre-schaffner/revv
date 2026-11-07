@@ -35,14 +35,17 @@ $effect(() => {
   });
 });
 
+// Observes a wrapper of its own: the children swap their root element (the
+// empty state for the timeline), which a direct observer would lose.
+let contentEl = $state<HTMLDivElement | undefined>(undefined);
 $effect(() => {
   const el = scrollEl;
-  const contentEl = el?.firstElementChild;
-  if (!el || !contentEl) return;
+  const content = contentEl;
+  if (!el || !content) return;
   const observer = new ResizeObserver(() => {
     if (isAtBottom) el.scrollTop = el.scrollHeight;
   });
-  observer.observe(contentEl);
+  observer.observe(content);
   return () => observer.disconnect();
 });
 </script>
@@ -53,7 +56,9 @@ $effect(() => {
 		class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
 		onscroll={handleScroll}
 	>
-		{@render children()}
+		<div bind:this={contentEl}>
+			{@render children()}
+		</div>
 	</div>
 	{#if !isAtBottom}
 		<div class="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center pb-4">

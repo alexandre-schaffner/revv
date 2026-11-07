@@ -32,7 +32,7 @@ import type { CommentRowsTrigger } from "./pierre-diff-adapter";
 
 interface Props {
   prId: string;
-  files: ReviewFile[];
+  files: readonly ReviewFile[];
 }
 
 let { prId, files }: Props = $props();

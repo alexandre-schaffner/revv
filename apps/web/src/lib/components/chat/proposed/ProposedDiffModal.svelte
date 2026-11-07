@@ -27,6 +27,7 @@ import {
   getProposedComments,
   isCherryPickingCommit,
   isDiscardingCommit,
+  isWorktreeBusy,
   type ProposedComment,
   removeProposedComment,
   updateProposedComment,
@@ -138,10 +139,10 @@ const pendingInputs = new SvelteMap<string, { editingId: string | undefined }>()
 const comments = $derived(getProposedComments(prId, sha));
 const commentCount = $derived(comments.length);
 const isStreaming = $derived(isChatStreaming(prId));
-const canSend = $derived(commentCount > 0 && !isStreaming);
+const canSend = $derived(commentCount > 0);
 const isDiscarding = $derived(isDiscardingCommit(prId, sha));
 const isCherryPicking = $derived(isCherryPickingCommit(prId, sha));
-const commitActionBusy = $derived(isDiscarding || isCherryPicking);
+const commitActionBusy = $derived(isWorktreeBusy(prId));
 
 async function handleDiscardCommit() {
   if (commitActionBusy) return;
@@ -333,6 +334,7 @@ $effect(() => {
       console.error("[ProposedDiffModal] Annotation render failed:", e);
     }
   }
+  annotationMounts.pruneDetached();
 });
 
 let lastMode = $state(untrack(() => mode));
@@ -596,7 +598,7 @@ onDestroy(() => {
 							{commentCount} comment{commentCount === 1 ? '' : 's'}
 						</span>
 						{#if isStreaming}
-							<span class="footer-hint">Agent is responding…</span>
+							<span class="footer-hint">Sends after the agent's current turn.</span>
 						{/if}
 					{/if}
 				</div>
@@ -607,7 +609,7 @@ onDestroy(() => {
 					disabled={!canSend}
 					onclick={handleSendFeedback}
 					title={isStreaming
-						? 'Wait for the current turn to finish'
+						? "Queue the comments behind the agent's current turn"
 						: 'Send all comments to the agent'}
 				>
 					<PaperPlaneRight size={12} />

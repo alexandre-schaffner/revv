@@ -13,11 +13,10 @@ import { stackCitations } from "$lib/components/stack/margin/stack-citations.sve
 import StackHandoffCard from "$lib/components/stack/StackHandoffCard.svelte";
 import IssueStackNote from "$lib/components/stack/walkthrough/IssueStackNote.svelte";
 import StackOverviewRow from "$lib/components/stack/walkthrough/StackOverviewRow.svelte";
-import { WalkthroughStack } from "$lib/components/stack/walkthrough/walkthrough-stack.svelte";
 import { Button } from "$lib/components/ui/button";
 import { Shimmer } from "$lib/components/ui/shimmer";
 import { enterOnce } from "$lib/motion";
-import { jumpToDiffLine, scrollToAnchor } from "$lib/stores/review-nav.svelte";
+import { openInDiff, scrollToAnchor, walkthroughAnchor } from "$lib/stores/review-nav.svelte";
 import { resume } from "$lib/walkthrough/actions";
 import { sortBySeverity } from "$lib/walkthrough/issues";
 import ChapterStepper, { type StepperChapter } from "./ChapterStepper.svelte";
@@ -29,6 +28,7 @@ import IssueGroups from "./IssueGroups.svelte";
 import LowSignalDisclosure from "./LowSignalDisclosure.svelte";
 import MergedStamp from "./MergedStamp.svelte";
 import WalkthroughSection from "./WalkthroughSection.svelte";
+import { WalkthroughStack } from "./walkthrough-stack.svelte";
 import { FIRST_PASS_SPINNER, WalkthroughView } from "./walkthrough-view.svelte";
 
 interface Props {
@@ -87,7 +87,8 @@ $effect(() => {
   function onDocumentClick(e: MouseEvent): void {
     const target = e.target as Element | null;
     if (!target) return;
-    if (blockId && document.getElementById(`step-${blockId}`)?.contains(target)) return;
+    if (blockId && document.getElementById(walkthroughAnchor.block(blockId))?.contains(target))
+      return;
     // The card's own click re-selects; clearing here would race it.
     if (target.closest(".issue-card")) return;
     selectedIssueId = null;
@@ -98,15 +99,15 @@ $effect(() => {
 
 function selectIssue(issueId: string, blockId: string): void {
   selectedIssueId = issueId;
-  scrollToAnchor("walkthrough", `step-${blockId}`);
-}
-
-function jumpToBlock(blockId: string): void {
-  scrollToAnchor("walkthrough", `step-${blockId}`, { highlight: true });
+  scrollToAnchor("walkthrough", walkthroughAnchor.block(blockId));
 }
 
 function jumpToSection(elementId: string): void {
   scrollToAnchor("walkthrough", elementId);
+}
+
+function jumpToLine(filePath: string, line: number): void {
+  openInDiff(prId, filePath, line);
 }
 
 function handleResume(): void {
@@ -132,8 +133,8 @@ function handleResume(): void {
 {/snippet}
 
 {#snippet ratingsGrid(forceShow: boolean)}
-	<div id="walkthrough-rating" class="sentiment-scorecard">
-		<WalkthroughRatingsGrid ratings={view.ratings} blocks={view.blocks} onJump={jumpToBlock} {forceShow} />
+	<div id={walkthroughAnchor.rating} class="sentiment-scorecard">
+		<WalkthroughRatingsGrid {prId} ratings={view.ratings} {forceShow} />
 	</div>
 {/snippet}
 
@@ -143,7 +144,7 @@ function handleResume(): void {
 		note={view.firstPass.note}
 		isComplete={!view.isStreaming}
 		bind:open={firstPassOpen}
-		onjump={jumpToDiffLine}
+		onjump={jumpToLine}
 	/>
 {/snippet}
 
@@ -197,7 +198,7 @@ function handleResume(): void {
 		</div>
 	{:else if view.page.kind === 'first-pass-only'}
 		<div class="walkthrough-loading review-columns">
-			<FirstPassPreview view={view.firstPass} spinner={FIRST_PASS_SPINNER} onjump={jumpToDiffLine} />
+			<FirstPassPreview view={view.firstPass} spinner={FIRST_PASS_SPINNER} onjump={jumpToLine} />
 		</div>
 	{:else if view.page.kind === 'empty'}
 		<div class="walkthrough-empty" class:walkthrough-empty--in-flow={stack.isStacked}>
@@ -271,11 +272,11 @@ function handleResume(): void {
 					</LowSignalDisclosure>
 
 					{#if view.firstPass.hasLeads}
-						<div id="walkthrough-first-pass">{@render firstPassLeads()}</div>
+						<div id={walkthroughAnchor.firstPass}>{@render firstPassLeads()}</div>
 					{/if}
 				</div>
 			{:else if view.firstPass.hasLeads}
-				<div id="walkthrough-first-pass" class="first-pass-section">{@render firstPassLeads()}</div>
+				<div id={walkthroughAnchor.firstPass} class="first-pass-section">{@render firstPassLeads()}</div>
 			{/if}
 
 			<!-- The Overview, then each Phase B chapter; the sentiment and the
@@ -283,6 +284,7 @@ function handleResume(): void {
 			<div class="blocks review-columns" data-col="full">
 				{#if view.overview}
 					<WalkthroughSection
+						{prId}
 						id={view.overview.anchorId}
 						section={view.overview.section}
 						entries={view.overview.entries}
@@ -298,6 +300,7 @@ function handleResume(): void {
 				{/if}
 				{#each view.chapters as chapter (chapter.section.semanticStepIndex)}
 					<WalkthroughSection
+						{prId}
 						id={chapter.anchorId}
 						section={chapter.section}
 						entries={chapter.entries}
@@ -338,7 +341,6 @@ function handleResume(): void {
 													<ToolActivityGroup
 														items={entry.items}
 														active={entryIdx === view.activity.length - 1}
-														defaultOpen={false}
 													/>
 												</div>
 											{/if}
@@ -359,7 +361,7 @@ function handleResume(): void {
 				{#if view.sentiment !== null || view.ratings.length > 0 || view.isStreaming}
 					<div class="sentiment-stack" data-col="content">
 						{#if view.sentiment !== null}
-							<div id="walkthrough-sentiment" class="sentiment-card" aria-label="Overall sentiment">
+							<div id={walkthroughAnchor.sentiment} class="sentiment-card" aria-label="Overall sentiment">
 								<div class="sentiment-card-header">
 									<h3 class="sentiment-card-title">Overall Sentiment</h3>
 								</div>

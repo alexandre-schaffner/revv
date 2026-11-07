@@ -3,52 +3,44 @@
  * Every unresolved thread on one file, as one row. The file badge jumps to the
  * first thread; each thread in the open body has its own jump.
  */
-import type { CommentThread, ThreadMessage } from "@revv/shared";
+import type { CommentThread } from "@revv/shared";
 import Chat from "phosphor-svelte/lib/Chat";
 import Chats from "phosphor-svelte/lib/Chats";
-import Robot from "phosphor-svelte/lib/Robot";
-import User from "phosphor-svelte/lib/User";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import { enterOnce } from "$lib/motion";
+import { lineRangeLabel } from "$lib/review/threads";
+import { getThreadMessages } from "$lib/stores/review.svelte";
+import { openInDiff } from "$lib/stores/review-nav.svelte";
 import CommentExpandedBody from "./CommentExpandedBody.svelte";
 import SpecRow from "./SpecRow.svelte";
 
 interface Props {
+  prId: string;
   filePath: string;
   /** Ordered by startLine. */
   threads: readonly CommentThread[];
-  getThreadMessages: (threadId: string) => ThreadMessage[];
   open: boolean;
   onToggleOpen: () => void;
-  onJump?: ((filePath: string, line: number) => void) | undefined;
   onDiscard?: ((threadId: string) => void) | undefined;
   onTriggerRef?: ((el: HTMLElement | null) => void) | undefined;
 }
 
-let {
-  filePath,
-  threads,
-  getThreadMessages,
-  open,
-  onToggleOpen,
-  onJump,
-  onDiscard,
-  onTriggerRef,
-}: Props = $props();
+let { prId, filePath, threads, open, onToggleOpen, onDiscard, onTriggerRef }: Props = $props();
 
 // groupThreadsByFile never yields an empty group, but degrade if it ever does.
 const firstThread = $derived(threads[0]);
-const firstThreadMessages = $derived(firstThread ? getThreadMessages(firstThread.id) : []);
+const firstThreadMessages = $derived(firstThread ? getThreadMessages(prId, firstThread.id) : []);
 const firstMessage = $derived(firstThreadMessages[0]);
 const preview = $derived(firstMessage?.body.trim() ?? "");
 
-const totalMessages = $derived(threads.reduce((sum, t) => sum + getThreadMessages(t.id).length, 0));
+const totalMessages = $derived(
+  threads.reduce((sum, t) => sum + getThreadMessages(prId, t.id).length, 0),
+);
 const hasMultipleMessages = $derived(totalMessages > 1);
 const hasMultipleThreads = $derived(threads.length > 1);
 
 const motionKey = $derived(`spec-row:comment:${firstThread?.reviewSessionId}:${filePath}`);
-
-let avatarFailed = $state(false);
 
 const ariaLabel = $derived(
   threads.length === 1 && firstThread
@@ -94,14 +86,14 @@ const ariaLabel = $derived(
                     {filePath}
                     startLine={!hasMultipleThreads && firstThread ? firstThread.startLine : undefined}
                     endLine={!hasMultipleThreads && firstThread ? firstThread.endLine : undefined}
-                    onclick={onJump && firstThread
-                        ? () => onJump(filePath, firstThread.startLine)
+                    onclick={firstThread
+                        ? () => openInDiff(prId, filePath, firstThread.startLine)
                         : undefined}
                 />
             </span>
             {#if !hasMultipleThreads && firstThread}
                 <span class="line-chip" aria-label="Line {firstThread.startLine}">
-                    :{firstThread.startLine}{#if firstThread.endLine && firstThread.endLine !== firstThread.startLine}-{firstThread.endLine}{/if}
+                    {lineRangeLabel(firstThread)}
                 </span>
             {/if}
         {/snippet}
@@ -109,20 +101,13 @@ const ariaLabel = $derived(
         {#snippet preview()}
             <span class="preview-wrap">
                 <span class="preview-avatar" title={firstMessage?.authorName ?? ""}>
-                    {#if firstMessage?.authorRole === 'ai_agent'}
-                        <Robot size={11} aria-hidden="true" />
-                    {:else if firstMessage?.authorAvatarContent && !avatarFailed}
-                        <img
-                            src={firstMessage.authorAvatarContent}
-                            alt={firstMessage.authorName}
-                            class="preview-avatar-img"
-                            loading="lazy"
-                            referrerpolicy="no-referrer"
-                            onerror={() => (avatarFailed = true)}
-                        />
-                    {:else}
-                        <User size={11} aria-hidden="true" />
-                    {/if}
+                    <Avatar
+                        src={firstMessage?.authorRole === 'ai_agent' ? null : firstMessage?.authorAvatarContent}
+                        name={firstMessage?.authorName ?? ""}
+                        size={14}
+                        fallback={firstMessage?.authorRole === 'ai_agent' ? 'robot' : 'user'}
+                        glyphSize={11}
+                    />
                 </span>
                 <span class="comment-preview">{preview}</span>
             </span>
@@ -143,7 +128,7 @@ const ariaLabel = $derived(
         {/snippet}
 
         {#snippet content()}
-            <CommentExpandedBody {threads} {getThreadMessages} {onJump} {onDiscard} />
+            <CommentExpandedBody {prId} {threads} {onDiscard} />
         {/snippet}
     </SpecRow>
 </div>
@@ -212,13 +197,6 @@ const ariaLabel = $derived(
         justify-content: center;
         background: var(--color-bg-elevated);
         color: var(--color-text-muted);
-    }
-
-    .preview-avatar-img {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-        display: block;
     }
 
     .comment-preview {

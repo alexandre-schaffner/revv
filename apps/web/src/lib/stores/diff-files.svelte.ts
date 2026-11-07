@@ -1,12 +1,13 @@
-// The changed files of the PR on screen, as the review page, the sidebar tree
-// and the chat's file references see them. One PR at a time; a different PR
-// starts from empty.
+// The changed files of each open PR, as the review page, the sidebar tree and
+// the chat's file references see them.
 
+import { SvelteMap } from "svelte/reactivity";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
+import { call } from "$lib/api/errors";
 import { getActiveFilePath, setActiveFilePath } from "$lib/stores/pr-view-state.svelte";
 import { getPrById } from "$lib/stores/prs.svelte";
 import { RequestState } from "./_types";
+import { createResource } from "./resource";
 
 /** A file in the review, with the git patch for @pierre/diffs to render. */
 export interface ReviewFile {
@@ -27,34 +28,46 @@ export interface ReviewFile {
   prerenderedHtml?: string;
 }
 
-/** Re-entering the same PR within this window keeps the files already loaded. */
-const REFETCH_WINDOW_MS = 60_000;
-
-let files = $state<ReviewFile[]>([]);
-/** The load the review page waits on. A refresh of the view on screen doesn't show here. */
-let load = $state<RequestState<void>>(RequestState.idle());
-let loaded = $state<{ prId: string; at: number } | null>(null);
-let requestSeq = 0;
-
-// The head each PR's files were loaded against. When `prs:updated` brings a
-// newer `pr.headSha`, the diff on screen is behind it and the tab offers Pull.
-let loadedHeadShas = $state(new Map<string, string>());
-
-export function getReviewFiles(): ReviewFile[] {
-  return files;
+interface LoadedFiles {
+  readonly files: readonly ReviewFile[];
+  /** `pr.headSha` once the files landed; null when the PR row isn't known yet. */
+  readonly headSha: string | null;
 }
 
-/** The paths `prId` changes, once its files are the ones loaded; empty until then. */
+const NO_FILES: readonly ReviewFile[] = [];
+
+/** An answer lands only once `alongside` (the review threads) has settled too. */
+const loads = createResource<Promise<unknown> | undefined, LoadedFiles>({
+  freshForMs: 60_000,
+  keepDataOnError: true,
+  fetch: async (prId, alongside) => {
+    const [files] = await Promise.all([fetchFiles(prId), alongside]);
+    // Read after the fetch: a `prs:updated` that landed meanwhile has already
+    // re-cached the server's diff at that head, so the two agree. Open and
+    // archived rows both count — a PR that merged while open moved lists.
+    return { status: "ok", data: { files, headSha: getPrById(prId)?.headSha ?? null } };
+  },
+});
+
+// The head each PR's files were last loaded against, kept while a pull
+// reloads them. When `prs:updated` brings a newer `pr.headSha`, the diff on
+// screen is behind it and the tab offers Pull.
+const loadedHeadShas = new SvelteMap<string, string>();
+
+/** The files of `prId`: loading until its first load lands, then the last good answer. */
+export function getReviewFiles(prId: string): RequestState<readonly ReviewFile[]> {
+  const request = loads.entry(prId).request;
+  return request.status === "ok" ? RequestState.ok(request.data.files) : request;
+}
+
+/** The files of `prId` once loaded; empty until then. */
+export function getLoadedFiles(prId: string): readonly ReviewFile[] {
+  return loads.data(prId)?.files ?? NO_FILES;
+}
+
+/** The paths `prId` changes, once its files are loaded; empty until then. */
 export function getChangedPaths(prId: string): readonly string[] {
-  return loaded?.prId === prId ? files.map((f) => f.path) : [];
-}
-
-export function getIsLoadingFiles(): boolean {
-  return load.status === "loading";
-}
-
-export function getFilesError(): string | null {
-  return load.status === "error" ? load.error : null;
+  return getLoadedFiles(prId).map((f) => f.path);
 }
 
 export function getLoadedHeadSha(prId: string): string | null {
@@ -63,10 +76,10 @@ export function getLoadedHeadSha(prId: string): string | null {
 
 async function fetchFiles(prId: string): Promise<ReviewFile[]> {
   const active = getActiveFilePath();
-  const { data, error } = await api.api.prs({ id: prId }).files.get({
-    query: active === null ? {} : { active },
-  });
-  if (error) throw new Error(apiErrorMessage(error, "Failed to fetch PR files"));
+  const data = await call(
+    api.api.prs({ id: prId }).files.get({ query: active === null ? {} : { active } }),
+    "Failed to fetch PR files",
+  );
   return data.map((f) => ({
     path: f.path,
     patch: f.patch ?? null,
@@ -79,86 +92,40 @@ async function fetchFiles(prId: string): Promise<ReviewFile[]> {
   }));
 }
 
-function install(prId: string, next: ReviewFile[]): void {
-  files = next;
-  load = RequestState.ok(undefined);
-  loaded = { prId, at: Date.now() };
+function install(prId: string, request: RequestState<LoadedFiles>): boolean {
+  if (request.status !== "ok") return false;
+  const { files, headSha } = request.data;
+  if (headSha) loadedHeadShas.set(prId, headSha);
   const active = getActiveFilePath();
-  const first = next[0];
-  if (first && !next.some((f) => f.path === active)) setActiveFilePath(first.path);
-  // Read the head after the fetch: a `prs:updated` that landed meanwhile has
-  // already re-cached the server's diff at that head, so the two agree. Open
-  // and archived rows both count — a PR that merged while open moved lists.
-  const headSha = getPrById(prId)?.headSha;
-  if (headSha) {
-    loadedHeadShas.set(prId, headSha);
-    loadedHeadShas = new Map(loadedHeadShas);
-  }
+  const first = files[0];
+  if (first && !files.some((f) => f.path === active)) setActiveFilePath(first.path);
+  return true;
 }
 
 /**
- * Load the files of `prId`. The same PR loaded within the last minute is kept
- * as is. Otherwise a different PR starts from empty (the page shows its
- * loader), while the PR already on screen refreshes in place: its files stay
- * up until the new ones land, and a failed refresh keeps them.
- * The files are installed only once `alongside` has settled too, so the diff
- * first paints with what loads with it (its comment threads).
+ * Load the files of `prId`, unless they loaded within the last minute. A PR
+ * already loaded refreshes in place: its files stay up until the new ones
+ * land, and a failed refresh keeps them.
  */
 export async function loadReviewFiles(prId: string, alongside?: Promise<unknown>): Promise<void> {
-  const requestId = ++requestSeq;
-  const samePr = loaded?.prId === prId && files.length > 0;
-  if (samePr && loaded && Date.now() - loaded.at < REFETCH_WINDOW_MS) {
-    load = RequestState.ok(undefined);
-    return;
-  }
-  if (!samePr) {
-    files = [];
-    loaded = null;
-    load = RequestState.loading();
-  }
-  try {
-    const [next] = await Promise.all([fetchFiles(prId), alongside]);
-    if (requestId === requestSeq) install(prId, next);
-  } catch (e) {
-    if (requestId !== requestSeq) return;
-    if (samePr) {
-      console.error("[review] Background diff refresh failed:", e);
-      load = RequestState.ok(undefined);
-      return;
-    }
-    load = RequestState.error(e instanceof Error ? e.message : "Failed to load diff");
-  }
+  install(prId, await loads.load(prId, alongside));
 }
 
 /**
- * Re-read the files of the view on screen at the PR's current head, with the
- * page loader up meanwhile. Resolves whether the new files are installed.
+ * Re-read the files of `prId` at the PR's current head, with the page loader
+ * up meanwhile. Resolves whether the new files are installed.
  */
 export async function reloadReviewFiles(prId: string): Promise<boolean> {
-  const requestId = ++requestSeq;
-  load = RequestState.loading();
-  try {
-    const next = await fetchFiles(prId);
-    if (requestId !== requestSeq) return false;
-    install(prId, next);
-    return true;
-  } catch (e) {
-    if (requestId === requestSeq) {
-      load = RequestState.error(e instanceof Error ? e.message : "Failed to pull latest commit");
-    }
-    return false;
-  }
+  loads.invalidate(prId);
+  return install(prId, await loads.load(prId, undefined));
 }
 
-/** Drop the files on screen; a load still in flight can't write them back. */
-export function clearReviewFiles(): void {
-  requestSeq++;
-  files = [];
-  load = RequestState.idle();
-  loaded = null;
+/** Forget the files of `prId`; a load still in flight can't write them back. */
+export function releaseReviewFiles(prId: string): void {
+  loads.invalidate(prId);
 }
 
 export function reset(): void {
-  clearReviewFiles();
-  loadedHeadShas = new Map();
+  loads.reset();
+  loadedHeadShas.clear();
 }

@@ -11,7 +11,7 @@ interface Props {
 let { prId, filePath }: Props = $props();
 
 // No disclosure here: an expander per file would out-weigh the rows it
-// hides. Filtered issues stay reachable via the walkthrough and RC panel.
+// hides. Filtered issues stay reachable via the walkthrough and Your review.
 const issues = $derived(getIssueSignal(prId, filePath).shown);
 </script>
 

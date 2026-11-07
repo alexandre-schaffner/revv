@@ -1,8 +1,8 @@
 <script lang="ts">
 import StackSimple from "phosphor-svelte/lib/StackSimple";
+import { placePhrase, plainTitle, type StackPlace } from "$lib/stacks/stack-margin";
 import BriefAction from "./BriefAction.svelte";
 import LayerChip from "./LayerChip.svelte";
-import { placePhrase, plainTitle, type StackPlace } from "./stack-margin";
 
 interface Props {
   place: StackPlace;

@@ -70,7 +70,7 @@ export function openChat(prId: string): void {
   });
 }
 
-export interface SendChatMessageParams {
+interface SendChatMessageParams {
   prId: string;
   message: string;
   /** The plan this message approves; the server leaves plan mode for the turn. */
@@ -79,8 +79,12 @@ export interface SendChatMessageParams {
   attachments?: ReadonlyArray<ChatAttachment>;
 }
 
-/** Start a turn, cancelling the one in flight. */
-export function sendChatMessage(params: SendChatMessageParams): void {
+/**
+ * Start a turn, cancelling the one in flight. Only the queue and plan
+ * approval start turns this way; everything else goes through
+ * `submitChatMessage`, which never interrupts a running turn.
+ */
+function sendChatMessage(params: SendChatMessageParams): void {
   const { prId, message, approvedPlanId, interactionMode, attachments = [] } = params;
   const text = message.trim();
   if (text.length === 0 && attachments.length === 0) return;
@@ -276,7 +280,7 @@ export function sendProposedFeedback(params: {
     (c) =>
       `- **${c.filePath}:${c.lineNumber}** (${c.side === "deletions" ? "old" : "new"}) — ${c.body}`,
   );
-  sendChatMessage({ prId, message: [header, "", ...lines].join("\n") });
+  submitChatMessage(prId, [header, "", ...lines].join("\n"), []);
   clearProposedComments(prId, sha);
   return true;
 }

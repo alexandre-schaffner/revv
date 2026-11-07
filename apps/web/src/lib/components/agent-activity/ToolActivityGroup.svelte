@@ -1,50 +1,28 @@
-<script lang="ts" module>
-import type { GroupableActivity } from "./activity-groups";
-
-export interface ToolActivityGroupProps {
-  items: readonly GroupableActivity[];
-  active?: boolean;
-  defaultOpen?: boolean;
-  forceOpenWhileActive?: boolean;
-  class?: string;
-}
-</script>
-
 <script lang="ts">
 import CaretDown from "phosphor-svelte/lib/CaretDown";
-import { Shimmer } from "$lib/components/ui/shimmer";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "$lib/components/ui/collapsible";
+import { Shimmer } from "$lib/components/ui/shimmer";
 import { gsapFadeY, tokens } from "$lib/motion";
 import { cn } from "$lib/utils.js";
-import { activityGroupSummary } from "./activity-groups";
+import { activityGroupSummary, type GroupableActivity } from "./activity-groups";
 import ToolActivityCountSummary from "./ToolActivityCountSummary.svelte";
 import ToolCallCard from "./ToolCallCard.svelte";
 
-let {
-  items,
-  active = false,
-  defaultOpen = false,
-  forceOpenWhileActive = false,
-  class: className,
-}: ToolActivityGroupProps = $props();
+interface Props {
+  items: readonly GroupableActivity[];
+  active?: boolean;
+  class?: string;
+}
+
+let { items, active = false, class: className }: Props = $props();
 
 let open = $state(false);
-let initialized = $state(false);
 const summary = $derived(activityGroupSummary(items));
 const title = $derived(active ? "Exploring" : "Explored");
-
-$effect(() => {
-  if (!initialized) {
-    open = defaultOpen;
-    initialized = true;
-  }
-  if (active && forceOpenWhileActive) open = true;
-});
-
 </script>
 
 <div

@@ -3,16 +3,16 @@
 // reviewer's pending replies and pulls the threads back; this asks for it and
 // reports the outcome.
 
-import { draftCommentBody, type WalkthroughIssue } from "@revv/shared";
+import type { WalkthroughIssue } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { call } from "$lib/api/errors";
 import { thrownMessage } from "$lib/api/wire";
-import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { acceptWriteResult } from "$lib/stores/conversation.svelte";
-import { getThreadMessages, getThreads, loadSession } from "$lib/stores/review.svelte";
+import { loadSession } from "$lib/stores/review.svelte";
 import { markIssuesAsSubmitted } from "$lib/walkthrough/store.svelte";
 import { reviewBody } from "./review-payload";
+import { draftThreadIds } from "./threads";
 
 export type ReviewAction = "approve" | "request_changes" | "comment";
 
@@ -33,9 +33,7 @@ export async function submitReview(
 ): Promise<boolean> {
   const issueIds = issues.map((issue) => issue.id);
   // The drafts on screen, so nothing the reviewer hasn't seen goes up.
-  const threadIds = getThreads()
-    .filter((t) => draftCommentBody(t, getThreadMessages(t.id), getCurrentUserLogin()) !== null)
-    .map((t) => t.id);
+  const threadIds = draftThreadIds(prId);
   try {
     const result = await call(
       api.api

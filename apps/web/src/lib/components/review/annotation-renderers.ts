@@ -38,7 +38,6 @@ export function renderThreadAnnotation(
     onReopen: () => void controller.reopen(id),
     onDiscard: () => void controller.discard(id),
     onDiscardReply: (messageId: string) => void controller.discardReply(id, messageId),
-    onApplySuggestion: (suggestion: string) => void controller.applySuggestion(id, suggestion),
     onReplySubmit: (body: string) => void controller.submitReply(id, body),
     onReplyDismiss: () => controller.toggleReply(id),
     onEditMessage: (messageId: string, body: string) =>

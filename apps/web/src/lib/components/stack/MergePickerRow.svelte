@@ -6,14 +6,12 @@ import StackLayerGlyph from "./StackLayerGlyph.svelte";
 
 interface Props {
   layer: StackMergePlanLayer;
-  /** Why this layer can't be the target; null when it can. */
-  refusal: string | null;
   inRange: boolean;
   isTarget: boolean;
   onpick: () => void;
 }
 
-let { layer, refusal, inRange, isTarget, onpick }: Props = $props();
+let { layer, inRange, isTarget, onpick }: Props = $props();
 </script>
 
 <button
@@ -22,8 +20,8 @@ let { layer, refusal, inRange, isTarget, onpick }: Props = $props();
 	class="layer-row layer-pick"
 	class:layer-pick--range={inRange && layer.readiness !== 'merged'}
 	aria-checked={isTarget}
-	disabled={refusal !== null}
-	title={refusal ?? `Merge everything through #${layer.number}`}
+	disabled={layer.refusal !== null}
+	title={layer.refusal ?? `Merge everything through #${layer.number}`}
 	onclick={onpick}
 >
 	<SpineGlyph>

@@ -5,6 +5,7 @@ import type { ChatCallbacks, ResolvePushCallbacks } from "./api";
 let chatStreams: ChatCallbacks[] = [];
 let resolveStreams: ResolvePushCallbacks[] = [];
 let historyReads = 0;
+let pushResult: unknown = { status: "remote-changed", branch: "b" };
 
 mock.module("./api", () => ({
   streamChatMessage: (_params: unknown, callbacks: ChatCallbacks) => {
@@ -31,7 +32,7 @@ mock.module("./api", () => ({
   batchDiscardProposedCommits: async () => ({ discardedCount: 0 }),
   cherryPickProposedCommit: async () => {},
   discardProposedCommit: async () => {},
-  pushProposedChanges: async () => ({ status: "remote-changed", branch: "b" }),
+  pushProposedChanges: async () => pushResult,
   rebaseProposedCommits: async () => {},
 }));
 mock.module("svelte-sonner", () => ({
@@ -66,7 +67,7 @@ beforeEach(() => {
 
 describe("a chat turn", () => {
   it("keeps prose and tool rows in the order the agent produced them", () => {
-    turn.sendChatMessage({ prId: PR, message: " hi " });
+    turn.submitChatMessage(PR, " hi ", []);
     const stream = lastStream();
     stream.onText("Looking");
     stream.onActivity({
@@ -87,7 +88,7 @@ describe("a chat turn", () => {
   });
 
   it("keeps partial text with the error when the stream fails", () => {
-    turn.sendChatMessage({ prId: PR, message: "go" });
+    turn.submitChatMessage(PR, "go", []);
     lastStream().onText("half");
     lastStream().onError({ code: "NETWORK_ERROR", message: "Lost connection" });
 
@@ -111,8 +112,23 @@ describe("a chat turn", () => {
     expect(timeline.isChatStreaming(PR)).toBe(true);
   });
 
+  it("feedback on a proposed commit waits behind the running turn", () => {
+    turn.submitChatMessage(PR, "first", []);
+    proposed.addProposedComment(PR, "abc12345", {
+      id: "c1",
+      filePath: "a.ts",
+      lineNumber: 3,
+      side: "additions",
+      body: "rename this",
+    });
+    expect(turn.sendProposedFeedback({ prId: PR, sha: "abc12345", subject: "Fix" })).toBe(true);
+    expect(chatStreams).toHaveLength(1);
+    expect(timeline.isChatStreaming(PR)).toBe(true);
+    expect(queue.getQueuedMessages(PR)).toHaveLength(1);
+  });
+
   it("stopping drops an empty bubble and frees the composer", () => {
-    turn.sendChatMessage({ prId: PR, message: "go" });
+    turn.submitChatMessage(PR, "go", []);
     turn.abortChatTurn(PR);
     expect(timeline.getChatItems(PR).map((i) => i.kind)).toEqual(["message"]);
     expect(timeline.isChatStreaming(PR)).toBe(false);
@@ -125,7 +141,7 @@ describe("reloading for a new head", () => {
     await flush();
     expect(historyReads).toBe(1);
 
-    turn.sendChatMessage({ prId: PR, message: "go" });
+    turn.submitChatMessage(PR, "go", []);
     turn.reloadChatForNewHead(PR);
     await flush();
 
@@ -135,6 +151,17 @@ describe("reloading for a new head", () => {
 });
 
 describe("resolving a conflicting push", () => {
+  it("keeps the conflict on the PR whose push conflicted until resolve starts", async () => {
+    pushResult = { status: "conflict", files: ["a.ts"], branch: "feature" };
+    await proposed.pushProposed(PR);
+    expect(proposed.getPushConflict(PR)).toEqual({ files: ["a.ts"], branch: "feature" });
+    expect(proposed.getPushConflict("repo:2")).toBeNull();
+
+    void proposed.resolveAndPushProposed(PR);
+    expect(proposed.getPushConflict(PR)).toBeNull();
+    resolveStreams[0]?.onDone();
+  });
+
   it("releases the resolve flag when the stream fails", async () => {
     const settled = proposed.resolveAndPushProposed(PR);
     expect(proposed.isResolvingPush(PR)).toBe(true);

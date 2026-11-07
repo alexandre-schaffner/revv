@@ -3,27 +3,21 @@ import type { PullRequest } from "@revv/shared";
 import ArrowLeft from "phosphor-svelte/lib/ArrowLeft";
 import Eraser from "phosphor-svelte/lib/Eraser";
 import X from "phosphor-svelte/lib/X";
-import { isPushingProposed, isResolvingPush } from "$lib/chat/proposed.svelte";
-import { isChatStreaming } from "$lib/chat/timeline.svelte";
+import { isWorktreeOpRunning } from "$lib/chat/proposed.svelte";
 import { clearChatHistory } from "$lib/chat/turn.svelte";
 import PushPill from "./PushPill.svelte";
 
 interface Props {
-  prId: string | null;
+  prId: string;
   /** The PR the panel belongs to, named in the header while it covers the PR. */
   pr: PullRequest | null;
   commitCount: number;
   hasItems: boolean;
   stacked: boolean;
   onClose: () => void;
-  onConflict: (conflict: { files: readonly string[]; branch: string }) => void;
 }
 
-let { prId, pr, commitCount, hasItems, stacked, onClose, onConflict }: Props = $props();
-
-const isPushing = $derived(prId ? isPushingProposed(prId) : false);
-const isResolving = $derived(prId ? isResolvingPush(prId) : false);
-const isStreaming = $derived(prId ? isChatStreaming(prId) : false);
+let { prId, pr, commitCount, hasItems, stacked, onClose }: Props = $props();
 </script>
 
 <div class="panel-header" class:panel-header--stacked={stacked} data-glass>
@@ -39,16 +33,10 @@ const isStreaming = $derived(prId ? isChatStreaming(prId) : false);
 		<span class="panel-subtitle">#{pr.externalId} {pr.title}</span>
 	{/if}
 	<div class="header-actions">
-		{#if prId && commitCount > 0}
-			<PushPill
-				{prId}
-				{commitCount}
-				sourceBranch={pr?.sourceBranch}
-				blocked={isStreaming || isResolving}
-				{onConflict}
-			/>
+		{#if commitCount > 0}
+			<PushPill {prId} {commitCount} sourceBranch={pr?.sourceBranch} />
 		{/if}
-		{#if prId && hasItems}
+		{#if hasItems}
 			<button
 				class="icon-btn"
 				onclick={() => clearChatHistory(prId)}
@@ -58,7 +46,7 @@ const isStreaming = $derived(prId ? isChatStreaming(prId) : false);
 				aria-label={commitCount > 0
 					? 'Clear conversation and discard proposed commits'
 					: 'Clear conversation'}
-				disabled={isPushing || isResolving}
+				disabled={isWorktreeOpRunning(prId)}
 			>
 				<Eraser size={13} />
 			</button>

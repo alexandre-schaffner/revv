@@ -4,7 +4,7 @@ import HunkSmellChip from "$lib/components/walkthrough/first-pass/HunkSmellChip.
 import { hunkRangeLabel, leadOutcome, rowMatchesHunk } from "$lib/hunk-scan/first-pass";
 import { getHunkScanForFile } from "$lib/hunk-scan/store.svelte";
 import { getLoadedHeadSha } from "$lib/stores/diff-files.svelte";
-import { jumpToDiffLine } from "$lib/stores/review-nav.svelte";
+import { openInDiff } from "$lib/stores/review-nav.svelte";
 import {
   getIsStreaming,
   getIssuesForFile,
@@ -61,7 +61,7 @@ const hunks = $derived.by(() => {
 					type="button"
 					class="file-first-pass-hunk"
 					title="Jump to {hunkRangeLabel(row)}"
-					onclick={() => jumpToDiffLine(row.filePath, row.newStart)}
+					onclick={() => openInDiff(prId, row.filePath, row.newStart)}
 				>
 					<span class="file-first-pass-range">{hunkRangeLabel(row)}</span>
 					{#each smells as { smell, probability } (smell)}

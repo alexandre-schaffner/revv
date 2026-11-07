@@ -16,7 +16,10 @@ interface Props {
 
 let { prId, file, commentTrigger, scrollRoot }: Props = $props();
 
-const threads = new ThreadAnnotations(() => file.path);
+const threads = new ThreadAnnotations(
+  () => prId,
+  () => file.path,
+);
 
 const mode = $derived(getDiffMode());
 const wrap = $derived(getDiffWrap());

@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { RatingAxis, Verdict, WalkthroughBlock, WalkthroughRating } from "@revv/shared";
+import type { RatingAxis, Verdict, WalkthroughRating } from "@revv/shared";
 import { RATING_AXES, RATING_AXIS_LABELS } from "@revv/shared";
 import Check from "phosphor-svelte/lib/Check";
 import Spinner from "phosphor-svelte/lib/Spinner";
@@ -14,9 +14,8 @@ import SpecCount from "./SpecCount.svelte";
 import SpecSummaryBar from "./SpecSummaryBar.svelte";
 
 interface Props {
+  prId: string;
   ratings: WalkthroughRating[];
-  blocks: WalkthroughBlock[];
-  onJump: (blockId: string) => void;
   /**
    * Render even with zero ratings, so live generation shows the queued grid
    * from the start. Off by default so a stored pre-scorecard walkthrough
@@ -25,7 +24,7 @@ interface Props {
   forceShow?: boolean;
 }
 
-let { ratings, blocks, onJump, forceShow = false }: Props = $props();
+let { prId, ratings, forceShow = false }: Props = $props();
 
 const visible = $derived(ratings.length > 0 || forceShow);
 
@@ -259,8 +258,7 @@ function onGridKeydown(e: KeyboardEvent): void {
                         {axis}
                         rating={ratingByAxis.get(axis) ?? null}
                         state={cellState(axis, i)}
-                        {blocks}
-                        {onJump}
+                        {prId}
                         bind:triggerRef={cellRefs[axis]}
                     />
                 </div>

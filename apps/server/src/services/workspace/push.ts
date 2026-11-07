@@ -5,7 +5,7 @@
 // for its whole run; both are taken before any git work, so an overlapping
 // flow is refused up front.
 
-import type { ResolvePushFrame } from "@revv/shared";
+import { isValidBranchName, type ResolvePushFrame } from "@revv/shared";
 import { type Context, Effect, Exit, Queue, Scope } from "effect";
 import {
   type AiError,
@@ -321,7 +321,7 @@ export function makeAgentPush(deps: PushDeps) {
   const pushToNewBranch = (prId: string, newBranchName: string, force: boolean) =>
     Effect.gen(function* () {
       const name = newBranchName.trim();
-      if (name.length === 0 || /\s/.test(name) || name.includes("..") || name.startsWith("-")) {
+      if (!isValidBranchName(name)) {
         return yield* Effect.fail(
           new InvalidBranchNameError({
             message: "newBranchName is empty or contains invalid characters",

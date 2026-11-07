@@ -6,24 +6,28 @@ import { fromAction } from "svelte/attachments";
 import { fileReferences } from "$lib/chat/file-references";
 import { mentionReferences } from "$lib/chat/mention-references";
 import Markdown from "$lib/components/markdown/Markdown.svelte";
-import { getReviewFiles } from "$lib/stores/diff-files.svelte";
+import { getLoadedFiles } from "$lib/stores/diff-files.svelte";
 import { cn } from "$lib/utils.js";
 
 interface Props {
+  /** The PR whose changed files the message's paths resolve against. */
+  prId: string;
   from: "user" | "assistant";
   content: string;
   class?: string;
 }
 
-let { from, content, class: className }: Props = $props();
+let { prId, from, content, class: className }: Props = $props();
+
+const scope = $derived({ prId, files: getLoadedFiles(prId) });
 </script>
 
 <Markdown
 	data-slot="message-response"
 	source={content}
 	trust={from === "assistant" ? "agent" : "external"}
-	{@attach fromAction(fileReferences, () => (from === "assistant" ? getReviewFiles() : null))}
-	{@attach fromAction(mentionReferences, () => (from === "user" ? getReviewFiles() : null))}
+	{@attach fromAction(fileReferences, () => (from === "assistant" ? scope : null))}
+	{@attach fromAction(mentionReferences, () => (from === "user" ? scope : null))}
 	class={cn(
 		"max-w-none min-w-0 break-words [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_.shiki]:max-w-full [&_.shiki]:overflow-x-auto",
 		// A user bubble sits in an `items-end` column, so it is never narrower
@@ -31,7 +35,7 @@ let { from, content, class: className }: Props = $props();
 		// instead of pushing the bubble past the pane. `max-w-full!` because
 		// prose.css's unlayered `.prose { max-width: none }` beats a layered
 		// utility.
-		from === "user" && "max-w-full! rounded-2xl bg-secondary px-4 py-2.5 wrap-anywhere",
+		from === "user" && "max-w-full! wrap-anywhere",
 		className,
 	)}
 />

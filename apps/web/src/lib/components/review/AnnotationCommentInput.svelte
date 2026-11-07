@@ -1,6 +1,31 @@
+<script module lang="ts">
+// Escape dismisses the most recently opened input, focused or not, and only
+// that one: a reply box, a new-comment box and a proposed-commit comment can
+// all be mounted at once.
+const dismissers: (() => void)[] = [];
+
+function onWindowKeydown(e: KeyboardEvent): void {
+  if (e.key !== "Escape" || e.defaultPrevented) return;
+  const top = dismissers.at(-1);
+  if (!top) return;
+  e.stopPropagation();
+  top();
+}
+
+function claimEscape(dismiss: () => void): () => void {
+  if (dismissers.length === 0) window.addEventListener("keydown", onWindowKeydown);
+  dismissers.push(dismiss);
+  return () => {
+    const at = dismissers.lastIndexOf(dismiss);
+    if (at >= 0) dismissers.splice(at, 1);
+    if (dismissers.length === 0) window.removeEventListener("keydown", onWindowKeydown);
+  };
+}
+</script>
+
 <script lang="ts">
 import ArrowRight from "phosphor-svelte/lib/ArrowRight";
-import { onDestroy, onMount, untrack } from "svelte";
+import { onMount, untrack } from "svelte";
 
 interface Props {
   onSubmit: (body: string) => void;
@@ -26,19 +51,9 @@ function autoResize() {
 }
 
 function handleKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape") {
-    onDismiss();
-  } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && hasContent) {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && hasContent) {
     e.preventDefault();
     onSubmit(body.trim());
-  }
-}
-
-// Global Escape handler so dismissal works even when textarea is blurred
-function handleGlobalKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape") {
-    e.stopPropagation();
-    onDismiss();
   }
 }
 
@@ -53,11 +68,7 @@ onMount(() => {
     textareaEl.setSelectionRange(body.length, body.length);
     autoResize();
   }
-  window.addEventListener("keydown", handleGlobalKeydown);
-});
-
-onDestroy(() => {
-  window.removeEventListener("keydown", handleGlobalKeydown);
+  return claimEscape(() => onDismiss());
 });
 </script>
 

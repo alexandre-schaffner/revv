@@ -3,7 +3,9 @@
 // floating composer with the queue dock on top of it.
 import { tick } from "svelte";
 import {
+  dismissPushConflict,
   getProposedChanges,
+  getPushConflict,
   getWorktreeBlocked,
   resolveAndPushProposed,
 } from "$lib/chat/proposed.svelte";
@@ -14,7 +16,7 @@ import { openChat } from "$lib/chat/turn.svelte";
 import { provideActivityPr } from "$lib/components/agent-activity/repo-file";
 import { gsapSlide, tokens } from "$lib/motion";
 import { useCommands } from "$lib/stores/commands.svelte";
-import { getSelectedPr, getSelectedPrId } from "$lib/stores/route.svelte";
+import { getPrById } from "$lib/stores/prs.svelte";
 import { getChatStacked, setRightPanelOpen, toggleRightPanel } from "$lib/stores/sidebar.svelte";
 import ChatTimeline from "./ChatTimeline.svelte";
 import ChatComposer from "./composer/ChatComposer.svelte";
@@ -23,27 +25,30 @@ import ChatHeader from "./header/ChatHeader.svelte";
 import PushConflictDialog from "./header/PushConflictDialog.svelte";
 import QueueDock from "./QueueDock.svelte";
 
-const prId = $derived(getSelectedPrId());
-const pr = $derived(getSelectedPr());
+interface Props {
+  prId: string;
+}
+
+let { prId }: Props = $props();
+
+const pr = $derived(getPrById(prId));
 // Too narrow to sit beside the main pane, the panel covers it instead.
 const stacked = $derived(getChatStacked());
 
-const hasItems = $derived(prId ? getChatItems(prId).length > 0 : false);
-const proposed = $derived(prId ? getProposedChanges(prId) : null);
+const hasItems = $derived(getChatItems(prId).length > 0);
+const proposed = $derived(getProposedChanges(prId));
 const commitCount = $derived(proposed?.commits.length ?? 0);
-const blocked = $derived(prId ? getWorktreeBlocked(prId) : null);
+const blocked = $derived(getWorktreeBlocked(prId));
 const showQueueDock = $derived(
-  prId !== null &&
-    (getQueuedMessages(prId).length > 0 || getActiveTasks(prId).length > 0 || commitCount > 0),
+  getQueuedMessages(prId).length > 0 || getActiveTasks(prId).length > 0 || commitCount > 0,
 );
 
-let conflict = $state<{ files: readonly string[]; branch: string } | null>(null);
 let composer: ChatComposer | undefined = $state();
 
 provideActivityPr(() => prId);
 
 $effect(() => {
-  if (prId) openChat(prId);
+  openChat(prId);
 });
 
 $effect(() => {
@@ -55,7 +60,6 @@ useCommands([
     id: "chat:focus",
     label: "Focus Chat",
     keys: { key: "l" },
-    when: () => prId !== null,
     hidden: true,
     run: async () => {
       setRightPanelOpen(true);
@@ -88,17 +92,16 @@ $effect(() => {
 		{hasItems}
 		{stacked}
 		onClose={toggleRightPanel}
-		onConflict={(next) => (conflict = next)}
 	/>
 
-	{#if prId && blocked}
+	{#if blocked}
 		<BlockedStrip {prId} {blocked} />
 	{/if}
 
 	<ChatTimeline {prId} {stacked} bottomInset={composerH} />
 
 	<div class="composer-float" bind:this={composerEl}>
-		{#if prId && showQueueDock}
+		{#if showQueueDock}
 			<div class="queue-dock" transition:gsapSlide={{ duration: tokens.smooth }}>
 				<QueueDock {prId} {proposed} />
 			</div>
@@ -110,12 +113,9 @@ $effect(() => {
 </div>
 
 <PushConflictDialog
-	{conflict}
-	onClose={() => (conflict = null)}
-	onResolve={() => {
-		conflict = null;
-		if (prId) void resolveAndPushProposed(prId);
-	}}
+	conflict={getPushConflict(prId)}
+	onClose={() => dismissPushConflict(prId)}
+	onResolve={() => void resolveAndPushProposed(prId)}
 />
 
 <style>

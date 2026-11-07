@@ -3,6 +3,7 @@ import ArrowsHorizontal from "phosphor-svelte/lib/ArrowsHorizontal";
 import ImageBroken from "phosphor-svelte/lib/ImageBroken";
 import { onDestroy } from "svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
+import { apiErrorMessage } from "$lib/api/errors";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import { authHeaders } from "$lib/session/token.svelte";
 import type { ReviewFile } from "$lib/stores/diff-files.svelte";
@@ -56,15 +57,13 @@ async function loadSide(path: string, side: "base" | "head"): Promise<SidePane> 
     };
   }
 
+  // Raw fetch, not Eden: the success body is the image's bytes.
   if (!response.ok) {
-    let detail = `${response.status}`;
-    try {
-      const text = await response.text();
-      if (text) detail = text;
-    } catch {
-      // ignore — fall back to status code
-    }
-    return { ...blank, error: detail };
+    const value: unknown = await response.json().catch(() => null);
+    return {
+      ...blank,
+      error: apiErrorMessage({ status: response.status, value }, "Couldn't load the image"),
+    };
   }
 
   const blob = await response.blob();

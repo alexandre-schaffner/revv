@@ -4,8 +4,8 @@ import PencilSimpleLine from "phosphor-svelte/lib/PencilSimpleLine";
 import { toast } from "svelte-sonner";
 import { thrownMessage } from "$lib/api/wire";
 import { Shimmer } from "$lib/components/ui/shimmer";
+import type { StackPlace } from "$lib/stacks/stack-margin";
 import { requestStackBrief } from "$lib/stores/stacks.svelte";
-import type { StackPlace } from "./stack-margin";
 
 interface Props {
   place: StackPlace;

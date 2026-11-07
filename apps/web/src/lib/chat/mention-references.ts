@@ -1,9 +1,10 @@
 import { MENTION_PATH_PATTERN } from "@revv/shared";
 import { decorationAction } from "$lib/markdown/decorate";
 import type { ReviewFile } from "$lib/stores/diff-files.svelte";
-import { openFileInDiff } from "$lib/stores/review-nav.svelte";
+import { openInDiff } from "$lib/stores/review-nav.svelte";
 import { basename } from "$lib/utils/path";
 import { appendPillContents } from "./file-glyph";
+import type { ReviewFilesScope } from "./file-references";
 
 const PILL_CLASS = "mention-ref";
 const PATH_ATTR = "data-mention-path";
@@ -104,11 +105,11 @@ function decorate(node: HTMLElement, files: ReadonlyArray<ReviewFile> | null): v
  * The bound value is the review's file set, or null to leave the mentions as
  * text. A new file set re-resolves which pills are clickable.
  */
-export const mentionReferences = decorationAction<ReadonlyArray<ReviewFile> | null>((node) => {
-  let files: ReadonlyArray<ReviewFile> | null = null;
+export const mentionReferences = decorationAction<ReviewFilesScope | null>((node) => {
+  let scope: ReviewFilesScope | null = null;
 
   const target = (e: Event): HTMLElement | null => {
-    if (!files) return null;
+    if (!scope) return null;
     const pill = (e.target as HTMLElement | null)?.closest<HTMLElement>(
       `.${PILL_CLASS}[${PATH_ATTR}]`,
     );
@@ -117,10 +118,10 @@ export const mentionReferences = decorationAction<ReadonlyArray<ReviewFile> | nu
   const activate = (e: Event): void => {
     const pill = target(e);
     const path = pill?.getAttribute(PATH_ATTR);
-    if (!pill || !path) return;
+    if (!pill || !path || !scope) return;
     e.preventDefault();
     const lineAttr = pill.getAttribute(LINE_ATTR);
-    openFileInDiff(path, lineAttr ? Number(lineAttr) : undefined);
+    openInDiff(scope.prId, path, lineAttr ? Number(lineAttr) : undefined);
   };
   const onKeydown = (e: KeyboardEvent): void => {
     if (e.key === "Enter" || e.key === " ") activate(e);
@@ -130,8 +131,8 @@ export const mentionReferences = decorationAction<ReadonlyArray<ReviewFile> | nu
 
   return {
     apply(next) {
-      files = next;
-      decorate(node, files);
+      scope = next;
+      decorate(node, scope?.files ?? null);
     },
     destroy() {
       node.removeEventListener("click", activate);

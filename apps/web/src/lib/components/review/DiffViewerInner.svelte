@@ -119,7 +119,7 @@ const mounts = new AnnotationMounts();
  */
 let appliedAnnotations: DiffLineAnnotation<ThreadMeta>[] | null = null;
 let appliedThreadById: Record<string, CommentThread> | null = null;
-let appliedThreadMessages: Record<string, ThreadMessage[]> | null = null;
+let appliedThreadMessages: Record<string, readonly ThreadMessage[]> | null = null;
 
 function captureEl(el: HTMLDivElement) {
   wrapperEl = el;
@@ -204,35 +204,30 @@ function scrollVirtualizedLineIntoView(lineIndex: number): boolean {
   return true;
 }
 
-function retryRenderedLineIntoView(
-  lineIndex: number,
-  onRendered: (() => void) | undefined,
-  attemptsLeft = 6,
-): void {
-  requestAnimationFrame(() => {
-    const lineEl = findRenderedLineElement(lineIndex);
+/** Bumped on every Pierre render: the signal that rows may have appeared. */
+let renderSeq = $state(0);
+/** The row to bring on screen once Pierre has rendered it. */
+let revealRow = $state<number | null>(null);
+
+// One frame after a render, so a pane restoring its scroll offset (on the
+// microtask after mount) lands first. A virtualized row that isn't rendered
+// gets scrolled to its estimated offset, which renders it, and the next
+// render reveals it exactly.
+$effect(() => {
+  void renderSeq;
+  const row = revealRow;
+  if (row === null || !instance) return;
+  const frame = requestAnimationFrame(() => {
+    const lineEl = findRenderedLineElement(row);
     if (lineEl) {
       lineEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
-      onRendered?.();
-      return;
+      revealRow = null;
+    } else if (!scrollVirtualizedLineIntoView(row)) {
+      revealRow = null;
     }
-    if (attemptsLeft > 0) retryRenderedLineIntoView(lineIndex, onRendered, attemptsLeft - 1);
   });
-}
-
-function scrollLineIntoView(lineIndex: number, onRendered?: () => void): boolean {
-  const lineEl = findRenderedLineElement(lineIndex);
-  if (lineEl) {
-    lineEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    onRendered?.();
-    return true;
-  }
-
-  if (!scrollVirtualizedLineIntoView(lineIndex)) return false;
-
-  retryRenderedLineIntoView(lineIndex, onRendered);
-  return true;
-}
+  return () => cancelAnimationFrame(frame);
+});
 
 // The keyboard cursor counts rendered rows 1..N; Pierre indexes them with the
 // collapsed lines between hunks counted in.
@@ -323,25 +318,19 @@ $effect(() => {
 $effect(() => {
   if (!isInLineCursorMode()) return;
   const row = cursorRowIndex(getCursorLineIndex());
-  if (row === null) return;
-
-  requestAnimationFrame(() => {
-    scrollLineIntoView(row);
-  });
+  if (row !== null) revealRow = row;
 });
 
+// The jump is this viewer's once it has the file: a line outside the diff is
+// dropped rather than left to fire the next time the file mounts.
 $effect(() => {
   const jump = getPendingDiffJump();
   if (!jump || jump.filePath !== file.path || !instance || !parsedFileDiff) return;
-
   const row = rowIndexForNewLine(parsedFileDiff, jump.lineNumber);
-  if (row === null) return;
-
-  setTimeout(() => {
-    requestAnimationFrame(() => {
-      scrollLineIntoView(row, clearPendingDiffJump);
-    });
-  }, 50);
+  untrack(() => {
+    clearPendingDiffJump();
+    if (row !== null) revealRow = row;
+  });
 });
 
 $effect(() => {
@@ -427,6 +416,7 @@ onMount(() => {
       },
 
       onPostRender(node) {
+        renderSeq++;
         // Pierre hardcodes `pre.tabIndex = 0` (see setWrapperNodeProps)
         // with no opt-out. We use focus-mode for line-level keyboard
         // navigation instead, so opt this pre out of the tab order.

@@ -1,5 +1,5 @@
 <script lang="ts">
-import { isOpenLayer, loginsMatch } from "@revv/shared";
+import { isOpenLayer, layerReviewState } from "@revv/shared";
 import ArrowUp from "phosphor-svelte/lib/ArrowUp";
 import Check from "phosphor-svelte/lib/Check";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
@@ -8,15 +8,14 @@ import { Shimmer } from "$lib/components/ui/shimmer";
 import { VIEWER_VERDICT_LABEL } from "$lib/conversation/verdict";
 import { gsapFadeY } from "$lib/motion";
 import { openStackLayer } from "$lib/stacks/open-layer";
+import { layerFacts, layerRole, RISK_LABEL, readableBrief } from "$lib/stacks/stack-layer-facts";
+import { shortcutLabel } from "$lib/stores/command-keys";
 import {
-  layerFacts,
-  layerRole,
-  needsReview,
-  RISK_LABEL,
-  readableBrief,
-} from "$lib/stacks/stack-layer-facts";
-import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
-import { getPrById } from "$lib/stores/prs.svelte";
+  askMergeEligibility,
+  canViewerMerge,
+  viewerMayMerge,
+} from "$lib/stores/merge-eligibility.svelte";
+import { STACK_NEXT_KEYS } from "$lib/stores/shortcuts.svelte";
 import { openStackMergeSheet } from "$lib/stores/stack-merge.svelte";
 import { getLayer, getNeighbour, getStack } from "$lib/stores/stacks.svelte";
 import StackLayerGlyph from "./StackLayerGlyph.svelte";
@@ -34,11 +33,14 @@ const brief = $derived(readableBrief(stack?.brief ?? null));
 const nextRole = $derived(next ? layerRole(next, brief) : null);
 const nextFacts = $derived(next ? layerFacts(next) : []);
 
-const isOwner = $derived(loginsMatch(getPrById(prId)?.authorLogin, getCurrentUserLogin()));
+$effect(() => {
+  if (viewerMayMerge(prId)) askMergeEligibility(prId);
+});
+const canMerge = $derived(canViewerMerge(prId));
+const nextKeys = shortcutLabel(STACK_NEXT_KEYS);
 const atTop = $derived(stack !== null && here !== null && next === null);
 const allReviewed = $derived(
-  stack?.layers.filter(isOpenLayer).every((l) => l.review.kind === "complete" && !needsReview(l)) ??
-    false,
+  stack?.layers.filter(isOpenLayer).every((l) => layerReviewState(l) === "reviewed") ?? false,
 );
 const anyOpen = $derived(stack?.layers.some(isOpenLayer) ?? false);
 </script>
@@ -83,7 +85,7 @@ const anyOpen = $derived(stack?.layers.some(isOpenLayer) ?? false);
 			<Button class="continue" onclick={() => openStackLayer(prId, next)}>
 				<ArrowUp size={14} weight="bold" aria-hidden="true" />
 				Continue to #{next.number}
-				<kbd class="kbd" aria-label="Option Command Up Arrow">⌥⌘↑</kbd>
+				<kbd class="kbd">{nextKeys}</kbd>
 			</Button>
 		</div>
 	</section>
@@ -93,9 +95,9 @@ const anyOpen = $derived(stack?.layers.some(isOpenLayer) ?? false);
 		<div class="handoff-body">
 			<p class="end-text">
 				Every open layer has a review of its current head.
-				{#if !isOwner}The author merges the stack from here.{/if}
+				{#if !canMerge}The author merges the stack from here.{/if}
 			</p>
-			{#if isOwner}
+			{#if canMerge}
 				<Button variant="outline" onclick={() => openStackMergeSheet(prId)}>
 					<GitMerge size={14} aria-hidden="true" />
 					Merge stack…

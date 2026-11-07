@@ -212,11 +212,11 @@ export function submitReview(prId: string, body: SubmitReviewInput) {
     // Replies on threads GitHub already has, one at a time so each thread's
     // replies land in the order they were written.
     const after = yield* review.getConversation(pr.id);
-    const pendingReplies = after.threads.flatMap((t) =>
+    const replies = after.threads.flatMap((t) =>
       unpublishedReplies(t, after.messages[t.id] ?? [], viewerLogin),
     );
     let failedReplies = 0;
-    for (const reply of pendingReplies) {
+    for (const reply of replies) {
       yield* sync.pushReply(reply.id).pipe(
         Effect.catch((e) =>
           logged(`push reply ${reply.id}`)(e).pipe(

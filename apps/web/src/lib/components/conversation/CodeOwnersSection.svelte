@@ -15,7 +15,7 @@ import DisclosureCaret from "$lib/components/shared/DisclosureCaret.svelte";
 import { VERDICT_LABEL } from "$lib/conversation/verdict";
 import { gsapSlide } from "$lib/motion";
 import { getChangedPaths } from "$lib/stores/diff-files.svelte";
-import { openFileInDiff } from "$lib/stores/review-nav.svelte";
+import { openInDiff } from "$lib/stores/review-nav.svelte";
 import SidebarSection from "./SidebarSection.svelte";
 import VerdictGlyph from "./VerdictGlyph.svelte";
 
@@ -136,7 +136,7 @@ function stateLabel(row: OwnerRow): string {
 										type="button"
 										class="co-file"
 										title="Open {path} in the diff"
-										onclick={() => openFileInDiff(path)}
+										onclick={() => openInDiff(prId, path)}
 									>
 										{path}
 									</button>

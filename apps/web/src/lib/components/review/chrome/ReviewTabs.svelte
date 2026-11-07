@@ -11,13 +11,19 @@ import {
   type ReviewTab,
   setActiveTab,
 } from "$lib/stores/pr-view-state.svelte";
-import { getSelectedPr } from "$lib/stores/route.svelte";
+import { getPrById } from "$lib/stores/prs.svelte";
 import { getCmdHeld } from "$lib/stores/shortcuts.svelte";
 import { getPrWalkthroughStatus } from "$lib/walkthrough/store.svelte";
 
-const pr = $derived(getSelectedPr());
+interface Props {
+  prId: string;
+}
+
+let { prId }: Props = $props();
+
+const pr = $derived(getPrById(prId));
 const activeTab = $derived(getActiveTab());
-const walkthroughStatus = $derived(pr ? getPrWalkthroughStatus(pr.id) : "idle");
+const walkthroughStatus = $derived(getPrWalkthroughStatus(prId));
 
 // For the diff and the Pull button only: the PR's head differs from the SHA
 // the diff was loaded at (`getLoadedHeadSha` is null until the first fetch).
@@ -27,13 +33,13 @@ const walkthroughStatus = $derived(pr ? getPrWalkthroughStatus(pr.id) : "idle");
 // "Merged" instead.
 const hasNewCommit = $derived.by(() => {
   if (!pr?.headSha || pr.status !== "open") return false;
-  const loaded = getLoadedHeadSha(pr.id);
+  const loaded = getLoadedHeadSha(prId);
   return loaded !== null && loaded !== pr.headSha;
 });
-const isPulling = $derived(pr ? getIsPullingCommit(pr.id) : false);
+const isPulling = $derived(getIsPullingCommit(prId));
 
 function onPullCommit(): void {
-  if (pr) void pullLatestCommit(pr.id);
+  void pullLatestCommit(prId);
 }
 
 // The pull button takes precedence over the dot, since it needs the user to

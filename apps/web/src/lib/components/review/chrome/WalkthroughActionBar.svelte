@@ -8,7 +8,7 @@ import type { GenActionCopy, GenActionState } from "$lib/components/shared/gen-a
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import { getIsPullingCommit, reviewLatestCommit } from "$lib/review/pull-latest";
-import { getScrollRoot, scrollToAnchor } from "$lib/stores/review-nav.svelte";
+import { getScrollRoot, scrollToAnchor, walkthroughAnchor } from "$lib/stores/review-nav.svelte";
 import {
   abort as abortWalkthrough,
   generateWalkthrough,
@@ -78,7 +78,7 @@ function scrollToBottom(): void {
 }
 
 function scrollToRatings(): void {
-  scrollToAnchor("walkthrough", "walkthrough-rating");
+  scrollToAnchor("walkthrough", walkthroughAnchor.rating);
 }
 
 const walkthroughUiState = $derived(getWalkthroughUiState(prId));
@@ -126,8 +126,7 @@ const genActionState = $derived.by((): GenActionState | null => {
 });
 
 // The walkthrough's perspective is the user's pick; the caret on the pills
-// that start a fresh run offers the other one. Comments and the diff stay on
-// the identity-derived session either way.
+// that start a fresh run offers the other one.
 const perspective = $derived({ value: selectedMode, options: WALKTHROUGH_PERSPECTIVE_OPTIONS });
 
 /** A streaming chat or a commit pull blocks the destructive buttons, with a

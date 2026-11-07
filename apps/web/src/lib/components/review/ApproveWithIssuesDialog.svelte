@@ -1,31 +1,24 @@
 <script lang="ts">
 import type { CommentThread, WalkthroughIssue } from "@revv/shared";
 import Chat from "phosphor-svelte/lib/Chat";
-import Info from "phosphor-svelte/lib/Info";
 import Warning from "phosphor-svelte/lib/Warning";
-import WarningOctagon from "phosphor-svelte/lib/WarningOctagon";
 import { Button } from "$lib/components/ui/button";
 import * as Dialog from "$lib/components/ui/dialog";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
+import SeverityIcon from "$lib/components/walkthrough/SeverityIcon.svelte";
+import { getThreadMessages } from "$lib/stores/review.svelte";
+import { openInDiff } from "$lib/stores/review-nav.svelte";
 import { countBySeverity, outstandingItemsPhrase } from "$lib/walkthrough/issues";
 
 interface Props {
   open: boolean;
-  issues: WalkthroughIssue[];
-  pendingThreads: CommentThread[];
-  getThreadMessages?: (threadId: string) => { body: string }[];
-  onfileclick?: (filePath: string, line: number) => void;
+  prId: string;
+  issues: readonly WalkthroughIssue[];
+  pendingThreads: readonly CommentThread[];
   onconfirm: () => void;
 }
 
-let {
-  open = $bindable(),
-  issues,
-  pendingThreads,
-  getThreadMessages = () => [],
-  onfileclick = undefined,
-  onconfirm,
-}: Props = $props();
+let { open = $bindable(), prId, issues, pendingThreads, onconfirm }: Props = $props();
 
 const severityCounts = $derived(countBySeverity(issues));
 const threadCount = $derived(pendingThreads.length);
@@ -36,7 +29,7 @@ const description = $derived(
 
 function handleFileClick(filePath: string, line: number): void {
   open = false;
-  onfileclick?.(filePath, line);
+  openInDiff(prId, filePath, line);
 }
 
 function handleConfirm(): void {
@@ -65,20 +58,20 @@ function handleCancel(): void {
 
 		<div class="issue-summary">
 			{#if severityCounts.critical > 0}
-				<span class="count-pill count-critical">
-					<WarningOctagon size={12} weight="fill" />
+				<span class="count-pill" data-severity="critical">
+					<SeverityIcon severity="critical" size={12} />
 					{severityCounts.critical} critical
 				</span>
 			{/if}
 			{#if severityCounts.warning > 0}
-				<span class="count-pill count-warning">
-					<Warning size={12} weight="fill" />
+				<span class="count-pill" data-severity="warning">
+					<SeverityIcon severity="warning" size={12} />
 					{severityCounts.warning} warning{severityCounts.warning !== 1 ? 's' : ''}
 				</span>
 			{/if}
 			{#if severityCounts.info > 0}
-				<span class="count-pill count-info">
-					<Info size={12} />
+				<span class="count-pill" data-severity="info">
+					<SeverityIcon severity="info" size={12} />
 					{severityCounts.info} info
 				</span>
 			{/if}
@@ -96,14 +89,8 @@ function handleCancel(): void {
 				<ul class="issue-list">
 					{#each issues as issue (issue.id)}
 						<li class="issue-row">
-							<span class="severity-icon severity-{issue.severity}">
-								{#if issue.severity === 'critical'}
-									<WarningOctagon size={13} weight="fill" />
-								{:else if issue.severity === 'warning'}
-									<Warning size={13} weight="fill" />
-								{:else}
-									<Info size={13} />
-								{/if}
+							<span class="severity-icon" data-severity={issue.severity}>
+								<SeverityIcon severity={issue.severity} size={13} />
 							</span>
 							<span class="issue-text">
 								<span class="issue-title">{issue.title}</span>
@@ -127,7 +114,7 @@ function handleCancel(): void {
 				<div class="section-label">Unresolved comments</div>
 				<ul class="issue-list">
 					{#each pendingThreads as thread (thread.id)}
-						{@const firstMessage = getThreadMessages(thread.id)[0]}
+						{@const firstMessage = getThreadMessages(prId, thread.id)[0]}
 						<li class="issue-row">
 							<span class="severity-icon severity-thread">
 								<Chat size={13} />
@@ -178,7 +165,7 @@ function handleCancel(): void {
 	}
 
 	.count-pill {
-		--pill-color: var(--color-text-muted);
+		--pill-color: var(--severity-color, var(--color-text-muted));
 		display: inline-flex;
 		align-items: center;
 		gap: 4px;
@@ -192,15 +179,6 @@ function handleCancel(): void {
 		border: 1px solid color-mix(in srgb, var(--pill-color) 30%, transparent);
 	}
 
-	.count-critical {
-		--pill-color: var(--color-danger);
-	}
-	.count-warning {
-		--pill-color: var(--color-warning);
-	}
-	.count-info {
-		--pill-color: var(--color-text-muted);
-	}
 	.count-thread {
 		--pill-color: var(--color-accent);
 	}
@@ -248,6 +226,7 @@ function handleCancel(): void {
 		align-items: center;
 		flex-shrink: 0;
 		margin-top: 1px;
+		color: var(--severity-color);
 	}
 
 	.severity-thread {
@@ -287,10 +266,6 @@ function handleCancel(): void {
 		gap: 8px;
 		margin-top: 4px;
 	}
-
-	.severity-critical { color: var(--color-danger); }
-	.severity-warning { color: var(--color-warning); }
-	.severity-info { color: var(--color-accent); }
 
 	.issue-title {
 		font-size: 12px;

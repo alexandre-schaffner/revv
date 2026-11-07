@@ -18,6 +18,7 @@ import {
   isBatchOpInFlight,
   isCherryPickingCommit,
   isDiscardingCommit,
+  isWorktreeBusy,
   selectAllCommits,
   toggleCommitSelection,
 } from "$lib/chat/proposed.svelte";
@@ -40,6 +41,7 @@ const commitCount = $derived(proposed.commits.length);
 const selected = $derived(getSelectedCommitShas(prId));
 const selectedCount = $derived(selected.size);
 const batchInFlight = $derived(isBatchOpInFlight(prId));
+const busy = $derived(isWorktreeBusy(prId));
 
 let diffOpen = $state<{
   sha: string;
@@ -120,7 +122,7 @@ function filesSummary(files: readonly string[]): string {
 						</QueueItemAction>
 						<QueueItemAction
 							class="opacity-100 hover:text-destructive"
-							disabled={isDiscardingCommit(prId, commit.sha)}
+							disabled={busy}
 							onclick={() => void discardProposedCommitAction(prId, commit.sha)}
 							aria-label="Discard commit"
 							title="Discard commit"
@@ -133,7 +135,7 @@ function filesSummary(files: readonly string[]): string {
 						</QueueItemAction>
 						<QueueItemAction
 							class="opacity-100 hover:text-primary"
-							disabled={isCherryPickingCommit(prId, commit.sha)}
+							disabled={busy}
 							onclick={() => void cherryPickProposedCommitAction(prId, commit.sha)}
 							aria-label="Push this commit to PR branch"
 							title="Push this commit to PR branch"
@@ -180,7 +182,7 @@ function filesSummary(files: readonly string[]): string {
 						variant="ghost"
 						size="sm"
 						class="h-7 gap-1.5 px-2 text-xs hover:text-destructive"
-						disabled={batchInFlight}
+						disabled={busy}
 						onclick={() => void batchDiscardSelectedAction(prId)}
 					>
 						{#if batchInFlight}
@@ -194,7 +196,7 @@ function filesSummary(files: readonly string[]): string {
 						variant="ghost"
 						size="sm"
 						class="h-7 gap-1.5 px-2 text-xs hover:text-primary"
-						disabled={batchInFlight}
+						disabled={busy}
 						onclick={() => void batchCherryPickSelectedAction(prId)}
 					>
 						{#if batchInFlight}

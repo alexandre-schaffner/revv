@@ -1,0 +1,29 @@
+/* An issue's severity colours, declared once. Anything carrying
+   `data-severity` exposes them to itself and its descendants:
+   `--severity-color` is the severity's own tone, `--severity-score-*` the
+   scorecard tier it reads as (critical = blocker, warning = concern), for
+   the panels that share the scorecard's palette. */
+
+[data-severity="critical"] {
+  --severity-color: var(--color-danger);
+  --severity-score-bg: var(--color-score-blocker-bg);
+  --severity-score-border: var(--color-score-blocker-border);
+  --severity-score-icon: var(--color-score-blocker-icon);
+  --severity-score-label: var(--color-score-blocker-label);
+}
+
+[data-severity="warning"] {
+  --severity-color: var(--color-warning);
+  --severity-score-bg: var(--color-score-concern-bg);
+  --severity-score-border: var(--color-score-concern-border);
+  --severity-score-icon: var(--color-score-concern-icon);
+  --severity-score-label: var(--color-score-concern-label);
+}
+
+[data-severity="info"] {
+  --severity-color: var(--color-accent);
+  --severity-score-bg: var(--color-score-info-bg);
+  --severity-score-border: var(--color-score-info-border);
+  --severity-score-icon: var(--color-score-info-icon);
+  --severity-score-label: var(--color-score-info-label);
+}

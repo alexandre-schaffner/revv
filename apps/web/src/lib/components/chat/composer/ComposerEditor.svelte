@@ -25,8 +25,6 @@ interface Props {
   placeholder: string;
   commands: readonly ChatSessionCommand[];
   mentionPaths: readonly string[];
-  /** Read-only while no PR is selected. */
-  disabled: boolean;
   onsubmit: () => void;
   onfocus: () => void;
 }
@@ -36,7 +34,6 @@ let {
   placeholder,
   commands,
   mentionPaths,
-  disabled,
   onsubmit,
   onfocus,
 }: Props = $props();
@@ -118,7 +115,7 @@ function refreshTrigger() {
   // Only reassign when the token actually changed. `refreshTrigger` runs on
   // every keyup/mouseup (incl. ArrowUp/Down menu navigation), and a fresh
   // object with identical kind/query would still re-run the activeIndex-reset
-  // effect below, snapping the highlighted row back to the top on each arrow.
+  // effect above, snapping the highlighted row back to the top on each arrow.
   if (!sameTrigger(trigger, next)) trigger = next;
 }
 
@@ -308,7 +305,7 @@ function handlePaste(e: ClipboardEvent) {
 	{/if}
 	<div
 		bind:this={editorEl}
-		contenteditable={!disabled}
+		contenteditable="true"
 		role="textbox"
 		tabindex="0"
 		aria-multiline="true"

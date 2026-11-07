@@ -9,13 +9,17 @@ import { getContext, onDestroy, type Snippet, setContext } from "svelte";
  * PR), and `{@render}` re-mounts its content whenever the snippet's identity
  * changes. Chrome that must stay mounted across that hop has to pass a snippet
  * that doesn't close over component state: export it from `<script module>`
- * (Svelte refuses to compile the export otherwise) and read state from stores.
+ * (Svelte refuses to compile the export otherwise) and take what it shows as
+ * the snippet's argument.
  */
 export interface ShellChrome {
   /** Appended to the PR title in the top bar. */
   subtitle?: string | null | undefined;
-  /** Floats over the top of the main pane. */
-  tabs?: Snippet | undefined;
+  /**
+   * Floats over the top of the main pane, rendered with `key` (the review
+   * page's PR id, so one module-level snippet serves every PR).
+   */
+  tabs?: { readonly snippet: Snippet<[key: string]>; readonly key: string } | undefined;
   /** Floats over the bottom of the main pane. */
   actions?: Snippet | undefined;
 }

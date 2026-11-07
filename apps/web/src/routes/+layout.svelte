@@ -119,7 +119,10 @@ onMount(() => {
 		<AppShell>
 			{@render children()}
 			{#snippet rightPanel()}
-				<ChatPanel />
+				{@const prId = getSelectedPrId()}
+				{#if prId}
+					<ChatPanel {prId} />
+				{/if}
 			{/snippet}
 		</AppShell>
 	</OnboardingGate>

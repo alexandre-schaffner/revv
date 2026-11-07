@@ -50,12 +50,9 @@ export function warmChatSessionContext(prId: string): void {
   void contexts.refresh(prId, { warm: true });
 }
 
-export function getChatMentionPaths(
-  prId: string | null,
-  changedPaths: readonly string[],
-): string[] {
+export function getChatMentionPaths(prId: string, changedPaths: readonly string[]): string[] {
   const changed = new Set(changedPaths);
-  const repo = (prId ? contexts.data(prId)?.repoFiles : undefined) ?? [];
+  const repo = contexts.data(prId)?.repoFiles ?? [];
   return [...changedPaths, ...repo.filter((path) => !changed.has(path))];
 }
 

@@ -2,13 +2,15 @@
 import type { CodeBlock } from "@revv/shared";
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import { pierreFile } from "$lib/pierre/mount";
-import { jumpToDiffLine } from "$lib/stores/review-nav.svelte";
+import { openInDiff } from "$lib/stores/review-nav.svelte";
 
 interface Props {
+  /** The PR the walkthrough reviews; the header opens the block's file in its diff. */
+  prId: string;
   block: CodeBlock;
 }
 
-let { block }: Props = $props();
+let { prId, block }: Props = $props();
 
 const startLine = $derived(
   Number.isInteger(block.startLine) && block.startLine > 1 ? block.startLine : 1,
@@ -36,7 +38,7 @@ function offsetLineNumbers(node: HTMLElement): void {
 
 <div class="annotated-block">
 	<div class="code-panel">
-		<button class="code-header" onclick={() => jumpToDiffLine(block.filePath, block.startLine)}>
+		<button class="code-header" onclick={() => openInDiff(prId, block.filePath, block.startLine)}>
 			<span class="code-file-path">{block.filePath}</span>
 			<span class="code-header-right">
 				<span class="code-line-range">:{block.startLine}-{block.endLine}</span>

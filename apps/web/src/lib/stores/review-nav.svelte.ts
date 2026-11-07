@@ -5,7 +5,7 @@
 import { tick } from "svelte";
 import type { Action } from "svelte/action";
 import { pulseHighlight } from "$lib/motion";
-import { getReviewFiles } from "./diff-files.svelte";
+import { getLoadedFiles } from "./diff-files.svelte";
 import {
   getPrScrollPosition,
   setActiveFilePath,
@@ -14,6 +14,16 @@ import {
 } from "./pr-view-state.svelte";
 
 export type ReviewPane = "walkthrough" | "conversation" | "diff";
+
+/** The ids the walkthrough tab renders on its parts, and that jumps scroll to. */
+export const walkthroughAnchor = {
+  overview: "walkthrough-overview",
+  diff: "walkthrough-diff",
+  sentiment: "walkthrough-sentiment",
+  rating: "walkthrough-rating",
+  firstPass: "walkthrough-first-pass",
+  block: (blockId: string) => `step-${blockId}`,
+} as const;
 
 let roots = $state.raw<Partial<Record<ReviewPane, HTMLElement>>>({});
 
@@ -117,12 +127,14 @@ export function scrollToAnchor(
   requestAnimationFrame(attempt);
 }
 
+/** Show a walkthrough block, flashing it; from another tab, switch to the walkthrough first. */
 export function jumpToWalkthroughBlock(blockId: string): void {
   setActiveTab("walkthrough");
-  scrollToAnchor("walkthrough", `step-${blockId}`, { highlight: true });
+  scrollToAnchor("walkthrough", walkthroughAnchor.block(blockId), { highlight: true });
 }
 
-// The diff pane resolves a line jump itself, once Pierre has rendered the file.
+// The diff pane resolves a line jump itself, once Pierre has rendered the
+// file, and drops it when the line isn't in the diff.
 interface DiffLineJump {
   filePath: string;
   lineNumber: number;
@@ -138,24 +150,16 @@ export function clearPendingDiffJump(): void {
   pendingDiffJump = null;
 }
 
-export function jumpToDiffLine(filePath: string, lineNumber: number): void {
-  pendingDiffJump = { filePath, lineNumber };
-  setActiveFilePath(filePath);
-  setActiveTab("diff");
-}
-
 /**
- * Open a changed file in the diff tab, optionally at a line. No-ops when the
- * path isn't part of the loaded review (a stale render can lag a pull);
- * matches `oldPath` too, so a renamed file still resolves.
+ * Open a file of `prId`'s review in the diff tab, optionally at a line.
+ * No-ops when the path isn't one of its loaded files (a citation of an
+ * unchanged file, or a stale render lagging a pull); matches `oldPath` too, so
+ * a renamed file still resolves.
  */
-export function openFileInDiff(filePath: string, lineNumber?: number): void {
-  const match = getReviewFiles().find((f) => f.path === filePath || f.oldPath === filePath);
+export function openInDiff(prId: string, filePath: string, lineNumber?: number): void {
+  const match = getLoadedFiles(prId).find((f) => f.path === filePath || f.oldPath === filePath);
   if (!match) return;
-  if (typeof lineNumber === "number") {
-    jumpToDiffLine(match.path, lineNumber);
-    return;
-  }
+  pendingDiffJump = lineNumber === undefined ? null : { filePath: match.path, lineNumber };
   setActiveFilePath(match.path);
   setActiveTab("diff");
 }
