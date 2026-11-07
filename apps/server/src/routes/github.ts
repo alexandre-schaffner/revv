@@ -16,42 +16,36 @@ export interface AvailableRepo {
   readonly avatarUrl: string | null;
 }
 
-let repoCache: { data: AvailableRepo[]; fetchedAt: number; accountId: string } | null = null;
-
 export const githubRoutes = new Elysia({ prefix: "/api/github" })
   .use(withAccount)
-  .get("/repos", (ctx) => {
-    const force = ctx.query.force === "true";
-
-    return runRoute(
+  .get("/repos", (ctx) =>
+    runRoute(
       Effect.gen(function* () {
-        const { accountId, client } = ctx.account;
-
-        if (
-          !force &&
-          repoCache &&
-          repoCache.accountId === accountId &&
-          Date.now() - repoCache.fetchedAt < REPO_CACHE_TTL_MS
-        ) {
-          return repoCache.data;
-        }
-
         const github = yield* GitHubGateway;
-
-        const fetched = (yield* github.repos.listForUser(client)).map(
-          (repo): AvailableRepo => ({
-            fullName: repo.fullName,
-            owner: repo.owner,
-            name: repo.name,
-            avatarUrl: repo.ownerAvatarUrl,
-          }),
+        const cache = yield* CacheService;
+        const { accountId, client } = ctx.account;
+        if (ctx.query.force === "true") yield* cache.invalidate("github-repos", accountId);
+        return yield* cache.getOrFetch(
+          "github-repos",
+          accountId,
+          () =>
+            github.repos.listForUser(client).pipe(
+              Effect.map((repos) =>
+                repos.map(
+                  (repo): AvailableRepo => ({
+                    fullName: repo.fullName,
+                    owner: repo.owner,
+                    name: repo.name,
+                    avatarUrl: repo.ownerAvatarUrl,
+                  }),
+                ),
+              ),
+            ),
+          { ttlMs: REPO_CACHE_TTL_MS },
         );
-
-        repoCache = { data: fetched, fetchedAt: Date.now(), accountId };
-        return fetched;
       }),
-    );
-  })
+    ),
+  )
   .post(
     "/pr-counts",
     (ctx) =>

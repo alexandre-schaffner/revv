@@ -2,11 +2,11 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { NotFoundError, ValidationError } from "../domain/errors";
+import { ValidationError } from "../domain/errors";
 import { CLONE_BASE_DIR, expandUserPath, pathIsUnder } from "../services/clone-policy";
-import { GitHubAccounts } from "../services/github/accounts";
 import { GitHubGateway } from "../services/github/gateway";
 import { PollScheduler } from "../services/PollScheduler";
+import { PrContextService } from "../services/PrContext";
 import { getRepoActivityResponse } from "../services/RepoActivity";
 import { RepoCloneService } from "../services/RepoClone";
 import { RepositoryService } from "../services/Repository";
@@ -148,15 +148,9 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
   .get("/:id/activity", (ctx) =>
     runRoute(
       Effect.gen(function* () {
-        const repoSvc = yield* RepositoryService;
-        const accounts = yield* GitHubAccounts;
-        const repo = yield* repoSvc.getRepoById(ctx.params.id);
-        const owner = yield* repoSvc.getAccountIdForRepo(repo.id);
-        const account = yield* accounts.accountForUser(ctx.session.user.id, repo.githubHost);
-        if (account.accountId !== owner) {
-          return yield* Effect.fail(new NotFoundError({ resource: "repository", id: repo.id }));
-        }
-        return yield* getRepoActivityResponse(repo, account.client);
+        const prContext = yield* PrContextService;
+        const { repo, client } = yield* prContext.forRepo(ctx.params.id);
+        return yield* getRepoActivityResponse(repo, client);
       }),
     ),
   )
