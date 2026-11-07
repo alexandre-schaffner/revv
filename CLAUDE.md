@@ -263,8 +263,10 @@ agent tomorrow). Any change that violates them is wrong by construction — push
 
    The snapshot importer that hydrates team-cache hits also carries a review over a pure
    restack: when a stacked layer's new head has a fingerprint identical to a finished review's
-   (`walkthroughs.diff_fingerprint`), the orchestrator imports that review into the new head's
-   row (`carried_from_walkthrough_id`) with no agent run. The old row is never touched.
+   (`walkthroughs.diff_fingerprint`) that covers the requested generation mode, the orchestrator
+   imports that review into the new head's row (`carried_from_walkthrough_id`) with no agent
+   run. The old row is never touched. The rule is `services/walkthrough/restack.ts`; the stack
+   overlay's `restacked` label calls the same rule.
 
    **Carve-out: chat-edit is the single authorized post-completion mutation path.** After
    `status='complete'`, the chat agent's edit MCP tools (`update_overview`, `add_block`,
