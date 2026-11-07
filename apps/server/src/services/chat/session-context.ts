@@ -36,14 +36,15 @@ export const resolveChatSessionContext = (prId: string, warm: boolean) =>
   Effect.gen(function* () {
     const prCtx = yield* PrContextService;
     const workspace = yield* PrWorkspace;
-    const ctx = yield* prCtx.forPr(prId);
+    const record = yield* prCtx.readPr(prId);
     const launch = yield* resolveAgentLaunch("chat");
-    const cacheKey = `${launch.agent}::${ctx.repo.id}`;
+    const cacheKey = `${launch.agent}::${record.repo.id}`;
     const cachedCommands = slashCommandCache.get(cacheKey) ?? EMPTY.commands;
 
-    let worktreePath = workspace.agentBranch(ctx)?.worktreePath ?? null;
-    let headSha = ctx.pr.headSha;
+    let worktreePath = workspace.agentBranch(record)?.worktreePath ?? null;
+    let headSha = record.pr.headSha;
     if (warm && (worktreePath === null || headSha === null)) {
+      const ctx = yield* prCtx.forPr(prId);
       // A turn or push already working there will bring the worktree up itself.
       const opened = yield* Effect.scoped(workspace.open(ctx, "warm-up")).pipe(
         Effect.catchTag("WorkspaceBusyError", () => Effect.succeed(null)),
@@ -62,7 +63,7 @@ export const resolveChatSessionContext = (prId: string, warm: boolean) =>
         }),
       ),
     );
-    const session = yield* workspace.session({ id: ctx.pr.id, headSha });
+    const session = yield* workspace.session({ id: record.pr.id, headSha });
     const live = yield* Effect.promise(() =>
       agentSessionContext({ launch, cwd, warm, sessionId: session?.sessionId ?? null }),
     );

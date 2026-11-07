@@ -168,8 +168,8 @@ export const PrConversationServiceLive = Layer.effect(
 
     const cached = (prId: string) =>
       Effect.gen(function* () {
-        const ctx = yield* prContext.forPr(prId);
-        return yield* readCached(prId, ctx.repo.githubHost);
+        const { repo } = yield* prContext.readPr(prId);
+        return yield* readCached(prId, repo.githubHost);
       });
 
     const load = (prId: string) =>
