@@ -219,7 +219,7 @@ export interface ReposCloneStatusEnvelope {
  * Full state of the signed-in user's GitHub identity on `host`, after GitHub
  * reported a new login or avatar for that account. The stream carries every
  * account of the user, so a client applies it to the account on `host`.
- * `avatarContent` is the cached data URL, as on `UserIdentity`: GitHub
+ * `avatarContent` is the cached data URL, as on `/api/auth/accounts`: GitHub
  * Enterprise avatar URLs are signed and expire.
  */
 export interface UserUpdatedEnvelope {

@@ -19,7 +19,7 @@ import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { call } from "$lib/api/errors";
 import { thrownMessage } from "$lib/api/wire";
-import { getReviewModeForPr } from "$lib/stores/prs.svelte";
+import { reviewModeForPr } from "$lib/prs/viewer";
 import { createResource } from "$lib/stores/resource";
 import { getSettings } from "$lib/stores/settings.svelte";
 import { shallowEntryEqual, updateEntryInMap } from "./entry-equal";
@@ -179,7 +179,7 @@ export function getPendingAction(prId: string): PendingAction | null {
  * record. The review session (comments, threads, diff) isn't keyed on it.
  */
 export function getSelectedMode(prId: string): WalkthroughMode {
-  return entries.get(prId)?.mode ?? getReviewModeForPr(prId);
+  return entries.get(prId)?.mode ?? reviewModeForPr(prId);
 }
 
 /** The tab bar's dot. A stopped or partial run is not complete: it shows none. */

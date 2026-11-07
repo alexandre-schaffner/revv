@@ -9,23 +9,24 @@ export interface HeldSession {
   readonly token: string;
   readonly name: string;
   readonly email: string;
-  readonly image: string | null;
 }
 
-function isHeldSession(value: unknown): value is HeldSession {
-  if (typeof value !== "object" || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return (
-    typeof v.userId === "string" &&
-    typeof v.token === "string" &&
-    typeof v.name === "string" &&
-    typeof v.email === "string" &&
-    (v.image === null || typeof v.image === "string")
-  );
+/** A held session, without the fields older versions also stored (an avatar `image`). */
+function heldSession(value: unknown): HeldSession | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { userId, token, name, email } = value as Record<string, unknown>;
+  return typeof userId === "string" &&
+    typeof token === "string" &&
+    typeof name === "string" &&
+    typeof email === "string"
+    ? { userId, token, name, email }
+    : null;
 }
 
 const heldCodec = jsonCodec<readonly HeldSession[]>((value) =>
-  Array.isArray(value) ? value.filter(isHeldSession) : undefined,
+  Array.isArray(value)
+    ? value.map(heldSession).filter((held): held is HeldSession => held !== null)
+    : undefined,
 );
 
 // Read from storage on every call, never cached: another window may have

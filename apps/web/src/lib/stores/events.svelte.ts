@@ -200,7 +200,7 @@ function dispatch(msg: ServerEventMessage): void {
       auth.onAuthReauthRequired(msg.data);
       break;
     case "auth:reauth-cleared":
-      auth.onAuthReauthCleared();
+      auth.onAuthReauthCleared(msg.data);
       break;
     case "thread:created":
       review.onThreadCreated(msg.data);

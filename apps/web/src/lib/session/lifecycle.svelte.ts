@@ -172,12 +172,13 @@ async function runSwitch(userId: string, host: string | undefined): Promise<void
   if (isOnAccountPage()) {
     void goto("/", { replaceState: true });
   }
-  // The switch blocks only on the identity round-trip (and the host write
-  // the settings read depends on); the lists load in the background.
+  // The identity reports the active host, which the host write sets: the
+  // write settles first, or the identity could still name the old host. The
+  // lists load in the background.
   const [hostWrite] = await Promise.allSettled([
     host ? updateSettings({ githubHost: host }, { strict: true }) : undefined,
-    loadUser(),
   ]);
+  await loadUser();
   const user = getUser();
   if (!user) {
     throw new Error(getError() ?? "This account's session has ended. Sign in again.");

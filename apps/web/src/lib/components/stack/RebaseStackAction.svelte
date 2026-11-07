@@ -3,7 +3,7 @@ import { isOpenLayer, loginsMatch, type PrStackDetail } from "@revv/shared";
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import type { Snippet } from "svelte";
 import ConfirmDialog from "$lib/components/ui/confirm-dialog/ConfirmDialog.svelte";
-import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
+import { viewerLoginOnPr } from "$lib/prs/viewer";
 import { getStackRebase, rebaseStack } from "$lib/stores/stack-rebase.svelte";
 import { plural } from "$lib/utils/plural";
 
@@ -30,7 +30,7 @@ const title = $derived(
   `Replay every open layer onto the one below it, the bottom onto ${stack.baseRefName}, and force-push them together. Nothing is pushed if any layer conflicts or moved meanwhile.`,
 );
 
-const viewer = $derived(getCurrentUserLogin());
+const viewer = $derived(viewerLoginOnPr(prId));
 const pushed = $derived(stack.layers.filter(isOpenLayer).reverse());
 const othersOwn = $derived(
   pushed.some((l) => l.authorLogin !== null && !loginsMatch(l.authorLogin, viewer)),

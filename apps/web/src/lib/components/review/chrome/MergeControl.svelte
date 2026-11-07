@@ -3,7 +3,7 @@
 // the PR sits in a stack, and the confirmation a merge needs (another
 // author's PR, or a merge that bypasses branch protection).
 import type { MergeMethod } from "@revv/shared";
-import { isOpenLayer, loginsMatch } from "@revv/shared";
+import { isOpenLayer } from "@revv/shared";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
 import ShieldWarning from "phosphor-svelte/lib/ShieldWarning";
@@ -11,7 +11,7 @@ import Stack from "phosphor-svelte/lib/Stack";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { Popover, PopoverContent, PopoverTrigger } from "$lib/components/ui/popover";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
-import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
+import { viewerIsAuthor } from "$lib/prs/viewer";
 import { getConversation } from "$lib/stores/conversation.svelte";
 import { useMergeEligibility, viewerMayMerge } from "$lib/stores/merge-eligibility.svelte";
 import { getPrById, mergePr } from "$lib/stores/prs.svelte";
@@ -29,7 +29,7 @@ interface Props {
 let { prId, disabled = false }: Props = $props();
 
 const pr = $derived(getPrById(prId));
-const isPrOwner = $derived(!!pr && loginsMatch(pr.authorLogin, getCurrentUserLogin()));
+const isPrOwner = $derived(viewerIsAuthor(prId));
 
 const eligibility = useMergeEligibility(
   () => prId,

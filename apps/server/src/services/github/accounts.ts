@@ -8,6 +8,7 @@ import {
   type GitHubError,
   type GitHubRateLimitError,
   NotFoundError,
+  ValidationError,
 } from "../../domain/errors";
 import { hostFromProviderId, isAccountOnHost, providerIdForHost } from "../../domain/github-host";
 import { dbTry } from "../../effects/db-try";
@@ -18,6 +19,7 @@ import { Realtime } from "../Realtime";
 import { SecretStore, type TokenPair } from "../SecretStore";
 import { AvatarCache, avatarIdentity } from "./avatars";
 import {
+  type ClientIdError,
   clientIdForHost,
   clientIdIsGitHubApp,
   deviceFlowScopeFor,
@@ -83,6 +85,12 @@ export interface LocalUser {
 
 export interface ConnectedHost extends AccountFace {
   readonly connected: boolean;
+  /**
+   * The account must sign in again. A flagged account's token is probed
+   * first (a 401 can be transient), so this read reconciles the
+   * `auth:reauth-*` pushes a client missed.
+   */
+  readonly reauthRequired: boolean;
 }
 
 export interface UserProfile {
@@ -105,6 +113,8 @@ export const sessionRetention: RetentionPolicy = {
   sweep: (db, now) =>
     db.delete(session).where(lt(session.expiresAt, now)).returning({ id: session.id }).all().length,
 };
+
+type RefreshError = GitHubAuthError | GitHubError | ClientIdError | DbError;
 
 /** What GitHub says about a token: it works, it is rejected (401), or the probe couldn't tell. */
 type TokenVerdict = "works" | "rejected" | "unknown";
@@ -189,7 +199,7 @@ export class GitHubAccounts extends Context.Service<
       readonly linkToUserId: string | null;
     }) => Effect.Effect<
       { readonly userId: string; readonly sessionToken: string | null },
-      GitHubError | DbError | GitHubAuthError
+      GitHubError | DbError | ValidationError
     >;
     /** The user behind a live session token, or null. Using a session extends it (see `SESSION_TTL_MS`). */
     readonly sessionUser: (sessionToken: string) => Effect.Effect<string | null, DbError>;
@@ -197,6 +207,7 @@ export class GitHubAccounts extends Context.Service<
     readonly switchTo: (targetUserId: string) => Effect.Effect<string | null, DbError>;
     /** Local users with a live session, and their accounts per host. */
     readonly localUsers: Effect.Effect<LocalUser[], DbError>;
+    /** The user's account on each host, and the hosts Revv can sign in to unconnected. */
     readonly connectedHosts: (userId: string) => Effect.Effect<ConnectedHost[], DbError>;
     /** The ids of the user's accounts, or of their account on `host`. */
     readonly accountsOf: (userId: string, host?: string) => Effect.Effect<string[], DbError>;
@@ -341,9 +352,14 @@ export const GitHubAccountsLive = Layer.effect(
 
     // One grant per account at a time: concurrent grants would each invalidate
     // the previous one's rotated refresh token.
-    const refreshOnce = keyedSingleFlight<string, string, GitHubAuthError | DbError>();
+    const refreshOnce = keyedSingleFlight<string, string, RefreshError>();
 
-    const doRefresh = (accountId: string): Effect.Effect<string, GitHubAuthError | DbError> =>
+    /**
+     * A refresh GitHub refused fails with `GitHubAuthError`; one that couldn't
+     * ask (no client id, GitHub unreachable) keeps its own error, so it never
+     * reads as a rejected token.
+     */
+    const doRefresh = (accountId: string): Effect.Effect<string, RefreshError> =>
       Effect.gen(function* () {
         const row = yield* readRow(accountId);
         if (!row) return yield* Effect.fail(authFailure(`account ${accountId} not found`));
@@ -354,12 +370,8 @@ export const GitHubAccountsLive = Layer.effect(
         }
 
         const host = hostFromProviderId(row.providerId);
-        const clientId = yield* issuedClientId(row).pipe(
-          Effect.mapError((e) => authFailure(e.message)),
-        );
-        const { status, data } = yield* refreshGrant(host, clientId, refreshToken).pipe(
-          Effect.mapError((e) => authFailure(String(e))),
-        );
+        const clientId = yield* issuedClientId(row);
+        const { status, data } = yield* refreshGrant(host, clientId, refreshToken);
         if (!data.access_token) {
           return yield* Effect.fail(authFailure(data.error ?? `refresh failed (HTTP ${status})`));
         }
@@ -741,7 +753,12 @@ export const GitHubAccountsLive = Layer.effect(
             (yield* users.primaryEmail(probe).pipe(Effect.orElseSucceed(() => null))) ??
             viewer.email;
           if (!email) {
-            return yield* Effect.fail(authFailure("No email address found on GitHub account"));
+            return yield* Effect.fail(
+              new ValidationError({
+                message:
+                  "Revv can't read an email address on this GitHub account; add a public or primary email on GitHub, then sign in again",
+              }),
+            );
           }
           userId = yield* upsertUserByEmail({ email, name: viewer.name ?? viewer.login });
         }
@@ -853,18 +870,33 @@ export const GitHubAccountsLive = Layer.effect(
       Effect.gen(function* () {
         const rows = yield* dbTry("list connected hosts", () =>
           db
-            .select({ providerId: account.providerId, githubLogin: account.githubLogin })
+            .select({
+              id: account.id,
+              providerId: account.providerId,
+              githubLogin: account.githubLogin,
+            })
             .from(account)
             .where(eq(account.userId, userId))
             .all(),
         );
-        const byHost = new Map((yield* accountFaces(rows)).map((face) => [face.host, face]));
-        return [...new Set<string>([...BUNDLED_HOSTS, ...byHost.keys()])].map((host) => {
-          const face = byHost.get(host);
-          return face
-            ? { ...face, connected: true }
-            : { host, connected: false, githubLogin: null, avatarContent: null };
-        });
+        const faces = yield* accountFaces(rows);
+        const flagged = yield* Effect.forEach(rows, (row) => probeFlagged(row.id));
+        const byHost = new Map(
+          faces.map((face, i) => [
+            face.host,
+            { ...face, connected: true, reauthRequired: flagged[i] === true },
+          ]),
+        );
+        return [...new Set<string>([...BUNDLED_HOSTS, ...byHost.keys()])].map(
+          (host) =>
+            byHost.get(host) ?? {
+              host,
+              connected: false,
+              reauthRequired: false,
+              githubLogin: null,
+              avatarContent: null,
+            },
+        );
       });
 
     const forgetAccounts = (ids: readonly string[]): Effect.Effect<void> =>

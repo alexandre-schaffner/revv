@@ -9,7 +9,7 @@ import {
   type ThreadMessage,
   unpublishedReplies,
 } from "@revv/shared";
-import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
+import { viewerLoginOnPr } from "$lib/prs/viewer";
 import { getThreadMessages, getThreads } from "$lib/stores/review.svelte";
 
 /** Not on GitHub yet: a local draft. */
@@ -17,16 +17,14 @@ export function isPendingThread(thread: Pick<CommentThread, "externalCommentId">
   return thread.externalCommentId == null;
 }
 
-/** A draft the signed-in user may throw away (the server refuses the rest). */
+/** A draft the PR's viewer (`viewerLoginOnPr`) may throw away (the server refuses the rest). */
 export function canDiscardThread(
   thread: CommentThread,
   messages: readonly ThreadMessage[],
-  currentUserLogin: string | null,
+  viewerLogin: string | null,
 ): boolean {
   const first = messages[0];
-  return (
-    isPendingThread(thread) && first !== undefined && canUserModifyComment(first, currentUserLogin)
-  );
+  return isPendingThread(thread) && first !== undefined && canUserModifyComment(first, viewerLogin);
 }
 
 /** `:12` or `:12-18`. */
@@ -37,7 +35,7 @@ export function lineRangeLabel(thread: Pick<CommentThread, "startLine" | "endLin
 
 /** Threads not yet on GitHub that a submit posts as new review comments. */
 export function draftThreadIds(prId: string): string[] {
-  const viewer = getCurrentUserLogin();
+  const viewer = viewerLoginOnPr(prId);
   return getThreads(prId)
     .filter((t) => draftCommentBody(t, getThreadMessages(prId, t.id), viewer) !== null)
     .map((t) => t.id);
@@ -45,7 +43,7 @@ export function draftThreadIds(prId: string): string[] {
 
 /** Threads a submit posts something on: a new comment, or a reply to one GitHub has. */
 export function postableThreadCount(prId: string): number {
-  const viewer = getCurrentUserLogin();
+  const viewer = viewerLoginOnPr(prId);
   return getThreads(prId).filter((t) => {
     const messages = getThreadMessages(prId, t.id);
     return (
