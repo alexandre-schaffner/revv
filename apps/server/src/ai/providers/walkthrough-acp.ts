@@ -15,6 +15,7 @@ import type {
   WalkthroughTokenUsage,
 } from "@revv/shared";
 import { ZERO_TOKEN_USAGE } from "@revv/shared";
+import { SPAN_ATTR } from "@revv/shared/telemetry";
 import { debug, logError } from "../../logger";
 import { graftedSpan } from "../../observability/span-graft";
 import type { PrFileMeta } from "../../services/github/pulls";
@@ -154,7 +155,7 @@ export async function runWalkthroughTurn(
             ev.callId,
             graftedSpan(params.walkthroughId, `Agent.${ev.toolName}`, {
               attributes: {
-                walkthrough_id: params.walkthroughId,
+                [SPAN_ATTR.walkthroughId]: params.walkthroughId,
                 agent_tool: ev.toolName,
                 call_id: ev.callId,
               },
@@ -217,7 +218,7 @@ export async function runWalkthroughTurn(
       deadlines: JOB_TURN,
       activity,
       signal: params.abortController.signal,
-      trace: { key: params.walkthroughId, attribute: "walkthrough_id" },
+      trace: { key: params.walkthroughId, attribute: SPAN_ATTR.walkthroughId },
       onSessionOpened: () => {
         // The model may take minutes to its first tool call; the session is alive.
         lastPhaseMessage = "Waiting for model response...";

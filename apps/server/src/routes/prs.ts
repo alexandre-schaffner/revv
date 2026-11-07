@@ -1,4 +1,4 @@
-import { guessImageContentType } from "@revv/shared";
+import { guessImageContentType, MERGE_METHODS } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
@@ -23,6 +23,7 @@ import { RepositoryService } from "../services/Repository";
 import { ReviewService } from "../services/Review";
 import { runRoute, withAccount } from "./middleware";
 import { ownedBy } from "./ownership";
+import { literalUnion } from "./schemas";
 
 /**
  * Resolve the `?at=` query param to the SHA the review should be scoped to,
@@ -398,7 +399,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
       ),
     {
       body: t.Object({
-        mergeMethod: t.Union([t.Literal("merge"), t.Literal("squash"), t.Literal("rebase")]),
+        mergeMethod: literalUnion(MERGE_METHODS),
       }),
     },
   )

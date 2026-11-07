@@ -15,7 +15,7 @@ import type { StackBriefStatus, StackMergeRun } from "./stacks";
 import type { WalkthroughDurableEvent, WalkthroughLiveEvent } from "./walkthrough";
 
 /**
- * A walkthrough's content or lifecycle event (see `WalkthroughDurableEvent`).
+ * Delta: a walkthrough's content or lifecycle event (see `WalkthroughDurableEvent`).
  *
  *   prId           — the PR this walkthrough belongs to; the client keys its
  *                    entries on it.
@@ -35,7 +35,7 @@ export interface WalkthroughEventEnvelope {
   };
 }
 
-/** A live-only walkthrough event (see `WalkthroughLiveEvent`): no seq, never replayed. */
+/** Delta, live-only (see `WalkthroughLiveEvent`): no seq, never replayed. */
 export interface WalkthroughLiveEnvelope {
   type: "walkthrough:live";
   data: {
@@ -88,11 +88,13 @@ export type HunkScanEventMessage =
   | HunkScanHunkEnvelope
   | HunkScanCompleteEnvelope;
 
+/** Full state: every open PR the receiving account syncs. */
 export interface PrsUpdatedEnvelope {
   type: "prs:updated";
   data: PullRequest[];
 }
 
+/** Delta: one PR closed or merged; it leaves the open list for the archive. */
 export interface PrArchivedEnvelope {
   type: "pr:archived";
   data: {
@@ -195,32 +197,41 @@ export interface PrsSyncFailedEnvelope {
   data: { message: string };
 }
 
+/** Full state: every repository the receiving account has added. */
 export interface ReposUpdatedEnvelope {
   type: "repos:updated";
   data: Repository[];
 }
 
+/** Full state of one repository's clone status. */
 export interface ReposCloneStatusEnvelope {
   type: "repos:clone-status";
   data: { repoId: string; status: CloneStatus; error?: string };
 }
 
+/**
+ * Full state of the signed-in user's GitHub identity, after GitHub reported a
+ * new login or avatar. `avatarContent` is the cached data URL, as on
+ * `UserIdentity`: GitHub Enterprise avatar URLs are signed and expire.
+ */
 export interface UserUpdatedEnvelope {
   type: "user:updated";
   data: {
     id: string;
     name: string;
     email: string;
-    image: string | null;
+    avatarContent: string | null;
     githubLogin: string | null;
   };
 }
 
+/** Full state: the account on `host` needs a new sign-in. */
 export interface AuthReauthRequiredEnvelope {
   type: "auth:reauth-required";
   data: { host: string; githubLogin: string | null };
 }
 
+/** Full state: the account on `host` no longer needs one. */
 export interface AuthReauthClearedEnvelope {
   type: "auth:reauth-cleared";
   data: { host: string };
@@ -232,6 +243,7 @@ export interface ThreadCreatedEnvelope {
   data: { prId: string; thread: CommentThread; message: ThreadMessage };
 }
 
+/** Full state of one thread's status. */
 export interface ThreadUpdatedEnvelope {
   type: "thread:updated";
   /** Full state of the thread's status: `resolvedAt` is null unless the status resolves it. */
@@ -244,16 +256,19 @@ export interface ThreadMessageEnvelope {
   data: { threadId: string; message: ThreadMessage };
 }
 
+/** Signal: `prId`'s threads were pulled from GitHub; re-read the session. */
 export interface ThreadsSyncedEnvelope {
   type: "threads:synced";
   data: { prId: string; timestamp: string };
 }
 
+/** Delta: what changed in the last sync, for notifications; not state. */
 export interface PrsSyncSummaryEnvelope {
   type: "prs:sync-summary";
   data: SyncChange[];
 }
 
+/** Delta: a thread is gone. */
 export interface ThreadDeletedEnvelope {
   type: "thread:deleted";
   data: { threadId: string };
@@ -265,16 +280,19 @@ export interface ThreadMessageEditedEnvelope {
   data: { threadId: string; message: ThreadMessage };
 }
 
+/** Delta: one message of a thread is gone. */
 export interface ThreadMessageDeletedEnvelope {
   type: "thread:message:deleted";
   data: { threadId: string; messageId: string };
 }
 
+/** Signal: pulling `prId`'s threads failed; ends that thread sync. */
 export interface ThreadsSyncErrorEnvelope {
   type: "threads:sync-error";
   data: { prId: string; message: string };
 }
 
+/** Full state of one recap's lifecycle (status and terminal fields). */
 export interface RecapStatusChangedEnvelope {
   type: "recap:status-changed";
   data: {
@@ -287,6 +305,7 @@ export interface RecapStatusChangedEnvelope {
   };
 }
 
+/** Delta: a new recap row. */
 export interface RecapAddedEnvelope {
   type: "recap:added";
   data: { recap: ProjectRecap };

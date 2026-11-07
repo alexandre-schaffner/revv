@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { COLLECTOR_PORT } from "../../packages/shared/src/constants";
 import { rankCandidates, summaries } from "./model";
 import { hotFrames } from "./profiles";
 
@@ -10,7 +11,7 @@ const { values } = parseArgs({
   options: {
     out: { type: "string" },
     days: { type: "string", default: "7" },
-    collector: { type: "string", default: "http://127.0.0.1:45680" },
+    collector: { type: "string", default: `http://127.0.0.1:${COLLECTOR_PORT}` },
     grafana: { type: "string", default: "http://127.0.0.1:3000" },
   },
 });

@@ -2,6 +2,7 @@
 // events stream over the global SSE bus (`/api/events`), not from here. The
 // agent's own surface is `/mcp/walkthrough` (routes/mcp/walkthrough.ts).
 
+import { REVIEW_MODES, WALKTHROUGH_GENERATION_MODES } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
@@ -13,11 +14,12 @@ import { WalkthroughService } from "../../services/Walkthrough";
 import { WalkthroughJobs } from "../../services/WalkthroughJobs";
 import { runRoute, withAccount } from "../middleware";
 import { ownedBy } from "../ownership";
+import { literalUnion } from "../schemas";
 import { currentWalkthrough } from "./current";
 import { ensureHunkScan, walkthroughSizing } from "./previews";
 
-const perspective = t.Union([t.Literal("reviewer"), t.Literal("author")]);
-const generationMode = t.Union([t.Literal("full"), t.Literal("incremental")]);
+const perspective = literalUnion(REVIEW_MODES);
+const generationMode = literalUnion(WALKTHROUGH_GENERATION_MODES);
 const perspectiveBody = t.Optional(t.Object({ mode: t.Optional(perspective) }));
 
 /** Routes on a PR's walkthrough: `:id` names the pull request. */

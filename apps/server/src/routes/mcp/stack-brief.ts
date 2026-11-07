@@ -1,3 +1,4 @@
+import { SPAN_ATTR } from "@revv/shared/telemetry";
 import { Effect } from "effect";
 import type { StackBriefToolContext } from "../../ai/providers/stack-brief-tools";
 import { STACK_BRIEF_TOOL_BUNDLE } from "../../ai/providers/stack-brief-tools";
@@ -12,7 +13,7 @@ export const mcpStackBriefRoute = bindTokenMcpRoute({
   rejected: "Session token not recognized, expired, or job no longer running",
   toContext: (ctx: StackBriefToolContext) => ({ ctx, meta: { briefId: ctx.briefId } }),
   logInbound: true,
-  trace: { attribute: "briefId", key: (meta) => meta.briefId },
+  trace: { attribute: SPAN_ATTR.briefId, key: (meta) => meta.briefId },
   beforeToolCall: ({ spec, ctx }) => ctx.onToolCall(spec.name),
   servedMessage: (requests, _ctx, meta) =>
     `served ${requests.length} request(s), briefId=${meta.briefId}`,

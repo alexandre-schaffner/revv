@@ -1,4 +1,6 @@
+import { MESSAGE_TYPES } from "@revv/shared";
 import { t } from "elysia";
+import { literalUnion } from "./schemas";
 
 /**
  * A message the signed-in user posts on a review thread. Its author is not the
@@ -7,11 +9,6 @@ import { t } from "elysia";
  */
 export const threadMessageBody = t.Object({
   body: t.String(),
-  messageType: t.Union([
-    t.Literal("comment"),
-    t.Literal("reply"),
-    t.Literal("suggestion"),
-    t.Literal("resolution"),
-  ]),
+  messageType: literalUnion(MESSAGE_TYPES),
   codeSuggestion: t.Optional(t.String()),
 });

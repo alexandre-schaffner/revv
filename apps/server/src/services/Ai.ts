@@ -1,4 +1,5 @@
 import type { ChatAttachment, InteractionMode } from "@revv/shared";
+import { SPAN_ATTR } from "@revv/shared/telemetry";
 import { Context, Effect, Layer } from "effect";
 import { type AgentLaunch, resolveAgentLaunch } from "../ai/acp/agent-launch";
 import { isAgentLaunchable } from "../ai/acp/launch";
@@ -92,9 +93,9 @@ export const AiServiceLive = Layer.effect(
       walkthroughTurn: (params) =>
         Effect.withSpan("Ai.walkthroughTurn", {
           attributes: {
-            walkthroughId: params.walkthroughId,
-            provider: params.launch.agent,
-            model: params.launch.model,
+            [SPAN_ATTR.walkthroughId]: params.walkthroughId,
+            [SPAN_ATTR.provider]: params.launch.agent,
+            [SPAN_ATTR.model]: params.launch.model,
           },
         })(
           Effect.gen(function* () {
@@ -108,8 +109,8 @@ export const AiServiceLive = Layer.effect(
         Effect.withSpan("Ai.chat")(
           Effect.gen(function* () {
             const { launch } = params;
-            yield* Effect.annotateCurrentSpan("prId", params.prId);
-            yield* Effect.annotateCurrentSpan("provider", "acp");
+            yield* Effect.annotateCurrentSpan(SPAN_ATTR.prId, params.prId);
+            yield* Effect.annotateCurrentSpan(SPAN_ATTR.provider, "acp");
             yield* Effect.annotateCurrentSpan("agent", launch.agent);
             yield* requireLaunchable(launch);
 

@@ -20,7 +20,6 @@ const POLICIES: readonly RetentionPolicy[] = [
 
 type DbMaintenanceService = {
   readonly start: () => Effect.Effect<void>;
-  readonly stop: () => Effect.Effect<void>;
 };
 
 export class DbMaintenance extends Context.Service<DbMaintenance, DbMaintenanceService>()(
@@ -57,7 +56,6 @@ export const DbMaintenanceLive = Layer.effect(
         sweep.start(
           runMaintenance.pipe(Effect.repeat(Schedule.spaced(Duration.hours(SWEEP_INTERVAL_HOURS)))),
         ),
-      stop: () => sweep.stop,
     };
   }),
 );

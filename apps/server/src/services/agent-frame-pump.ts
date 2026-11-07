@@ -32,13 +32,7 @@ export const pumpAgentFrames = (
       if (value.kind === "text") {
         yield* offer({ kind: "agent-text", data: value.data });
       } else if (value.kind === "activity") {
-        yield* offer({
-          kind: "agent-activity",
-          activityKind: value.activityKind,
-          toolName: value.toolName ?? null,
-          summary: value.summary,
-          ...(value.payload !== undefined ? { payload: value.payload } : {}),
-        });
+        yield* offer({ ...value, kind: "agent-activity" });
       }
       chunk = yield* readNext;
     }

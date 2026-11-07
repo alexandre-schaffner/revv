@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { API_PORT, type AppChannel, DEFAULT_APP_CHANNEL } from "@revv/shared";
+import { DESKTOP_PID_ENV } from "@revv/shared/desktop-contract";
 import { Config, Effect } from "effect";
 
 // The only module that reads Revv's environment. Everything else reads
@@ -8,7 +9,7 @@ import { Config, Effect } from "effect";
 // API keys) are read where a child process's environment is assembled, since
 // they describe what that tool will see, not how Revv is configured.
 const EnvConfig = Config.all({
-  desktopPid: Config.Int("REVV_DESKTOP_PID").pipe(Config.withDefault(0)),
+  desktopPid: Config.Int(DESKTOP_PID_ENV).pipe(Config.withDefault(0)),
   port: Config.Int("PORT").pipe(Config.withDefault(API_PORT)),
   // Bind interface. Loopback-only by default so the API is unreachable off-box.
   // `REVV_HOST` is the escape hatch for self-hosting; a non-loopback value also
@@ -45,7 +46,8 @@ const EnvConfig = Config.all({
     Config.withDefault("Iv23lixUYaPwtByygekJ"),
   ),
   githubHost: Config.String("GITHUB_HOST").pipe(Config.withDefault("github.com")),
-  // `REV_DEBUG` is the older spelling, still set by existing `.env` files.
+  // `REV_DEBUG` is the older spelling, still set by existing `.env` files
+  // (legacy-upgrade: revDebugEnv).
   debug: Config.Boolean("REVV_DEBUG").pipe(
     Config.orElse(() => Config.Boolean("REV_DEBUG")),
     Config.withDefault(false),

@@ -9,9 +9,10 @@ default sort.
 | Domain | Open | Severity mix |
 |---|---|---|
 | Server (Effect) | 1 | medium |
+| Server (layout) | 1 | low |
 | Web stores | 0 | — |
 | UI / motion | 1 | low |
-| **Total** | **2** | |
+| **Total** | **3** | |
 
 ---
 
@@ -38,6 +39,28 @@ every caller; scheduled as one change.
 **Severity:** Medium (a convention callers must know; no runtime fault).
 
 ---
+
+<a id="s-001"></a>
+### S-001 — Feature files still flat beside (or instead of) a `services/<feature>/` folder
+
+**Rule violated:** [§2.7 — A multi-file feature owns a folder](./conventions.md#services-layout).
+
+**Where** (`apps/server/src/services/`):
+
+- walkthrough: `Walkthrough.ts`, `WalkthroughJobs.ts`, `WalkthroughSnapshotImporter.ts`,
+  `walkthrough-{cache-format,leads,prompt-files,request,snapshot}.ts`, `RemoteWalkthroughCache.ts`
+- chat: `ChatSession.ts`, `ChatMcpTokens.ts`
+- external integrations: `ExternalIntegrations.ts`
+- jobs: `job-mutex.ts`, `job-subscribers.ts`, `session-token-store.ts`
+- no folder yet: hunk scan (`HunkScan.ts`, `hunk-scan-{run,store}.ts`), poll (`PollScheduler.ts`,
+  `poll-{gate,maintenance,notifications,open-prs,state}.ts`), recap (`ProjectRecap.ts`,
+  `ProjectRecapJobs.ts`, `RecapScheduler.ts`, `recap-{request,source-bundle}.ts`)
+
+**Fix shape.** Moves plus import rewrites, one feature per PR, with the feature roots in
+`scripts/check-import-boundaries.ts` following. Mechanical, but it touches every importer, so
+it lands when nothing else is in flight in that feature.
+
+**Severity:** Low.
 
 <a id="m-030"></a>
 ### M-030 — `weight="bold"` on an 18px dialog-title glyph

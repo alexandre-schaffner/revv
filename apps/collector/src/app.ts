@@ -1,11 +1,12 @@
 import { cors } from "@elysiajs/cors";
+import { WEB_DEV_PORT } from "@revv/shared";
 import { Elysia } from "elysia";
 import type { TelemetryStore } from "./store";
 import { OtlpPayloadError } from "./store/ingest";
 
 const BROWSER_ORIGINS = [
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
+  `http://localhost:${WEB_DEV_PORT}`,
+  `http://127.0.0.1:${WEB_DEV_PORT}`,
   "http://localhost:3000",
   "http://127.0.0.1:3000",
   "tauri://localhost",

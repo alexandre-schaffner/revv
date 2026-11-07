@@ -1,3 +1,4 @@
+import { SPAN_ATTR } from "@revv/shared/telemetry";
 import { Effect } from "effect";
 import { toolCallActivity } from "../../ai/providers/mcp-tool-gateway";
 import { WALKTHROUGH_TOOL_BUNDLE } from "../../ai/providers/walkthrough-tools";
@@ -14,7 +15,7 @@ export const mcpWalkthroughRoute = bindTokenMcpRoute({
   logInbound: true,
   // File each content write inside the generation's trace — the agent calls us
   // from its own subprocess, so without this every write is an orphan trace.
-  trace: { attribute: "walkthrough_id", key: (meta) => meta.walkthroughId },
+  trace: { attribute: SPAN_ATTR.walkthroughId, key: (meta) => meta.walkthroughId },
   beforeToolCall: ({ spec, input, ctx }) => {
     const activity = toolCallActivity(spec, input);
     if (activity) ctx.emit({ type: "exploration", data: activity });

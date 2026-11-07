@@ -9,6 +9,9 @@ export const DEFAULT_APP_CHANNEL: AppChannel = "prod";
 export const API_PORT = 45678;
 export const DEV_API_PORT = 45679;
 
+// The Vite dev server the dev desktop shell loads (Tauri `devUrl`).
+export const WEB_DEV_PORT = 5173;
+
 // apps/collector: one port serves OTLP ingest and the archive query API.
 export const COLLECTOR_PORT = 45680;
 export const COLLECTOR_BASE_URL = `http://localhost:${COLLECTOR_PORT}`;

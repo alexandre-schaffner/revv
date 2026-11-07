@@ -17,6 +17,10 @@ import { DbService } from "./Db";
 
 // Every field is normalized on the way in and out, so a stale or hand-edited
 // row still yields valid settings.
+//
+// `scripts/revv` reads `update_channel` of this row straight from SQLite:
+// `revv update` has to work with the server stopped. Renaming the row id or
+// that column breaks the CLI's channel-aware updates.
 const ROW_ID = "default";
 
 function parseJsonList(json: string): unknown {
@@ -182,16 +186,16 @@ export const settingsServiceLayer = (legacySettingsPath: string) =>
       return {
         getSettings: () => SubscriptionRef.get(settingsRef),
 
+        // Read, write and publish under the ref's permit: two concurrent
+        // patches would otherwise both start from the same snapshot, and the
+        // later write would drop the earlier one.
         updateSettings: (patch) =>
-          Effect.gen(function* () {
-            const current = yield* SubscriptionRef.get(settingsRef);
+          SubscriptionRef.updateAndGetEffect(settingsRef, (current) => {
             const next = withoutDerived(applySettingsUpdate(current, patch));
-            yield* Effect.tryPromise({
+            return Effect.tryPromise({
               try: () => writeRow(db, next),
               catch: (cause) => new DbError({ message: "Failed to save settings", cause }),
-            });
-            yield* SubscriptionRef.set(settingsRef, next);
-            return next;
+            }).pipe(Effect.as(next));
           }),
 
         settingsChanges: () => SubscriptionRef.changes(settingsRef).pipe(Stream.drop(1)),

@@ -397,7 +397,8 @@ export type WalkthroughEndReason = (typeof WALKTHROUGH_END_REASONS)[number];
  * expected to use the linked prior walkthrough and the new commit range as its
  * starting point.
  */
-export type WalkthroughGenerationMode = "full" | "incremental";
+export const WALKTHROUGH_GENERATION_MODES = ["full", "incremental"] as const;
+export type WalkthroughGenerationMode = (typeof WALKTHROUGH_GENERATION_MODES)[number];
 
 export interface WalkthroughReviewRound {
   id: string;
@@ -757,17 +758,19 @@ export type WalkthroughDurableEvent =
 /** Anything a walkthrough announces; `WalkthroughJobs.emitEvent` routes it by kind. */
 export type WalkthroughStreamEvent = WalkthroughDurableEvent | WalkthroughLiveEvent;
 
-const LIVE_EVENT_TYPES: ReadonlySet<WalkthroughStreamEvent["type"]> = new Set([
-  "usage",
-  "exploration",
-  "exploration-result",
-  "exploration-input",
-  "phase",
-  "thought",
-]);
+// A record, not a list, so a live type added to the union without a key here
+// fails to compile instead of being journaled as durable.
+const LIVE_EVENT_TYPES: Record<WalkthroughLiveEvent["type"], true> = {
+  usage: true,
+  exploration: true,
+  "exploration-result": true,
+  "exploration-input": true,
+  phase: true,
+  thought: true,
+};
 
 export function isWalkthroughLiveEvent(
   event: WalkthroughStreamEvent,
 ): event is WalkthroughLiveEvent {
-  return LIVE_EVENT_TYPES.has(event.type);
+  return Object.hasOwn(LIVE_EVENT_TYPES, event.type);
 }

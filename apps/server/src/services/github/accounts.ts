@@ -624,7 +624,7 @@ export const GitHubAccountsLive = Layer.effect(
             id: userRow.id,
             name: userRow.name,
             email: userRow.email,
-            image,
+            avatarContent: image,
             githubLogin: identity.login,
           },
         });

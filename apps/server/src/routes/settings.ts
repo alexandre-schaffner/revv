@@ -1,7 +1,3 @@
-import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import {
   ACP_AGENT_IDS,
   type AcpAgentId,
@@ -17,19 +13,19 @@ import {
 import { Effect } from "effect";
 import { Elysia, type TSchema, t } from "elysia";
 import { listAgentModels } from "../ai/acp/agents";
-import { hasJevApiKey } from "../ai/jev/api-key";
-import { BlobStore } from "../services/blob/BlobStore";
-import { SshSigner } from "../services/cache-signing/index";
+import { clearJevApiKey, hasJevApiKey, setJevApiKey } from "../ai/jev/api-key";
+import type { JevUnavailableReason } from "../domain/errors";
+import { JevService } from "../services/Jev";
 import { SettingsService } from "../services/Settings";
-import { runRoute, withAccount } from "./middleware";
+import { runRoute, withAuth } from "./middleware";
 import { literalUnion } from "./schemas";
-import { settingsJevRoutes } from "./settings-jev";
+import { teamCacheRoutes } from "./team-cache";
 
 /**
  * Overlay the server-derived `jev.hasApiKey` onto a settings DTO.
  *
- * The key lives in the keyring, never in `user_settings`: this router is
- * mounted without `withAuth`, so anything in the row is world-readable.
+ * The key lives in the keyring, never in `user_settings`: settings are
+ * readable without a session.
  */
 const withJevKeyState = (settings: UserSettings) =>
   Effect.map(
@@ -67,139 +63,48 @@ function fieldSchemaOf(wire: SettingWire): TSchema | null {
   }
 }
 
-function findGcloud(): string | null {
-  const onPath = Bun.which("gcloud");
-  if (onPath) return onPath;
-  const candidates = [
-    join(homedir(), "google-cloud-sdk", "bin", "gcloud"),
-    "/opt/homebrew/bin/gcloud",
-    "/usr/local/bin/gcloud",
-    "/usr/bin/gcloud",
-  ];
-  return candidates.find((c) => existsSync(c)) ?? null;
-}
-
-/**
- * The credentials file alone isn't proof: `gcloud auth revoke` leaves it in
- * place, so ask gcloud for a token. Without gcloud, the file is all there is.
- */
-function isAdcValid(gcloudPath: string | null, adcExists: boolean): boolean {
-  if (!gcloudPath) return adcExists;
-  const result = spawnSync(gcloudPath, ["auth", "application-default", "print-access-token"], {
-    timeout: 5000,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  return result.status === 0;
-}
+const TEST_FAILURE_MESSAGE: Record<JevUnavailableReason, string> = {
+  unconfigured: "No API key saved.",
+  disabled: "TypeSafe is turned off.",
+  timeout: "The request timed out.",
+  rate_limited: "The API key is over its request quota; try again shortly.",
+  transport: "Could not reach the TypeSafe API.",
+  malformed: "The API returned an unexpected response.",
+};
 
 const settingsPatchSchema = t.Unsafe<SettingsUpdate>(patchSchemaOf(SETTINGS_SPEC));
 
-/** Sign and verify a probe as the requesting account, to check commit signing works. */
-const signingTestRoute = new Elysia().use(withAccount).post("/cache/signing/test", (ctx) => {
-  const probe = "revv-signing-test";
-  return runRoute(
-    Effect.gen(function* () {
-      const signerSvc = yield* SshSigner;
-      const signed = yield* signerSvc.sign(probe, ctx.account.accountId);
-      yield* signerSvc.verify(probe, signed.signature, signed.signerHost, signed.signerLogin);
-      return {
-        ok: true as const,
-        signerLogin: signed.signerLogin,
-        signerHost: signed.signerHost,
-        signatureNamespace: signed.signatureNamespace,
-      };
-    }).pipe(
-      Effect.catch((e) =>
-        Effect.succeed({
-          ok: false as const,
-          error: (e as { message?: string }).message ?? String(e),
-        }),
-      ),
+const githubConfigSchema = t.Unsafe<Pick<UserSettings, "githubHost" | "githubClientId">>(
+  t.Object({
+    githubHost: fieldSchemaOf(SETTINGS_SPEC.githubHost.wire) ?? t.String(),
+    githubClientId: fieldSchemaOf(SETTINGS_SPEC.githubClientId.wire) ?? t.String(),
+  }),
+);
+
+const getSettings = () =>
+  runRoute(
+    Effect.flatMap(SettingsService, (s) => s.getSettings()).pipe(Effect.flatMap(withJevKeyState)),
+  );
+
+// Only persists: reactions to a change subscribe to `SettingsService.watch`.
+const putSettings = (patch: SettingsUpdate) =>
+  runRoute(
+    Effect.flatMap(SettingsService, (s) => s.updateSettings(patch)).pipe(
+      Effect.flatMap(withJevKeyState),
     ),
   );
-});
 
-export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
-  .get("/", () =>
-    runRoute(
-      Effect.flatMap(SettingsService, (s) => s.getSettings()).pipe(Effect.flatMap(withJevKeyState)),
-    ),
-  )
-  // Only persists: reactions to a change subscribe to `SettingsService.watch`.
-  .put(
-    "/",
-    (ctx) =>
-      runRoute(
-        Effect.flatMap(SettingsService, (s) => s.updateSettings(ctx.body)).pipe(
-          Effect.flatMap(withJevKeyState),
-        ),
-      ),
-    { body: settingsPatchSchema },
-  )
-  // Key management lives in its own sub-router because every route on it is
-  // individually `withAuth`-guarded, unlike this one.
-  .use(settingsJevRoutes)
-  .get("/cache/status", () =>
-    runRoute(
-      Effect.gen(function* () {
-        const blob = yield* BlobStore;
-        return yield* blob.status();
-      }),
-    ),
-  )
-  .use(signingTestRoute)
-  .get("/cache/adc-status", () =>
-    runRoute(
-      Effect.sync(() => {
-        const gcloudPath = findGcloud();
-        // An explicit service-account key or path is trusted as configured:
-        // service-account JSON keys don't work with `print-access-token`.
-        const envPath = process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
-        if (envPath && existsSync(envPath)) {
-          return {
-            available: true as const,
-            source: "env" as const,
-            gcloudFound: gcloudPath !== null,
-            gcloudPath,
-            adcPath: envPath,
-          };
-        }
-        const adcPath = join(
-          homedir(),
-          ".config",
-          "gcloud",
-          "application_default_credentials.json",
-        );
-        const adcExists = existsSync(adcPath);
-        return {
-          available: adcExists && isAdcValid(gcloudPath, adcExists),
-          source: adcExists ? ("default" as const) : null,
-          gcloudFound: gcloudPath !== null,
-          gcloudPath,
-          adcPath,
-        };
-      }),
-    ),
-  )
-  .post("/cache/adc-login", () =>
-    runRoute(
-      Effect.sync(() => {
-        const gcloudPath = findGcloud();
-        if (!gcloudPath) {
-          return {
-            started: false as const,
-            error: "gcloud CLI not found. Install the Google Cloud SDK first.",
-          };
-        }
-        const proc = Bun.spawn([gcloudPath, "auth", "application-default", "login"], {
-          detached: true,
-          stdio: ["ignore", "ignore", "ignore"],
-        });
-        proc.unref();
-        return { started: true as const, pid: proc.pid };
-      }),
-    ),
-  )
+/**
+ * What onboarding needs before anyone has signed in: the settings read, and
+ * the GitHub host and client id that sign-in itself depends on.
+ */
+const openSettingsRoutes = new Elysia({ prefix: "/api/settings" })
+  .get("/", getSettings)
+  .put("/github", (ctx) => putSettings(ctx.body), { body: githubConfigSchema });
+
+const signedInSettingsRoutes = new Elysia({ prefix: "/api/settings" })
+  .use(withAuth)
+  .put("/", (ctx) => putSettings(ctx.body), { body: settingsPatchSchema })
   .get(
     "/models",
     (ctx) =>
@@ -221,4 +126,31 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
         }),
       ),
     },
+  )
+  .put(
+    "/jev/api-key",
+    (ctx) =>
+      runRoute(setJevApiKey(ctx.body.apiKey).pipe(Effect.map((hasApiKey) => ({ hasApiKey })))),
+    { body: t.Object({ apiKey: t.String() }) },
+  )
+  .delete("/jev/api-key", () => runRoute(clearJevApiKey.pipe(Effect.as({ hasApiKey: false }))))
+  // Lets the user tell a bad key from a bad network without generating a
+  // walkthrough. Mirrors `/cache/signing/test`: failures return `{ ok: false, error }`, not a non-2xx.
+  .post("/jev/test", () =>
+    runRoute(
+      Effect.flatMap(JevService, (jev) => jev.testConnection()).pipe(
+        Effect.map((r) => ({ ok: true as const, model: r.model, latencyMs: r.latencyMs })),
+        Effect.catchTag("JevUnavailable", (e) =>
+          Effect.succeed({
+            ok: false as const,
+            error: e.message || TEST_FAILURE_MESSAGE[e.reason],
+          }),
+        ),
+      ),
+    ),
   );
+
+export const settingsRoutes = new Elysia()
+  .use(openSettingsRoutes)
+  .use(signedInSettingsRoutes)
+  .use(teamCacheRoutes);

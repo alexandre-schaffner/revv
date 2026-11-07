@@ -1,8 +1,10 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: Substitute Grafana runtime variables for the integration check.
 // Checks the running, provisioned dashboards through Grafana's query engine.
 // Requires the local collector and `bun run observability:up`.
+import { COLLECTOR_PORT } from "../packages/shared/src/constants.ts";
+
 const grafana = "http://127.0.0.1:3000";
-const collector = "http://127.0.0.1:45680";
+const collector = `http://127.0.0.1:${COLLECTOR_PORT}`;
 const to = Date.now();
 const from = to - 7 * 24 * 60 * 60_000;
 async function json(url, body) {

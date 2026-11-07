@@ -4,13 +4,17 @@
 // `data: [DONE]` terminator, `event: error` failures) is shared with the web
 // client through `@revv/shared`'s stream-frames.
 
-import { SSE_DONE_FRAME, type StreamErrorBody, sseErrorFrame } from "@revv/shared";
+import {
+  SSE_DONE_FRAME,
+  SSE_HEARTBEAT_EVENT,
+  SSE_HEARTBEAT_INTERVAL_MS,
+  type StreamErrorBody,
+  sseErrorFrame,
+} from "@revv/shared";
 import { Cause, type Effect, Exit } from "effect";
 import { httpErrorOf, isAppError } from "../domain/errors";
 import { debug, logError } from "../logger";
 import { AppRuntime, type AppServices } from "../runtime";
-
-const HEARTBEAT_INTERVAL_MS = 15_000;
 
 /**
  * Heartbeats keep Bun's idle timeout and WKWebView's TCP-idle drop from
@@ -20,7 +24,7 @@ const HEARTBEAT_INTERVAL_MS = 15_000;
  */
 const HEARTBEAT_FRAMES = {
   comment: ": ping\n\n",
-  event: "event: heartbeat\ndata: {}\n\n",
+  event: `event: ${SSE_HEARTBEAT_EVENT}\ndata: {}\n\n`,
 } as const;
 
 const SSE_HEADERS = {
@@ -106,7 +110,7 @@ export function openSse<E = unknown>(
   });
 
   const heartbeatFrame = HEARTBEAT_FRAMES[options.heartbeat ?? "comment"];
-  const heartbeat = setInterval(() => write(heartbeatFrame), HEARTBEAT_INTERVAL_MS);
+  const heartbeat = setInterval(() => write(heartbeatFrame), SSE_HEARTBEAT_INTERVAL_MS);
   options.signal?.addEventListener("abort", teardown, { once: true });
 
   const channel: SseChannel<E> = {

@@ -1,3 +1,4 @@
+import { SPAN_ATTR } from "@revv/shared/telemetry";
 import type { StackBriefSnapshot } from "../../db/schema/stack-briefs";
 import type { AgentLaunch } from "../acp/agent-launch";
 import type { ActivityBeacon, TurnSettle } from "../acp/run-turn";
@@ -28,7 +29,7 @@ export function runStackBriefAgentViaAcp(
     abortController: params.abortController,
     activity: params.activity,
     settle: params.completion,
-    trace: { key: params.ctx.briefId, attribute: "briefId" },
+    trace: { key: params.ctx.briefId, attribute: SPAN_ATTR.briefId },
     mcp: turnMcpServer(STACK_BRIEF_TOOL_BUNDLE, params.ctx.briefId, params.sessionToken, true),
     prompt: `${STACK_BRIEF_SYSTEM_PROMPT}\n\n---\n\n${buildStackBriefUserMessage(params.snapshot)}`,
     calledAnyTool: params.calledAnyTool,

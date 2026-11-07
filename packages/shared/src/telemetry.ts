@@ -4,11 +4,22 @@
 
 export const SPAN = {
   httpRequest: "http.request",
-  walkthroughJob: "WalkthroughJobs.job",
   walkthroughGenerate: "WalkthroughJobs.generate",
   walkthroughEmitEvent: "WalkthroughJobs.emitEvent",
-  walkthroughSetStatus: "WalkthroughJobs.setStatus",
   recapGenerate: "ProjectRecapJobs.generate",
+} as const;
+
+/** Span-name namespaces (`<prefix>.<operation>`); the collector categorises spans by them. */
+export const SPAN_NAMESPACE = {
+  github: "GitHub",
+  agentTool: "Agent",
+  mcp: "Mcp",
+  ai: "Ai",
+  chat: "Chat",
+  acp: "Acp",
+  walkthrough: "Walkthrough",
+  recapJobs: "ProjectRecapJobs",
+  repoClone: "RepoClone",
 } as const;
 
 /** OpenTelemetry semantic-convention keys, plus Revv's own KPI keys. */
@@ -18,4 +29,12 @@ export const SPAN_ATTR = {
   httpStatus: "http.response.status_code",
   toolCallCount: "tool_call_count",
   ttftMs: "ttft_ms",
+  walkthroughId: "walkthrough_id",
+  recapId: "recapId",
+  briefId: "briefId",
+  prId: "prId",
+  /** A `WalkthroughStartTrigger`. */
+  trigger: "trigger",
+  model: "model",
+  provider: "provider",
 } as const;

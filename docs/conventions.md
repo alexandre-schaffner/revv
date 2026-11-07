@@ -8,10 +8,12 @@ because the codebase already has strong implicit canon in several places — and
 practice in others — and future refactors are cheap only if everyone reaches for the same idiom
 first.
 
-**Status: convention-only.** There are no ESLint rules, biome custom checks, or type-level
-guards enforcing the patterns below. Drift is caught at PR review time. If you find a rule
-boring enough that you reach for an exception, open a PR amending this document instead — it's
-shorter than the argument in code review.
+**Status.** Most rules are caught at PR review. Some are enforced by `bun run lint`:
+`check:import-boundaries` (§2.5.1, §3.4, the git and GitHub-transport boundaries, and the
+`gsap` import of §5), `check:motion-tokens` (§5.1's generated `tokens.ts`),
+`check:desktop-contract` (every port, path and name shared with Rust, JSON, shell and Nix) and
+`check:migrations`. If you find a rule boring enough that you reach for an exception, open a PR
+amending this document instead — it's shorter than the argument in code review.
 
 Companion file: [`conventions-backlog.md`](./conventions-backlog.md) — every known existing
 violation, ranked, with a back-pointer to the rule it violates. New violations should not
@@ -36,19 +38,17 @@ ceremony with no payoff.
 <a id="effect-service-naming"></a>
 ### 2.1 Service tag + Layer naming
 
-**Rule.** A service named `XService` is declared as `class XService extends Context.Service<Self, Shape>()("ServiceName")`
-and its concrete implementation is exported as `XServiceLive: Layer<...>`. No exceptions, no
-default exports, no `Live`-less Layers.
+**Rule.** A service tag is declared as `class X extends Context.Service<Self, Shape>()("X")` and
+its concrete implementation is exported as `XLive: Layer<...>`. The tag is named `XService` when
+the bare name would clash with a domain type or table (`PullRequestService`, `SettingsService`),
+and its Layer is then `XServiceLive`. No default exports, no `Live`-less Layers.
 
 **Why.** Composing the tag instead of the Layer is one of the easier mistakes in Effect, and a
 mechanical naming rule eliminates the entire class. The `Live` suffix mirrors Effect community
 convention.
 
-**Canonical example.** `apps/server/src/services/Cache.ts:51` declares
-`class CacheService extends Context.Service<CacheService, Shape>()("CacheService")` and exports its implementation as
-`CacheServiceLive = Layer.sync(CacheService, () => {...})` at `apps/server/src/services/Cache.ts:72`.
-`Broadcaster` / `BroadcasterLive` at `apps/server/src/services/Broadcaster.ts:50` and `:70`
-follows the same shape.
+**Canonical example.** `Realtime` / `RealtimeLive` (`services/Realtime.ts`) and `CacheService` /
+`CacheServiceLive` (`services/Cache.ts`).
 
 **Anti-pattern.** `export const Cache = Layer.sync(...)` (Live suffix missing — caller can't
 tell from the import whether they're getting the tag or the Layer).
@@ -69,16 +69,14 @@ channel; cancellation does not propagate; ordering becomes non-deterministic und
 A service that uses `runPromise` inside its own methods loses the very properties Effect was
 adopted for.
 
-**Canonical example.** `apps/server/src/services/PollScheduler.ts:197` composes a long-running
-loop entirely inside `Effect.gen`, using `Effect.forEach`, `Effect.tapError`, and
+**Canonical example.** `PollScheduler.syncAllRepos` (`services/PollScheduler.ts`) composes a
+long-running loop entirely inside `Effect.gen`, using `Effect.forEach`, `Effect.tapError`, and
 `Effect.catchTag` for branching — no `runPromise` escape hatches.
 
-**Anti-pattern.** `apps/server/src/services/OpencodeSupervisor.ts:670–681` schedules an idle
-timer with `Effect.sync(() => { void Effect.runPromise(...) })` and inside the `setTimeout`
-callback recursively calls `void Effect.runPromise(stopIfIdle())`. The same file uses the
-pattern again at `:525` for a `proc.exited.then(...)` handler. These should be replaced with
-`Effect.forkChild(Effect.sleep(...).pipe(Effect.andThen(stopIfIdle)))` and a forked `proc.exited`
-observer that yields back into the supervisor's fiber.
+**Anti-pattern.** An idle timer scheduled with `Effect.sync(() => { void Effect.runPromise(...) })`,
+or a `proc.exited.then(() => void Effect.runPromise(...))` handler. Use
+`Effect.forkChild(Effect.sleep(...).pipe(Effect.andThen(stopIfIdle)))` and a forked observer
+of the promise that yields back into the owning fiber.
 
 **Allowed boundary.** Bridging Effect into a plain-JS callback contract (e.g. SDK options that
 take `(value: string) => void` rather than `(value: string) => Effect<...>`) is the one
@@ -148,17 +146,17 @@ are the import-direction guardrails for keeping those modules deep.
 <a id="feature-pr-context"></a>
 ### 2.5.1 Feature modules use PR Context
 
-**Rule.** Walkthrough, Chat, and Recap feature modules must not import `GitHubGateway`,
-`RepositoryService`, or `GitHubAccounts` directly. PR-scoped GitHub context flows through
-`PrContextService`.
+**Rule.** Walkthrough, Chat, Recap and stack-brief/review feature modules must not import
+`GitHubAccounts` or `RepositoryService`. PR-scoped GitHub context flows through
+`PrContextService`, and they call `GitHubGateway` only with the `GitHubClient` it hands them for
+the repository's owning account: they never mint a client or read repositories around it.
 
 **Why.** Feature modules should express product lifecycle and user workflow logic, not token
 lookup, repository ownership, GitHub API calls, or account fallback rules. `PrContextService`
 is the narrow seam that hides that platform detail.
 
-**Enforcement.** `bun run check:import-boundaries` is part of `bun run lint`. It rejects new
-direct imports and lists the remaining legacy exceptions explicitly in the script while later
-waves migrate them.
+**Enforcement.** `bun run check:import-boundaries` (part of `bun run lint`) rejects those
+imports from the feature roots it lists.
 
 **Canonical example.** `WalkthroughJobs` depends on `PrContextService` for PR/repo/token/diff
 context before starting a walkthrough job.
@@ -176,15 +174,12 @@ they do not own fallback or validation rules.
 **Why.** Agent choice is a settings concern. Keeping it in one service prevents drift between
 walkthroughs, chat, recaps, model listing, session lookup, and daemon lifecycle.
 
-**Backlog.** The daemon lifecycle still has provider-specific mechanics in feature code until the
-later AI-provider and job-helper waves.
-
 <a id="settings-shape"></a>
 ### 2.5.3 One settings spec; reactions subscribe
 
 **Rule.** A user setting is declared once, in `SETTINGS_SPEC` (`packages/shared/src/settings.ts`),
 next to its `UserSettings` field: default, coercion, and what a patch may send. Defaults,
-`normalizeSettings`, the `PUT /api/settings` schema and the web's optimistic merge derive from it;
+`normalizeSettings`, the settings routes' request schemas and the web's optimistic merge derive from it;
 the server adds only the column and its two mapping lines in `services/Settings.ts`. Code that
 reacts to a change subscribes to `SettingsService.watch(select)` (or `settingsChanges()`), never
 the route that wrote it. Web caches whose answers depend on settings put those settings in their
@@ -212,6 +207,19 @@ new route from forgetting the ownership check.
 hand-written `ctx.set.status = 404` for a condition a domain error already names, or a
 hand-rolled `ReadableStream` of `data:` frames.
 
+<a id="services-layout"></a>
+### 2.7 A multi-file feature owns a `services/<feature>/` folder
+
+**Rule.** A server feature with more than one file keeps all of them in `services/<feature>/`
+(`github/`, `git/`, `walkthrough/`, `chat/`, `jobs/`, `stacks/`, `workspace/`, `blob/`, …). A
+service that is one file stays flat in `services/`. A file joining a feature that has no folder
+yet creates the folder and moves its siblings in.
+
+**Why.** A change to one feature should touch one folder. Half-moved features (a folder plus
+flat `Walkthrough*.ts` / `walkthrough-*.ts` siblings) make every reader check both places.
+
+**Backlog.** [`S-001`](./conventions-backlog.md#s-001).
+
 ---
 
 <a id="event-envelopes"></a>
@@ -221,8 +229,9 @@ All server-to-client realtime traffic between the Elysia server and the SvelteKi
 flows over a single SSE stream (`GET /api/events`) and is shaped by the discriminated union
 `ServerEventMessage` in `packages/shared/src/events.ts`. This is the canonical source of truth —
 anything else is divergence. Inbound (client-to-server) commands are REST endpoints, not stream
-messages. The server-side narrow neck that fans these out is `Broadcaster`
-(`apps/server/src/services/Broadcaster.ts`); see [`architecture.md`](./architecture.md#realtime--events).
+messages. Features send through `Realtime` (`apps/server/src/services/Realtime.ts`), which
+resolves the receiving account; `Broadcaster` is its transport. See
+[`architecture.md`](./architecture.md#realtime--events).
 
 <a id="event-envelope-shape"></a>
 ### 3.1 Envelope shape is `{ type, data? }`
@@ -236,15 +245,15 @@ Messages with no payload omit `data` entirely rather than passing `data: null`.
 exhaustively switch on `msg.type` with `noUncheckedIndexedAccess`-friendly types. Adding a flat
 field means every consumer needs to know which arms carry it.
 
-**Canonical example.** `packages/shared/src/events.ts:59–320` defines 30+ message arms, all
-conforming to `{ type, data? }`. Signal-only arms (`prs:sync-started`) omit `data`;
-payload-bearing arms (`prs:sync-failed`) carry a structured `data` object.
+**Canonical example.** `ServerEventMessage` in `packages/shared/src/events.ts`: 30+ message
+arms, all conforming to `{ type, data? }`. Signal-only arms (`PrsSyncStartedEnvelope`) omit
+`data`; payload-bearing arms (`PrsSyncFailedEnvelope`) carry a structured `data` object.
 
 **Anti-pattern.** `{ type: "thing-happened", thing: { ... } }` (flat `thing` instead of nested
 in `data`). Or `{ event: "thing-happened", data: ... }` (`event` instead of `type`).
 
 **Nested payload note.** Embedding a typed sub-envelope inside `data` is fine when it carries
-real meaning. `walkthrough:event` at `packages/shared/src/events.ts:49–57` wraps a
+real meaning. `walkthrough:event` (`WalkthroughEventEnvelope`) wraps a
 `WalkthroughStreamEvent` (plus the `prId` / `walkthroughId` / `seq` routing cursor) inside `data`
 so the frontend can reuse the walkthrough reducer code path — this is consistent with the rule
 (the outer shape is still `{ type, data }`) and is documented in code.
@@ -263,8 +272,8 @@ the action is the verb (`updated`, `created`, `sync-started`, `clone-status`, `s
 in most identifiers, so message types can never accidentally collide with frontend variable
 names.
 
-**Canonical example.** Every entry in `packages/shared/src/events.ts:59–320` follows the rule
-(`prs:updated`, `repos:clone-status`, `thread:message:edited` at `:159`).
+**Canonical example.** Every arm of `ServerEventMessage` follows the rule (`prs:updated`,
+`repos:clone-status`, `thread:message:edited`).
 
 **Anti-pattern.** `prsUpdated`, `PRS_UPDATED`, `prs.updated`, or routing on a generic
 `message-type` discriminator field that holds free-form strings.
@@ -290,8 +299,8 @@ The choice is documented at the type definition.
 state and "kinda" carries deltas needs custom handler logic per consumer.
 
 **Canonical example.** Three arms of `packages/shared/src/events.ts` illustrating each:
-`prs:sync-started` (signal, `:74`); `prs:updated` (full-state, `:59`); `thread:message`
-(delta, `:134`).
+`PrsSyncStartedEnvelope` (signal), `PrsUpdatedEnvelope` (full-state), `ThreadMessageEnvelope`
+(delta). Every arm names its contract in its doc comment.
 
 **Anti-pattern.** Mixing — e.g. a `repos:partial-update` message that sometimes carries the
 full list and sometimes carries one repo. Receivers can't tell whether to replace or merge.

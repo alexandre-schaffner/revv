@@ -1,6 +1,15 @@
 import { isDeepStrictEqual } from "node:util";
-import { API_PORT, COLLECTOR_PORT, DEV_API_PORT } from "../packages/shared/src/constants";
-import { APP_DATA_DIR_NAME, REPO_SLUG } from "../packages/shared/src/desktop-contract";
+import {
+  API_PORT,
+  COLLECTOR_PORT,
+  DEV_API_PORT,
+  WEB_DEV_PORT,
+} from "../packages/shared/src/constants";
+import {
+  APP_DATA_DIR_NAME,
+  DESKTOP_PID_ENV,
+  REPO_SLUG,
+} from "../packages/shared/src/desktop-contract";
 
 // Default WebSocket port of tauri-plugin-mcp-bridge (the dev webview bridge).
 const MCP_BRIDGE_PORT = 9223;
@@ -18,6 +27,11 @@ const collectorPort: Value = {
   value: String(COLLECTOR_PORT),
   source: `COLLECTOR_PORT in ${CONSTANTS}`,
 };
+const webDevPort: Value = { value: String(WEB_DEV_PORT), source: `WEB_DEV_PORT in ${CONSTANTS}` };
+const desktopPidEnv: Value = {
+  value: DESKTOP_PID_ENV,
+  source: `DESKTOP_PID_ENV in ${DESKTOP_CONTRACT}`,
+};
 const appDataDir: Value = {
   value: APP_DATA_DIR_NAME,
   source: `APP_DATA_DIR_NAME in ${DESKTOP_CONTRACT}`,
@@ -30,9 +44,9 @@ const APP_SUPPORT_DIR = /Application Support\/(?!\$)([^/"'}\n]+)/g;
 interface Copy {
   readonly file: string;
   readonly what: string;
-  /** Global, one capture group: every match must equal `expected`. */
+  /** Global, one capture group: the distinct matches must be exactly the expected values. */
   readonly pattern: RegExp;
-  readonly expected: Value;
+  readonly expected: Value | readonly Value[];
 }
 
 const copies: readonly Copy[] = [
@@ -41,6 +55,36 @@ const copies: readonly Copy[] = [
     what: "default server PORT",
     pattern: /\.unwrap_or\("(\d+)"\)/g,
     expected: apiPort,
+  },
+  {
+    file: "apps/desktop/src/server.rs",
+    what: "desktop pid env var",
+    pattern: /\.env\("(REVV_[A-Z_]*PID)"/g,
+    expected: desktopPidEnv,
+  },
+  {
+    file: "apps/desktop/src/server_tests.rs",
+    what: "desktop pid env var",
+    pattern: /process\.env\.(REVV_[A-Z_]*PID)/g,
+    expected: desktopPidEnv,
+  },
+  {
+    file: "apps/desktop/tauri.conf.json",
+    what: "devUrl port",
+    pattern: /"devUrl": "http:\/\/localhost:(\d+)"/g,
+    expected: webDevPort,
+  },
+  {
+    file: "apps/web/vite.config.ts",
+    what: "dev server port",
+    pattern: /port: (\d+)/g,
+    expected: webDevPort,
+  },
+  {
+    file: "integrations/external-mcp-bridge/revv-mcp.ts",
+    what: "default server endpoints",
+    pattern: /"http:\/\/127\.0\.0\.1:(\d+)\/mcp\/external"/g,
+    expected: [apiPort, devApiPort],
   },
   {
     file: "apps/desktop/src/server_config.rs",
@@ -100,7 +144,7 @@ const copies: readonly Copy[] = [
     file: "install.sh",
     what: "dev-server port hint",
     pattern: /\(port (\d+)\)/g,
-    expected: apiPort,
+    expected: devApiPort,
   },
   {
     file: "install.sh",
@@ -224,12 +268,13 @@ for (const { file, what, pattern, expected } of copies) {
       `${file}: no ${what} matching ${pattern}. If that line was rewritten, update the pattern in scripts/check-desktop-contract.ts.`,
     );
   }
-  for (const value of new Set(found)) {
-    if (value !== expected.value) {
-      errors.push(
-        `${file}: ${what} is "${value}", expected "${expected.value}" (${expected.source}).`,
-      );
-    }
+  const expectedValues: readonly Value[] = [expected].flat();
+  const wanted = expectedValues.map((e) => e.value).toSorted();
+  const values = [...new Set(found)].toSorted();
+  if (found.length > 0 && !isDeepStrictEqual(values, wanted)) {
+    errors.push(
+      `${file}: ${what} is ${values.map((v) => `"${v}"`).join(", ")}, expected ${wanted.map((v) => `"${v}"`).join(", ")} (${expectedValues.map((e) => e.source).join(", ")}).`,
+    );
   }
 }
 
@@ -274,18 +319,28 @@ if (!isDeepStrictEqual(localOrigins, expectedLocalOrigins)) {
 }
 
 // The dev config keeps its own CSP: the dev build also talks to the local
-// telemetry collector, which prod doesn't reach. Its localhost origins are
-// prod's plus the collector, so a port change has to land in both files.
+// telemetry collector, which prod doesn't reach. Otherwise it is prod's
+// policy, so any CSP change has to land in both files.
+const directives = (csp: unknown): Record<string, string[]> =>
+  Object.fromEntries(
+    (typeof csp === "string" ? csp.split(";") : [])
+      .map((directive) => directive.trim().split(/\s+/))
+      .filter(([name]) => name)
+      .map(([name, ...sources]) => [name, sources.toSorted()]),
+  );
 const devCsp: unknown = devConf?.app?.security?.csp;
 if (devCsp !== undefined) {
-  const devLocalOrigins = localConnectOrigins(devCsp).toSorted();
-  const expectedDevLocalOrigins = [
-    ...expectedLocalOrigins,
-    `http://localhost:${COLLECTOR_PORT}`,
-  ].toSorted();
-  if (!isDeepStrictEqual(devLocalOrigins, expectedDevLocalOrigins)) {
+  const prodDirectives = directives(prodConf?.app?.security?.csp);
+  const expectedDev = {
+    ...prodDirectives,
+    "connect-src": [
+      ...(prodDirectives["connect-src"] ?? []),
+      `http://localhost:${COLLECTOR_PORT}`,
+    ].toSorted(),
+  };
+  if (!isDeepStrictEqual(directives(devCsp), expectedDev)) {
     errors.push(
-      `${DEV_CONF}: app.security.csp connect-src localhost origins are ${JSON.stringify(devLocalOrigins)}, expected ${JSON.stringify(expectedDevLocalOrigins)} (the prod origins plus COLLECTOR_PORT in ${CONSTANTS}).`,
+      `${DEV_CONF}: app.security.csp must be ${PROD_CONF}'s plus http://localhost:${COLLECTOR_PORT} in connect-src (COLLECTOR_PORT in ${CONSTANTS}).`,
     );
   }
 }

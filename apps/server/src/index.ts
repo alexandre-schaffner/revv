@@ -205,8 +205,15 @@ watchDesktopParent(serverEnv.desktopPid, () => void gracefulShutdown("desktop ex
 
 // The runtime builds lazily: force it now, which runs the boot sequence
 // (`boot.ts`) — resume-on-boot, the schedulers and the sweeps.
+// A layer that fails to build would fail every Effect route with the same
+// cached error while `/api/health` still answers, so the desktop host would
+// never restart the server. Exit and let it.
 await AppRuntime.runPromise(Effect.void).catch((err) => {
   logError("server", "runtime failed to start:", err);
+  if (isShuttingDown) return;
+  app.stop();
+  releasePidFile();
+  process.exit(1);
 });
 
 export type App = typeof app;

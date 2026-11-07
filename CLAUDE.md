@@ -12,27 +12,28 @@ Stack: Bun + TypeScript monorepo (Turborepo), Svelte 5, Elysia, Drizzle ORM on S
 
 ```bash
 # Setup
-bun install              # Install all workspace deps
-cp .env.example .env     # Then fill in GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET
+bun install              # Install all workspace deps (no .env needed: see Environment)
 
-# Development
-make dev                 # All services (web @ 5173, server @ 45678, Tauri desktop)
+# Development (dev channel: server @ 45679, apps/server/revv-dev.db)
+make dev                 # Grafana stack, collector, web @ 5173 and server; no desktop shell
+make dev-desktop         # The same plus the Tauri dev app
 make dev-server          # Elysia API only
 
-# Quality
-make typecheck           # tsc across all packages
-make lint                # Linters across all packages
+# Quality (see Operational Reminders)
+bun run typecheck && bun run lint && bun run knip && bun run build
+bun run test             # Every package's tests, against a sandboxed DB and git config
 
 # Build & Distribution
 make build               # Build all packages
-make dist                # Build platform installer (dmg/msi/deb)
+make dist                # Build Revv.app (what the source installer copies)
+make dmg                 # Build the DMG installer
 
 # Database
-cd apps/server && bunx drizzle-kit generate   # Generate migration from schema changes
+cd apps/server && bunx drizzle-kit generate   # Generate migration from schema changes (needs a TTY)
 
 # Cleanup
 make clean               # Remove build artifacts
-make reset-db            # Delete SQLite database (apps/server/revv.db)
+make reset-db            # Delete the dev DB (revv-dev.db) and ~/.revv/settings.json
 ```
 
 ## Architecture
@@ -40,9 +41,10 @@ make reset-db            # Delete SQLite database (apps/server/revv.db)
 ### Monorepo Layout
 
 - `apps/web` — SvelteKit frontend rendered by the Tauri desktop shell (from the Vite dev server at `localhost:5173` in dev, from `../web/build` in prod). Revv is a desktop-only app; the frontend is not a standalone browser app.
-- `apps/server` — Elysia HTTP + SSE server (port 45678)
-- `apps/desktop` — Tauri v2 shell; minimal Rust, just window + plugin setup
-- `packages/shared` — Shared types, constants (`API_PORT`, `APP_NAME`), and SSE event message schemas
+- `apps/server` — Elysia HTTP + SSE server (port 45678; the dev channel uses 45679)
+- `apps/desktop` — Tauri v2 shell: spawns and supervises the bundled server, tray, deep links, updater
+- `apps/collector` — dev-only OpenTelemetry receiver and query API (port 45680) behind the Grafana dashboards
+- `packages/shared` — Shared types, constants (`API_PORT`, `DEV_API_PORT`, `COLLECTOR_PORT`), SSE event schemas, and the desktop contract (`desktop-contract.ts`)
 
 `packages/shared` is the source of truth for cross-app types. Import from `@revv/shared`.
 
@@ -52,8 +54,9 @@ make reset-db            # Delete SQLite database (apps/server/revv.db)
 - **Services**: `GitHubGateway` (`services/github/`, every GitHub call, made with a host-bound `GitHubClient`), `GitHubAccounts` (account tokens, re-auth, identity), `PrMirror` (the one writer of GitHub's view of a PR), `RepositoryService`, `PullRequestService`, `PollScheduler`, `Broadcaster`, `Settings`
 - **Git**: only `services/git/` runs git, through one runner that never runs the user's hooks (the clone is often the user's own repo); commits Revv writes for the user's branches are signed per the user's own config, non-interactively (a signer that would prompt fails with its error), and internal ones are unsigned. One push per remote branch (`BranchPushLock`); never `git worktree prune`, never move a branch the user owns. The chat agent's per-PR worktree belongs to `PrWorkspace` (`services/workspace/`); the chat turn is `ChatTurnService` (`services/chat/`).
 - **Auth**: GitHub's device-code flow (`routes/device-auth.ts`): no client secret and no OAuth callback URL. `GitHubAccounts` owns users, accounts (each row records the OAuth client its token was issued to), tokens (OS keychain via `SecretStore`) and sessions: it mints a 30-day bearer session token that each day of use extends, and `withAuth`/`withAccount` (`routes/middleware.ts`) resolve it. The SSE stream takes the same token as `?token=`. better-auth is no longer used at runtime; its `user`/`session`/`account` tables remain.
-- **Database**: Drizzle ORM on SQLite (`revv.db`). Schema in `src/db/schema.ts`. Migrations live in `src/db/migrations` and are auto-applied on startup via `drizzle-orm/bun-sqlite/migrator`. Generate new ones with `bunx drizzle-kit generate` (run from `apps/server`).
-- **Realtime (SSE)**: Clients open a single `GET /api/events?token=…` stream. Server broadcasts `prs:updated`, `repos:updated`, etc. via `Broadcaster` (account-scoped fan-out). Inbound commands use REST endpoints.
+- **Database**: Drizzle ORM on SQLite: `~/Library/Application Support/Revv/revv.db` in prod, `apps/server/revv-dev.db` under `make dev`. Schema in `src/db/schema/` (one file per table). Migrations live in `src/db/migrations` and are applied on startup (below).
+- **Realtime (SSE)**: Clients open a single `GET /api/events?token=…` stream. Features send through `Realtime`, which resolves the owning account; `Broadcaster` is its transport. Inbound commands use REST endpoints.
+- **Layout**: a feature with more than one file keeps all of them in `services/<feature>/` (`github/`, `git/`, `walkthrough/`, `chat/`, `jobs/`, `stacks/`, …); a single-file service stays flat in `services/`. Flat files that belong to a feature folder are tracked in `docs/conventions-backlog.md`.
 
 #### Database migrations
 
@@ -62,19 +65,19 @@ The project uses **Drizzle's code-first migration workflow**.
 **How it works:**
 1. **Schema is the source of truth.** All tables, indexes, and relations are defined in TypeScript under `apps/server/src/db/schema/`.
 2. **Generate a migration** after changing the schema by running `cd apps/server && bunx drizzle-kit generate`. This compares the current schema against the database state and writes a new `.sql` file + a `meta/` snapshot into `src/db/migrations/`.
-3. **Migrations are applied automatically on startup.** `src/db/index.ts` calls `migrate()` from `drizzle-orm/bun-sqlite/migrator` using the `src/db/migrations` folder. You do **not** need to run `drizzle-kit migrate` or `drizzle-kit push` manually.
-4. **Migration state is tracked** in a `__drizzle_migrations` table inside `revv.db`. Already-applied migrations are skipped on subsequent starts.
+3. **Migrations are applied automatically on startup.** `createDb` (`src/db/index.ts`) first reconciles Drizzle's ledger with the schema (`src/db/journal.ts`), then calls `migrate()` from `drizzle-orm/bun-sqlite/migrator` on the `src/db/migrations` folder. You do **not** need to run `drizzle-kit migrate` or `drizzle-kit push` manually.
+4. **Migration state is tracked** in a `__drizzle_migrations` table inside the database. Already-applied migrations are skipped on subsequent starts.
 
 **Expected agent workflow when schema changes are needed:**
 1. Edit the Drizzle schema files in `apps/server/src/db/schema/`.
 2. Generate the migration: `cd apps/server && bunx drizzle-kit generate`.
 3. Review the generated `.sql` file in `apps/server/src/db/migrations/` for correctness.
-4. Restart the server (`make dev-server` or `make dev`). The startup routine will apply the new migration automatically.
+4. Run `bun run check:migrations`; it replays the upgrade against a populated database. Restart the dev server (`make dev-server` or `make dev`) only with the dev env, never against the prod DB.
 5. If the generated migration is wrong (e.g., destructive defaults, wrong column types), **edit the generated `.sql` file before restarting** rather than trying to fix it after it has been applied.
 
 **Do not** run `drizzle-kit push` against the local SQLite file — the app relies on the migration-file workflow for reproducible schema evolution.
 
-**Shipped migrations are append-only.** Nightly builds ship every push to `main`, so a migration on `main` has already run on users' databases. Drizzle only applies journal entries whose `when` is newer than the last one a database recorded, so a reordered, renumbered, or edited migration is silently skipped on every existing install. When rebasing onto a `main` that gained migrations, renumber *your* migration after theirs with a larger `when`; never touch theirs. Adding a `NOT NULL` column needs a `DEFAULT`. `bun run check:migrations` (part of `bun run lint`) enforces all of this, and replays an upgrade from every earlier migration against a populated database. Never boot the server against a real database to "try" a migration: without the `make dev` env it opens the prod DB.
+**Shipped migrations are append-only.** Nightly builds ship every push to `main`, so a migration on `main` has already run on users' databases. Drizzle alone only applies journal entries whose `when` is newer than the last one a database recorded. `reconcileJournal` (`src/db/journal.ts`) is the safety net that runs first on every boot: it applies unrecorded migrations below that frontier and restores schema objects a migration created that went missing. It cannot see an *edited* migration (same `when`, already recorded), which is skipped on every existing install. When rebasing onto a `main` that gained migrations, renumber *your* migration after theirs with a larger `when`; never touch theirs. Adding a `NOT NULL` column needs a `DEFAULT`. `bun run check:migrations` (part of `bun run lint`) enforces all of this, and replays an upgrade from every earlier migration against a populated database. Never boot the server against a real database to "try" a migration: without the `make dev` env it opens the prod DB.
 
 ### Web (`apps/web`)
 
@@ -84,14 +87,14 @@ The project uses **Drizzle's code-first migration workflow**.
 - **Chat**: state lives in `src/lib/chat/` (`timeline`, `proposed`, `session`, `queue`, and `turn`, which sends turns and owns the PR-level actions), its UI in `components/chat/`. Tool-call cards and peeks shared by chat, walkthrough and recaps are in `components/agent-activity/` (with the token gauge the bottom bar shows).
 - **Feature folders**: a feature's state, pure logic and API calls live together in `src/lib/<feature>/` (`chat/`, `walkthrough/`, `hunk-scan/`, `recaps/`, `agent-setup/`, `repos/`, `conversation/`, `stacks/`, `pierre/`, `markdown/`, …); a helper only one component folder uses sits in that `components/<feature>/` folder. `src/lib/utils/` keeps only helpers several features share.
 - **API client**: Eden (Elysia type-safe client) — import from `@revv/server` types.
-- **Deep-link handling**: OAuth callback comes in via `revv://auth/callback?token=…` scheme (Tauri) or polling `/api/auth/pending-token` (browser dev mode).
+- **Deep links**: `revv://` links open a PR (`stores/pr-deep-link.svelte.ts`), arriving through `tauri-plugin-deep-link` in `routes/+layout.svelte`. Sign-in is GitHub's device flow, with no redirect back into the app.
 - **Component library**: shadcn-svelte + Tailwind CSS v4.
 
 ### Desktop (`apps/desktop`)
 
-- Tauri v2. Frontend served from `../web/build`. Dev URL: `http://localhost:5173`.
-- Plugins: `tauri-plugin-deep-link` (handles `revv://` scheme), `tauri-plugin-opener`.
-- CSP restricts API calls to `localhost:45678`.
+- Tauri v2. Frontend served from `../web/build`; dev loads `http://localhost:5173` with `tauri.dev.conf.json` merged over `tauri.conf.json` (it replaces arrays such as `windows` whole).
+- `server.rs` spawns the bundled `revv-server`, polls `/api/health`, restarts it up to 3 times, and passes its own pid (`REVV_DESKTOP_PID`) so the server exits with it. `server_config.rs` reads `desktop-server.json`. `lib.rs` wires the tray (closing the window hides to it), the `artifact://` scheme walkthrough artifacts render through, and the plugins: single-instance, deep-link (`revv://`), dialog, opener, autostart, updater, process, and the MCP webview bridge in debug builds.
+- The CSP allows the API on `localhost:45678` and `:45679`, and `frame-src artifact:`; the dev CSP adds the collector. `bun run check:desktop-contract` holds every port, path and name that crosses into Rust, JSON, shell or Nix to `packages/shared`.
 
 ## TypeScript Config
 
@@ -101,7 +104,7 @@ All packages extend `tsconfig.base.json` which enables `strict`, `exactOptionalP
 
 **Always use icons, never emojis.** For any glyph in the UI — buttons, fallback avatars, placeholders, status indicators, empty states, inline hints — use a phosphor-svelte icon component or an inline SVG for brand/octicon-style marks. Do not use emoji characters (🎉, ✅, ❌, 👤, etc.) in rendered UI, toast messages, or component text. `phosphor-svelte` is the standard icon library; only inline SVG when no phosphor equivalent fits.
 
-**Motion: GSAP via `$lib/motion`.** All animations go through `$lib/motion` (`apps/web/src/lib/motion/`). Use the actions, presets, and Svelte transitions from there (`gsapPress`, `bitsAnim`, `dialogSpringIn`, `gsapFade`, `gsapFadeY`, `gsapSlide`, …) instead of CSS `transition:` rules, Svelte built-in transitions (`transition:fade`, `transition:slide`, …), or hand-rolled `@keyframes`. The motion tokens (`--duration-*`, `--ease-*`, `--stagger-*`) live in `app.css`' `@theme` block; `$lib/motion/tokens.ts` is generated from them (`bun run gen:motion-tokens`, checked by `bun run lint`). Never import `gsap` from the package directly; only `$lib/motion/gsap.ts` may (`check:import-boundaries` enforces it).
+**Motion: token CSS transitions, GSAP via `$lib/motion` for everything else.** A CSS `transition:` rule is fine when its durations and easings are the motion tokens (conventions §5.1). Every other animation goes through `$lib/motion` (`apps/web/src/lib/motion/`): use the actions, presets, and Svelte transitions from there (`gsapPress`, `bitsAnim`, `dialogSpringIn`, `gsapFade`, `gsapFadeY`, `gsapSlide`, …) instead of Svelte built-in transitions (`transition:fade`, `transition:slide`, …) or hand-rolled `@keyframes`. The motion tokens (`--duration-*`, `--ease-*`, `--stagger-*`) live in `app.css`' `@theme` block; `$lib/motion/tokens.ts` is generated from them (`bun run gen:motion-tokens`, checked by `bun run lint`). Never import `gsap` from the package directly; only `$lib/motion/gsap.ts` may (`check:import-boundaries` enforces it).
 
 **Reduced-motion contract.** `prefersReducedMotion()` from `$lib/motion` is the single arbiter. Every action, preset call site, and motion `$effect` reads through it. The defensive global `@media (prefers-reduced-motion: reduce)` block in `app.css` covers the CSS animations that intentionally stayed off GSAP (loader spinner, text shimmer, indeterminate progress, dotmatrix, per-character markdown fade) — see `motion/README.md` for the list.
 
@@ -109,7 +112,7 @@ All packages extend `tsconfig.base.json` which enables `strict`, `exactOptionalP
 
 Canonical patterns live in [`docs/conventions.md`](docs/conventions.md). Existing violations are tracked in [`docs/conventions-backlog.md`](docs/conventions-backlog.md). The rules below are the headline summary; the doc is the authority.
 
-- **Effect services.** Service tag `XService` pairs with Layer `XServiceLive`. No `Effect.runPromise` inside an Effect-returning method — schedule with `Effect.forkChild` / `Effect.sleep` / `Effect.callback`. Tagged errors live in `apps/server/src/domain/errors.ts`, never inline. Drizzle calls inside `Effect.gen` are wrapped in `Effect.try*` mapping to a tagged DB error. ([§2](docs/conventions.md#effect-services))
+- **Effect services.** A service tag `X` (or `XService`) pairs with its Layer `XLive` (`XServiceLive`). No `Effect.runPromise` inside an Effect-returning method — schedule with `Effect.forkChild` / `Effect.sleep` / `Effect.callback`. Tagged errors live in `apps/server/src/domain/errors.ts`, never inline. Drizzle calls inside `Effect.gen` are wrapped in `Effect.try*` mapping to a tagged DB error. ([§2](docs/conventions.md#effect-services))
 - **SSE event envelopes.** Shape is `{ type, data? }`; type strings are `namespace:action` colon-style; payload contract is one of signal / full-state / delta and documented at the type definition. Features send through `Realtime` (`services/Realtime.ts`); `Broadcaster` is transport only. Data-bearing envelopes are account-scoped (`Realtime.toAccount`, or `toRepo`/`toPr`, which resolve the owning account); `Realtime.toAll` is reserved for server-global sync signals. Source of truth: `packages/shared/src/events.ts`. ([§3](docs/conventions.md#event-envelopes))
 - **Web stores.** Singleton module + `getX/setX` exports; per-PR state is `Map<prId, Entry>` with shared `setEntry/deleteEntry/updateEntry` helpers; every Map/Set write is followed by reassignment for reactivity; request-state is a tagged `RequestState<T>` union, not parallel boolean+nullable triples; event handlers are named `on<EventName>` matching the message type and take the envelope's `data` whole; per-key fetches go through `createResource` (`stores/resource.ts`); account-scoped stores export `reset()`, called from `session/lifecycle.svelte.ts`; JSON calls go through Eden (`api/client.ts`, no hand-typed response shapes) and refusals read through `apiErrorMessage`. ([§4](docs/conventions.md#stores))
 - **Motion.** All durations and easings come from the `@theme` block in `app.css` (`--duration-snap/quick/smooth`, `--ease-soft/out-expo/standard`). A ceremonial tier (`--duration-ceremonial-quick/medium/slow`) is reserved for onboarding-style theatrical motion. No hand-typed `cubic-bezier(...)`, no `220ms`/`0.55s` literals. ([§5.1–5.2](docs/conventions.md#motion-tokens))
@@ -119,27 +122,11 @@ Proposing a new convention: open a PR editing `docs/conventions.md`; no RFC cere
 
 ## Environment
 
-The only required env vars are in `.env` at the repo root (read by `apps/server`):
-
-```
-GITHUB_CLIENT_ID=
-BETTER_AUTH_SECRET=   # Generate with: openssl rand -hex 32
-```
-
-Create a GitHub OAuth App with callback URL `http://localhost:45678/api/auth/callback/github`.
+Nothing is required to develop: sign-in is GitHub's device flow, the github.com client ids are bundled (`apps/server/src/config.ts`), and the secret-store key is generated on first run (`auth.key` in the app-data dir; `BETTER_AUTH_SECRET` overrides it, a name kept so existing fallback stores stay readable). `config.ts` is the only reader of Revv's env vars; `.env.example` lists the optional ones. A GitHub Enterprise host needs its own OAuth/App client id, entered during onboarding (or `GITHUB_CLIENT_ID`).
 
 ## Product Direction
 
-`docs/prds/` contains 6 sequential PRDs describing the remaining feature roadmap. The README there documents what's already built vs what's next. Read these before implementing new features to understand intended design.
-
-| PRD | Title                                 | Priority |
-| --- | ------------------------------------- | -------- |
-| 01  | Comment Persistence & Review Sessions | P0       |
-| 02  | AI Context Panel                      | P0       |
-| 03  | AI Guided Walkthrough                 | P1       |
-| 04  | GitHub Sync & Conversations           | P1       |
-| 05  | Post-Review Agent                     | P1       |
-| 06  | Polish, Performance & Ship            | P2       |
+`docs/prds/` holds the historical roadmap: 6 PRDs plus an index of emergent features. Its README records what shipped, where it diverged from the plan, and what remains. Read it before implementing new features to understand intended design; where it disagrees with this file, this file wins.
 
 ## Agent Subsystem Invariants
 
@@ -182,11 +169,12 @@ agent tomorrow). Any change that violates them is wrong by construction — push
    sentiment remain MCP-only.** Growing this list means editing this rule — it is not a
    general licence for Elysia to write content.
 
-   `walkthrough_issues.advisory_score` / `.advisory_scored_at` are the same kind of judgment
-   but need no carve-out: they are written by the `flag_issue` handler itself, in the same
-   transaction as the row they describe. A judgment a tool handler can make inline belongs
-   in the tool handler — the carve-out is only for judgments the orchestrator has to make
-   outside any tool call.
+   `walkthrough_issues.advisory_score` / `.advisory_scored_at` (and the severity relabel) are
+   the same kind of judgment but need no carve-out: `flag_issue` writes the row with them
+   null and schedules the judgment that fills them in (`ai/jev/issue-relevance-persistence.ts`,
+   see invariant 4), so they stay on the tool handler's path. A judgment a tool handler can
+   own belongs to the tool handler — the carve-out is only for judgments the orchestrator has
+   to make outside any tool call.
 3. **Each MCP tool call is one atomic idempotent write** keyed on a deterministic identity.
    Replays are no-ops.
 4. **Content generation is a strict 4-phase pipeline: A → B → C → D.** Phases complete in

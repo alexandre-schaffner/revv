@@ -4,6 +4,7 @@ import {
   attachmentTooLargeMessage,
   type ChatAttachment,
   type ChatAttachmentMetadata,
+  INTERACTION_MODES,
   MAX_CHAT_ATTACHMENT_BYTES,
   MAX_CHAT_ATTACHMENTS_COUNT,
   MAX_CHAT_ATTACHMENTS_TOTAL_BYTES,
@@ -19,6 +20,7 @@ import { chatInteractionRoutes } from "./chat-route-interactions";
 import { chatProposedChangesRoutes } from "./chat-route-proposed-changes";
 import { runRoute, withAuth } from "./middleware";
 import { ownedBy } from "./ownership";
+import { literalUnion } from "./schemas";
 import { pipeToSse, runStream } from "./sse";
 
 // Confirms an attachment labelled `image` carries base64 bytes, not
@@ -136,7 +138,7 @@ export const chatRoute = new Elysia()
             { maxItems: MAX_CHAT_ATTACHMENTS_COUNT },
           ),
         ),
-        interactionMode: t.Optional(t.Union([t.Literal("default"), t.Literal("plan")])),
+        interactionMode: t.Optional(literalUnion(INTERACTION_MODES)),
         approvedPlanId: t.Optional(t.String()),
       }),
     },

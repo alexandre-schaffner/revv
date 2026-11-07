@@ -156,17 +156,23 @@ export function parseOtlpBatch(body: unknown): { spans: SpanInsert[]; rejectedSp
           statusCode: decodeStatusCode(status?.code),
           statusMessage: str(status?.message),
           attributes: attrs,
-          // Revv's Effect spans annotate camelCase keys; OTel semconv and the KPI
-          // annotations use snake_case.
-          walkthroughId: str(pick(attrs, "walkthrough_id", "walkthrough.id", "walkthroughId")),
-          prId: str(pick(attrs, "pr_id", "pr.id", "pull_request_id", "prId")),
+          // Revv's own keys come first; the rest are other exporters' spellings
+          // (OTel gen_ai semconv, agent CLIs).
+          walkthroughId: str(pick(attrs, SPAN_ATTR.walkthroughId, "walkthrough.id")),
+          prId: str(pick(attrs, SPAN_ATTR.prId, "pr_id", "pr.id", "pull_request_id")),
           model: str(
-            pick(attrs, "model", "ai.model", "gen_ai.request.model", "gen_ai.response.model"),
+            pick(
+              attrs,
+              SPAN_ATTR.model,
+              "ai.model",
+              "gen_ai.request.model",
+              "gen_ai.response.model",
+            ),
           ),
           provider: str(
-            pick(attrs, "provider", "ai.provider", "gen_ai.provider.name", "gen_ai.system"),
+            pick(attrs, SPAN_ATTR.provider, "ai.provider", "gen_ai.provider.name", "gen_ai.system"),
           ),
-          toolCallCount: num(pick(attrs, SPAN_ATTR.toolCallCount, "toolCallCount")),
+          toolCallCount: num(pick(attrs, SPAN_ATTR.toolCallCount)),
           inputTokens: num(
             pick(
               attrs,

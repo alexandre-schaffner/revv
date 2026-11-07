@@ -14,7 +14,7 @@ export const repositories = sqliteTable(
     /** Raw owner avatar URL from the provider. On GitHub Enterprise it is signed
      *  and expires, so it is served only for github.com repos. */
     avatarUrl: text("avatar_url"),
-    /** Retired: owner avatars are cached in `remote_users` (migration 0490). */
+    /** Retired: owner avatars are cached in `remote_users` (migration 0500). */
     avatarContent: text("avatar_content"),
     addedAt: text("added_at").notNull(),
     cloneStatus: text("clone_status").notNull().default("pending").$type<CloneStatus>(),

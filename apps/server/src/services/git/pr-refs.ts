@@ -15,9 +15,9 @@ export const agentWorktreeDir = (prNumber: number) => `pr-${prNumber}`;
 export const prFetchRef = (prNumber: number) => `refs/revv-pull/${prNumber}`;
 
 /**
- * Where an older Revv fetched the PR head. It made the bare name `revv/pr-N`
- * resolve to the PR head instead of the agent branch, so every reader and
- * writer deletes it on sight.
+ * Where an older Revv fetched the PR head (legacy-upgrade: prRefNamespace).
+ * It made the bare name `revv/pr-N` resolve to the PR head instead of the
+ * agent branch, so every reader and writer deletes it on sight.
  */
 export const legacyPrRef = (prNumber: number) => `refs/revv/pr-${prNumber}`;
 

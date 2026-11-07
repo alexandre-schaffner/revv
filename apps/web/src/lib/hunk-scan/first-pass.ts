@@ -6,7 +6,7 @@ import {
   flaggedHunkSmells,
   HUNK_SMELL_FLOORS,
   HUNK_SMELLS,
-  type HunkRange,
+  type HunkHeader,
   type HunkScanRow,
   type HunkScanStatus,
   type HunkSmell,
@@ -150,7 +150,7 @@ export function hunkTone(entry: HunkScanRow): SmellTone | null {
  */
 export function rowMatchesHunk(
   entry: HunkScanRow,
-  hunk: Pick<HunkRange, "newStart" | "newLines">,
+  hunk: Pick<HunkHeader, "newStart" | "newLines">,
 ): boolean {
   return entry.newStart === hunk.newStart && entry.newLines === hunk.newLines;
 }

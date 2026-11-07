@@ -27,7 +27,7 @@ import {
   type WalkthroughStreamEvent,
   ZERO_TOKEN_USAGE,
 } from "@revv/shared";
-import { SPAN } from "@revv/shared/telemetry";
+import { SPAN, SPAN_ATTR } from "@revv/shared/telemetry";
 import { eq } from "drizzle-orm";
 import { Cause, Context, Effect, Layer, Option } from "effect";
 import { withWalkthroughMetrics } from "../ai/providers/walkthrough-metrics";
@@ -276,7 +276,7 @@ export const WalkthroughJobsLive = Layer.effect(
 
     const emitEvent = (walkthroughId: string, event: WalkthroughStreamEvent): Effect.Effect<void> =>
       Effect.withSpan(SPAN.walkthroughEmitEvent, {
-        attributes: { walkthroughId, eventType: event.type },
+        attributes: { [SPAN_ATTR.walkthroughId]: walkthroughId, eventType: event.type },
       })(
         Effect.gen(function* () {
           const targets = yield* eventTargets(walkthroughId);
@@ -511,10 +511,10 @@ export const WalkthroughJobsLive = Layer.effect(
               // The forked work's real duration: the walkthrough-gen-duration KPI.
               Effect.withSpan(SPAN.walkthroughGenerate, {
                 attributes: {
-                  walkthroughId,
-                  prId: input.prId,
-                  trigger: input.trigger,
-                  model: inputs.plan.model,
+                  [SPAN_ATTR.walkthroughId]: walkthroughId,
+                  [SPAN_ATTR.prId]: input.prId,
+                  [SPAN_ATTR.trigger]: input.trigger,
+                  [SPAN_ATTR.model]: inputs.plan.model,
                 },
               }),
               withGitHubOrigin("walkthrough:job"),

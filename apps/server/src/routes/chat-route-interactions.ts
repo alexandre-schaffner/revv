@@ -1,4 +1,4 @@
-import { getAgentCapabilities } from "@revv/shared";
+import { getAgentCapabilities, INTERACTION_MODES } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { PlanGateError } from "../domain/errors";
@@ -9,6 +9,7 @@ import { SettingsService } from "../services/Settings";
 import { PrWorkspace } from "../services/workspace/PrWorkspace";
 import { runRoute, withAuth } from "./middleware";
 import { ownedBy } from "./ownership";
+import { literalUnion } from "./schemas";
 
 const decidePlan = (prId: string, planId: string, decision: "approved" | "rejected") =>
   Effect.gen(function* () {
@@ -40,7 +41,7 @@ export const chatInteractionRoutes = new Elysia()
     {
       params: t.Object({ prId: t.String() }),
       body: t.Object({
-        mode: t.Union([t.Literal("default"), t.Literal("plan")]),
+        mode: literalUnion(INTERACTION_MODES),
       }),
     },
   )

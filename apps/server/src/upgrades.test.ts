@@ -18,11 +18,13 @@ function newer(a: string, b: string): boolean {
   return false;
 }
 
-function sourceFiles(dir: string): string[] {
+function sourceFiles(dir: string, include: RegExp): string[] {
   return readdirSync(dir).flatMap((name) => {
     const path = join(dir, name);
-    if (statSync(path).isDirectory()) return name === "node_modules" ? [] : sourceFiles(path);
-    return /\.(ts|rs)$/.test(name) ? [path] : [];
+    if (statSync(path).isDirectory()) {
+      return name === "node_modules" ? [] : sourceFiles(path, include);
+    }
+    return include.test(name) ? [path] : [];
   });
 }
 
@@ -39,8 +41,10 @@ describe("legacy upgrades ledger", () => {
   it("matches the legacy-upgrade markers in the code, both ways", () => {
     const markers = new Map<string, Set<string>>();
     for (const file of [
-      ...sourceFiles(join(repoRoot, "apps/server/src")),
-      ...sourceFiles(join(repoRoot, "apps/desktop/src")),
+      ...sourceFiles(join(repoRoot, "apps/server/src"), /\.ts$/),
+      ...sourceFiles(join(repoRoot, "apps/desktop/src"), /\.rs$/),
+      // The installer and the `revv` CLI carry installs forward too.
+      ...sourceFiles(join(repoRoot, "scripts"), /^(revv|.*\.(ts|sh))$/),
     ]) {
       for (const [, key] of readFileSync(file, "utf8").matchAll(MARKER)) {
         if (!key) continue;
@@ -52,9 +56,9 @@ describe("legacy upgrades ledger", () => {
     const entries = Object.entries(LEGACY_UPGRADES);
     expect([...markers.keys()].sort()).toEqual(entries.map(([key]) => key).sort());
     for (const [key, upgrade] of entries) {
-      expect({ key, sites: [...(markers.get(key) ?? [])] }).toEqual({
+      expect({ key, sites: [...(markers.get(key) ?? [])].sort() }).toEqual({
         key,
-        sites: expect.arrayContaining([upgrade.site]),
+        sites: [...upgrade.sites].sort(),
       });
     }
   });

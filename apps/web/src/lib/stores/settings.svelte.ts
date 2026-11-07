@@ -67,11 +67,11 @@ export function getGithubClientId(): string {
  * to public GitHub.
  */
 export async function setGithubConfig(host: string, clientId: string): Promise<void> {
-  await updateSettings({ githubHost: host, githubClientId: clientId });
+  await persist({ githubHost: host, githubClientId: clientId }, {}, sendGithubConfig);
 }
 
 export async function setGithubConfigStrict(host: string, clientId: string): Promise<void> {
-  await updateSettings({ githubHost: host, githubClientId: clientId }, { strict: true });
+  await persist({ githubHost: host, githubClientId: clientId }, { strict: true }, sendGithubConfig);
 }
 
 /**
@@ -141,13 +141,27 @@ export async function updateSettings(
   patch: SettingsUpdate,
   options: UpdateSettingsOptions = {},
 ): Promise<void> {
+  await persist(patch, options, (p) => call(api.api.settings.put(p), "Couldn't save settings"));
+}
+
+// Onboarding picks the host before sign-in, so the host and client id have
+// their own unauthenticated write; every other field needs a session.
+const sendGithubConfig = (patch: Pick<UserSettings, "githubHost" | "githubClientId">) =>
+  call(api.api.settings.github.put(patch), "Couldn't save settings");
+
+async function persist<P extends SettingsUpdate>(
+  patch: P,
+  options: UpdateSettingsOptions,
+  /** Throws on a refusal (see `call`). */
+  send: (patch: P) => Promise<unknown>,
+): Promise<void> {
   const previous = loaded;
   // Apply locally first, with the same rules the server applies, so
   // concurrent writes don't clobber each other when responses arrive out of
   // order. The response body is ignored for the same reason.
   if (loaded) loaded = applySettingsUpdate(loaded, patch);
   try {
-    await call(api.api.settings.put(patch), "Couldn't save settings");
+    await send(patch);
   } catch (e) {
     if (options.strict) {
       loaded = previous;

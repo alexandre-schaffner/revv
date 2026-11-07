@@ -5,6 +5,7 @@
 // pills for its built-in tools.
 
 import type { RecapStreamEvent } from "@revv/shared";
+import { SPAN_ATTR } from "@revv/shared/telemetry";
 import { logError } from "../../logger";
 import type { AgentLaunch } from "../acp/agent-launch";
 import type { ActivityBeacon, TurnSettle } from "../acp/run-turn";
@@ -75,7 +76,7 @@ export async function runRecapAgentViaAcp(
     abortController: params.abortController,
     activity: params.activity,
     settle: params.completion,
-    trace: { key: params.ctx.recapId, attribute: "recapId" },
+    trace: { key: params.ctx.recapId, attribute: SPAN_ATTR.recapId },
     mcp: turnMcpServer(RECAP_TOOL_BUNDLE, params.ctx.recapId, params.sessionToken, true),
     prompt: userMessage,
     calledAnyTool: params.calledAnyTool,
