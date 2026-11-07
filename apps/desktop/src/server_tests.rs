@@ -187,8 +187,15 @@ fn startup_failure_is_reported_without_leaking_children() {
 
 #[test]
 fn refuses_an_occupied_port_without_stopping_its_owner() {
-	let (_root, command, config) = fixture(SERVER);
-	let listener = TcpListener::bind(("127.0.0.1", config.port().unwrap())).unwrap();
+	let (_root, command, mut config) = fixture(SERVER);
+	// Occupy a port we hold from the moment it's picked. Re-binding the
+	// fixture's port raced the other tests: the fixture releases it, and a
+	// server started in parallel could take it first ("Address already in use").
+	let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+	config.env.insert(
+		"PORT".into(),
+		listener.local_addr().unwrap().port().to_string(),
+	);
 	let result = ServerProcess::start(command.clone(), config.clone(), |_| {});
 	assert!(result.err().unwrap().to_string().contains("already in use"));
 	assert_eq!(
