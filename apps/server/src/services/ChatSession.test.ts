@@ -10,9 +10,7 @@ const TURN_ID = "turn-1";
 
 function seedChatSession(db: Db): void {
   // FKs off: the session's pull-request row is irrelevant to sequencing.
-  const sqlite = (db as unknown as { session: { client: { run: (sql: string) => void } } }).session
-    .client;
-  sqlite.run("PRAGMA foreign_keys = OFF");
+  db.$client.run("PRAGMA foreign_keys = OFF");
   db.insert(chatSessions)
     .values({
       id: SESSION_ID,

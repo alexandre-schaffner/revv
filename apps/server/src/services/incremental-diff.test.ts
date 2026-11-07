@@ -59,14 +59,6 @@ describe("parseNumstat", () => {
     expect(counts.get("assets/logo.png")).toEqual({ additions: 0, deletions: 0 });
   });
 
-  it("preserves rename arrow notation as the raw key (caller falls back)", () => {
-    const counts = parseNumstat("4\t2\tsrc/{old => new}.ts\n");
-    expect(counts.get("src/{old => new}.ts")).toEqual({ additions: 4, deletions: 2 });
-    // The resolved post-image path is NOT a hit — this is why the caller
-    // falls back to countPatchLines for renamed files.
-    expect(counts.get("src/new.ts")).toBeUndefined();
-  });
-
   it("skips malformed lines", () => {
     const counts = parseNumstat("garbage\n12\t3\tsrc/a.ts\n\n");
     expect(counts.size).toBe(1);

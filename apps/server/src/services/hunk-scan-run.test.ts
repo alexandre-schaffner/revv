@@ -36,9 +36,7 @@ const PR = "repo-1:1";
 function makeDb(): Db {
   const db = createDb(":memory:");
   // Only the scan tables are under test; the PR they hang off is irrelevant.
-  (db as unknown as { session: { client: { run: (sql: string) => void } } }).session.client.run(
-    "PRAGMA foreign_keys = OFF",
-  );
+  db.$client.run("PRAGMA foreign_keys = OFF");
   return db;
 }
 

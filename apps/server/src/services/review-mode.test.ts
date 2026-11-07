@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { createDb, type Db } from "../db";
 import { account, pullRequests, repositories, user } from "../db/schema";
@@ -101,18 +102,20 @@ describe("resolveReviewModeForPr", () => {
   });
 
   it("resolves against the PR's owning account, not an arbitrary user row", async () => {
-    const db = seedIdentity({ authorLogin: "alex", userLogin: "alex" });
+    const db = seedIdentity({ authorLogin: "alex", userLogin: "someone-else" });
     const now = new Date();
+    // The owner is the second user row, so "the first user" would read someone else.
     db.insert(user)
       .values({
         id: "user-2",
-        name: "Other User",
-        email: "other@example.com",
-        githubLogin: "someone-else",
+        name: "Owner",
+        email: "owner@example.com",
+        githubLogin: "alex",
         createdAt: now,
         updatedAt: now,
       })
       .run();
+    db.update(account).set({ userId: "user-2" }).where(eq(account.id, "account-1")).run();
     expect(await resolve(db)).toBe("author");
   });
 });

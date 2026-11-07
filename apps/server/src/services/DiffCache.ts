@@ -133,7 +133,7 @@ export function toGitHubFileShape(files: readonly CachedDiffFile[]): Array<{
  * two of them (`removed` + `added`) while collapsing to one row, so the gap is
  * permanent and a large PR would re-fetch every page on every view.
  */
-export function hasCompleteCachedFiles(
+function hasCompleteCachedFiles(
   cached: readonly CachedDiffFile[],
   expectedChangedFiles?: number,
   cachedCount?: number | null,
@@ -144,7 +144,7 @@ export function hasCompleteCachedFiles(
 }
 
 /** A rate limit with a cache in hand serves the cache: the diff, if maybe not the newest. */
-export function shouldServeCachedFilesOnFetchError(
+function shouldServeCachedFilesOnFetchError(
   cached: readonly CachedDiffFile[] | null,
   error: GitHubError,
 ): cached is readonly CachedDiffFile[] {
