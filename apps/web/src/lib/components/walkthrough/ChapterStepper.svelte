@@ -22,8 +22,8 @@ export interface StepperChapter {
 </script>
 
 <script lang="ts">
+import ToolCallTicker from "$lib/components/agent-activity/ToolCallTicker.svelte";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix/index.js";
-import { gsapFadeY, tokens } from "$lib/motion";
 
 /**
  * The walkthrough's chapter index. While generating, the active cell carries
@@ -43,8 +43,13 @@ interface Props {
 let { chapters, activeId, isStreaming, toolCalls, onjump }: Props = $props();
 
 const activeIndex = $derived(chapters.findIndex((c) => c.id === activeId));
-
-const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
+const tickerRows = $derived(
+  toolCalls.map(({ step, ordinal }) => ({
+    key: ordinal,
+    label: step.toolName,
+    detail: step.summary,
+  })),
+);
 </script>
 
 <div
@@ -85,19 +90,7 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 					<div class="chapter-active-row">
 						<Dotmatrix variant={chapter.spinner} {active} />
 						{#if toolCalls.length > 0}
-							<div class="chapter-tool-calls">
-								{#each toolCalls as { step, ordinal }, row (ordinal)}
-									<div
-										class="chapter-tool-call"
-										style="top: {row * TOOL_CALL_ROW_H}px"
-										in:gsapFadeY={{ y: TOOL_CALL_ROW_H, duration: tokens.smooth }}
-										out:gsapFadeY={{ y: -TOOL_CALL_ROW_H, duration: tokens.quick }}
-									>
-										<span class="chapter-tool-call-tool">{step.toolName}</span>
-										<span class="chapter-tool-call-desc">{step.summary}</span>
-									</div>
-								{/each}
-							</div>
+							<ToolCallTicker rows={tickerRows} />
 						{:else}
 							<span class="chapter-active-blurb">{chapter.activeBlurb}</span>
 						{/if}
@@ -288,41 +281,6 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 		font-size: 10px;
 		color: var(--color-accent);
 		min-width: 0;
-	}
-
-	.chapter-tool-calls {
-		position: relative;
-		flex: 1;
-		height: 28px; /* 2 × 14px rows, fixed — prevents layout shift during transitions */
-		min-width: 0;
-		overflow: hidden;
-	}
-
-	.chapter-tool-call {
-		position: absolute;
-		left: 0;
-		right: 0;
-		display: flex;
-		gap: 6px;
-		min-width: 0;
-		/* `top`, not a transform: the gsapFadeY enter transition writes an
-		   inline `transform`, and a base-class transform would compose with
-		   it. */
-		transition: top var(--duration-smooth) var(--ease-standard);
-	}
-
-	.chapter-tool-call-tool {
-		color: var(--color-accent);
-		font-weight: 500;
-		flex-shrink: 0;
-	}
-
-	.chapter-tool-call-desc {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		min-width: 0;
-		color: var(--color-text-muted);
 	}
 
 	.chapter-blurb {

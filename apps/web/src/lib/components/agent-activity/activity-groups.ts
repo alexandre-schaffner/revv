@@ -1,7 +1,6 @@
 import type { ActivityKind } from "@revv/shared";
 import { TOOL_PATH_INPUT_KEYS } from "@revv/shared";
 import { basename } from "$lib/utils/path";
-import { plural } from "$lib/utils/plural";
 
 export interface GroupableActivity {
   readonly id: string;
@@ -17,58 +16,49 @@ export interface GroupableActivity {
   readonly isError?: boolean;
 }
 
-export interface ActivityGroupCounts {
-  readonly reads: number;
-  readonly searches: number;
-  readonly lists: number;
-}
-
 const EXPLORATION_KINDS = new Set<ActivityKind>(["tool.read", "tool.grep", "tool.glob", "tool.ls"]);
 
 export function isExplorationActivity(activity: Pick<GroupableActivity, "activityKind">): boolean {
   return EXPLORATION_KINDS.has(activity.activityKind);
 }
 
-/** "3 reads, 1 search": the count a group's header shows, as text. */
-export function activityGroupSummary(
-  items: readonly Pick<GroupableActivity, "activityKind" | "toolName">[],
-): string {
-  const { reads, searches, lists } = activityGroupCounts(items);
-
-  return [
-    countLabel(reads, "read", "reads"),
-    countLabel(searches, "search", "searches"),
-    countLabel(lists, "list", "lists"),
-  ]
-    .filter((label): label is string => !!label)
-    .join(", ");
+interface ActivityGroupPart {
+  readonly key: "reads" | "searches" | "lists";
+  readonly count: number;
+  /** The noun for `count`: "read" or "reads". */
+  readonly word: string;
 }
 
-/**
- * Reads, searches and lists in a group. A tool counts by its kind or, when an
- * agent reports a builtin under another kind, by its name.
- */
-export function activityGroupCounts(
-  items: readonly Pick<GroupableActivity, "activityKind" | "toolName">[],
-): ActivityGroupCounts {
-  let reads = 0;
-  let searches = 0;
-  let lists = 0;
+const GROUP_PARTS = [
+  { key: "reads", kinds: ["tool.read"], one: "read", other: "reads" },
+  { key: "searches", kinds: ["tool.grep", "tool.glob"], one: "search", other: "searches" },
+  { key: "lists", kinds: ["tool.ls"], one: "list", other: "lists" },
+] as const satisfies ReadonlyArray<{
+  key: ActivityGroupPart["key"];
+  kinds: readonly ActivityKind[];
+  one: string;
+  other: string;
+}>;
 
-  for (const item of items) {
-    const label = activityToolLabel(item).toLowerCase();
-    if (item.activityKind === "tool.read" || label === "read") reads++;
-    else if (
-      item.activityKind === "tool.grep" ||
-      item.activityKind === "tool.glob" ||
-      label === "grep" ||
-      label === "glob"
-    )
-      searches++;
-    else if (item.activityKind === "tool.ls" || label === "list") lists++;
-  }
+/** The non-zero counts a group's header shows, in order: reads, searches, lists. */
+export function activityGroupParts(
+  items: readonly Pick<GroupableActivity, "activityKind">[],
+): ActivityGroupPart[] {
+  return GROUP_PARTS.flatMap(({ key, kinds, one, other }) => {
+    const count = items.filter((item) =>
+      (kinds as readonly ActivityKind[]).includes(item.activityKind),
+    ).length;
+    return count > 0 ? [{ key, count, word: count === 1 ? one : other }] : [];
+  });
+}
 
-  return { reads, searches, lists };
+/** "3 reads, 1 search": the header's counts as text. */
+export function activityGroupSummary(
+  items: readonly Pick<GroupableActivity, "activityKind">[],
+): string {
+  return activityGroupParts(items)
+    .map((part) => `${part.count} ${part.word}`)
+    .join(", ");
 }
 
 function activityToolLabel(item: Pick<GroupableActivity, "activityKind" | "toolName">): string {
@@ -95,10 +85,6 @@ export function activityLabel(item: {
   if (item.activityKind !== "tool.read" || !item.output) return base;
   const lines = item.output.replace(/\n$/, "").split("\n").length;
   return lines > 0 ? `${base} ${lines} lines` : base;
-}
-
-function countLabel(count: number, one: string, other: string): string | null {
-  return count > 0 ? plural(count, one, other) : null;
 }
 
 /** Tool kinds whose payload names a single file the peek can render. */

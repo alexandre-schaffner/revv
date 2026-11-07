@@ -338,7 +338,6 @@ function handleResume(): void {
 													<ToolActivityGroup
 														items={entry.items}
 														active={entryIdx === view.activity.length - 1}
-														defaultOpen={false}
 													/>
 												</div>
 											{/if}

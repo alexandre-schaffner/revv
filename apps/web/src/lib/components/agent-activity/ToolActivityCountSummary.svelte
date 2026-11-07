@@ -1,39 +1,24 @@
-<script lang="ts" module>
-import type { GroupableActivity } from "./activity-groups";
+<script lang="ts">
+import { cn } from "$lib/utils.js";
+import AnimatedNumber from "./AnimatedNumber.svelte";
+import { activityGroupParts, type GroupableActivity } from "./activity-groups";
 
-export interface ToolActivityCountSummaryProps {
+interface Props {
   items: readonly GroupableActivity[];
   class?: string;
 }
-</script>
 
-<script lang="ts">
-import AnimatedNumber from "./AnimatedNumber.svelte";
-import { cn } from "$lib/utils.js";
-import { activityGroupCounts } from "./activity-groups";
+let { items, class: className }: Props = $props();
 
-let { items, class: className }: ToolActivityCountSummaryProps = $props();
-
-const counts = $derived(activityGroupCounts(items));
-const visibleItems = $derived(
-  [
-    { key: "reads", count: counts.reads, one: "read", other: "reads" },
-    { key: "searches", count: counts.searches, one: "search", other: "searches" },
-    { key: "lists", count: counts.lists, one: "list", other: "lists" },
-  ].filter((item) => item.count > 0),
-);
-
-function labelFor(item: { count: number; one: string; other: string }): string {
-  return item.count === 1 ? item.one : item.other;
-}
+const parts = $derived(activityGroupParts(items));
 </script>
 
 <span data-component="tool-count-summary" class={cn("tool-count-summary", className)}>
-  {#each visibleItems as item, index (item.key)}
+  {#each parts as part, index (part.key)}
     <span class="tool-count-item">
-      <AnimatedNumber value={item.count} class="tool-count-number" />
+      <AnimatedNumber value={part.count} class="tool-count-number" />
       <span class="tool-count-word">
-        <span class="tool-count-stem">{labelFor(item)}{index < visibleItems.length - 1 ? ',' : ''}</span>
+        <span class="tool-count-stem">{part.word}{index < parts.length - 1 ? ',' : ''}</span>
       </span>
     </span>
   {/each}
