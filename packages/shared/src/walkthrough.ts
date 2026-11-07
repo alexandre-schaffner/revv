@@ -128,7 +128,11 @@ export function chapterNumbersByIndex(
 export type IssueSeverity = "info" | "warning" | "critical";
 
 /** Most severe first: the order every issue list renders its severity groups in. */
-export const ISSUE_SEVERITIES: readonly IssueSeverity[] = ["critical", "warning", "info"];
+export const ISSUE_SEVERITIES = [
+  "critical",
+  "warning",
+  "info",
+] as const satisfies readonly IssueSeverity[];
 
 export const ISSUE_SEVERITY_LABEL: Readonly<Record<IssueSeverity, string>> = {
   critical: "Critical",

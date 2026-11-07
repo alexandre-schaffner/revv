@@ -1,6 +1,6 @@
 // A GitHub-submitted issue and its comments are immutable (invariant 7).
 
-import type { ThreadEventMessage, WalkthroughRating } from "@revv/shared";
+import type { WalkthroughRating } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import type { Db } from "../../../db";
 import { commentThreads } from "../../../db/schema/comment-threads";
@@ -239,12 +239,10 @@ export const deleteIssueHandler: ChatEditToolHandler<DeleteIssueInput> = async (
       };
     }
 
-    const threadIds = deleteIssue(ctx.db, existing.id);
+    const threadEvents = deleteIssue(ctx.db, existing.id);
     return {
-      message: `Issue ${input.issue_id} deleted${threadIds.length > 0 ? ` (${threadIds.length} linked thread(s) cascaded)` : ""}.`,
-      threadEvents: threadIds.map(
-        (threadId): ThreadEventMessage => ({ type: "thread:deleted", data: { threadId } }),
-      ),
+      message: `Issue ${input.issue_id} deleted${threadEvents.length > 0 ? ` (${threadEvents.length} linked thread(s) cascaded)` : ""}.`,
+      threadEvents,
       events: [{ type: "issue:deleted", data: { id: input.issue_id } }],
     };
   });

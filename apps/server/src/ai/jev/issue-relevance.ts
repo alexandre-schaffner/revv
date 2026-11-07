@@ -1,15 +1,15 @@
-// `flag_issue` commits immediately; the relevance/severity judgment runs
-// behind the agent and is optional.
+// The relevance/severity judgment of one concern `flag_issue` already
+// committed: the questions, the policy and the cache key. What it reads from
+// the journal, and what its verdict does there, is the caller's
+// (`services/walkthrough/issue-gate.ts`).
 
 import { isDiscardedScore, isLowSignalScore } from "@revv/shared";
 import { noul, type ScoreQuestion } from "@typesafe-ai/sdk";
 import { Effect } from "effect";
-import type { Db } from "../../db";
 import { debug } from "../../logger";
 import type { CacheService } from "../../services/Cache";
 import { JevService } from "../../services/Jev";
 import type { IssueCandidate, IssueJudgment } from "./contracts";
-import { collectIssueGateInput, type IssueGateInput } from "./issue-relevance-context";
 import {
   compositeScore,
   ISSUE_RELEVANCE_CACHE_NS,
@@ -21,7 +21,18 @@ import {
   severityForLevel,
 } from "./issue-relevance-policy";
 import { cachedJev } from "./optional";
-import { buildIssueRelevanceState } from "./state";
+import { buildIssueRelevanceState, type IssueRelevanceInput } from "./state";
+
+/** What the judgment reads besides the candidate. */
+export interface IssueGateInput {
+  readonly pr: IssueRelevanceInput["pr"];
+  /** The diff hunk the concern is anchored to, if it could be resolved. */
+  readonly hunk: string | null;
+  /** The concern's lines fall outside the diff. */
+  readonly offDiff: boolean;
+  /** The walkthrough's other concerns, for the duplicate check. */
+  readonly existingIssues: IssueRelevanceInput["existingIssues"];
+}
 
 function answerNoul(value: unknown): number {
   if (value === null || typeof value !== "object" || !("noul" in value)) return 1;
@@ -93,19 +104,14 @@ function candidateKey(walkthroughId: string, issueId: string, candidate: IssueCa
   ].join("\0");
 }
 
-/** Judge one candidate, degrading to the exact pre-Jev behavior on failure. */
+/** Judge one candidate; null (the concern stands as written) when Jev has no answer. */
 export function judgeIssue(
-  db: Db,
   walkthroughId: string,
   issueId: string,
   candidate: IssueCandidate,
+  input: IssueGateInput,
 ): Effect.Effect<IssueJudgment | null, never, JevService | CacheService> {
   return Effect.gen(function* () {
-    const input = yield* Effect.sync(() =>
-      collectIssueGateInput(db, walkthroughId, issueId, candidate),
-    );
-    if (input === null) return null;
-
     const raw = yield* cachedJev<RawIssueJudgment>(
       `issue relevance for ${issueId}`,
       {

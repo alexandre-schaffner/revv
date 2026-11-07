@@ -18,6 +18,7 @@ import {
   normalizeTokenUsage,
   type RatingAxis,
   type RatingCitation,
+  type ThreadEventMessage,
   type ThreadMessage,
   type Verdict,
   type WalkthroughBlock,
@@ -172,7 +173,7 @@ export function decodeIssue(row: IssueRow): WalkthroughIssue {
   const resolutionEvidence = decodeStringArray(row.resolutionEvidence);
   return {
     id: row.id,
-    severity: row.severity as WalkthroughIssue["severity"],
+    severity: row.severity,
     title: row.title,
     description: row.description,
     blockIds: decodeStringArray(row.blockIds),
@@ -496,7 +497,7 @@ export function findIssuesMissingInlineComment(
         ? [
             {
               id: i.id,
-              severity: i.severity as WalkthroughIssue["severity"],
+              severity: i.severity,
               title: i.title,
               filePath: i.filePath,
               startLine: i.startLine,
@@ -621,18 +622,20 @@ export function upsertIssue(
 }
 
 /**
- * Delete a concern. Its inline-comment threads go with it by FK cascade; their
- * ids are returned so the deletions can be announced.
+ * Delete a concern, its AI threads retired first (`threadWrites.retireAiThreads`).
+ * Returns their envelopes, to announce once committed.
  */
-export function deleteIssue(db: Db, id: string): string[] {
-  const threadIds = db
-    .select({ id: commentThreads.id })
-    .from(commentThreads)
-    .where(eq(commentThreads.walkthroughIssueId, id))
-    .all()
-    .map((t) => t.id);
+export function deleteIssue(db: Db, id: string): readonly ThreadEventMessage[] {
+  const owner = db
+    .select({ prId: walkthroughs.pullRequestId })
+    .from(walkthroughIssues)
+    .innerJoin(walkthroughs, eq(walkthroughs.id, walkthroughIssues.walkthroughId))
+    .where(eq(walkthroughIssues.id, id))
+    .get();
+  if (!owner) return [];
+  const retired = threadWrites.retireAiThreads(db, owner.prId, [id]);
   db.delete(walkthroughIssues).where(eq(walkthroughIssues.id, id)).run();
-  return threadIds;
+  return retired.envelopes;
 }
 
 /** A block named by its position, as the agent addresses it. */

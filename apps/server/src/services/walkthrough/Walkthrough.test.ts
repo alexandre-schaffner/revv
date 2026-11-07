@@ -362,6 +362,28 @@ describe("supersede", () => {
       { prId: "pr-1", type: "thread:deleted", data: { threadId: "thread-ai" } },
     ]);
   });
+
+  // The comment and its replies still exist on GitHub, and the pull would
+  // never bring them back.
+  it("keeps an AI thread already on GitHub, detached from its issue", async () => {
+    const db = createDb(":memory:");
+    seedAiThread(db);
+    db.update(commentThreads)
+      .set({ externalCommentId: "gh-1" })
+      .where(eq(commentThreads.id, "thread-ai"))
+      .run();
+    const sent: Sent = [];
+
+    await runWalkthrough(db, (s) => s.supersedeAllForPr("pr-1", "head-2"), sent);
+
+    expect(sent).toEqual([]);
+    expect(
+      db
+        .select({ id: commentThreads.id, issue: commentThreads.walkthroughIssueId })
+        .from(commentThreads)
+        .all(),
+    ).toEqual([{ id: "thread-ai", issue: null }]);
+  });
 });
 
 describe("issuesOnPr", () => {
@@ -372,7 +394,7 @@ describe("issuesOnPr", () => {
       id,
       walkthroughId,
       order: 0,
-      severity: "warning",
+      severity: "warning" as const,
       title: id,
       description: "d",
       createdAt: "2026-01-01T00:00:00Z",

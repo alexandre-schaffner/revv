@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type {
   ExternalAgentProvider,
   ExternalAgentScope,
+  IssueSeverity,
   WalkthroughGenerationMode,
   WalkthroughStatus,
 } from "@revv/shared";
@@ -417,7 +418,7 @@ function summarizeIssues(ctx: ExternalReviewToolContext, walkthroughId: string) 
     .from(walkthroughIssues)
     .where(eq(walkthroughIssues.walkthroughId, walkthroughId))
     .all();
-  const bySeverity: Record<string, number> = {};
+  const bySeverity: Partial<Record<IssueSeverity, number>> = {};
   for (const issue of issues) {
     bySeverity[issue.severity] = (bySeverity[issue.severity] ?? 0) + 1;
   }
