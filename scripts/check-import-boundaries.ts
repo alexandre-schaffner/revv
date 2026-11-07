@@ -74,6 +74,24 @@ const acpConnectionAllowedImporters = new Set([
 const gsapAllowedImporter = "apps/web/src/lib/motion/gsap.ts";
 const gsapImportPattern = /(?:from\s+|import\s*\(\s*|import\s+)["'](gsap(?:\/[^"']*)?)["']/g;
 
+// Web layering: components render what lib/ (stores, features, utilities)
+// provides, so nothing in lib/ outside components/ may import a component
+// module; and stores sit below the session lifecycle, which resets them.
+const webLibDir = "apps/web/src/lib/";
+const webComponentsDir = "apps/web/src/lib/components/";
+const webStoresDir = "apps/web/src/lib/stores/";
+const webSessionLifecycle = "apps/web/src/lib/session/lifecycle.svelte";
+const webImportPattern = /(?:from\s+|import\s*\(\s*|import\s+)["']([^"']+)["']/g;
+
+function resolveWebImport(importerRel: string, specifier: string): string | null {
+  const path = specifier.startsWith("$lib/")
+    ? `${webLibDir}${specifier.slice("$lib/".length)}`
+    : specifier.startsWith(".")
+      ? join(dirname(importerRel), specifier)
+      : null;
+  return path?.replace(/\.(?:ts|js)$/, "") ?? null;
+}
+
 function listTsFiles(dir: string, extensions = /\.(ts|tsx)$/): string[] {
   const entries = readdirSync(dir);
   const files: string[] = [];
@@ -166,9 +184,30 @@ for (const file of listTsFiles(join(repoRoot, "apps/server/src"))) {
 
 for (const file of listTsFiles(join(repoRoot, "apps/web/src"), /\.(ts|svelte)$/)) {
   const rel = relative(repoRoot, file);
-  if (rel === gsapAllowedImporter) continue;
-  for (const match of readFileSync(file, "utf8").matchAll(gsapImportPattern)) {
-    violations.push(`${rel} imports ${match[1]}; animate through $lib/motion`);
+  const source = readFileSync(file, "utf8");
+  if (rel !== gsapAllowedImporter) {
+    for (const match of source.matchAll(gsapImportPattern)) {
+      violations.push(`${rel} imports ${match[1]}; animate through $lib/motion`);
+    }
+  }
+
+  for (const match of source.matchAll(webImportPattern)) {
+    const specifier = match[1];
+    if (!specifier) continue;
+    const target = resolveWebImport(rel, specifier);
+    if (target === null) continue;
+
+    if (
+      rel.startsWith(webLibDir) &&
+      !rel.startsWith(webComponentsDir) &&
+      target.startsWith(webComponentsDir)
+    ) {
+      violations.push(`${rel} imports ${specifier}; lib/ modules sit below components/`);
+    }
+
+    if (rel.startsWith(webStoresDir) && target === webSessionLifecycle) {
+      violations.push(`${rel} imports ${specifier}; stores sit below the session lifecycle`);
+    }
   }
 }
 

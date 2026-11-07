@@ -1,4 +1,14 @@
-import type { SettingsSectionId } from "$lib/components/settings/settings-panes";
+/** The settings sections, by the id each pane declares. */
+export type SettingsSectionId =
+  | "general"
+  | "account"
+  | "repositories"
+  | "ai"
+  | "recap"
+  | "jev"
+  | "integrations"
+  | "cache"
+  | "updates";
 
 let open = $state(false);
 let targetSection = $state<SettingsSectionId | null>(null);

@@ -7,6 +7,7 @@ import {
   sameGithubHost,
   savedClientIdForHost,
 } from "@revv/shared";
+import { untrack } from "svelte";
 import { toast } from "svelte-sonner";
 import { goto } from "$app/navigation";
 import { api } from "$lib/api/client";
@@ -254,7 +255,7 @@ export async function openPrDeepLink(rawUrl: string): Promise<void> {
   await resolveActiveLocator(locator);
 }
 
-export function resumePendingPrDeepLink(): void {
+function resumePendingPrDeepLink(): void {
   if (state.kind !== "resolving") return;
   if (!getIsAuthenticated()) {
     if (getDeviceFlow()) return;
@@ -302,7 +303,7 @@ export async function connectPrDeepLinkAccount(clientId: string): Promise<string
   }
 }
 
-export async function settlePrDeepLinkAuthorization(authError: string | null): Promise<void> {
+async function settlePrDeepLinkAuthorization(authError: string | null): Promise<void> {
   if (state.kind !== "connect-account" || state.phase !== "device-code") {
     return;
   }
@@ -382,4 +383,41 @@ export function dismissPrDeepLink(): void {
   cancelResolution();
   state = { kind: "idle" };
   if (wasAuthorizing) cancelSignIn();
+}
+
+/**
+ * Receive `revv://` links for the life of the app, and move a parked link on
+ * when what it waits for lands: a sign-in or onboarding finishing (resolve),
+ * or the device flow it started ending (settle).
+ */
+export function listenForPrDeepLinks(): () => void {
+  const stopReactions = $effect.root(() => {
+    $effect(() => {
+      const canResume = !getIsAuthenticated() || getIsOnboarded();
+      if (canResume && state.kind === "resolving") untrack(resumePendingPrDeepLink);
+    });
+    $effect(() => {
+      if (state.kind !== "connect-account" || state.phase !== "device-code") return;
+      if (getDeviceFlow() !== null) return;
+      const authError = getError();
+      untrack(() => void settlePrDeepLinkAuthorization(authError));
+    });
+  });
+
+  let stopListening: (() => void) | undefined;
+  if ("__TAURI_INTERNALS__" in window) {
+    void import("@tauri-apps/plugin-deep-link").then(async ({ getCurrent, onOpenUrl }) => {
+      const receive = (urls: string[]): void => {
+        for (const url of urls) void openPrDeepLink(url);
+      };
+      stopListening = await onOpenUrl(receive);
+      const current = await getCurrent().catch(() => null);
+      if (current) receive(current);
+    });
+  }
+
+  return () => {
+    stopReactions();
+    stopListening?.();
+  };
 }

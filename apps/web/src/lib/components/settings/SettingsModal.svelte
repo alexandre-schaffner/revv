@@ -18,9 +18,10 @@ import { getUser } from "$lib/stores/auth.svelte";
 import {
   clearSettingsTargetSection,
   getSettingsTargetSection,
+  type SettingsSectionId,
 } from "$lib/stores/settingsModal.svelte";
 import { SETTINGS_PANE_CLUSTERS, SETTINGS_PANES, type SettingsPaneEntry } from "./panes";
-import { type SettingsSearchHit, type SettingsSectionId, searchSettings } from "./settings-panes";
+import { type SettingsSearchHit, searchSettings } from "./settings-panes";
 
 interface Props {
   open: boolean;

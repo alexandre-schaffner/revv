@@ -41,13 +41,18 @@ assertContract(
 );
 
 const layout = await Bun.file("apps/web/src/routes/+layout.svelte").text();
-assertContract(layout.includes("onOpenUrl") && layout.includes("getCurrent"), "root URL listeners");
+assertContract(layout.includes("listenForPrDeepLinks()"), "root layout listens for links");
 
-const deepLinkStore = await Bun.file("apps/web/src/lib/stores/pr-deep-link.svelte.ts").text();
+const deepLinkStore = await Bun.file("apps/web/src/lib/deep-link/pr-deep-link.svelte.ts").text();
+assertContract(
+  deepLinkStore.includes("onOpenUrl") && deepLinkStore.includes("getCurrent"),
+  "URL listeners",
+);
 const connectStart = deepLinkStore.indexOf("export async function connectPrDeepLinkAccount");
-const settleStart = deepLinkStore.indexOf("export async function settlePrDeepLinkAuthorization");
+const settleStart = deepLinkStore.indexOf("async function settlePrDeepLinkAuthorization");
+const settleEnd = deepLinkStore.indexOf("export async function addPrDeepLinkRepository");
 const connectBody = deepLinkStore.slice(connectStart, settleStart);
-const settleBody = deepLinkStore.slice(settleStart);
+const settleBody = deepLinkStore.slice(settleStart, settleEnd);
 assertContract(
   connectBody.includes("signIn(locator.githubHost, clientId)"),
   "transient auth config",

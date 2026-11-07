@@ -145,6 +145,9 @@ Feature modules depend inward on platform seams:
   (or `RepoCloneService` / `AgentWorktrees` / `PrWorkspace` for worktrees).
 - Features send realtime pushes through `Realtime`, never `Broadcaster`.
 - A multi-file feature keeps its files in `services/<feature>/` (conventions §2.7).
+- Web: nothing in `lib/` outside `lib/components/` imports a component module (a type a store
+  and a component share lives with the store), and no store imports the session lifecycle
+  (conventions §4).
 
 `bun run check:import-boundaries` enforces the PR-context, secret-store, GitHub-transport,
-Local-Git and Broadcaster import rules.
+Local-Git and Broadcaster import rules, and both web rules.

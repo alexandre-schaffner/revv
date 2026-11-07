@@ -7,19 +7,12 @@ import LinkSimple from "phosphor-svelte/lib/LinkSimple";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import User from "phosphor-svelte/lib/User";
 import WarningCircle from "phosphor-svelte/lib/WarningCircle";
-import { tick } from "svelte";
+import type { Attachment } from "svelte/attachments";
 import Avatar from "$lib/components/shared/Avatar.svelte";
 import { Button } from "$lib/components/ui/button";
 import * as Dialog from "$lib/components/ui/dialog";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import { Input } from "$lib/components/ui/input";
-import { gsapFadeY, tokens } from "$lib/motion";
-import {
-  getDeviceFlow,
-  getError,
-  getIsAuthenticated,
-  getIsOnboarded,
-} from "$lib/stores/auth.svelte";
 import {
   addPrDeepLinkRepository,
   chooseAnotherPrDeepLinkAccount,
@@ -31,10 +24,15 @@ import {
   getPrDeepLinkLoadingVisible,
   getPrDeepLinkState,
   matchingAccountsFor,
-  resumePendingPrDeepLink,
   retryPrDeepLink,
-  settlePrDeepLinkAuthorization,
-} from "$lib/stores/pr-deep-link.svelte";
+} from "$lib/deep-link/pr-deep-link.svelte";
+import { gsapFadeY, tokens } from "$lib/motion";
+import {
+  getDeviceFlow,
+  getError,
+  getIsAuthenticated,
+  getIsOnboarded,
+} from "$lib/stores/auth.svelte";
 import { copyFeedback } from "$lib/utils/copy-feedback.svelte";
 
 const workflow = $derived(getPrDeepLinkState());
@@ -70,29 +68,14 @@ $effect(() => {
   }
 });
 
-$effect(() => {
-  const shouldResume = !getIsAuthenticated() || getIsOnboarded();
-  if (shouldResume && workflow.kind === "resolving") resumePendingPrDeepLink();
-});
-
-$effect(() => {
-  if (
-    workflow.kind === "connect-account" &&
-    workflow.phase === "device-code" &&
-    deviceFlow === null
-  ) {
-    void settlePrDeepLinkAuthorization(authError);
-  }
-});
-
-$effect(() => {
-  if (!open || workflow.kind === "resolving") return;
-  void tick().then(() => {
-    requestAnimationFrame(() => {
-      document.querySelector<HTMLElement>("[data-pr-deep-link-autofocus]")?.focus();
-    });
-  });
-});
+/** Focus the element once the dialog has settled its own initial focus. */
+function autofocus(enabled: boolean): Attachment<HTMLElement> | null {
+  if (!enabled) return null;
+  return (node) => {
+    const frame = requestAnimationFrame(() => node.focus());
+    return () => cancelAnimationFrame(frame);
+  };
+}
 
 function locatorLabel(): string {
   if (workflow.kind === "idle") return "";
@@ -196,7 +179,7 @@ async function handleConnect(): Promise<void> {
                 <button
                   bind:this={accountButtons[index]}
                   class="account-row"
-                  data-pr-deep-link-autofocus={index === 0 ? "" : undefined}
+                  {@attach autofocus(index === 0)}
                   onclick={() => void choosePrDeepLinkAccount(account)}
                   onkeydown={(event) => handleAccountKeydown(event, index)}
                   aria-label={`${account.login}, ${account.email}, ${account.hostLabel}`}
@@ -240,7 +223,7 @@ async function handleConnect(): Promise<void> {
                 <label class="client-id-field">
                   <span>GitHub App client ID</span>
                   <Input
-                    data-pr-deep-link-autofocus
+                    {@attach autofocus(true)}
                     type="text"
                     bind:value={clientId}
                     aria-invalid={clientIdError ? "true" : undefined}
@@ -272,13 +255,13 @@ async function handleConnect(): Promise<void> {
                 <Button variant="outline" onclick={dismissPrDeepLink}>Cancel</Button>
                 {#if workflow.phase === "entry"}
                   <Button
-                    data-pr-deep-link-autofocus={!deepLinkNeedsClientId(workflow.locator) ? "" : undefined}
+                    {@attach autofocus(!deepLinkNeedsClientId(workflow.locator))}
                     onclick={() => void handleConnect()}
                   >Connect account</Button>
                 {/if}
               {:else if workflow.kind === "confirm-repository"}
                 <Button variant="outline" onclick={dismissPrDeepLink}>Cancel</Button>
-                <Button data-pr-deep-link-autofocus onclick={() => void addPrDeepLinkRepository()}>
+                <Button {@attach autofocus(true)} onclick={() => void addPrDeepLinkRepository()}>
                   Add repository
                 </Button>
               {:else if workflow.kind === "error"}
@@ -287,11 +270,11 @@ async function handleConnect(): Promise<void> {
                 {/if}
                 <Button
                   variant={workflow.reason === "network" ? "outline" : "default"}
-                  data-pr-deep-link-autofocus={workflow.reason !== "network" ? "" : undefined}
+                  {@attach autofocus(workflow.reason !== "network")}
                   onclick={dismissPrDeepLink}
                 >Dismiss</Button>
                 {#if workflow.reason === "network"}
-                  <Button data-pr-deep-link-autofocus onclick={retryPrDeepLink}>Try again</Button>
+                  <Button {@attach autofocus(true)} onclick={retryPrDeepLink}>Try again</Button>
                 {/if}
               {/if}
             </Dialog.Footer>
