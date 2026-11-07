@@ -13,10 +13,7 @@ import RevvBrand from "./RevvBrand.svelte";
  * room, not container chrome.
  */
 
-type StepId = "welcome" | "host" | "signin" | "repo" | "agent" | "done";
-
 interface Props {
-  stepId: StepId;
   stepIndex: number;
   totalSteps: number;
   chapter: string;
@@ -27,7 +24,6 @@ interface Props {
 }
 
 let {
-  stepId,
   stepIndex,
   totalSteps,
   chapter,
@@ -83,7 +79,7 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 };
 </script>
 
-<div class="onboarding-shell" data-step={stepId}>
+<div class="onboarding-shell">
 	<div class="grain" aria-hidden="true"></div>
 	<div class="vignette" aria-hidden="true"></div>
 
