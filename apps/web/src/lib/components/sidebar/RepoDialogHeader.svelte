@@ -31,14 +31,15 @@ let { title, meta }: Props = $props();
 	.title {
 		margin: 0;
 		color: var(--color-text-primary);
-		font-size: 13.5px;
-		font-weight: 600;
-		letter-spacing: -0.005em;
+		font-size: var(--text-sm);
+		font-weight: 500;
+		letter-spacing: var(--text-sm--letter-spacing);
 	}
 
 	.title-meta {
 		color: var(--color-text-muted);
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		font-variant-numeric: tabular-nums;
 	}
 </style>

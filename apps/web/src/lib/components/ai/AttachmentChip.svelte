@@ -20,8 +20,8 @@ let { kind, name, size, tone = "muted", onRemove }: Props = $props();
 
 <div
 	class={tone === "accent"
-		? "flex min-w-0 items-center gap-1.5 rounded-md border border-accent/25 bg-accent/10 px-2 py-1 text-xs text-accent"
-		: "flex max-w-full items-center gap-1.5 rounded-md border border-border bg-muted/60 px-2 py-1 text-xs text-foreground"}
+		? "flex min-w-0 items-center gap-1.5 rounded-md border border-accent/25 bg-accent/10 px-2 py-1 text-ui text-accent"
+		: "flex max-w-full items-center gap-1.5 rounded-md border border-border bg-muted/60 px-2 py-1 text-ui text-foreground"}
 >
 	{#if kind === "image"}
 		<Image class={tone === "accent" ? "size-3.5 shrink-0" : "size-3.5 shrink-0 text-accent"} />

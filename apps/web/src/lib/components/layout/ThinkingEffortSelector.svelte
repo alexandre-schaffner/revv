@@ -87,7 +87,7 @@ function select(value: ThinkingEffortSetting) {
         <PopoverContent class="w-44 p-1" align="start" side="top">
             {#if autoOffered}
                 <button
-                    class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
+                    class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-ui text-text-secondary transition-colors hover:bg-bg-tertiary"
                     onclick={() => select(AUTO_SENTINEL)}
                 >
                     <Sparkle size={12} class="shrink-0 text-text-muted" />
@@ -104,7 +104,7 @@ function select(value: ThinkingEffortSetting) {
             {/if}
             {#each options as opt (opt.value)}
                 <button
-                    class="flex w-full cursor-pointer items-center justify-between rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
+                    class="flex w-full cursor-pointer items-center justify-between rounded-sm px-2 py-1.5 text-ui text-text-secondary transition-colors hover:bg-bg-tertiary"
                     onclick={() => select(opt.value)}
                 >
                     {opt.label}

@@ -70,13 +70,15 @@ let {
 	}
 
 	.popover-title {
-		font-size: 11px;
-		font-weight: 600;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
+		font-weight: 500;
 		color: var(--color-text-primary);
 	}
 
 	.popover-clear {
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-muted);
 	}
 
@@ -108,7 +110,8 @@ let {
 		outline: 0;
 		background: transparent;
 		color: var(--color-text-primary);
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		line-height: 1;
 	}
 

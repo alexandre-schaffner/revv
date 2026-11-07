@@ -19,7 +19,6 @@ import ReliedOnNote from "$lib/components/stack/margin/ReliedOnNote.svelte";
 import { spreadRailNotes } from "$lib/components/stack/margin/spread-notes";
 import StackHandoffCard from "$lib/components/stack/StackHandoffCard.svelte";
 import IssueStackNote from "$lib/components/stack/walkthrough/IssueStackNote.svelte";
-import StackOverviewRow from "$lib/components/stack/walkthrough/StackOverviewRow.svelte";
 import { WalkthroughStack } from "$lib/components/stack/walkthrough/walkthrough-stack.svelte";
 import { Button } from "$lib/components/ui/button";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
@@ -77,8 +76,6 @@ import {
   markIssueAnimated,
   pollCloneUntilResolved,
   prepareEntry,
-  regenerate,
-  resume,
   selectWalkthroughReport,
   startWalkthrough,
   stopClonePoll,
@@ -280,7 +277,7 @@ $effect(() => {
     id: `walkthrough-error-${prId}`,
     description: isAgentAuthRecoveryError(streamError)
       ? agentAuthRecoveryDescription(streamError)
-      : streamError,
+      : "The walkthrough stopped before finishing. Retry to continue.",
     ...(isAgentAuthRecoveryError(streamError)
       ? {
           action: {
@@ -1072,16 +1069,23 @@ async function handleRetryClone(): Promise<void> {
     retryingClone = false;
   }
 }
-
-// ── Regenerate ──────────────────────────────────────────────────────
-function handleRegenerate(): void {
-  regenerate(prId, selectedMode);
-}
-
-function handleResume(): void {
-  resume(prId, selectedMode);
-}
 </script>
+
+{#snippet generationError()}
+	<div class="generation-error">
+		<div class="generation-error-actions">
+			<p role="status">Walkthrough stopped before finishing.</p>
+			{#if isAgentAuthRecoveryError(streamError)}
+				<button type="button" class="recovery-action" onclick={() => openSettings('ai')}>Open agent settings</button>
+
+			{/if}
+		</div>
+		<details class="error-details">
+			<summary>Error details</summary>
+			<p>{streamError}</p>
+		</details>
+	</div>
+{/snippet}
 
 {#snippet firstPassRibbon()}
 	<FirstPassRibbon rows={firstPass.rows} />
@@ -1109,10 +1113,6 @@ function handleResume(): void {
 		<div class="merged-stamp-row">
 			<MergedStamp {prId} {mergedAt} />
 		</div>
-	{/if}
-
-	{#if stack.isStacked}
-		<StackOverviewRow {prId} />
 	{/if}
 
 
@@ -1153,11 +1153,7 @@ function handleResume(): void {
 					{/each}
 				</div>
 			{/if}
-			<p class="loading-text">Walkthrough generation stopped. Check the notification for details.</p>
-			<Button variant="outline" size="lg" style="cursor: pointer;" onclick={handleResume}>
-				<ArrowsClockwise size={16} />
-				Retry
-			</Button>
+			{@render generationError()}
 		</div>
 	{:else if cloneInProgress && !summary && blocks.length === 0}
 		<!-- Clone-in-progress state: show indeterminate progress bar + Retry
@@ -1243,16 +1239,7 @@ function handleResume(): void {
 			onanimationend={(e) => lockContainerAnimation('content', e)}
 		>
 			{#if streamError}
-				<div class="partial-error" role="status">
-					<div class="partial-error-copy">
-						<Warning size={14} weight="fill" />
-						<span>{streamError}</span>
-					</div>
-					<Button variant="outline" size="sm" style="cursor: pointer;" onclick={handleResume}>
-						<ArrowsClockwise size={14} />
-						Retry
-					</Button>
-				</div>
+				<div class="partial-error">{@render generationError()}</div>
 			{/if}
 
 			<!-- Issues — bucketed by severity (Critical → Warning → Info) so the
@@ -1444,7 +1431,7 @@ function handleResume(): void {
 							<div class="sentiment-card-header">
 								<h3 class="sentiment-card-title">Overall Sentiment</h3>
 							</div>
-							<div class="sentiment-card-body prose prose-sm" use:prlensDiagrams={getResolvedTheme()}>{@html renderedSentiment}</div>
+							<div class="sentiment-card-body prose prose-reading" use:prlensDiagrams={getResolvedTheme()}>{@html renderedSentiment}</div>
 						</div>
 					{/if}
 					{#if ratings.length > 0 || isStreaming}
@@ -1563,7 +1550,7 @@ function handleResume(): void {
 		margin-top: 1.5rem;
 		padding-top: 0.5rem;
 		border-top: 1px solid var(--color-border-subtle);
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 		font-family: var(--font-mono);
 		letter-spacing: 0.01em;
@@ -1718,8 +1705,8 @@ function handleResume(): void {
 	.exploration-item {
 		display: flex;
 		gap: 8px;
-		font-size: 11px;
-		font-family: var(--font-mono, monospace);
+		font-size: var(--text-ui);
+		font-family: var(--font-mono);
 		color: var(--color-text-muted);
 		animation: fadeIn var(--duration-smooth) var(--ease-out-expo);
 		line-height: 1.5;
@@ -1777,11 +1764,9 @@ function handleResume(): void {
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		font-size: 11px;
-		font-weight: 600;
-		color: var(--color-text-muted);
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
+		font-size: var(--text-ui);
+		font-weight: 500;
+		color: var(--color-text-subtle);
 	}
 
 	.issues-groups {
@@ -1800,10 +1785,8 @@ function handleResume(): void {
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		font-size: 10px;
-		font-weight: 600;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
+		font-size: var(--text-ui);
+		font-weight: 500;
 		color: var(--color-text-secondary);
 	}
 
@@ -1851,7 +1834,8 @@ function handleResume(): void {
 		display: grid;
 		grid-column: 1 / -1;
 		grid-template-columns: var(--walkthrough-columns);
-		row-gap: 20px;
+		/* Room around each block, the way an article gives a figure air. */
+		row-gap: 24px;
 		margin-top: 20px;
 		grid-auto-flow: row;
 	}
@@ -2019,12 +2003,12 @@ function handleResume(): void {
 
 	.walkthrough-thought-empty {
 		margin: 0.375rem 0 0;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-muted);
 	}
 
 	.walkthrough-inline-thought {
-		font-size: 0.875rem;
+		font-size: var(--text-sm);
 		line-height: 1.6;
 		color: var(--color-text-muted);
 		word-break: break-word;
@@ -2068,7 +2052,7 @@ function handleResume(): void {
 		border: 1px solid var(--color-border);
 		border-radius: 8px;
 		padding: 14px 16px;
-		font-size: 14px;
+		font-size: var(--text-sm);
 		line-height: 1.6;
 		color: var(--color-text-secondary);
 		/* Allow long identifiers inside inline <code> (e.g. dotted API paths
@@ -2084,49 +2068,81 @@ function handleResume(): void {
 	   prose layer (see app.css); `.block-annotation-inner` only owns the card box. */
 
 	.loading-text {
-		font-size: 13px;
+		font-size: var(--text-sm);
 		color: var(--color-text-muted);
 	}
 
 	.loading-subtext {
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-muted);
 		opacity: 0.6;
 		margin: 0;
 	}
 
 	.error-inline {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-danger);
 		margin-top: 8px;
 	}
 
-	.partial-error {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		/* Wrap the button under the copy rather than letting the copy shrink to
-		   nothing — `overflow-wrap: anywhere` below would otherwise break the
-		   message one character per line. */
-		flex-wrap: wrap;
-		gap: 12px;
-		border: 1px solid color-mix(in srgb, var(--color-danger) 35%, transparent);
-		border-radius: 8px;
-		background: color-mix(in srgb, var(--color-danger) 8%, var(--color-surface));
-		color: var(--color-danger);
-		padding: 10px 12px;
-		font-size: 12px;
-		line-height: 1.45;
-	}
-
-	.partial-error-copy {
-		display: flex;
-		align-items: flex-start;
-		gap: 8px;
+	.generation-error {
 		min-width: 0;
+		text-align: left;
+		font-size: var(--text-sm);
+		line-height: 1.6;
+		color: var(--color-text-secondary);
 	}
 
-	.partial-error-copy span {
+	.generation-error-actions {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		column-gap: 12px;
+		row-gap: 4px;
+	}
+
+	.generation-error p {
+		margin: 0;
+	}
+
+	.recovery-action {
+		padding: 0;
+		border: none;
+		border-radius: 2px;
+		background: transparent;
+		font: inherit;
+		font-weight: 400;
+		color: var(--color-text-primary);
+		text-decoration: underline;
+		text-decoration-color: var(--color-border);
+		text-underline-offset: 3px;
+		cursor: pointer;
+	}
+
+	.recovery-action:hover {
+		text-decoration-color: currentColor;
+	}
+
+	.recovery-action:focus-visible,
+	.error-details summary:focus-visible {
+		outline: 2px solid var(--color-accent);
+		outline-offset: 4px;
+	}
+
+	.error-details {
+		margin-top: 4px;
+		color: var(--color-text-subtle);
+	}
+
+	.error-details summary {
+		width: fit-content;
+		cursor: pointer;
+	}
+
+	.error-details p {
+		margin-top: 8px;
+		max-width: 70ch;
 		overflow-wrap: anywhere;
 	}
 
@@ -2215,20 +2231,13 @@ function handleResume(): void {
 	}
 
 	.sentiment-card-title {
-		font-size: 16px;
+		font-size: var(--text-base);
 		font-weight: 600;
 		color: var(--color-text-primary);
 		margin: 0;
 	}
 
-	.sentiment-card-body {
-		font-size: 14px;
-		line-height: 1.65;
-		color: var(--color-text-secondary);
-	}
-
-	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
-	   prose layer (see app.css); `.sentiment-card-body` only owns base text density. */
+	/* Size, ink and measure come from `prose prose-reading` (lib/styles/prose.css). */
 
 	/* ── Narrow-viewport fallback ────────────────────────────────────────
 	   Below the 1336px geometric minimum (24 left + 48 + 820 + 40 + 380 +
@@ -2321,6 +2330,11 @@ function handleResume(): void {
 		.block-group:not(.block-group--sentiment-stack) {
 			display: block;
 			position: relative;
+		}
+
+		/* The grid's row gap, kept once the blocks stack (see WalkthroughSection). */
+		.block-group + .block-group {
+			margin-top: 24px;
 		}
 
 		.block-step-dot {

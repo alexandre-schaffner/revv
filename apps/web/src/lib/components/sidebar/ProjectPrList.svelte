@@ -72,7 +72,8 @@ const filtered = $derived(hasActivePrListFilter());
 	.empty {
 		margin: 0;
 		padding: 16px 10px;
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-muted);
 		text-align: center;
 	}

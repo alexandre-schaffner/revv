@@ -133,7 +133,7 @@ function mountCodeBlock(el: HTMLDivElement) {
 		align-items: flex-start;
 		padding: 16px 20px;
 		background: color-mix(in srgb, var(--revv-accent) 4%, var(--revv-bg-secondary));
-		font-size: 14px;
+		font-size: var(--text-sm);
 		line-height: 1.6;
 		color: var(--revv-text-secondary);
 	}
@@ -176,7 +176,7 @@ function mountCodeBlock(el: HTMLDivElement) {
 		border-bottom: 1px solid var(--revv-diff-gutter-border);
 		padding: 6px 12px;
 		font-family: var(--font-mono);
-		font-size: 11px;
+		font-size: var(--text-ui);
 		color: var(--revv-text-muted);
 		width: 100%;
 		border: none;

@@ -112,9 +112,9 @@ let textWidth = $state<number | null>(null);
 	}
 
 	.hero-title {
-		font-size: 24px;
-		font-weight: 700;
-		letter-spacing: -0.01em;
+		font-size: var(--text-2xl);
+		font-weight: 500;
+		letter-spacing: var(--text-2xl--letter-spacing);
 		color: var(--plate-mark);
 		margin: 0;
 		line-height: 1.15;
@@ -137,10 +137,10 @@ let textWidth = $state<number | null>(null);
 	}
 
 	.hero-owner {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: color-mix(in oklab, var(--plate-mark) 72%, transparent);
 		margin: 0;
-		font-family: var(--font-mono, monospace);
+		font-family: var(--font-mono);
 	}
 
 	.hero :global(.tagged-hero-action) {

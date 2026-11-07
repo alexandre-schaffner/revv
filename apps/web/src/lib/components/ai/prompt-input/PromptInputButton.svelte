@@ -44,7 +44,7 @@ export type PromptInputButtonProps = ButtonProps & {
 		<Tooltip.Content>
 			<span>{tooltipText}</span>
 			{#if tooltipShortcut}
-				<kbd class="ml-1.5 rounded border border-border bg-muted px-1 py-0.5 text-xs font-mono">
+				<kbd class="ml-1.5 rounded border border-border bg-muted px-1 py-0.5 text-ui font-mono">
 					{tooltipShortcut}
 				</kbd>
 			{/if}

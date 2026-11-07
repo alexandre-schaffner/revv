@@ -374,9 +374,9 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 
 	.side-head h3 {
 		margin: 0;
-		font-size: 0.75rem;
-		font-weight: 600;
-		letter-spacing: 0.01em;
+		font-size: var(--text-ui);
+		font-weight: 500;
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-secondary);
 	}
 
@@ -386,13 +386,13 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 		align-items: baseline;
 		gap: 5px;
 		margin: 0;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-muted);
 	}
 
 	.side-note {
 		margin-top: 8px;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 	}
 
@@ -426,7 +426,7 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		font-weight: 500;
 		color: var(--color-text-primary);
 	}
@@ -468,7 +468,7 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 		border: none;
 		background: none;
 		font: inherit;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-secondary);
 		text-align: left;
 		cursor: pointer;
@@ -508,7 +508,7 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 
 	.side-muted {
 		flex-shrink: 0;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 	}
 

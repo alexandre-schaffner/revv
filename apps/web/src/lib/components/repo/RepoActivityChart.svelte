@@ -350,7 +350,8 @@ const summary = $derived.by(() => {
 	}
 
 	.axis {
-		font-size: 9px;
+		font-size: var(--text-xs);
+		letter-spacing: var(--text-xs--letter-spacing);
 		fill: var(--color-text-muted);
 	}
 
@@ -384,7 +385,8 @@ const summary = $derived.by(() => {
 		background: var(--color-bg-elevated);
 		border: 1px solid var(--color-border);
 		box-shadow: 0 4px 12px rgb(0 0 0 / 0.08);
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		white-space: nowrap;
 		pointer-events: none;
 		z-index: 2;
@@ -403,7 +405,8 @@ const summary = $derived.by(() => {
 		display: flex;
 		align-items: center;
 		gap: 14px;
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-muted);
 	}
 

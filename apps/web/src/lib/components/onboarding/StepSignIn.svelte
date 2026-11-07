@@ -138,9 +138,9 @@ async function copyCode() {
 		border: 0;
 		padding: 0;
 		color: var(--ob-text-muted);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 10.5px;
-		letter-spacing: 0.14em;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
+		letter-spacing: var(--tracking-eyebrow);
 		text-transform: uppercase;
 		cursor: pointer;
 		transition: color var(--duration-snap) var(--ease-out-expo);
@@ -159,8 +159,8 @@ async function copyCode() {
 	}
 
 	.lede {
-		font-family: 'Newsreader', Georgia, serif;
-		font-size: 17px;
+		font-family: var(--font-serif);
+		font-size: var(--text-lg);
 		font-weight: 400;
 		line-height: 1.6;
 		color: var(--ob-text-body);
@@ -175,8 +175,8 @@ async function copyCode() {
 	}
 
 	.error {
-		font-family: 'Newsreader', Georgia, serif;
-		font-size: 14px;
+		font-family: var(--font-serif);
+		font-size: var(--text-sm);
 		color: var(--ob-error);
 		margin: 0;
 		padding: 10px 14px;
@@ -200,9 +200,9 @@ async function copyCode() {
 		border-radius: 2px;
 		background: transparent;
 		color: var(--ob-text-heading);
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-style: italic;
-		font-size: 16px;
+		font-size: var(--text-base);
 		font-weight: 500;
 		cursor: pointer;
 		letter-spacing: 0.01em;
@@ -254,8 +254,8 @@ async function copyCode() {
 	}
 
 	.char {
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 30px;
+		font-family: var(--font-mono);
+		font-size: var(--text-3xl);
 		font-weight: 500;
 		letter-spacing: 0.04em;
 		color: var(--ob-text-heading);
@@ -285,9 +285,9 @@ async function copyCode() {
 		border: 1px solid var(--ob-border);
 		border-radius: 2px;
 		color: var(--ob-text-label);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 11px;
-		letter-spacing: 0.12em;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
+		letter-spacing: var(--tracking-eyebrow);
 		text-transform: uppercase;
 		cursor: pointer;
 		transition:
@@ -301,8 +301,8 @@ async function copyCode() {
 	}
 
 	.link {
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 12px;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
 		color: var(--ob-text-muted);
 		text-decoration: none;
 		transition: color var(--duration-snap) var(--ease-out-expo);
@@ -320,18 +320,18 @@ async function copyCode() {
 	}
 
 	.waiting-text {
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 11px;
-		letter-spacing: 0.16em;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
+		letter-spacing: var(--tracking-eyebrow);
 		text-transform: uppercase;
 		color: var(--ob-text-label);
 		flex: 1;
 	}
 
 	.cancel {
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 10.5px;
-		letter-spacing: 0.16em;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
+		letter-spacing: var(--tracking-eyebrow);
 		text-transform: uppercase;
 		color: var(--ob-text-muted);
 		background: none;

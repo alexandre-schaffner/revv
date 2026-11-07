@@ -39,7 +39,7 @@ function readTheme(el: HTMLElement): { fontFamily: string; theme: ITheme } {
   const accent = v("--color-accent", "#6b5d3e");
   const danger = v("--color-destructive", "#b5494b");
   return {
-    fontFamily: v("--font-mono", '"JetBrains Mono", "Fira Code", monospace'),
+    fontFamily: v("--font-mono", "ui-monospace, monospace"),
     theme: {
       background: "#00000000",
       foreground: fg,

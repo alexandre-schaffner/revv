@@ -28,13 +28,13 @@ let {
 >
   {#if headingChild}
     <CommandPrimitive.GroupHeading
-      class="text-muted-foreground px-2 py-1.5 text-xs font-medium"
+      class="text-muted-foreground px-2 py-1.5 text-ui font-medium"
     >
       {@render headingChild()}
     </CommandPrimitive.GroupHeading>
   {:else if heading}
     <CommandPrimitive.GroupHeading
-      class="text-muted-foreground px-2 py-1.5 text-xs font-medium"
+      class="text-muted-foreground px-2 py-1.5 text-ui font-medium"
     >
       {heading}
     </CommandPrimitive.GroupHeading>

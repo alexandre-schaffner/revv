@@ -127,7 +127,7 @@ onDestroy(() => {
 		outline: none;
 		resize: none;
 		font-family: var(--font-sans);
-		font-size: 12px;
+		font-size: var(--text-ui);
 		line-height: 1.6;
 		color: var(--color-text-primary);
 		min-height: 20px;

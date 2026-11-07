@@ -469,9 +469,9 @@ async function runMerge(method: MergeMethod): Promise<void> {
     background: transparent;
     border: none;
     font-family: inherit;
-    font-size: 13px;
+    font-size: var(--text-sm);
     font-weight: 500;
-    letter-spacing: -0.01em;
+    letter-spacing: var(--text-sm--letter-spacing);
     color: inherit;
     cursor: pointer;
     white-space: nowrap;

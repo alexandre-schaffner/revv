@@ -23,5 +23,5 @@ export type QuestionCustomInputProps = {
 	{value}
 	{disabled}
 	oninput={(e) => onInput((e.currentTarget as HTMLInputElement).value)}
-	class="text-xs"
+	class="text-ui"
 />

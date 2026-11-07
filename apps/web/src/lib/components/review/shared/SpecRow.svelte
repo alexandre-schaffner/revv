@@ -253,8 +253,8 @@ function focusTriggerOnPointerDown(e: PointerEvent): void {
         align-items: center;
         gap: 8px;
         font-family: var(--font-mono);
-        font-size: 13px;
-        font-weight: 600;
+        font-size: var(--text-sm);
+        font-weight: 500;
         color: var(--c-label-color, var(--color-text-primary));
         white-space: nowrap;
         letter-spacing: 0.01em;
@@ -264,7 +264,7 @@ function focusTriggerOnPointerDown(e: PointerEvent): void {
 
     .spec-row-preview {
         font-family: var(--font-mono);
-        font-size: 12px;
+        font-size: var(--text-ui);
         color: var(--color-text-muted);
         overflow: hidden;
         text-overflow: ellipsis;

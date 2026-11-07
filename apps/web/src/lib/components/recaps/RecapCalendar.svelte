@@ -491,7 +491,7 @@ $effect(() => {
 
 	.month-label {
 		min-width: 7.5rem;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		font-weight: 500;
 		color: var(--color-text-primary);
 		text-align: center;
@@ -519,11 +519,9 @@ $effect(() => {
 
 	.weekday {
 		padding-bottom: 0.375rem;
-		font-family: var(--font-mono);
-		font-size: 0.625rem;
+		font-family: var(--font-sans);
+		font-size: var(--text-ui);
 		font-weight: 500;
-		text-transform: uppercase;
-		letter-spacing: 0.12em;
 		color: var(--color-text-subtle);
 	}
 
@@ -670,7 +668,7 @@ $effect(() => {
 
 	.cell-num {
 		font-family: var(--font-mono);
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		font-variant-numeric: tabular-nums;
 		line-height: 1;
 	}
@@ -725,7 +723,8 @@ $effect(() => {
 		align-items: center;
 		gap: 0.375rem;
 		margin: 0;
-		font-size: 0.6875rem;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-subtle);
 	}
 

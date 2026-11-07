@@ -407,8 +407,8 @@ const avatarFailed = $derived(
 
 	:global(.settings-title) {
 		padding: 24px 20px 14px;
-		font-family: "Newsreader", Georgia, serif;
-		font-size: 22px;
+		font-family: var(--font-serif);
+		font-size: var(--text-2xl);
 		font-weight: 500;
 		letter-spacing: -0.015em;
 		line-height: 1;
@@ -438,7 +438,7 @@ const avatarFailed = $derived(
 		background: var(--color-bg-secondary);
 		color: var(--color-text-primary);
 		font: inherit;
-		font-size: 12.5px;
+		font-size: var(--text-sm);
 		outline: none;
 		transition: box-shadow var(--duration-quick) var(--ease-out-expo);
 	}
@@ -504,7 +504,7 @@ const avatarFailed = $derived(
 		background: transparent;
 		color: var(--color-text-secondary);
 		font: inherit;
-		font-size: 13px;
+		font-size: var(--text-sm);
 		text-align: left;
 		cursor: pointer;
 		outline: none;
@@ -562,8 +562,8 @@ const avatarFailed = $derived(
 
 	.nav-accessory {
 		flex-shrink: 0;
-		font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-		font-size: 11px;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 		font-variant-numeric: tabular-nums;
 	}
@@ -595,7 +595,7 @@ const avatarFailed = $derived(
 	}
 
 	.result-label {
-		font-size: 13px;
+		font-size: var(--text-sm);
 		font-weight: 400;
 		color: var(--color-text-primary);
 	}
@@ -605,13 +605,13 @@ const avatarFailed = $derived(
 	}
 
 	.result-pane {
-		font-size: 11.5px;
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 	}
 
 	.results-empty {
 		padding: 8px 10px;
-		font-size: 12.5px;
+		font-size: var(--text-sm);
 		line-height: 1.45;
 		color: var(--color-text-secondary);
 		overflow-wrap: anywhere;
@@ -645,7 +645,7 @@ const avatarFailed = $derived(
 	.sidebar-username {
 		min-width: 0;
 		overflow: hidden;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -666,7 +666,7 @@ const avatarFailed = $derived(
 		height: 30px;
 		border-color: var(--color-border-subtle);
 		background: var(--color-bg-secondary);
-		font-size: 12.5px;
+		font-size: var(--text-sm);
 	}
 
 	:global(.dark) .pane :global([data-slot="select-trigger"]),

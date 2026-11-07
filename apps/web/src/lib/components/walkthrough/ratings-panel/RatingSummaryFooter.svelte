@@ -57,7 +57,7 @@ let { counts, totalElapsedMs, allPassed }: Props = $props();
         padding: 8px 12px 10px;
         border-top: 1px solid var(--color-border);
         font-family: var(--font-mono);
-        font-size: 11.5px;
+        font-size: var(--text-ui);
         color: var(--color-text-muted);
         font-variant-numeric: tabular-nums;
         flex-wrap: wrap;
@@ -89,9 +89,7 @@ let { counts, totalElapsedMs, allPassed }: Props = $props();
     }
 
     .footer-passed-label {
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
+        font-weight: 500;
         color: var(--color-score-pass-label);
     }
 

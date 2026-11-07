@@ -209,12 +209,10 @@ async function onGenerate(): Promise<void> {
 		display: inline-flex;
 		align-items: center;
 		gap: 0.5rem;
-		font-family: var(--font-mono);
-		font-size: 0.6875rem;
+		font-family: var(--font-sans);
+		font-size: var(--text-ui);
 		font-weight: 500;
-		text-transform: uppercase;
-		letter-spacing: 0.18em;
-		color: var(--color-text-muted);
+		color: var(--color-text-subtle);
 	}
 
 	.ai-mark {
@@ -240,8 +238,8 @@ async function onGenerate(): Promise<void> {
 
 	.date {
 		margin: 0;
-		font-family: "Newsreader", Georgia, serif;
-		font-size: 2.75rem;
+		font-family: var(--font-serif);
+		font-size: var(--text-5xl);
 		font-weight: 500;
 		letter-spacing: -0.02em;
 		line-height: 1.05;
@@ -250,9 +248,8 @@ async function onGenerate(): Promise<void> {
 	}
 
 	.time-cap {
-		font-family: var(--font-mono);
-		font-size: 0.6875rem;
-		letter-spacing: 0.04em;
+		font-variant-numeric: tabular-nums;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 	}
 
@@ -269,7 +266,7 @@ async function onGenerate(): Promise<void> {
 
 	.empty-title {
 		margin: 0;
-		font-size: 1rem;
+		font-size: var(--text-base);
 		font-weight: 500;
 		color: var(--color-text-primary);
 	}
@@ -277,7 +274,7 @@ async function onGenerate(): Promise<void> {
 	.empty-hint {
 		margin: 0;
 		max-width: 28rem;
-		font-size: 0.875rem;
+		font-size: var(--text-sm);
 		line-height: 1.55;
 		color: var(--color-text-subtle);
 		text-wrap: pretty;

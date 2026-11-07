@@ -36,8 +36,8 @@ let { icon: Icon, label, aside, children, foot }: Props = $props();
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		font-size: 12px;
-		font-weight: 600;
+		font-size: var(--text-ui);
+		font-weight: 500;
 		line-height: 16px;
 		color: var(--color-text-secondary);
 	}
@@ -56,7 +56,7 @@ let { icon: Icon, label, aside, children, foot }: Props = $props();
 
 	.body {
 		margin-top: 6px;
-		font-size: 13px;
+		font-size: var(--text-sm);
 		line-height: 1.65;
 		color: var(--color-text-secondary);
 		text-wrap: pretty;
@@ -89,7 +89,7 @@ let { icon: Icon, label, aside, children, foot }: Props = $props();
 		margin-top: 8px;
 		padding-top: 8px;
 		border-top: 1px solid var(--color-border-subtle);
-		font-size: 12px;
+		font-size: var(--text-ui);
 		line-height: 1.5;
 		color: var(--color-text-subtle);
 	}
@@ -118,7 +118,7 @@ let { icon: Icon, label, aside, children, foot }: Props = $props();
 		}
 
 		.label {
-			font-size: 12px;
+			font-size: var(--text-ui);
 			line-height: 1.6;
 		}
 
@@ -134,7 +134,7 @@ let { icon: Icon, label, aside, children, foot }: Props = $props();
 			flex: 1 1 0;
 			min-width: 16rem;
 			margin-top: 0;
-			font-size: 12.5px;
+			font-size: var(--text-sm);
 			line-height: 1.6;
 		}
 

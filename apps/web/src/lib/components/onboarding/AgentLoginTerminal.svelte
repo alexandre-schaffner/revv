@@ -155,7 +155,7 @@ function readTerminalStyle(el: HTMLElement): {
   const heading = v("--ob-text-heading", "#1a1816");
 
   return {
-    fontFamily: v("--font-mono", '"JetBrains Mono", "Fira Code", monospace'),
+    fontFamily: v("--font-mono", "ui-monospace, monospace"),
     theme: {
       background: "#00000000",
       foreground: fg,
@@ -293,8 +293,8 @@ onDestroy(() => {
 	}
 
 	.lede {
-		font-family: 'Newsreader', Georgia, serif;
-		font-size: 16px;
+		font-family: var(--font-serif);
+		font-size: var(--text-base);
 		line-height: 1.6;
 		color: var(--ob-text-body);
 		margin: 0;
@@ -314,9 +314,9 @@ onDestroy(() => {
 		border: 0;
 		padding: 0;
 		color: var(--ob-text-muted);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 10.5px;
-		letter-spacing: 0.14em;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
+		letter-spacing: var(--tracking-eyebrow);
 		text-transform: uppercase;
 		cursor: pointer;
 		transition: color var(--duration-snap) var(--ease-out-expo);
@@ -347,8 +347,8 @@ onDestroy(() => {
 	}
 
 	.login-error {
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 11.5px;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
 		color: var(--ob-text-italic);
 	}
 
@@ -362,9 +362,9 @@ onDestroy(() => {
 		border: 0;
 		padding: 8px 4px;
 		color: var(--ob-text-muted);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 10.5px;
-		letter-spacing: 0.14em;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
+		letter-spacing: var(--tracking-eyebrow);
 		text-transform: uppercase;
 		cursor: pointer;
 		transition: color var(--duration-snap) var(--ease-out-expo);

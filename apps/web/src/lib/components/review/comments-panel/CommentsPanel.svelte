@@ -176,10 +176,6 @@ function onPanelKeydown(e: KeyboardEvent): void {
             </ul>
         {/if}
     </section>
-{:else}
-    <section class="comments-panel comments-panel--empty" aria-label="Unresolved comments">
-        <div class="empty-state empty-state--quiet">no unresolved comment threads</div>
-    </section>
 {/if}
 
 <style>
@@ -197,10 +193,6 @@ function onPanelKeydown(e: KeyboardEvent): void {
         width: 100%;
     }
 
-    .comments-panel--empty {
-        padding: 10px 12px;
-    }
-
     .comment-rows {
         list-style: none;
         padding: 0;
@@ -212,12 +204,9 @@ function onPanelKeydown(e: KeyboardEvent): void {
     .empty-state {
         padding: 14px 16px;
         font-family: var(--font-mono);
-        font-size: 12px;
+        font-size: var(--text-ui);
         color: var(--color-text-muted);
         font-style: italic;
     }
 
-    .empty-state--quiet {
-        padding: 10px 12px;
-    }
 </style>

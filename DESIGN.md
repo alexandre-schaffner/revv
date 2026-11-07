@@ -51,37 +51,44 @@ typography:
     lineHeight: 1.05
     letterSpacing: "-0.02em"
   display:
-    fontFamily: "Inter, system-ui, sans-serif"
-    fontSize: "1.5rem"
-    fontWeight: 600
+    fontFamily: "Geist, system-ui, sans-serif"
+    fontSize: "2rem"
+    fontWeight: 500
     lineHeight: 1.2
-    letterSpacing: "-0.01em"
+    letterSpacing: "-0.03em"
   headline:
-    fontFamily: "Inter, system-ui, sans-serif"
+    fontFamily: "Geist, system-ui, sans-serif"
     fontSize: "1.125rem"
     fontWeight: 600
-    lineHeight: 1.3
-  title:
-    fontFamily: "Inter, system-ui, sans-serif"
-    fontSize: "0.9375rem"
-    fontWeight: 600
     lineHeight: 1.4
+    letterSpacing: "-0.012em"
+  title:
+    fontFamily: "Geist, system-ui, sans-serif"
+    fontSize: "1rem"
+    fontWeight: 600
+    lineHeight: 1.5
+    letterSpacing: "-0.006em"
   body:
-    fontFamily: "Inter, system-ui, sans-serif"
+    fontFamily: "Geist, system-ui, sans-serif"
     fontSize: "0.875rem"
     fontWeight: 400
-    lineHeight: 1.5
-  label:
-    fontFamily: "Inter, system-ui, sans-serif"
-    fontSize: "0.75rem"
-    fontWeight: 500
-    lineHeight: 1.3
-    letterSpacing: "0.01em"
-  mono:
-    fontFamily: "JetBrains Mono, Fira Code, monospace"
+    lineHeight: 1.7
+  ui:
+    fontFamily: "Geist, system-ui, sans-serif"
     fontSize: "0.8125rem"
     fontWeight: 400
-    lineHeight: 1.5
+    lineHeight: 1.25rem
+  label:
+    fontFamily: "Geist, system-ui, sans-serif"
+    fontSize: "0.75rem"
+    fontWeight: 500
+    lineHeight: 1rem
+    letterSpacing: "0.005em"
+  mono:
+    fontFamily: "Geist Mono, ui-monospace, monospace"
+    fontSize: "0.8125rem"
+    fontWeight: 400
+    lineHeight: 1.25rem
 
 rounded:
   sm: "4px"
@@ -256,35 +263,73 @@ is "considered" rather than "alarming." Stock-bright severity reads as a prototy
 
 ## 3. Typography
 
-**Body + UI Font:** Inter (with `system-ui, sans-serif` fallback)
-**Mono Font:** JetBrains Mono (with `Fira Code, monospace` fallback)
+**Body + UI Font:** Geist (vendored variable build, `system-ui` fallback)
+**Mono Font:** Geist Mono (same family, same x-height; `ui-monospace` fallback)
 **Editorial Display Font:** Newsreader (with `Georgia, serif` fallback). Scoped — see
 the Editorial-Display Carve-out below.
 
-**Character:** A single warm humanist sans for the whole interface, paired with a clean
-geometric mono for code and identifiers, and one editorial display serif reserved for
-AI-authored long-form moments. Inter is used at restrained weights (400, 500, 600) and
-modest sizes. The hierarchy is built from scale and weight contrast, not from six
-display families competing for attention.
+**Character:** One neo-grotesque family for the whole interface, its monospace sibling for
+code and identifiers, and one editorial serif reserved for AI-authored long-form moments.
+Because sans and mono share an x-height, an identifier set in mono sits on the same line
+as the sentence around it at the same size. The hierarchy is built from scale and weight
+contrast, not from competing families.
+
+### Scale
+
+Every font size is a `--text-*` step in `app.css`; there are no literals in between
+(`bun run check:typography` enforces it). Each step carries its leading and tracking:
+Geist has no optical-size axis, so the small steps open up a hair and the display steps
+close in.
+
+| Step | Size | Tracking | Role |
+| --- | --- | --- | --- |
+| `xs` | 12px | +0.01em | tertiary, busy views only: badges, kbd, chart ticks, counts (the floor) |
+| `ui` | 13px | 0 | secondary: metadata and captions beside 14px text, dense prose |
+| `sm` | 14px | 0 | the default: rows, menus, controls, body copy |
+| `base` | 16px | -0.006em | panel titles, section headings |
+| `lg` | 18px | -0.012em | section titles |
+| `xl` | 20px | -0.018em | page section headings |
+| `2xl` | 24px | -0.024em | dialog and pane titles |
+| `3xl` | 32px | -0.03em | page titles (PR title, file title) |
+| `4xl` / `5xl` | 36 / 44px | (serif) | editorial heroes |
+
+Geist was drawn for a 14px UI (Vercel's label-14 / copy-14 are its defaults), so 14px is
+the default for anything read, 13px the secondary line beside it (a title at 14 over its
+metadata at 13), 12px tertiary and the floor. Text a
+user is meant to read uses `--color-text-subtle` or darker, never `--color-text-muted`
+(a decorative grey). The app never overrides `-webkit-font-smoothing`: forcing `antialiased`
+switches off macOS's stem darkening and renders every glyph a weight lighter.
+
+Uppercase gets `--tracking-caps` (0.06em) in sans and `--tracking-eyebrow` (0.12em) in mono.
 
 ### Hierarchy
 
-- **Editorial Display** (Newsreader, 500, 2.25–2.75rem, 1.05): scoped to AI-authored
+- **Editorial Display** (Newsreader, 500, `4xl`–`5xl`): scoped to AI-authored
   long-form heroes. Reading-room voice. See carve-out below.
-- **Display** (Inter, 600, 1.5rem, 1.2): rare; reserved for page-level titles when one
-  exists.
-- **Headline** (Inter, 600, 1.125rem, 1.3): panel headers.
-- **Title** (Inter, 600, 0.9375rem, 1.4): card titles, PR titles in the list.
-- **Body** (Inter, 400, 0.875rem, 1.5): all running text. Body line length caps at 70ch
-  in prose contexts (walkthrough markdown, recap text).
-- **Label** (Inter, 500, 0.75rem, 0.01em letter-spacing): inline labels, metadata, tab
-  text. Never uppercase by default; case is meaningful, not decorative.
-- **Mono** (JetBrains Mono, 400, 0.8125rem): code in diffs, identifiers in prose,
-  filenames in lists.
+- **Display** (Geist, 500, `3xl`): page titles. Large type stays at 500 and closes its
+  tracking; weight is not how a 32px title earns attention.
+- **Headline** (Geist, 600, `lg`): panel headers.
+- **Title** (Geist, 600, `base`): card titles, section headings.
+- **Reading** (Geist, 400, `base`, 1.75, `--color-text-prose`): documents read top to bottom
+  (walkthrough, PR description, sentiment) use `prose prose-reading`, set like a blog article:
+  running text held to 36em (~80 characters) while code, tables and diagrams keep the full
+  column; a chapter's standfirst adds `prose-lede` (`lg`, secondary ink).
+- **Body** (Geist, 400, `sm`, 1.7): other markdown (`prose prose-sm`: chat, annotations,
+  comments); dense side panels use `prose-dense` (`ui`, 1.6). Markdown headings are 600 at
+  every level.
+- **UI** (Geist, 400/500, `ui`): rows, menus, controls.
+- **Label** (Geist, 500, `xs`): inline labels, metadata, tab text. Never uppercase by
+  default; case is meaningful, not decorative.
+- **Mono** (Geist Mono, 400, `ui` in the diff, 0.9em inline in prose): code, identifiers,
+  filenames.
+
+Weights are 400 (text), 500 (titles in rows, active controls, display) and 600 (headings
+16px and up, emphasis). Text 14px and under that needs to stand out takes 500, Geist's
+"strong" label weight, not 600. Nothing bolder: 700 reads as shouting.
 
 ### Named Rules
 
-**The Two-and-a-Half-Family Rule.** Inter is the only sans for UI and body. JetBrains
+**The Two-and-a-Half-Family Rule.** Geist is the only sans for UI and body. Geist
 Mono is the only mono for code and identifiers. Newsreader is the only editorial
 display serif, and only on AI-authored long-form heroes (see carve-out). No condensed
 sans, no second body family, no display sans, no decorative serif elsewhere. The
@@ -304,13 +349,15 @@ These are the surfaces where an agent is talking *to* the reader at length, so t
 serif earns the reading-room association the brand wants. Newsreader is never used
 for product chrome (buttons, tabs, sidebars, dialogs), never for body prose, and never
 below 1.875rem. If a new surface wants Newsreader, ask whether it's AI-authored
-long-form first; if not, use Inter.
+long-form first; if not, use Geist.
 
-**The Earned-Uppercase Rule.** Uppercase is prohibited as a decorative style. Use
-sentence case for everything except technical identifiers that are uppercase by
-convention (HTTP verbs, env var names, type names). The mono eyebrow pattern
-(0.6875rem mono, 0.18em letter-spacing, uppercase) is exempt — it's a structural
-section marker, not decoration.
+**The Earned-Uppercase Rule.** Uppercase is for badges and chips only: one or two words
+inside a filled or bordered pill ("HIGH RISK", "FIXED"), plus single-letter marks. Section
+labels, stat labels, group headings and eyebrows are sentence case, 13px sans, in
+`--color-text-subtle`. A label that only restates the heading under it is cut; a fact about
+the heading (a recap's kind, a sync time) goes under it, not above. Mono is for code, paths,
+SHAs and PR numbers, never for labels or counts: figures are Geist Sans with
+`tabular-nums`. (Onboarding keeps its own ceremonial voice and is the one exception.)
 
 **The 65–75ch Rule.** Body prose in walkthrough markdown, recap content, and chat
 messages caps at 70ch (`max-w-prose` in Tailwind). The diff is exempt; code wraps to
@@ -470,7 +517,7 @@ is alive.
   purpose.
 - **Do** cap body prose at 70ch (Tailwind's `max-w-prose`). The diff is exempt.
 - **Do** reach for Newsreader on AI-authored long-form hero titles (recap hero,
-  walkthrough section heads, onboarding hero copy). Inter everywhere else.
+  walkthrough section heads, onboarding hero copy). Geist everywhere else.
 - **Do** honor `prefers-reduced-motion` as a contract. Opt back in only for motion
   that carries meaning, using `.motion-essential-*` classes.
 - **Do** use motion tokens from the `@theme` block: `duration-snap`,

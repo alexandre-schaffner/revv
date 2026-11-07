@@ -53,14 +53,13 @@ function fmt(n: number): string {
 }
 
 .verb {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-ui);
   color: var(--color-text-muted);
 }
 
 .title {
-  font-size: 0.9rem;
+  font-size: var(--text-sm);
   font-weight: 500;
   color: var(--color-text-primary);
   text-decoration-line: underline;
@@ -78,7 +77,7 @@ function fmt(n: number): string {
 
 .pr-num {
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: var(--text-ui);
   color: var(--color-text-muted);
   letter-spacing: 0.02em;
 }
@@ -86,9 +85,8 @@ function fmt(n: number): string {
 .diff {
   display: inline-flex;
   gap: 0.35rem;
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-ui);
 }
 
 .diff .plus {
@@ -101,7 +99,7 @@ function fmt(n: number): string {
 
 .description {
   margin: 0.25rem 0 0;
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   color: var(--color-text-secondary);
   line-height: 1.55;
 }

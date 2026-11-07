@@ -112,7 +112,7 @@ onMount(async () => {
 		align-items: center;
 		gap: 0.5rem;
 		padding: 0.625rem 0.75rem;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-muted);
 	}
 </style>

@@ -46,6 +46,28 @@ kill-server: ## Kill any stale dev server processes (uses PID files; safe to run
 	  fi; \
 	  rm -f apps/server/revv-dev.db.dev.pid; \
 	fi
+	@# lsof lives in /usr/sbin, which GUI launchers (Conductor's Run button)
+	@# may leave off PATH; without it this loop silently found nothing.
+	@lsof=$$(command -v lsof || echo /usr/sbin/lsof); \
+	repo_root=$$(pwd -P); \
+	for port in 5173 45679; do \
+	  for pid in $$($$lsof -tiTCP:$$port -sTCP:LISTEN 2>/dev/null); do \
+	    cwd=$$($$lsof -a -p "$$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p'); \
+	    case "$$cwd" in \
+	      "$$repo_root"*) \
+	        printf "[kill-server] killing stale listener on :$$port (PID $$pid, $$cwd)…\n"; \
+	        kill "$$pid" 2>/dev/null || true ;; \
+	    esac; \
+	  done; \
+	  for _ in 1 2 3 4 5 6 7 8 9 10; do \
+	    $$lsof -tiTCP:$$port -sTCP:LISTEN >/dev/null 2>&1 || break; \
+	    sleep 0.5; \
+	  done; \
+	  if holder=$$($$lsof -tiTCP:$$port -sTCP:LISTEN 2>/dev/null | head -1) && [ -n "$$holder" ]; then \
+	    printf "[kill-server] :$$port is held by another process: %s\n" "$$(ps -o pid=,command= -p $$holder)"; \
+	    exit 1; \
+	  fi; \
+	done
 
 # ── Team Cache Emulator (fake-gcs-server) ─────────────────────
 

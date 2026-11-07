@@ -29,7 +29,7 @@ async function copyCode() {
 	<div class="flex flex-col items-center gap-4 text-center">
 		<p class="text-sm text-text-secondary">Enter this code on GitHub:</p>
 		<div class="flex items-center gap-2 rounded-lg border border-border bg-bg-elevated px-6 py-3">
-			<span class="font-mono text-2xl font-bold tracking-widest text-text-primary"
+			<span class="font-mono text-2xl font-semibold tracking-widest text-text-primary"
 				>{deviceFlow.userCode}</span
 			>
 			<button
@@ -48,13 +48,13 @@ async function copyCode() {
 			href={deviceFlow.verificationUri}
 			target="_blank"
 			rel="noopener noreferrer"
-			class="text-xs text-accent hover:underline"
+			class="text-ui text-accent hover:underline"
 		>
 			{deviceFlow.verificationUri}
 		</a>
-		<p class="text-xs text-text-muted">Waiting for authorization…</p>
+		<p class="text-ui text-text-muted">Waiting for authorization…</p>
 		<button
-			class="cursor-pointer text-xs text-text-muted underline hover:text-text-secondary"
+			class="cursor-pointer text-ui text-text-muted underline hover:text-text-secondary"
 			onclick={cancelSignIn}
 		>
 			Cancel

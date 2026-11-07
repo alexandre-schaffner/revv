@@ -27,12 +27,12 @@ export type ToolOutputProps = HTMLAttributes<HTMLDivElement> & {
 		class={cn("space-y-2", className)}
 		{...restProps}
 	>
-		<h4 class="font-medium text-muted-foreground text-xs uppercase tracking-wide">
+		<h4 class="font-medium text-muted-foreground text-ui">
 			{errorText ? "Error" : "Result"}
 		</h4>
 		<div
 			class={cn(
-				"overflow-x-auto rounded-md text-xs [&_table]:w-full",
+				"overflow-x-auto rounded-md text-ui [&_table]:w-full",
 				errorText
 					? "bg-destructive/10 text-destructive"
 					: "bg-muted/50 text-foreground",

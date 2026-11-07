@@ -164,7 +164,7 @@ onMount(() => {
 
 	.editor-hint,
 	.editor-keys {
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 	}
 
@@ -186,7 +186,7 @@ onMount(() => {
 		background: transparent;
 		color: var(--color-text-primary);
 		font: inherit;
-		font-size: 0.875rem;
+		font-size: var(--text-sm);
 		line-height: 1.5;
 	}
 
@@ -201,7 +201,7 @@ onMount(() => {
 
 	.editor-empty {
 		margin: 0;
-		font-size: 0.875rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-muted);
 	}
 

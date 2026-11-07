@@ -764,19 +764,26 @@ onDestroy(() => {
 		width: 100%;
 		--diffs-gap-inline: 8px;
 		--diffs-tab-size: 2;
+		/* Pierre falls back to SF Mono and system-ui; the diff speaks the app's type. */
+		--diffs-font-family: var(--font-mono);
+		--diffs-header-font-family: var(--font-sans);
+		/* Code is what a review is read in: the 14px default, on a 22px line so
+		   long runs of it stay easy to track. */
+		--diffs-font-size: var(--text-sm);
+		--diffs-line-height: 1.375rem;
 		--diffs-min-number-column-width: 2ch;
 	}
 
 	.diff-error {
 		padding: 16px;
 		color: var(--color-danger);
-		font-size: 13px;
+		font-size: var(--text-sm);
 	}
 
 	.diff-error pre {
 		margin-top: 8px;
 		font-family: var(--font-mono);
-		font-size: 11px;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 		white-space: pre-wrap;
 	}

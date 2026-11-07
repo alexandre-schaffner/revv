@@ -22,7 +22,7 @@ let { label, icon, trailing, chevron = true, title }: Props = $props();
   {#if icon}
     {@render icon()}
   {/if}
-  <span class="text-xs text-text-secondary">{label}</span>
+  <span class="text-ui text-text-secondary">{label}</span>
   {#if trailing}
     {@render trailing()}
   {/if}

@@ -233,9 +233,9 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 	}
 
 	.chapter-eyebrow {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-style: italic;
-		font-size: 11.5px;
+		font-size: var(--text-ui);
 		font-weight: 500;
 		letter-spacing: 0.3px;
 		color: var(--color-text-muted);
@@ -269,8 +269,8 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 	}
 
 	.chapter-title {
-		font-family: 'Newsreader', Georgia, serif;
-		font-size: 18px;
+		font-family: var(--font-serif);
+		font-size: var(--text-lg);
 		font-weight: 500;
 		letter-spacing: -0.012em;
 		line-height: 1.05;
@@ -304,7 +304,8 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		font-size: 10px;
+		font-size: var(--text-xs);
+		letter-spacing: var(--text-xs--letter-spacing);
 		color: var(--color-accent);
 		min-width: 0;
 	}
@@ -346,7 +347,8 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 	}
 
 	.chapter-blurb {
-		font-size: 10.5px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		line-height: 1.35;
 		color: var(--color-text-muted);
 		white-space: nowrap;

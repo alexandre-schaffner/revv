@@ -246,7 +246,8 @@ function onPathKeydown(e: KeyboardEvent): void {
 		gap: 5px;
 		margin: 8px 2px 0;
 		color: var(--color-text-muted);
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		line-height: 1.4;
 	}
 
@@ -255,7 +256,7 @@ function onPathKeydown(e: KeyboardEvent): void {
 	}
 
 	.hint code {
-		font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+		font-family: var(--font-mono);
 		color: var(--color-text-secondary);
 	}
 
@@ -284,7 +285,8 @@ function onPathKeydown(e: KeyboardEvent): void {
 		gap: 8px;
 		align-items: center;
 		color: var(--color-text-muted);
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 	}
 
 	.remote-row code {
@@ -318,8 +320,8 @@ function onPathKeydown(e: KeyboardEvent): void {
 	}
 
 	.linked-name {
-		font-size: 12.5px;
-		font-weight: 600;
+		font-size: var(--text-sm);
+		font-weight: 500;
 		color: var(--color-text-primary);
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -327,12 +329,12 @@ function onPathKeydown(e: KeyboardEvent): void {
 	}
 
 	.linked-path {
-		font-size: 11px;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+		font-family: var(--font-mono);
 	}
 
 	.linked-status {
@@ -348,7 +350,8 @@ function onPathKeydown(e: KeyboardEvent): void {
 		border-radius: 999px;
 		background: color-mix(in srgb, var(--color-accent) 12%, transparent);
 		color: var(--color-text-secondary);
-		font-size: 10.5px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 	}
 
 	/* ── Footer ─────────────────────────────────────────── */

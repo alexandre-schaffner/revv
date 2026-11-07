@@ -294,9 +294,9 @@ $effect(() => {
 						 * the span itself does nothing. */
 						button[data-type='item'] > [data-item-section='decoration']::before,
 						button[data-type='item'] > [data-item-section='decoration']::after {
-							font-family: var(--font-mono, ui-monospace, monospace);
-							font-size: 10px;
-							letter-spacing: -0.02em;
+							font-family: var(--font-mono);
+							font-size: var(--text-xs);
+							letter-spacing: 0;
 							/* Defensive: tabular figures in case the
 							 * monospace fallback ever lands on a font with
 							 * proportional digits. */
@@ -694,7 +694,11 @@ onDestroy(() => {
 		   `--trees-theme-*` → built-in defaults, so any override here wins. */
 		--trees-bg-override: var(--color-bg-secondary);
 		--trees-fg-override: var(--color-text-secondary);
-		--trees-fg-muted-override: var(--color-text-muted);
+		--trees-fg-muted-override: var(--color-text-subtle);
+		/* The library falls back to system-ui at 13px; rows are text people read. */
+		--trees-font-family-override: var(--font-sans);
+		--trees-font-size-override: var(--text-sm);
+		--trees-font-weight-semibold-override: 500;
 		--trees-border-color-override: var(--color-border);
 		--trees-selected-bg-override: var(--color-tree-active-bg);
 		--trees-selected-fg-override: var(--color-tree-active-text);

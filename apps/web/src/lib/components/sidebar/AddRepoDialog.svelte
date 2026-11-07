@@ -196,13 +196,14 @@ function rememberCloneBase(path: string): void {
 
   .source-title {
     color: var(--color-text-primary);
-    font-size: 12.5px;
-    font-weight: 600;
+    font-size: var(--text-sm);
+    font-weight: 500;
   }
 
   .source-hint {
     color: var(--color-text-muted);
-    font-size: 11px;
+    font-size: var(--text-ui);
+    letter-spacing: var(--text-ui--letter-spacing);
     line-height: 1.4;
   }
 
@@ -219,7 +220,8 @@ function rememberCloneBase(path: string): void {
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 11px;
+    font-size: var(--text-ui);
+    letter-spacing: var(--text-ui--letter-spacing);
     transition:
       background var(--duration-instant) var(--ease-soft),
       color var(--duration-instant) var(--ease-soft);

@@ -356,9 +356,9 @@ function handleSkip(): void {
 		border: 0;
 		padding: 0;
 		color: var(--ob-text-muted);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 10.5px;
-		letter-spacing: 0.14em;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
+		letter-spacing: var(--tracking-eyebrow);
 		text-transform: uppercase;
 		cursor: pointer;
 		transition: color var(--duration-snap) var(--ease-out-expo);
@@ -378,8 +378,8 @@ function handleSkip(): void {
 	}
 
 	.lede {
-		font-family: 'Newsreader', Georgia, serif;
-		font-size: 17px;
+		font-family: var(--font-serif);
+		font-size: var(--text-lg);
 		font-weight: 400;
 		line-height: 1.6;
 		color: var(--ob-text-body);
@@ -501,8 +501,8 @@ function handleSkip(): void {
 	}
 
 	.option-name {
-		font-family: 'Newsreader', Georgia, serif;
-		font-size: 20px;
+		font-family: var(--font-serif);
+		font-size: var(--text-xl);
 		color: var(--ob-text-heading);
 		letter-spacing: -0.005em;
 	}
@@ -512,9 +512,9 @@ function handleSkip(): void {
 	}
 
 	.option-tag {
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 9.5px;
-		letter-spacing: 0.18em;
+		font-family: var(--font-mono);
+		font-size: var(--text-xs);
+		letter-spacing: var(--tracking-eyebrow);
 		text-transform: uppercase;
 	}
 
@@ -531,8 +531,8 @@ function handleSkip(): void {
 	}
 
 	.option-host {
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 12px;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
 		color: var(--ob-text-muted);
 	}
 
@@ -565,9 +565,9 @@ function handleSkip(): void {
 		border-radius: 2px;
 		background: transparent;
 		color: var(--ob-text-heading);
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-style: italic;
-		font-size: 16px;
+		font-size: var(--text-base);
 		font-weight: 500;
 		cursor: pointer;
 		letter-spacing: 0.01em;
@@ -601,9 +601,9 @@ function handleSkip(): void {
 		border: 0;
 		padding: 8px 4px;
 		color: var(--ob-text-muted);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 10.5px;
-		letter-spacing: 0.14em;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
+		letter-spacing: var(--tracking-eyebrow);
 		text-transform: uppercase;
 		cursor: pointer;
 		transition: color var(--duration-snap) var(--ease-out-expo);
@@ -632,8 +632,8 @@ function handleSkip(): void {
 		border: 1px solid var(--ob-border);
 		border-radius: 2px;
 		background: var(--ob-hover-subtle);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 11.5px;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
 		line-height: 1.45;
 		color: var(--ob-text-body);
 		max-height: 160px;
@@ -664,8 +664,8 @@ function handleSkip(): void {
 	}
 
 	.win-hint-text {
-		font-family: 'Newsreader', Georgia, serif;
-		font-size: 15px;
+		font-family: var(--font-serif);
+		font-size: var(--text-base);
 		line-height: 1.6;
 		color: var(--ob-text-body);
 		margin: 0;
@@ -682,8 +682,8 @@ function handleSkip(): void {
 		border: 1px solid var(--ob-border);
 		border-radius: 2px;
 		background: var(--ob-hover-subtle);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 12.5px;
+		font-family: var(--font-mono);
+		font-size: var(--text-sm);
 		color: var(--ob-text-heading);
 		user-select: all;
 	}

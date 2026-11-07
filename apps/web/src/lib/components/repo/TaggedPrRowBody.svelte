@@ -275,10 +275,10 @@ function onNav(event: MouseEvent): void {
 	   the heading exactly, which read as nine sibling headings rather than as a
 	   list under one; weight carries the emphasis instead. */
 	.title {
-		font-size: 0.875rem;
-		font-weight: 600;
+		font-size: var(--text-sm);
+		font-weight: 500;
 		line-height: 1.4;
-		letter-spacing: -0.01em;
+		letter-spacing: var(--text-sm--letter-spacing);
 		color: var(--color-text-primary);
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -288,7 +288,7 @@ function onNav(event: MouseEvent): void {
 	/* Opened rows recede, like a read row in a notification inbox. Weight is
 	   the redundant channel for anyone who can't see the colour step. */
 	.link--visited .title {
-		font-weight: 500;
+		font-weight: 400;
 		color: var(--color-text-secondary);
 	}
 
@@ -302,7 +302,7 @@ function onNav(event: MouseEvent): void {
 		   `flex-shrink: 0`, so a container narrow enough to squeeze them clips
 		   rather than spilling over the frame. */
 		overflow: hidden;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		line-height: 1.4;
 		/* ink-secondary, not ink-muted: muted is 2.7:1 on warm paper and the
 		   system reserves it for placeholders and disabled labels. This line is
@@ -360,15 +360,15 @@ function onNav(event: MouseEvent): void {
 
 	/* Weight and ink split the digit (the datum) from the "files" label so the eye lands on the number. */
 	.size-count {
-		font-size: 0.8125rem;
-		font-weight: 600;
+		font-size: var(--text-sm);
+		font-weight: 500;
 		/* Tabular figures: a proportional `1` is narrow and the column wouldn't line up. */
 		font-variant-numeric: tabular-nums;
 		color: var(--color-text-primary);
 	}
 
 	.link--visited .size-count {
-		font-weight: 500;
+		font-weight: 400;
 		color: var(--color-text-secondary);
 	}
 
@@ -381,7 +381,8 @@ function onNav(event: MouseEvent): void {
 		/* Sized to "files" itself; slack lands in the gap rather than as unused headroom. */
 		min-width: 1.375rem;
 		text-align: right;
-		font-size: 0.6875rem;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		font-weight: 400;
 		/* ink-secondary, not ink-muted — same reason as `.meta`. */
 		color: var(--color-text-secondary);
@@ -395,7 +396,7 @@ function onNav(event: MouseEvent): void {
 		line-height: 1.05rem;
 		white-space: nowrap;
 		font-family: var(--font-mono);
-		font-size: 0.6875rem;
+		font-size: var(--text-ui);
 		font-variant-numeric: tabular-nums;
 		letter-spacing: 0.01em;
 	}
@@ -432,7 +433,7 @@ function onNav(event: MouseEvent): void {
 		gap: 0.25rem;
 		min-width: 0;
 		font-family: var(--font-mono);
-		font-size: 0.6875rem;
+		font-size: var(--text-ui);
 		opacity: 0.85;
 	}
 

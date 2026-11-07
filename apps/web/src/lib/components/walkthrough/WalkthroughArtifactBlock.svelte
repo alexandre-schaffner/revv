@@ -291,7 +291,7 @@ onDestroy(() => {
     padding: 18px;
     background: color-mix(in srgb, var(--color-bg-secondary) 72%, transparent);
     color: var(--color-text-muted);
-    font-size: 13px;
+    font-size: var(--text-sm);
   }
 
   .artifact-frame {
@@ -319,7 +319,7 @@ onDestroy(() => {
     align-items: center;
     gap: 8px;
     color: var(--color-danger);
-    font-size: 13px;
+    font-size: var(--text-sm);
     font-weight: 500;
   }
 
@@ -333,7 +333,7 @@ onDestroy(() => {
     padding: 12px;
     color: var(--color-text-secondary);
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--text-ui);
     line-height: 1.55;
     white-space: pre-wrap;
     overflow-wrap: anywhere;

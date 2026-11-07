@@ -65,18 +65,19 @@ const summaryByTheme = $derived.by(() => {
 }
 
 .eyebrow {
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-family: var(--font-sans);
+  font-size: var(--text-ui);
   font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  color: var(--color-text-muted);
+  color: var(--color-text-subtle);
 }
 
 .lede {
   margin: 0;
-  font-size: 1.1rem;
-  font-weight: 500;
+  font-size: var(--text-lg);
+  letter-spacing: var(--text-lg--letter-spacing);
+  /* A standfirst, not a heading: regular weight, so the bold it carries
+     still reads as emphasis. */
+  font-weight: 400;
   line-height: 1.55;
   color: var(--color-text-primary);
   max-width: 680px;

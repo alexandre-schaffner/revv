@@ -1,7 +1,6 @@
 <script lang="ts">
 import type { Repository } from "@revv/shared";
 import { AlertDialog } from "bits-ui";
-import Spinner from "phosphor-svelte/lib/Spinner";
 import Trash from "phosphor-svelte/lib/Trash";
 import { buttonVariants } from "$lib/components/ui/button/index.js";
 import { bitsAnim, dialogSpringIn, dialogSpringOut } from "$lib/motion";
@@ -10,19 +9,22 @@ import { cn } from "$lib/utils.js";
 let {
   repo,
   open = false,
-  deleting = false,
   onOpenChange,
   onConfirm,
 }: {
   repo: Repository | null;
   open?: boolean;
-  deleting?: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Starts the (optimistic) removal; the parent closes the dialog. */
   onConfirm: () => void;
 } = $props();
 
-let clonePath = $derived(repo?.clonePath ?? "the local clone path");
-let unmanaged = $derived(repo?.managed === false);
+// Parents clear `repo` as they close the dialog; keep the last one so the
+// exit animation doesn't flash the "this repository" fallback copy.
+let lastRepo: Repository | null = null;
+const shownRepo = $derived.by(() => (lastRepo = repo ?? lastRepo));
+let clonePath = $derived(shownRepo?.clonePath ?? "the local clone path");
+let unmanaged = $derived(shownRepo?.managed === false);
 </script>
 
 <AlertDialog.Root {open} {onOpenChange}>
@@ -43,7 +45,7 @@ let unmanaged = $derived(repo?.managed === false);
 						<AlertDialog.Title>
 							{#snippet child({ props: titleProps })}
 								<h2 {...titleProps} class="confirm-title">
-									Remove {repo?.fullName ?? 'this repository'}?
+									Remove {shownRepo?.fullName ?? 'this repository'}?
 								</h2>
 							{/snippet}
 						</AlertDialog.Title>
@@ -64,24 +66,15 @@ let unmanaged = $derived(repo?.managed === false);
 					<p class="confirm-path"><code>{clonePath}</code></p>
 
 					<div class="confirm-actions">
-						<AlertDialog.Cancel
-							class={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}
-							disabled={deleting}
-						>
+						<AlertDialog.Cancel class={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>
 							Cancel
 						</AlertDialog.Cancel>
 						<AlertDialog.Action
 							class={cn(buttonVariants({ variant: 'destructive', size: 'sm' }), 'confirm-delete')}
-							disabled={deleting}
 							onclick={onConfirm}
 						>
-							{#if deleting}
-								<Spinner size={13} class="motion-essential-spin" />
-								Removing…
-							{:else}
-								<Trash size={13} />
-								Remove
-							{/if}
+							<Trash size={13} />
+							Remove
 						</AlertDialog.Action>
 					</div>
 				</div>
@@ -147,17 +140,17 @@ let unmanaged = $derived(repo?.managed === false);
 		margin: 0;
 		min-width: 0;
 		color: var(--color-text-primary);
-		font-size: 15px;
+		font-size: var(--text-base);
 		font-weight: 600;
 		line-height: 1.3;
-		letter-spacing: -0.01em;
+		letter-spacing: var(--text-base--letter-spacing);
 		overflow-wrap: anywhere;
 	}
 
 	.confirm-description {
 		margin: 0;
 		color: var(--color-text-secondary);
-		font-size: 13px;
+		font-size: var(--text-sm);
 		line-height: 1.55;
 	}
 
@@ -168,8 +161,8 @@ let unmanaged = $derived(repo?.managed === false);
 		border: 1px solid var(--color-border-subtle);
 		padding: 7px 10px;
 		color: var(--color-text-primary);
-		font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
-		font-size: 11.5px;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
 		line-height: 1.45;
 		overflow-wrap: anywhere;
 	}

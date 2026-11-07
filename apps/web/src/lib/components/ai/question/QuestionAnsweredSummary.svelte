@@ -29,40 +29,40 @@ export type QuestionAnsweredSummaryProps = {
 		{@const picked = answers[q.question] ?? []}
 		{@const custom = customAnswers?.[q.question] ?? ""}
 		<div class="flex flex-col gap-1">
-			<span class="inline-flex items-center rounded bg-muted px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+			<span class="inline-flex items-center rounded bg-muted px-1.5 py-0.5 text-ui font-semibold uppercase tracking-caps text-muted-foreground">
 				{q.header}
 			</span>
 			<p
 				class={cn(
-					"text-xs leading-relaxed text-muted-foreground",
+					"text-ui leading-relaxed text-muted-foreground",
 					status === "rejected" && "line-through",
 				)}
 			>
 				{q.question}
 			</p>
 			{#if status === "rejected"}
-				<span class="text-xs italic text-muted-foreground">Skipped</span>
+				<span class="text-ui italic text-muted-foreground">Skipped</span>
 			{:else if status === "superseded"}
-				<span class="text-xs italic text-muted-foreground"
+				<span class="text-ui italic text-muted-foreground"
 					>No longer needed.</span
 				>
 			{:else}
 				<div class="flex flex-wrap gap-1.5">
 					{#each picked as label (label)}
 						<span
-							class="inline-flex items-center rounded-full bg-accent/15 px-2 py-0.5 text-xs font-medium text-accent"
+							class="inline-flex items-center rounded-full bg-accent/15 px-2 py-0.5 text-ui font-medium text-accent"
 						>
 							{label}
 						</span>
 					{/each}
 					{#if picked.length === 0 && !custom}
-						<span class="text-xs italic text-muted-foreground"
+						<span class="text-ui italic text-muted-foreground"
 							>(no choice recorded)</span
 						>
 					{/if}
 				</div>
 				{#if custom}
-					<p class="text-xs text-muted-foreground">
+					<p class="text-ui text-muted-foreground">
 						<span class="font-medium">Custom:</span>
 						{custom}
 					</p>

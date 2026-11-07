@@ -42,7 +42,7 @@ export type ConversationEmptyStateProps = HTMLAttributes<HTMLDivElement> & {
 		<h3 class="text-sm font-medium">{title}</h3>
 	{/if}
 	{#if description}
-		<p class="max-w-[280px] text-xs">{description}</p>
+		<p class="max-w-[280px] text-ui">{description}</p>
 	{/if}
 	{@render children?.()}
 </div>

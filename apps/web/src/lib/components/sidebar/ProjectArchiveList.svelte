@@ -134,7 +134,8 @@ const visible = $derived(archivedPrs.length > 0 || nextCursor !== null);
 		background: transparent;
 		color: var(--color-text-muted);
 		cursor: pointer;
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		text-align: left;
 		transition: background-color var(--duration-snap), color var(--duration-snap);
 	}
@@ -154,7 +155,8 @@ const visible = $derived(archivedPrs.length > 0 || nextCursor !== null);
 
 	.archive-count {
 		margin-left: auto;
-		font-size: 10px;
+		font-size: var(--text-xs);
+		letter-spacing: var(--text-xs--letter-spacing);
 		color: var(--color-text-muted);
 	}
 
@@ -168,7 +170,8 @@ const visible = $derived(archivedPrs.length > 0 || nextCursor !== null);
 	.empty {
 		margin: 0;
 		padding: 8px 10px;
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-muted);
 		text-align: center;
 	}
@@ -181,7 +184,8 @@ const visible = $derived(archivedPrs.length > 0 || nextCursor !== null);
 		background: transparent;
 		color: var(--color-text-muted);
 		cursor: pointer;
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		text-align: left;
 		transition: background-color var(--duration-snap), color var(--duration-snap);
 	}

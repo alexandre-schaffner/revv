@@ -6,10 +6,12 @@ import { api } from "$lib/api/client";
 import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import ConversationTab from "$lib/components/conversation/ConversationTab.svelte";
 import ReviewLayout from "$lib/components/review/ReviewLayout.svelte";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 import { readStackPlace } from "$lib/components/stack/margin/place";
 import StackPlaceLine from "$lib/components/stack/margin/StackPlaceLine.svelte";
 import StackPlaceNote from "$lib/components/stack/margin/StackPlaceNote.svelte";
 import StackThumbIndex from "$lib/components/stack/margin/StackThumbIndex.svelte";
+import RestackStatus from "$lib/components/stack/RestackStatus.svelte";
 import { Badge } from "$lib/components/ui/badge";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import GuidedWalkthrough from "$lib/components/walkthrough/GuidedWalkthrough.svelte";
@@ -50,6 +52,7 @@ import {
   getWalkthroughSizing,
 } from "$lib/stores/walkthrough-sizing.svelte";
 import { setScrollRoot } from "$lib/stores/walkthroughNav.svelte";
+import { formatRelativeTime } from "$lib/utils/format-relative-time";
 
 const pr = $derived(getSelectedPr());
 
@@ -436,9 +439,20 @@ onDestroy(() => {
 				class:page-title-section--narrow={activeTab === 'walkthrough' || activeTab === 'conversation'}
 			>
 				<h1 class="page-title">{pr.title}</h1>
-				<span class="page-subtitle">#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}</span>
+				<span class="page-subtitle">
+					#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}
+					{#if activeTab === 'conversation'}
+						{@const opened = new Date(pr.createdAt)}
+						· <time datetime={opened.toISOString()} title={opened.toLocaleString()}>
+							opened {formatRelativeTime(opened.toISOString())}
+						</time>
+					{/if}
+				</span>
 				{#if stackPlace}
 					<div class="title-stack-line"><StackPlaceLine place={stackPlace} /></div>
+				{/if}
+				{#if activeTab === 'walkthrough' && pr.stack}
+					<RestackStatus prId={pr.id} />
 				{/if}
 				{#if activeTab === 'walkthrough' && walkthroughRiskLevel}
 					<Badge
@@ -448,6 +462,11 @@ onDestroy(() => {
 					>
 						{walkthroughRiskLevel} risk
 					</Badge>
+				{/if}
+				{#if activeTab === 'conversation'}
+					<div class="title-avatar">
+						<Avatar handle={pr.authorLogin} avatarContent={pr.authorAvatarContent} size={28} />
+					</div>
 				{/if}
 				{#if stackPlace}
 					<div class="title-stack-thumb"><StackThumbIndex place={stackPlace} /></div>
@@ -593,8 +612,22 @@ onDestroy(() => {
 		min-width: 0;
 	}
 
+	/* Conversation: the author hangs in the gutter beside the title, so the
+	   title text keeps the same x as on the walkthrough tab. Centred on the
+	   first line (38.4px line box, 28px avatar). */
+	.page-title-section--narrow > .title-avatar {
+		grid-row: 1;
+		grid-column: 2;
+		align-self: start;
+		display: flex;
+		justify-content: flex-end;
+		height: 0;
+		padding: 5px 12px 0 0;
+	}
+
 	@container (max-width: 1335px) {
-		.page-title-section--narrow > .title-stack-thumb {
+		.page-title-section--narrow > .title-stack-thumb,
+		.page-title-section--narrow > .title-avatar {
 			grid-column: 1;
 		}
 
@@ -626,20 +659,21 @@ onDestroy(() => {
 	}
 
 	.page-title {
-		font-size: 32px;
-		font-weight: 700;
+		font-size: var(--text-3xl);
+		font-weight: 500;
 		color: var(--color-text-primary);
 		line-height: 1.2;
-		letter-spacing: -0.02em;
+		letter-spacing: var(--text-3xl--letter-spacing);
+		text-wrap: balance;
 		margin: 0;
 	}
 
 	.page-subtitle {
 		display: block;
-		font-size: 13px;
-		font-family: var(--font-mono, monospace);
-		color: var(--color-text-muted);
-		opacity: 0.5;
+		font-size: var(--text-sm);
+		font-family: var(--font-mono);
+		/* Quiet but legible: muted grey at half opacity measured ~1.6:1. */
+		color: var(--color-text-subtle);
 		line-height: 1.4;
 	}
 
@@ -647,9 +681,9 @@ onDestroy(() => {
 
 	:global(.risk-badge) {
 		display: inline-flex;
-		font-size: 10px;
+		font-size: var(--text-xs);
 		font-weight: 600;
-		letter-spacing: 0.05em;
+		letter-spacing: var(--tracking-caps);
 		text-transform: uppercase;
 		border-radius: 9999px;
 		padding: 1px 6px;
@@ -690,7 +724,7 @@ onDestroy(() => {
 		align-items: center;
 		justify-content: center;
 		gap: 12px;
-		font-size: 13px;
+		font-size: var(--text-sm);
 		color: var(--color-text-muted);
 	}
 

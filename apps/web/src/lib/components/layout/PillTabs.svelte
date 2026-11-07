@@ -271,9 +271,9 @@ $effect(() => {
 		height: 36px;
 		padding: 0 20px;
 		border-radius: 9999px;
-		font-size: 13px;
+		font-size: var(--text-sm);
 		font-weight: 500;
-		letter-spacing: -0.01em;
+		letter-spacing: var(--text-sm--letter-spacing);
 		color: var(--color-tab-inactive-text);
 		background: transparent;
 		border: none;
@@ -336,7 +336,8 @@ $effect(() => {
 	   sequencing that makes the modifier-key reveal feel laggy. */
 	.seg-shortcut {
 		display: inline-block;
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		font-weight: 400;
 		font-variant-numeric: tabular-nums;
 		color: var(--color-tab-inactive-text);

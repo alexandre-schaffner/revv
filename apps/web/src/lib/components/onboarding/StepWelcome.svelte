@@ -32,8 +32,8 @@ let { onContinue }: Props = $props();
 	}
 
 	.lede {
-		font-family: 'Newsreader', Georgia, serif;
-		font-size: 19px;
+		font-family: var(--font-serif);
+		font-size: var(--text-xl);
 		font-weight: 400;
 		line-height: 1.55;
 		color: var(--ob-text-body);
@@ -67,9 +67,9 @@ let { onContinue }: Props = $props();
 		border-radius: 2px;
 		background: transparent;
 		color: var(--ob-text-heading);
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-style: italic;
-		font-size: 16px;
+		font-size: var(--text-base);
 		font-weight: 500;
 		cursor: pointer;
 		letter-spacing: 0.01em;
@@ -98,9 +98,9 @@ let { onContinue }: Props = $props();
 	}
 
 	.hint {
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 10.5px;
-		letter-spacing: 0.14em;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
+		letter-spacing: var(--tracking-eyebrow);
 		text-transform: uppercase;
 		color: var(--ob-text-muted);
 	}

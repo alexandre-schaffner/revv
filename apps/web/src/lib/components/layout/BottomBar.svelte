@@ -99,7 +99,7 @@ function handleRetrySync() {
 		{/if}
 		{#if selectedPrId}
 			<button
-				class="flex cursor-pointer items-center gap-1.5 text-xs tabular-nums text-text-muted rounded px-1 py-0.5 transition-colors hover:bg-bg-elevated hover:text-text-secondary disabled:cursor-default disabled:opacity-60"
+				class="flex cursor-pointer items-center gap-1.5 text-ui tabular-nums text-text-muted rounded px-1 py-0.5 transition-colors hover:bg-bg-elevated hover:text-text-secondary disabled:cursor-default disabled:opacity-60"
 				onclick={handleRetrySync}
 				disabled={syncing}
 				title="Sync comments for this PR"

@@ -88,7 +88,7 @@ function close(): void {
 		border: 1px solid var(--color-border-subtle);
 		border-radius: 0.375rem;
 		font: inherit;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		font-weight: 500;
 		line-height: 1.35;
 		color: var(--color-text-secondary);

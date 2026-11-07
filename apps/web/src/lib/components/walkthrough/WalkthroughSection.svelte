@@ -136,7 +136,7 @@ $effect(() => {
 			<h3 class="section-title">{section.title}</h3>
 		</div>
 		{#if renderedSummary}
-			<div class="section-summary prose prose-sm prose-dense" use:prlensDiagrams={getResolvedTheme()}>{@html renderedSummary}</div>
+			<div class="section-summary prose prose-reading prose-lede" use:prlensDiagrams={getResolvedTheme()}>{@html renderedSummary}</div>
 		{/if}
 	</button>
 
@@ -249,9 +249,9 @@ $effect(() => {
 	}
 
 	.section-eyebrow {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-style: italic;
-		font-size: 11.5px;
+		font-size: var(--text-ui);
 		font-weight: 500;
 		letter-spacing: 0.3px;
 		color: var(--color-accent);
@@ -291,8 +291,8 @@ $effect(() => {
 	}
 
 	.section-title {
-		font-family: 'Newsreader', Georgia, serif;
-		font-size: 22px;
+		font-family: var(--font-serif);
+		font-size: var(--text-2xl);
 		font-weight: 500;
 		letter-spacing: -0.012em;
 		line-height: 1.15;
@@ -335,11 +335,7 @@ $effect(() => {
 		min-width: 0;
 	}
 
-	/* Density + body tone come from `prose prose-sm prose-dense`; this only
-	   sets the reading measure. */
-	.section-summary {
-		max-width: 720px;
-	}
+	/* Size, tone and measure come from `prose prose-reading prose-lede`. */
 
 	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
 	   prose layer (see app.css); `.section-summary` only owns the reading measure. */
@@ -445,7 +441,7 @@ $effect(() => {
 		border: 1px solid var(--color-border);
 		border-radius: 8px;
 		padding: 14px 16px;
-		font-size: 14px;
+		font-size: var(--text-sm);
 		line-height: 1.6;
 		color: var(--color-text-secondary);
 		overflow-wrap: anywhere;
@@ -492,6 +488,12 @@ $effect(() => {
 		.block-group {
 			display: block;
 			position: relative;
+		}
+
+		/* The wide grid's row gap, which the stacked layout otherwise loses:
+		   without it a code block sat flush under the sentence introducing it. */
+		.block-group + .block-group {
+			margin-top: 24px;
 		}
 
 		.block-step-dot {

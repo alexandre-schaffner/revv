@@ -55,20 +55,21 @@ const repoIdFromUrl = $derived(page.params.repoId ?? "");
 	}
 
 	.missing-title {
-		font-size: 18px;
+		font-size: var(--text-lg);
+		letter-spacing: var(--text-lg--letter-spacing);
 		font-weight: 600;
 		color: var(--color-text-primary);
 		margin: 0;
 	}
 
 	.missing-text {
-		font-size: 13px;
+		font-size: var(--text-sm);
 		color: var(--color-text-muted);
 		margin: 0;
 	}
 
 	.missing code {
-		font-family: var(--font-mono, monospace);
+		font-family: var(--font-mono);
 		padding: 1px 6px;
 		border-radius: 4px;
 		background: var(--color-bg-elevated);

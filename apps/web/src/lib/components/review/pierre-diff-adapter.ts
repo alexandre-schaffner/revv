@@ -128,7 +128,7 @@ export function populateDiffHeaderSlots(
 export function createHeaderBadge(label: string, color: string): HTMLElement {
   const badge = document.createElement("span");
   badge.textContent = label;
-  badge.style.cssText = `font-size:9px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;background:color-mix(in srgb, ${color} 13%, transparent);color:${color};border-radius:3px;padding:1px 5px;`;
+  badge.style.cssText = `font-size:var(--text-xs);font-weight:600;letter-spacing:var(--tracking-caps);text-transform:uppercase;background:color-mix(in srgb, ${color} 13%, transparent);color:${color};border-radius:3px;padding:1px 5px;`;
   return badge;
 }
 

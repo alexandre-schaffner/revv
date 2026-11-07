@@ -56,7 +56,7 @@ async function ask(): Promise<void> {
 		flex-wrap: wrap;
 		align-items: baseline;
 		column-gap: 6px;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		line-height: 1.5;
 		color: var(--color-text-subtle);
 	}

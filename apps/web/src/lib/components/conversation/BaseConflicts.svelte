@@ -336,15 +336,15 @@ function onResolveClick(): void {
 
 	.conflicts-title {
 		margin: 0;
-		font-size: 0.875rem;
-		font-weight: 600;
+		font-size: var(--text-sm);
+		font-weight: 500;
 		line-height: 1.35;
 		color: var(--color-text-primary);
 	}
 
 	.conflicts-detail {
 		margin: 0;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		line-height: 1.4;
 		color: var(--color-text-secondary);
 		font-variant-numeric: tabular-nums;
@@ -379,7 +379,7 @@ function onResolveClick(): void {
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		font-family: var(--font-mono);
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-primary);
 	}
 
@@ -392,7 +392,7 @@ function onResolveClick(): void {
 		border: none;
 		background: none;
 		font: inherit;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-secondary);
 		cursor: pointer;
 	}
@@ -425,7 +425,7 @@ function onResolveClick(): void {
 		margin: 0;
 		padding: 10px 14px;
 		border-top: 1px solid var(--color-border-subtle);
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		line-height: 1.45;
 		color: var(--color-text-secondary);
 	}
@@ -443,7 +443,7 @@ function onResolveClick(): void {
 		padding: 12px 14px;
 		border-top: 1px solid var(--color-border-subtle);
 		background: var(--color-bg-secondary);
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		line-height: 1.45;
 		color: var(--color-text-secondary);
 	}
@@ -469,7 +469,7 @@ function onResolveClick(): void {
 	.run-status {
 		margin: 0;
 		padding: 0 14px 0 22px;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-secondary);
 	}
 
@@ -479,7 +479,7 @@ function onResolveClick(): void {
 		gap: 6px;
 		margin: 0;
 		padding: 0 8px 0 22px;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		line-height: 1.45;
 	}
 
@@ -506,7 +506,7 @@ function onResolveClick(): void {
 		margin: 0;
 		padding: 0;
 		list-style: none;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		line-height: 1.5;
 		color: var(--color-text-secondary);
 	}
@@ -523,7 +523,7 @@ function onResolveClick(): void {
 		gap: 6px;
 		padding: 8px 14px;
 		border-top: 1px solid var(--color-border-subtle);
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 	}
 
@@ -544,6 +544,6 @@ function onResolveClick(): void {
 
 	code {
 		font-family: var(--font-mono);
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 	}
 </style>

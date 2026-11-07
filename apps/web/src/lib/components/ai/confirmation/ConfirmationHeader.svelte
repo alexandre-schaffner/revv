@@ -31,7 +31,7 @@ import Shield from "phosphor-svelte/lib/Shield";
 	<div class="min-w-0 flex-1">
 		<p class="text-sm font-medium text-foreground">{title}</p>
 		{#if description}
-			<p class="mt-0.5 text-xs text-muted-foreground">{description}</p>
+			<p class="mt-0.5 text-ui text-muted-foreground">{description}</p>
 		{/if}
 	</div>
 	{@render children?.()}

@@ -59,25 +59,23 @@ let open = $state(true);
 	}
 
 	.preview-title {
-		font-size: 11px;
-		font-weight: 600;
-		letter-spacing: 0.05em;
-		text-transform: uppercase;
-		color: var(--color-text-muted);
+		font-size: var(--text-ui);
+		font-weight: 500;
+		color: var(--color-text-subtle);
 	}
 
 	.preview-status {
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		font-variant-numeric: tabular-nums;
 		color: var(--color-text-secondary);
 	}
 
 	.preview-note {
 		margin: 4px 0 0;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 	}
 </style>

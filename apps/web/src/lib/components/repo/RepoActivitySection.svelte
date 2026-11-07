@@ -214,7 +214,8 @@ const commitsGaveUp = $derived(data !== null && data.commits === null && !data.c
 
 	.title {
 		margin: 0;
-		font-size: 13px;
+		font-size: var(--text-lg);
+		letter-spacing: var(--text-lg--letter-spacing);
 		font-weight: 600;
 		color: var(--color-text-primary);
 	}
@@ -224,8 +225,8 @@ const commitsGaveUp = $derived(data !== null && data.commits === null && !data.c
 		display: inline-flex;
 		align-items: baseline;
 		gap: 8px;
-		font-size: 12px;
-		color: var(--color-text-muted);
+		font-size: var(--text-ui);
+		color: var(--color-text-subtle);
 	}
 
 	.retry {
@@ -262,8 +263,9 @@ const commitsGaveUp = $derived(data !== null && data.commits === null && !data.c
 	}
 
 	dt {
-		font-size: 11px;
-		color: var(--color-text-muted);
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
+		color: var(--color-text-subtle);
 	}
 
 	dd {
@@ -274,8 +276,9 @@ const commitsGaveUp = $derived(data !== null && data.commits === null && !data.c
 		display: flex;
 		align-items: baseline;
 		gap: 8px;
-		font-size: 22px;
-		font-weight: 600;
+		font-size: var(--text-2xl);
+		letter-spacing: var(--text-2xl--letter-spacing);
+		font-weight: 500;
 		line-height: 1.1;
 		min-height: 1.1em;
 		color: var(--color-text-primary);
@@ -292,7 +295,8 @@ const commitsGaveUp = $derived(data !== null && data.commits === null && !data.c
 		display: inline-flex;
 		align-items: center;
 		gap: 1px;
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		font-weight: 500;
 		color: var(--color-text-secondary);
 	}
@@ -301,8 +305,9 @@ const commitsGaveUp = $derived(data !== null && data.commits === null && !data.c
 		display: flex;
 		align-items: flex-end;
 		gap: 6px;
-		font-size: 11px;
-		color: var(--color-text-muted);
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
+		color: var(--color-text-subtle);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;

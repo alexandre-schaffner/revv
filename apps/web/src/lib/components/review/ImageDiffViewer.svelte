@@ -289,10 +289,8 @@ function onImgLoad(event: Event, side: "base" | "head"): void {
 	}
 
 	.pane-label {
-		font-size: 10px;
-		font-weight: 600;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
+		font-size: var(--text-ui);
+		font-weight: 500;
 		border-radius: 3px;
 		padding: 1px 6px;
 	}
@@ -308,9 +306,9 @@ function onImgLoad(event: Event, side: "base" | "head"): void {
 	}
 
 	.pane-meta {
-		font-size: 11px;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
-		font-family: var(--font-mono, monospace);
+		font-family: var(--font-mono);
 	}
 
 	.frame {
@@ -365,7 +363,7 @@ function onImgLoad(event: Event, side: "base" | "head"): void {
 		justify-content: center;
 		gap: 6px;
 		padding: 32px;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 	}
 

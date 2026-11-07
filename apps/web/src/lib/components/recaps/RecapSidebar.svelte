@@ -111,12 +111,10 @@ const header = $derived(buildRecapHeader(recap, period));
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-family: var(--font-sans);
+  font-size: var(--text-ui);
   font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  color: var(--color-text-muted);
+  color: var(--color-text-subtle);
 }
 
 .ai-mark {
@@ -129,8 +127,8 @@ const header = $derived(buildRecapHeader(recap, period));
 
 .date {
   margin: 0;
-  font-family: "Newsreader", Georgia, serif;
-  font-size: 1.875rem;
+  font-family: var(--font-serif);
+  font-size: var(--text-3xl);
   font-weight: 500;
   letter-spacing: -0.02em;
   line-height: 1.08;
@@ -139,9 +137,8 @@ const header = $derived(buildRecapHeader(recap, period));
 }
 
 .time-cap {
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
-  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-ui);
   color: var(--color-text-muted);
 }
 
@@ -156,7 +153,7 @@ const header = $derived(buildRecapHeader(recap, period));
   align-items: baseline;
   justify-content: space-between;
   gap: 0.75rem;
-  font-size: 0.78rem;
+  font-size: var(--text-sm);
 }
 
 .stat .k {
@@ -164,10 +161,9 @@ const header = $derived(buildRecapHeader(recap, period));
 }
 
 .stat .v {
-  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   color: var(--color-text-primary);
   text-align: right;
-  letter-spacing: 0.01em;
 }
 
 .stat .v[data-warn="true"] {
@@ -233,7 +229,7 @@ const header = $derived(buildRecapHeader(recap, period));
   border: 0;
   border-radius: 6px;
   font: inherit;
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   text-align: left;
   color: inherit;
   cursor: pointer;
@@ -254,8 +250,8 @@ const header = $derived(buildRecapHeader(recap, period));
 }
 
 .theme-count {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-ui);
   color: var(--color-text-muted);
 }
 

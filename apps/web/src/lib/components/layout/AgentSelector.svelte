@@ -82,14 +82,14 @@ function select(id: AcpAgentId) {
 			{@const OptIcon = acpAgentIcon(opt.icon)}
 			{@const optStatus = status?.agents[opt.id] ?? null}
 			<button
-				class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
+				class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-ui text-text-secondary transition-colors hover:bg-bg-tertiary"
 				onclick={() => select(opt.id)}
 			>
 				<OptIcon size={12} class="text-text-muted" />
 				<span class={`h-1.5 w-1.5 shrink-0 rounded-full ${statusDotClass(optStatus)}`}></span>
 				<span class="min-w-0 flex-1 text-left">
 					<span class="block truncate text-text-primary">{opt.label}</span>
-					<span class="block truncate text-[11px] text-text-muted">{statusLabel(optStatus)}</span>
+					<span class="block truncate text-ui text-text-muted">{statusLabel(optStatus)}</span>
 				</span>
 				{#if currentId === opt.id}
 					<Check size={12} class="text-accent" />

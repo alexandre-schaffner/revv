@@ -691,17 +691,17 @@ function activitiesForTurn(
 							<PlanHeader>
 								<PlanTitle>Plan</PlanTitle>
 								{#if item.status === 'approved'}
-									<span class="ml-auto inline-flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-success">
+									<span class="ml-auto inline-flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-ui font-semibold uppercase tracking-caps text-success">
 										<CheckCircle class="size-2.5" />
 										Approved
 									</span>
 								{:else if item.status === 'rejected'}
-									<span class="ml-auto inline-flex items-center gap-1 rounded-full bg-destructive/15 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-destructive">
+									<span class="ml-auto inline-flex items-center gap-1 rounded-full bg-destructive/15 px-2 py-0.5 text-ui font-semibold uppercase tracking-caps text-destructive">
 										<XCircle class="size-2.5" />
 										Rejected
 									</span>
 								{:else if item.status === 'superseded'}
-									<span class="ml-auto inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+									<span class="ml-auto inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-ui font-semibold uppercase tracking-caps text-muted-foreground">
 										Superseded
 									</span>
 								{/if}
@@ -758,12 +758,12 @@ function activitiesForTurn(
 								{:else if item.status === 'completed' && item.result}
 									<ToolOutput class="mt-2">
 										{#snippet output()}
-											<pre class="overflow-x-auto rounded-md bg-muted p-2.5 text-xs font-mono whitespace-pre-wrap break-words">{item.result}</pre>
+											<pre class="overflow-x-auto rounded-md bg-muted p-2.5 text-ui font-mono whitespace-pre-wrap break-words">{item.result}</pre>
 										{/snippet}
 									</ToolOutput>
 								{/if}
 								{#if item.status === 'running' && nestedActivitiesFor(item.id).length === 0}
-									<p class="text-xs italic text-muted-foreground">Waiting for the sub-agent to start&hellip;</p>
+									<p class="text-ui italic text-muted-foreground">Waiting for the sub-agent to start&hellip;</p>
 								{/if}
 							</ToolContent>
 						</Tool>
@@ -837,7 +837,7 @@ function activitiesForTurn(
 						/>
 						{#if approval.input}
 							<ConfirmationContent>
-								<pre class="overflow-x-auto rounded bg-muted p-2 text-xs font-mono whitespace-pre-wrap break-words">{typeof approval.input === 'string' ? approval.input : JSON.stringify(approval.input, null, 2)}</pre>
+								<pre class="overflow-x-auto rounded bg-muted p-2 text-ui font-mono whitespace-pre-wrap break-words">{typeof approval.input === 'string' ? approval.input : JSON.stringify(approval.input, null, 2)}</pre>
 							</ConfirmationContent>
 						{/if}
 						<ConfirmationActions
@@ -902,7 +902,7 @@ function activitiesForTurn(
 									{/snippet}
 								</QueueSectionLabel>
 								{#if proposed.branchName}
-									<span class="ml-auto max-w-[140px] truncate font-mono text-xs text-muted-foreground">
+									<span class="ml-auto max-w-[140px] truncate font-mono text-ui text-muted-foreground">
 										{proposed.branchName}
 									</span>
 								{/if}
@@ -933,11 +933,11 @@ function activitiesForTurn(
 													title="View diff"
 												>
 													<span class="flex min-w-0 items-center gap-2">
-														<code class="shrink-0 font-mono text-[10px] text-accent">{commit.shortSha}</code>
-														<span class="truncate text-xs text-foreground">{commit.subject}</span>
+														<code class="shrink-0 font-mono text-xs text-accent">{commit.shortSha}</code>
+														<span class="truncate text-ui text-foreground">{commit.subject}</span>
 													</span>
 													{#if commit.files.length > 0}
-														<span class="truncate font-mono text-[10px] text-muted-foreground">
+														<span class="truncate font-mono text-xs text-muted-foreground">
 															{filesSummary(commit.files)}
 														</span>
 													{/if}
@@ -994,7 +994,7 @@ function activitiesForTurn(
 										transition:gsapSlide={{ duration: tokens.quick }}
 									>
 										<div class="proposed-batch-footer__info">
-											<span class="text-xs text-muted-foreground tabular-nums">
+											<span class="text-ui text-muted-foreground tabular-nums">
 												{selectedCount} of {commitCount} selected
 											</span>
 											{#if !allSelected}
@@ -1025,7 +1025,7 @@ function activitiesForTurn(
 											<Button
 												variant="ghost"
 												size="sm"
-												class="h-7 gap-1.5 px-2 text-xs hover:text-destructive"
+												class="h-7 gap-1.5 px-2 text-ui hover:text-destructive"
 												disabled={batchInFlight}
 												onclick={() => {
 													if (prId) void batchDiscardSelectedAction(prId);
@@ -1041,7 +1041,7 @@ function activitiesForTurn(
 											<Button
 												variant="ghost"
 												size="sm"
-												class="h-7 gap-1.5 px-2 text-xs hover:text-primary"
+												class="h-7 gap-1.5 px-2 text-ui hover:text-primary"
 												disabled={batchInFlight}
 												onclick={() => {
 													if (prId) void batchCherryPickSelectedAction(prId);
@@ -1083,7 +1083,7 @@ function activitiesForTurn(
 										{/if}
 									{/snippet}
 								</QueueSectionLabel>
-								<span class="ml-auto text-xs tabular-nums text-muted-foreground">
+								<span class="ml-auto text-ui tabular-nums text-muted-foreground">
 									{completed}/{activeTasks.length}
 								</span>
 							</QueueSectionTrigger>
@@ -1193,7 +1193,7 @@ function activitiesForTurn(
 					>
 						<MapTrifold class="size-3.5" />
 						{#if interactionMode === 'plan'}
-							<span class="text-xs font-medium">Plan</span>
+							<span class="text-ui font-medium">Plan</span>
 						{/if}
 					</PromptInputButton>
 				</PromptInputTools>
@@ -1493,11 +1493,9 @@ function activitiesForTurn(
 	}
 
 	.panel-title {
-		font-size: 11px;
-		font-weight: 600;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
-		color: var(--color-text-muted);
+		font-size: var(--text-ui);
+		font-weight: 500;
+		color: var(--color-text-subtle);
 		/* The PR subtitle beside it absorbs the squeeze instead. */
 		flex-shrink: 0;
 	}
@@ -1540,7 +1538,8 @@ function activitiesForTurn(
 	/* Which PR you'd return to — the stacked panel hides the main pane, so the
 	   header carries the context the pane would otherwise show. */
 	.panel-subtitle {
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-muted);
 		white-space: nowrap;
 		overflow: hidden;
@@ -1644,9 +1643,9 @@ function activitiesForTurn(
 	.push-pill-main {
 		gap: 6px;
 		padding: 0 9px;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		font-weight: 500;
-		letter-spacing: 0.01em;
+		letter-spacing: var(--text-ui--letter-spacing);
 	}
 
 	/* Upload / Loader icon picks up the accent — that's where the color
@@ -1673,8 +1672,9 @@ function activitiesForTurn(
 		border-radius: 8px;
 		background: color-mix(in srgb, var(--color-accent) 22%, transparent);
 		color: var(--color-accent);
-		font-size: 10px;
-		font-weight: 700;
+		font-size: var(--text-xs);
+		letter-spacing: var(--text-xs--letter-spacing);
+		font-weight: 500;
 		font-variant-numeric: tabular-nums;
 		line-height: 1;
 	}
@@ -1728,13 +1728,14 @@ function activitiesForTurn(
 	}
 
 	.push-menu-item-title {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		font-weight: 500;
 		color: var(--color-text-primary);
 	}
 
 	.push-menu-item-hint {
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-muted);
 		line-height: 1.4;
 	}
@@ -1776,7 +1777,7 @@ function activitiesForTurn(
 	}
 
 	.blocked-title {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		font-weight: 500;
 		flex: 1;
 		min-width: 0;
@@ -1786,7 +1787,8 @@ function activitiesForTurn(
 		display: flex;
 		align-items: center;
 		gap: 4px;
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		padding: 3px 8px;
 		border-radius: 4px;
 		border: 1px solid var(--color-border);
@@ -1820,12 +1822,13 @@ function activitiesForTurn(
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 	}
 
 	.blocked-sha {
 		font-family: var(--font-mono);
-		font-size: 10px;
+		font-size: var(--text-xs);
 		color: var(--color-text-muted);
 		flex-shrink: 0;
 	}
@@ -1865,7 +1868,8 @@ function activitiesForTurn(
 	}
 
 	.blocked-hint {
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-muted);
 		margin: 0;
 	}
@@ -1890,7 +1894,8 @@ function activitiesForTurn(
 		display: flex;
 		gap: 6px;
 		min-width: 0;
-		font-size: 10px;
+		font-size: var(--text-xs);
+		letter-spacing: var(--text-xs--letter-spacing);
 		line-height: 14px;
 		/* `top` is deliberate over `transform: translateY`: Svelte's `fly` enter
 		   transition writes inline `transform`, and a base-class transform would
@@ -1969,8 +1974,8 @@ function activitiesForTurn(
 	}
 
 	.conflict-card-title {
-		font-size: 13px;
-		font-weight: 600;
+		font-size: var(--text-sm);
+		font-weight: 500;
 		color: var(--color-text-primary);
 		flex: 1;
 		min-width: 0;
@@ -1978,7 +1983,7 @@ function activitiesForTurn(
 
 	.conflict-card-body {
 		padding: 14px 16px;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		line-height: 1.55;
 		color: var(--color-text-secondary);
 		overflow-y: auto;
@@ -1997,7 +2002,7 @@ function activitiesForTurn(
 	.conflict-card-summary code,
 	.conflict-card-hint code {
 		font-family: var(--font-mono);
-		font-size: 11px;
+		font-size: var(--text-ui);
 		background: var(--color-bg-tertiary);
 		border-radius: 3px;
 		padding: 1px 4px;
@@ -2017,7 +2022,7 @@ function activitiesForTurn(
 
 	.conflict-file-list li {
 		font-family: var(--font-mono);
-		font-size: 11px;
+		font-size: var(--text-ui);
 		color: var(--color-text-primary);
 		background: var(--color-bg-tertiary);
 		border-radius: 3px;
@@ -2035,7 +2040,7 @@ function activitiesForTurn(
 	}
 
 	.conflict-btn {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		padding: 5px 12px;
 		border-radius: 5px;
 		border: 1px solid transparent;
@@ -2092,16 +2097,15 @@ function activitiesForTurn(
 	}
 
 	.new-branch-label {
-		font-size: 11px;
-		font-weight: 600;
+		font-size: var(--text-ui);
+		font-weight: 500;
 		color: var(--color-text-secondary);
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
 	}
 
 	.new-branch-hint {
 		margin: 0;
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-muted);
 		line-height: 1.4;
 	}
@@ -2112,7 +2116,7 @@ function activitiesForTurn(
 
 	.new-branch-hint code {
 		font-family: var(--font-mono);
-		font-size: 10.5px;
+		font-size: var(--text-ui);
 		background: var(--color-bg-tertiary);
 		border-radius: 3px;
 		padding: 1px 4px;
@@ -2146,7 +2150,8 @@ function activitiesForTurn(
 		background: transparent;
 		border: none;
 		padding: 0;
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-muted);
 		cursor: pointer;
 		text-decoration: underline;

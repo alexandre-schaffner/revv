@@ -138,14 +138,14 @@ function metaLine(lastUsedAt: string | null, expiresAt: string | null): string |
 		padding: 8px 10px;
 		border-radius: 6px;
 		background: var(--color-bg-secondary);
-		font-size: 12px;
+		font-size: var(--text-ui);
 		line-height: 1.45;
 		color: var(--color-text-secondary);
 		overflow-wrap: anywhere;
 	}
 
 	.integration-error {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-danger);
 	}
 </style>

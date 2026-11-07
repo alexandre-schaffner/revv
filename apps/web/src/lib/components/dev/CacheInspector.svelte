@@ -199,7 +199,7 @@ onMount(() => {
 		width: 320px;
 		max-height: 480px;
 		overflow-y: auto;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-primary);
 		box-shadow: var(--color-shadow-lg);
 	}
@@ -216,10 +216,8 @@ onMount(() => {
 	}
 
 	.inspector-title {
-		font-weight: 600;
-		font-size: 12px;
-		letter-spacing: 0.05em;
-		text-transform: uppercase;
+		font-weight: 500;
+		font-size: var(--text-ui);
 		opacity: 0.7;
 	}
 
@@ -270,21 +268,17 @@ onMount(() => {
 	}
 
 	.section-title {
-		font-size: 11px;
-		font-weight: 600;
-		letter-spacing: 0.04em;
-		text-transform: uppercase;
+		font-size: var(--text-ui);
+		font-weight: 500;
 		opacity: 0.5;
 		margin: 0 0 6px 0;
 	}
 
 	.subsection-title {
-		font-size: 10px;
-		font-weight: 600;
+		font-size: var(--text-ui);
+		font-weight: 500;
 		opacity: 0.4;
 		margin: 8px 0 4px 0;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
 	}
 
 	.stats-table {
@@ -303,7 +297,7 @@ onMount(() => {
 
 	.stat-value {
 		text-align: right;
-		font-family: var(--font-mono, monospace);
-		font-size: 11px;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
 	}
 </style>

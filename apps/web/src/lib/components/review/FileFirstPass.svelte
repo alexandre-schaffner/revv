@@ -81,11 +81,9 @@ const hunks = $derived.by(() => {
 	}
 
 	.file-first-pass-label {
-		font-size: 11px;
-		font-weight: 600;
-		letter-spacing: 0.05em;
-		text-transform: uppercase;
-		color: var(--color-text-muted);
+		font-size: var(--text-ui);
+		font-weight: 500;
+		color: var(--color-text-subtle);
 	}
 
 	.file-first-pass-strip {
@@ -122,7 +120,7 @@ const hunks = $derived.by(() => {
 	.file-first-pass-range {
 		margin-right: 2px;
 		font-family: var(--font-mono);
-		font-size: 11px;
+		font-size: var(--text-ui);
 		color: var(--color-accent);
 	}
 </style>

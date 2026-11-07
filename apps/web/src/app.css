@@ -63,12 +63,15 @@
   --revv-text-primary: #2a2825;
   --revv-text-secondary: #5a5650;
   /* The quiet-but-readable step. `--revv-text-muted` is a decorative grey —
-     2.9:1 on warm-paper, 2.6:1 on midnight — so it is only legitimate on
+     3.5:1 on warm-paper, 3.7:1 on midnight — so it is only legitimate on
      disabled controls and non-informational marks. Any label a user is meant
      to *read* (weekday headers, footnotes, metadata) belongs here: 5.1:1
      light / 4.8:1 dark, still clearly subordinate to `--revv-text-secondary`. */
   --revv-text-subtle: #6f6b64;
-  --revv-text-muted: #9a958c;
+  /* Long-form reading ink: darker than secondary, softer than primary. Body
+     text read for minutes at a time wants ~11:1, not the 7:1 of UI copy. */
+  --revv-text-prose: #3a3632;
+  --revv-text-muted: #8a857d;
   --revv-accent: oklch(48% 0.08 195); /* tidewater teal — the one distinctive move */
   --revv-accent-hover: oklch(42% 0.075 195); /* deepened */
   --revv-accent-muted: oklch(58% 0.07 195); /* muted variant for archival states */
@@ -264,7 +267,8 @@
   --revv-text-primary: #e4e4e7;
   --revv-text-secondary: #a1a1aa;
   --revv-text-subtle: #7c7c85; /* see the light-theme note above */
-  --revv-text-muted: #52525b;
+  --revv-text-prose: #d0d0d5;
+  --revv-text-muted: #6b6b74;
   --revv-accent: oklch(72% 0.12 195); /* phosphor teal — luminous dark accent */
   --revv-accent-hover: oklch(66% 0.12 195); /* deepened press */
   --revv-accent-muted: oklch(81% 0.09 195); /* muted icon variant */
@@ -450,6 +454,7 @@
   --color-text-primary: var(--revv-text-primary);
   --color-text-secondary: var(--revv-text-secondary);
   --color-text-subtle: var(--revv-text-subtle);
+  --color-text-prose: var(--revv-text-prose);
   --color-text-muted: var(--revv-text-muted);
   --color-accent: var(--revv-accent);
   --color-accent-hover: var(--revv-accent-hover);
@@ -459,18 +464,73 @@
   --color-warning-fg: var(--revv-warning-fg);
   --color-danger: var(--revv-danger);
   --color-merged: var(--revv-merged);
-  --font-sans: "Inter", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", "Fira Code", monospace;
+  --font-sans: "Geist", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+  --font-serif: "Newsreader Variable", "Newsreader", Georgia, serif;
+
+  /* Type scale. Every font-size in the app is one of these steps; there are
+     no literals in between (`bun run check:typography` enforces it). Geist was
+     drawn for a 14px UI (Vercel's own label-14 / copy-14 are the default), so
+     `sm` is the default for anything read: rows, menus, controls, body. `ui`
+     (13) is secondary text beside it, `xs` (12) tertiary in busy views and the
+     floor. Each step carries the leading and tracking Geist wants at that size:
+     the small steps open up a hair, the display steps close in. CSS that sets
+     `font-size: var(--text-x)` should take the matching `--text-x--letter-spacing`
+     when it has no tracking of its own. */
+  --text-xs: 0.75rem; /* 12px: tertiary: badges, kbd, chart ticks, counts in busy rows */
+  --text-xs--line-height: 1rem;
+  --text-xs--letter-spacing: 0.01em;
+  --text-ui: 0.8125rem; /* 13px: secondary: metadata, captions, labels beside 14px text */
+  --text-ui--line-height: 1.25rem;
+  --text-ui--letter-spacing: 0em;
+  --text-sm: 0.875rem; /* 14px: the default: rows, menus, controls, body copy */
+  --text-sm--line-height: 1.25rem;
+  --text-sm--letter-spacing: 0em;
+  --text-base: 1rem; /* 16px: panel titles, primary reading */
+  --text-base--line-height: 1.5rem;
+  --text-base--letter-spacing: 0em;
+  --text-lg: 1.125rem; /* 18px: section titles */
+  --text-lg--line-height: 1.75rem;
+  --text-lg--letter-spacing: -0.012em;
+  --text-xl: 1.25rem; /* 20px: page section headings */
+  --text-xl--line-height: 1.75rem;
+  --text-xl--letter-spacing: -0.018em;
+  --text-2xl: 1.5rem; /* 24px: dialog and pane titles */
+  --text-2xl--line-height: 2rem;
+  --text-2xl--letter-spacing: -0.024em;
+  --text-3xl: 2rem; /* 32px: page titles */
+  --text-3xl--line-height: 2.5rem;
+  --text-3xl--letter-spacing: -0.03em;
+  --text-4xl: 2.25rem; /* 36px: editorial heroes in narrow panes (Newsreader) */
+  --text-4xl--line-height: 1.1;
+  --text-4xl--letter-spacing: -0.02em;
+  --text-5xl: 2.75rem; /* 44px: editorial heroes (Newsreader) */
+  --text-5xl--line-height: 1.1;
+  --text-5xl--letter-spacing: -0.02em;
+
+  /* Tracking for uppercase. Capitals sit too close at default spacing:
+     `caps` for short sans labels, `eyebrow` for the mono section marker. */
+  --tracking-caps: 0.06em;
+  --tracking-eyebrow: 0.12em;
 
   /* Markdown / prose type scale — reusable size + line-height presets.
      Every markdown surface (walkthrough, chat, recap, review, annotations)
      reads from these so the app has one reading scale. They also generate
-     `text-prose` / `text-prose-dense` utilities. Tuned to the pre-typography
-     reading sizes; consumed by the prose layer in lib/styles/prose.css. */
-  --text-prose: 0.875rem; /* 14px — default markdown reading size */
+     `text-prose` / `text-prose-dense` utilities. Consumed by the prose layer
+     in lib/styles/prose.css. */
+  --text-prose: var(--text-sm); /* 14px: default markdown reading size */
   --text-prose--line-height: 1.7;
-  --text-prose-dense: 0.8125rem; /* 13px — dense side panels & summaries */
-  --text-prose-dense--line-height: 1.55;
+  --text-prose-dense: var(--text-ui); /* 13px: dense side panels & summaries */
+  --text-prose-dense--line-height: 1.6;
+  /* The reading tier: documents read top to bottom (walkthrough, PR
+     description, sentiment), set the way a good blog sets an article. 16px on
+     28px leading, a darker ink, and a measure of ~80 characters. The measure is
+     in em, not ch: Geist's zero is wide (0.66em against a 0.44em average
+     letter), so 68ch would run past 100 characters. */
+  --text-prose-reading: var(--text-base);
+  --text-prose-reading--line-height: 1.75;
+  --text-prose-lede: var(--text-lg); /* 18px: a chapter's standfirst */
+  --text-prose-lede--line-height: 1.6;
 
   /* Diff canvas */
   --color-diff-bg: var(--revv-diff-bg);
@@ -836,9 +896,26 @@ body {
   background-color: var(--color-bg-primary);
   color: var(--color-text-primary);
   font-family: var(--font-sans);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  font-optical-sizing: auto;
+  font-kerning: normal;
 }
+
+/* Line breaking, everywhere. Headings even out their lines instead of leaving
+   a stub; running text avoids a lone word on its last line. `:where` keeps
+   both at zero specificity, so a component can still opt out. */
+:where(h1, h2, h3, h4, h5, h6) {
+  text-wrap: balance;
+}
+
+:where(p, li, dd, blockquote, figcaption) {
+  text-wrap: pretty;
+}
+
+/* No -webkit-font-smoothing override. Forcing `antialiased` switches off
+   macOS's own stem darkening and every glyph renders a weight lighter: at
+   12-14px Geist that read as faint grey hairlines, worst on 1x displays.
+   The platform default is tuned per display (MDN; Fadeyev, "Please stop
+   'fixing' font smoothing"). */
 
 /* Scrollbar */
 ::-webkit-scrollbar {
@@ -921,7 +998,9 @@ diffs-container {
 
   /* Gutter / line-number column */
   --diffs-bg-context-number-override: light-dark(#edeae3, #0a0a0a);
-  --diffs-fg-number-override: light-dark(#9a958c, #52525b);
+  /* Line numbers and "N unmodified lines": quieter than code but still read
+     (about 4:1 on the gutter), not the decorative 2.6:1 they were. */
+  --diffs-fg-number-override: light-dark(#78736b, #7c7c85);
 
   /* Context-line hover */
   --diffs-bg-hover-override: light-dark(#eae6de, #131313);
