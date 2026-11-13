@@ -61,6 +61,10 @@ let sidebarView = $state<SidebarView>("prs");
 
 let fileSearchQuery = $state<string>("");
 
+// Files-mode "Needs me": show only the changed files CODEOWNERS assigns to the
+// viewer or their teams. Transient, cleared with the search query.
+let filesNeedsMeOnly = $state(false);
+
 $effect.root(() => {
   $effect(() => {
     writeStored(STORAGE_KEYS.sidebarWidth, sidebarWidthCodec, sidebarWidth);
@@ -183,6 +187,7 @@ export function setSidebarView(v: SidebarView): void {
   sidebarView = v;
   if (v === "prs") {
     fileSearchQuery = "";
+    filesNeedsMeOnly = false;
   }
 }
 
@@ -192,6 +197,14 @@ export function getFileSearchQuery(): string {
 
 export function setFileSearchQuery(v: string): void {
   fileSearchQuery = v;
+}
+
+export function getFilesNeedsMeOnly(): boolean {
+  return filesNeedsMeOnly;
+}
+
+export function setFilesNeedsMeOnly(v: boolean): void {
+  filesNeedsMeOnly = v;
 }
 
 export function isOwnerCollapsed(owner: string): boolean {

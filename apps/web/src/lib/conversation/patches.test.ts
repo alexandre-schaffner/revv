@@ -41,6 +41,7 @@ function conversation(overrides: Partial<PrConversation> = {}): PrConversation {
     isDraft: false,
     reviewDecision: null,
     viewerLogin: "me",
+    viewerTeams: [],
     viewerCanUpdate: true,
     viewerCanPush: true,
     labels: [],
@@ -97,6 +98,7 @@ describe("conversation patches", () => {
       asCodeOwner: false,
       verdict: "approved" as const,
       verdictAt: null,
+      onBehalfOf: [],
     };
     const reviewers = [bob];
     const request = requestReviewersPatch({ users: ["bob", "carol"], teams: ["o/core"] });

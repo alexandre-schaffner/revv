@@ -57,6 +57,7 @@ function rawConversation(overrides: Record<string, unknown> = {}): RawConversati
               state: "CHANGES_REQUESTED",
               submittedAt: "2026-10-02T00:00:00Z",
               author: user("dave"),
+              onBehalfOf: { nodes: [{ combinedSlug: "o/web" }] },
             },
           ],
         },
@@ -215,6 +216,14 @@ describe("mapConversation", () => {
     expect(dave?.kind === "user" && dave.verdict).toBe("changes_requested");
     const carol = reviewers.find((r) => r.kind === "user" && r.actor.login === "carol");
     expect(carol?.kind === "user" && carol.verdict).toBeNull();
+  });
+
+  test("keeps the teams a verdict was given on behalf of", () => {
+    const reviewers = conversation?.reviewers ?? [];
+    const dave = reviewers.find((r) => r.kind === "user" && r.actor.login === "dave");
+    expect(dave?.kind === "user" && dave.onBehalfOf).toEqual(["o/web"]);
+    const erin = reviewers.find((r) => r.kind === "user" && r.actor.login === "erin");
+    expect(erin?.kind === "user" && erin.onBehalfOf).toEqual([]);
   });
 
   test("maps timeline items and drops pending reviews and unknown nodes", () => {

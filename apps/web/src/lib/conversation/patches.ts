@@ -143,6 +143,7 @@ export function requestReviewersPatch(change: ReviewerChange): ConversationPatch
         asCodeOwner: false,
         verdict: null,
         verdictAt: null,
+        onBehalfOf: [],
       });
     }
     for (const combinedSlug of change.teams) {

@@ -87,6 +87,31 @@ export function codeownersPatternRegex(pattern: string): RegExp {
 }
 
 /**
+ * The rule that decides each path's owners under `rules`: the last one that
+ * matches, as on GitHub. Null when no rule matches.
+ */
+export function codeownersRuleFor(
+  rules: readonly CodeownersRule[],
+  paths: readonly string[],
+): Map<string, CodeownersRule | null> {
+  const compiled = rules.map((rule) => ({ rule, regex: codeownersPatternRegex(rule.pattern) }));
+  const result = new Map<string, CodeownersRule | null>();
+  for (const path of paths) {
+    const clean = path.replace(/^\//, "");
+    let match: CodeownersRule | null = null;
+    for (let i = compiled.length - 1; i >= 0; i--) {
+      const entry = compiled[i];
+      if (entry?.regex.test(clean)) {
+        match = entry.rule;
+        break;
+      }
+    }
+    result.set(path, match);
+  }
+  return result;
+}
+
+/**
  * The owners of each path under `rules`: last matching rule wins. A path no
  * rule matches, or whose last match lists nobody, maps to `[]`.
  */
@@ -94,19 +119,7 @@ export function codeownersFor(
   rules: readonly CodeownersRule[],
   paths: readonly string[],
 ): Map<string, readonly string[]> {
-  const compiled = rules.map((rule) => ({ rule, regex: codeownersPatternRegex(rule.pattern) }));
   const result = new Map<string, readonly string[]>();
-  for (const path of paths) {
-    const clean = path.replace(/^\//, "");
-    let owners: readonly string[] = [];
-    for (let i = compiled.length - 1; i >= 0; i--) {
-      const entry = compiled[i];
-      if (entry?.regex.test(clean)) {
-        owners = entry.rule.owners;
-        break;
-      }
-    }
-    result.set(path, owners);
-  }
+  for (const [path, rule] of codeownersRuleFor(rules, paths)) result.set(path, rule?.owners ?? []);
   return result;
 }

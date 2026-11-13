@@ -13,11 +13,13 @@ import type {
   CheckDetails,
   CiAccess,
   CiRollup,
+  CodeownersFile,
   ConversationWrite,
   ConversationWriteResult,
   PrConversation,
   PrConversationResponse,
   PrLabel,
+  ReviewerEntry,
   ReviewerOptions,
 } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
@@ -26,6 +28,7 @@ import { logError } from "../logger";
 import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { CacheService } from "./Cache";
 import { AvatarCache } from "./github/avatars";
+import type { MappedConversation } from "./github/conversation/map";
 import { GitHubGateway } from "./github/gateway";
 import { type PrContextBasic, type PrContextError, PrContextService } from "./PrContext";
 import { Realtime } from "./Realtime";
@@ -41,6 +44,9 @@ const DETAILS_NS = "pr-check-details";
 const CODEOWNERS_NS = "pr-codeowners";
 /** CODEOWNERS rarely moves; a base branch's copy is re-read at most this often. */
 const CODEOWNERS_TTL_MS = 10 * 60 * 1000;
+const VIEWER_TEAMS_NS = "viewer-teams";
+/** Team membership changes rarely; one org's answer serves every PR in it for this long. */
+const VIEWER_TEAMS_TTL_MS = 60 * 60 * 1000;
 
 type ConversationError = GitHubError | PrContextError | DbError;
 
@@ -102,6 +108,27 @@ function loginsOf(conversation: PrConversation): Set<string> {
   return logins;
 }
 
+/** A snapshot cached by an older build may predate these fields. */
+type SnapshotOnDisk = Omit<PrConversation, "viewerTeams" | "reviewers"> & {
+  readonly viewerTeams?: readonly string[];
+  readonly reviewers: ReadonlyArray<
+    | Extract<ReviewerEntry, { kind: "team" }>
+    | (Omit<Extract<ReviewerEntry, { kind: "user" }>, "onBehalfOf"> & {
+        readonly onBehalfOf?: readonly string[];
+      })
+  >;
+};
+
+function upgradeSnapshot(snapshot: SnapshotOnDisk): PrConversation {
+  return {
+    ...snapshot,
+    viewerTeams: snapshot.viewerTeams ?? [],
+    reviewers: snapshot.reviewers.map(
+      (r): ReviewerEntry => (r.kind === "team" ? r : { ...r, onBehalfOf: r.onBehalfOf ?? [] }),
+    ),
+  };
+}
+
 export const PrConversationServiceLive = Layer.effect(
   PrConversationService,
   Effect.gen(function* () {
@@ -134,6 +161,28 @@ export const PrConversationServiceLive = Layer.effect(
         { ttlMs: CODEOWNERS_TTL_MS },
       );
 
+    /**
+     * The viewer's teams in the repo's org, asked only when the PR involves
+     * a team: a CODEOWNERS team owner, a team review request, or a review
+     * given on a team's behalf.
+     */
+    const viewerTeamsFor = (
+      ctx: PrContextBasic,
+      mapped: MappedConversation,
+      codeowners: CodeownersFile | null,
+    ) => {
+      const involvesTeams =
+        mapped.reviewers.some((r) => r.kind === "team" || r.onBehalfOf.length > 0) ||
+        (codeowners?.rules.some((rule) => rule.owners.some((o) => o.includes("/"))) ?? false);
+      if (!involvesTeams) return Effect.succeed<readonly string[]>([]);
+      return cache.getOrFetch(
+        VIEWER_TEAMS_NS,
+        `${ctx.repo.githubHost}:${ctx.repo.fullName.split("/")[0]}:${mapped.viewerLogin}`.toLowerCase(),
+        () => github.conversation.viewerTeams(ctx.client, ctx.repo.fullName, mapped.viewerLogin),
+        { ttlMs: VIEWER_TEAMS_TTL_MS },
+      );
+    };
+
     /** Fill in the avatars `remote_users` holds for everyone the conversation names. */
     const withAvatars = (host: string, conversation: PrConversation) =>
       Effect.map(avatars.contents(host, loginsOf(conversation)), (known) => ({
@@ -150,9 +199,10 @@ export const PrConversationServiceLive = Layer.effect(
           ],
           { concurrency: 2 },
         );
+        const viewerTeams = yield* viewerTeamsFor(ctx, mapped, codeowners);
         // Cached without images: they live in `remote_users`, and every read
         // fills them in from there.
-        const snapshot: PrConversation = { ...mapped, codeowners, avatars: {} };
+        const snapshot: PrConversation = { ...mapped, codeowners, viewerTeams, avatars: {} };
         yield* cache.set(CACHE_NS, prId, snapshot, { ttlMs: CACHE_TTL_MS });
         const { conversation, known } = yield* withAvatars(ctx.repo.githubHost, snapshot);
         yield* warmAvatars(ctx.repo.githubHost, avatarUrls, known);
@@ -161,9 +211,9 @@ export const PrConversationServiceLive = Layer.effect(
 
     const readCached = (prId: string, host: string) =>
       Effect.gen(function* () {
-        const snapshot = yield* cache.get<PrConversation>(CACHE_NS, prId);
+        const snapshot = yield* cache.get<SnapshotOnDisk>(CACHE_NS, prId);
         if (!snapshot) return null;
-        return (yield* withAvatars(host, snapshot)).conversation;
+        return (yield* withAvatars(host, upgradeSnapshot(snapshot))).conversation;
       });
 
     const cached = (prId: string) =>

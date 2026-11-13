@@ -47,6 +47,7 @@ import {
   MODERN_TOKENS,
   TIMELINE_MAX_PAGES,
   timelinePageQuery,
+  VIEWER_TEAMS_QUERY,
 } from "./queries";
 import { runWrite } from "./writes";
 
@@ -284,6 +285,37 @@ function fetchCodeowners(
     );
 }
 
+/**
+ * The teams (`org/slug`) `login` belongs to in the repo owner's org. Empty
+ * when the owner is a user rather than an organization, or the token can't
+ * read team membership (no `read:org`, a GitHub App without the members
+ * permission, SAML): team ownership is an enhancement, never a reason to
+ * fail the page.
+ */
+function fetchViewerTeams(
+  http: GitHubHttp,
+  client: GitHubClient,
+  ref: RepoRef,
+  login: string,
+): Effect.Effect<string[], GitHubError> {
+  return http
+    .graphqlPartial<{
+      organization: { teams: { nodes: ReadonlyArray<{ combinedSlug: string } | null> } } | null;
+    }>(client, VIEWER_TEAMS_QUERY, { org: ref.owner, login })
+    .pipe(
+      Effect.map(({ data }) =>
+        (data.organization?.teams.nodes ?? []).flatMap((team) => (team ? [team.combinedSlug] : [])),
+      ),
+      Effect.catchIf(
+        (e) =>
+          e instanceof GitHubApiError ||
+          e instanceof GitHubAccessDeniedError ||
+          e instanceof GitHubNotFoundError,
+        () => Effect.succeed([]),
+      ),
+    );
+}
+
 interface RawCheckRun {
   readonly status: string;
   readonly output?: { readonly title: string | null; readonly summary: string | null } | null;
@@ -485,6 +517,7 @@ export const conversationApi = (http: GitHubHttp) => {
     fetch: onRepo(fetchConversation),
     ciRollup: onRepo(fetchCiRollup),
     codeowners: onRepo(fetchCodeowners),
+    viewerTeams: onRepo(fetchViewerTeams),
     checkDetails: onRepo(fetchCheckDetails),
     labels: onRepo(listRepoLabels),
     assignableUsers: onRepo(searchAssignableUsers),

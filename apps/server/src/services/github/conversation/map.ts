@@ -36,6 +36,8 @@ interface RawReview {
   readonly state: string;
   readonly submittedAt: string | null;
   readonly author: RawActor | null;
+  /** Absent on hosts that predate it, and on the legacy `reviews` list. */
+  readonly onBehalfOf?: RawConnection<{ readonly combinedSlug: string }> | null;
 }
 
 export interface RawConnection<N> {
@@ -591,14 +593,23 @@ function mapReviewers(pr: RawPullRequest): ReviewerEntry[] {
   // Latest verdict per login. `latestOpinionatedReviews` wins over a later
   // plain comment (GitHub's own sidebar does the same: an approval followed
   // by a comment still reads as an approval).
-  const verdicts = new Map<string, { verdict: ReviewVerdict; at: string | null; raw: RawActor }>();
+  const verdicts = new Map<
+    string,
+    { verdict: ReviewVerdict; at: string | null; raw: RawActor; onBehalfOf: string[] }
+  >();
+  const teamsOf = (review: RawReview) => nodesOf(review.onBehalfOf).map((t) => t.combinedSlug);
   const record = (reviews: RawReview[], overwrite: boolean) => {
     for (const review of reviews) {
       const verdict = toVerdict(review.state);
       if (!verdict || !review.author) continue;
       const login = review.author.login;
       if (!overwrite && verdicts.has(login)) continue;
-      verdicts.set(login, { verdict, at: review.submittedAt, raw: review.author });
+      verdicts.set(login, {
+        verdict,
+        at: review.submittedAt,
+        raw: review.author,
+        onBehalfOf: teamsOf(review),
+      });
     }
   };
   if (pr.latestOpinionatedReviews || pr.latestReviews) {
@@ -615,7 +626,12 @@ function mapReviewers(pr: RawPullRequest): ReviewerEntry[] {
       const priorOpinionated =
         prior?.verdict === "approved" || prior?.verdict === "changes_requested";
       if (!prior || opinionated || !priorOpinionated) {
-        verdicts.set(review.author.login, { verdict, at: review.submittedAt, raw: review.author });
+        verdicts.set(review.author.login, {
+          verdict,
+          at: review.submittedAt,
+          raw: review.author,
+          onBehalfOf: teamsOf(review),
+        });
       }
     }
   }
@@ -645,10 +661,11 @@ function mapReviewers(pr: RawPullRequest): ReviewerEntry[] {
       asCodeOwner: request.asCodeOwner === true,
       verdict: prior?.verdict ?? null,
       verdictAt: prior?.at ?? null,
+      onBehalfOf: prior?.onBehalfOf ?? [],
     });
   }
   const authorLogin = pr.author?.login;
-  for (const [login, { verdict, at, raw }] of verdicts) {
+  for (const [login, { verdict, at, raw, onBehalfOf }] of verdicts) {
     if (seen.has(login) || login === authorLogin) continue;
     entries.push({
       kind: "user",
@@ -657,6 +674,7 @@ function mapReviewers(pr: RawPullRequest): ReviewerEntry[] {
       asCodeOwner: false,
       verdict,
       verdictAt: at,
+      onBehalfOf,
     });
   }
   return entries;
@@ -665,10 +683,11 @@ function mapReviewers(pr: RawPullRequest): ReviewerEntry[] {
 const WRITE_PERMISSIONS = new Set(["ADMIN", "MAINTAIN", "WRITE"]);
 
 /**
- * What GitHub's conversation query answers. CODEOWNERS comes from its own
- * query and avatars from the local cache; the service adds both.
+ * What GitHub's conversation query answers. CODEOWNERS and the viewer's
+ * teams come from their own queries and avatars from the local cache; the
+ * service adds them.
  */
-export type MappedConversation = Omit<PrConversation, "codeowners" | "avatars">;
+export type MappedConversation = Omit<PrConversation, "codeowners" | "avatars" | "viewerTeams">;
 
 /**
  * `olderTimeline` is the pages read before the query's own (newest) page,

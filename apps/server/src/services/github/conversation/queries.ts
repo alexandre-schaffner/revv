@@ -15,6 +15,7 @@ export const MODERN_TOKENS = [
   "CONVERT_TO_DRAFT_EVENT",
   "convertToDraft",
   "asCodeOwner",
+  "onBehalfOf",
   "STACK_EVENT",
   "StackEvent",
 ] as const;
@@ -25,6 +26,9 @@ const TIMELINE_PAGE = 100;
 export const TIMELINE_MAX_PAGES = 5;
 
 const ACTOR = `login avatarUrl __typename ... on User { name databaseId }`;
+
+/** The teams a review answered for: how a code-owner team's approval is traced to a member. */
+const ON_BEHALF_OF = `onBehalfOf(first: 10) { nodes { combinedSlug } }`;
 
 function timelineTypes(modern: boolean): string {
   return [
@@ -187,10 +191,10 @@ export function conversationQuery(modern: boolean): string {
           ${
             modern
               ? `latestOpinionatedReviews(first: 50, writersOnly: true) {
-                   nodes { state submittedAt author { ${ACTOR} } }
+                   nodes { state submittedAt author { ${ACTOR} } ${ON_BEHALF_OF} }
                  }
                  latestReviews(first: 50) {
-                   nodes { state submittedAt author { ${ACTOR} } }
+                   nodes { state submittedAt author { ${ACTOR} } ${ON_BEHALF_OF} }
                  }`
               : `reviews(last: 100) { nodes { state submittedAt author { ${ACTOR} } } }`
           }
@@ -243,6 +247,19 @@ export function checkContextsPageQuery(modern: boolean): string {
     }
   `;
 }
+
+/**
+ * The teams in `$org` that `$login` belongs to. GitHub answers with the
+ * teams the token may see, so a token without `read:org` (or a GitHub App
+ * without the members permission) gets an error or an empty list.
+ */
+export const VIEWER_TEAMS_QUERY = `
+  query ViewerTeams($org: String!, $login: String!) {
+    organization(login: $org) {
+      teams(first: 100, userLogins: [$login]) { nodes { combinedSlug } }
+    }
+  }
+`;
 
 /** The base branch's CODEOWNERS, at each place GitHub looks for one. */
 export const CODEOWNERS_QUERY = `
