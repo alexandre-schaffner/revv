@@ -1,20 +1,16 @@
 import { describe, expect, it } from "bun:test";
-import { readFileSync } from "node:fs";
 import { buildResolveConflictsPrompt, buildResolveConflictsUserMessage } from "./chat";
 
 describe("buildResolveConflictsPrompt", () => {
-  it("keeps the push-merge prompt as the template reads", () => {
-    const template = readFileSync(`${import.meta.dir}/chat-resolve-conflicts.md`, "utf-8");
+  it("names both branches and every conflict file in the push-merge prompt", () => {
     const prompt = buildResolveConflictsPrompt(
       { kind: "push-merge", agentBranch: "revv/pr-4", sourceBranch: "feat" },
-      ["a.ts"],
+      ["a.ts", "b.ts"],
     );
-    expect(prompt).toBe(
-      template
-        .replace("{{AGENT_BRANCH}}", "revv/pr-4")
-        .replace("{{SOURCE_BRANCH}}", "feat")
-        .replace("{{CONFLICT_FILES}}", "- `a.ts`"),
-    );
+    expect(prompt).toContain("`revv/pr-4`");
+    expect(prompt).toContain("`feat`");
+    expect(prompt).toContain("- `a.ts`\n- `b.ts`");
+    expect(prompt).not.toContain("{{");
   });
 
   it("names both branches in the base-merge prompt", () => {

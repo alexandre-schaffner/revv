@@ -35,7 +35,7 @@ export const hunkScanRows = sqliteTable(
       .notNull()
       .references(() => hunkScans.id, { onDelete: "cascade" }),
     filePath: text("file_path").notNull(),
-    /** Position among the file's hunks — the index `@pierre/diffs` and `hunk_decisions` use. */
+    /** Position among the file's hunks — the index `@pierre/diffs` uses. */
     hunkIndex: integer("hunk_index").notNull(),
     oldStart: integer("old_start").notNull(),
     oldLines: integer("old_lines").notNull(),

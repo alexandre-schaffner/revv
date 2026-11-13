@@ -1,24 +1,31 @@
-import { ACP_AGENT_IDS, type AcpAgentId, isAcpAgentId, type UserSettings } from "@revv/shared";
+import {
+  ACP_AGENT_IDS,
+  type AcpAgentId,
+  isAcpAgentId,
+  isSettingField,
+  SETTINGS_SPEC,
+  type SettingField,
+  type SettingsSpecNode,
+  type SettingsUpdate,
+  type SettingWire,
+  type UserSettings,
+} from "@revv/shared";
 import { Effect } from "effect";
-import { Elysia, t } from "elysia";
-import { hasJevApiKey } from "../ai/jev/api-key";
-import { listCliModels } from "../ai/providers/cli-models";
-import { AppRuntime } from "../runtime";
-import { AiService } from "../services/Ai";
-import { BlobStore } from "../services/blob/BlobStore";
-import { SshSigner } from "../services/cache-signing/index";
-import { PollScheduler } from "../services/PollScheduler";
-import { RecapScheduler } from "../services/RecapScheduler";
+import { Elysia, type TSchema, t } from "elysia";
+import { listAgentModels } from "../ai/acp/agents";
+import { clearJevApiKey, hasJevApiKey, setJevApiKey } from "../ai/jev/api-key";
+import type { JevUnavailableReason } from "../domain/errors";
+import { JevService } from "../services/Jev";
 import { SettingsService } from "../services/Settings";
-import { handleAppError } from "./middleware";
-import { baseConflictStrategySchema, updateChannelSchema } from "./schemas";
-import { settingsJevRoutes } from "./settings-jev";
+import { runRoute, withAuth } from "./middleware";
+import { literalUnion } from "./schemas";
+import { teamCacheRoutes } from "./team-cache";
 
 /**
  * Overlay the server-derived `jev.hasApiKey` onto a settings DTO.
  *
- * The key lives in the keyring, never in `user_settings`: this router is
- * mounted without `withAuth`, so anything in the row is world-readable.
+ * The key lives in the keyring, never in `user_settings`: settings are
+ * readable without a session.
  */
 const withJevKeyState = (settings: UserSettings) =>
   Effect.map(
@@ -26,327 +33,124 @@ const withJevKeyState = (settings: UserSettings) =>
     (present): UserSettings => ({ ...settings, jev: { ...settings.jev, hasApiKey: present } }),
   );
 
-// Registry-derived literal unions for request validation — adding an ACP agent
-// to the shared registry extends these automatically.
-const acpAgentLiterals = ACP_AGENT_IDS.map((id) => t.Literal(id));
-const aiAgentSchema = t.Union(acpAgentLiterals);
-const recapAgentSchema = t.Union([t.Literal("auto"), ...acpAgentLiterals]);
+/** The request schema for a settings patch, built from the shared spec; derived fields are left out. */
+function patchSchemaOf(group: Exclude<SettingsSpecNode, SettingField<unknown>>): TSchema {
+  const properties: Record<string, TSchema> = {};
+  for (const [key, child] of Object.entries(group)) {
+    const schema = isSettingField(child) ? fieldSchemaOf(child.wire) : patchSchemaOf(child);
+    if (schema) properties[key] = schema;
+  }
+  return t.Partial(t.Object(properties));
+}
 
-export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
-  .get("/", async (ctx) => {
-    try {
-      const settings = await AppRuntime.runPromise(
-        Effect.flatMap(SettingsService, (s) => s.getSettings()).pipe(
-          Effect.flatMap(withJevKeyState),
-        ),
-      );
-      return settings;
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-  .put(
-    "/",
-    async (ctx) => {
-      try {
-        const updated = await AppRuntime.runPromise(
-          Effect.gen(function* () {
-            const settingsSvc = yield* SettingsService;
-            const scheduler = yield* PollScheduler;
-            const result = yield* settingsSvc.updateSettings(ctx.body);
-            if (ctx.body.autoFetchInterval !== undefined) {
-              yield* scheduler.restart(ctx.body.autoFetchInterval);
-            }
-            // `start` reads the just-written toggles and only forks the
-            // cadences still enabled, so a stop/start pair applies them live.
-            // An agent-only change skips it: a restart sweeps immediately.
-            const recap = ctx.body.recap;
-            if (
-              recap?.enabled !== undefined ||
-              recap?.dailyEnabled !== undefined ||
-              recap?.weeklyEnabled !== undefined
-            ) {
-              const recapScheduler = yield* RecapScheduler;
-              yield* recapScheduler.stop();
-              yield* recapScheduler.start();
-            }
-            return yield* withJevKeyState(result);
-          }),
-        );
-        return updated;
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
+function fieldSchemaOf(wire: SettingWire): TSchema | null {
+  switch (wire.type) {
+    case "string":
+      return wire.minLength === undefined ? t.String() : t.String({ minLength: wire.minLength });
+    case "enum":
+      return literalUnion(wire.values);
+    case "number":
+      return t.Number({
+        ...(wire.minimum === undefined ? {} : { minimum: wire.minimum }),
+        ...(wire.maximum === undefined ? {} : { maximum: wire.maximum }),
+      });
+    case "boolean":
+      return t.Boolean();
+    case "string[]":
+      return t.Array(t.String());
+    case "derived":
+      return null;
+  }
+}
+
+const TEST_FAILURE_MESSAGE: Record<JevUnavailableReason, string> = {
+  unconfigured: "No API key saved.",
+  disabled: "TypeSafe is turned off.",
+  timeout: "The request timed out.",
+  rate_limited: "The API key is over its request quota; try again shortly.",
+  transport: "Could not reach the TypeSafe API.",
+  malformed: "The API returned an unexpected response.",
+};
+
+const settingsPatchSchema = t.Unsafe<SettingsUpdate>(patchSchemaOf(SETTINGS_SPEC));
+
+const githubConfigSchema = t.Unsafe<Pick<UserSettings, "githubHost" | "githubClientId">>(
+  t.Object({
+    githubHost: fieldSchemaOf(SETTINGS_SPEC.githubHost.wire) ?? t.String(),
+    githubClientId: fieldSchemaOf(SETTINGS_SPEC.githubClientId.wire) ?? t.String(),
+  }),
+);
+
+const getSettings = () =>
+  runRoute(
+    Effect.flatMap(SettingsService, (s) => s.getSettings()).pipe(Effect.flatMap(withJevKeyState)),
+  );
+
+// Only persists: reactions to a change subscribe to `SettingsService.watch`.
+const putSettings = (patch: SettingsUpdate) =>
+  runRoute(
+    Effect.flatMap(SettingsService, (s) => s.updateSettings(patch)).pipe(
+      Effect.flatMap(withJevKeyState),
+    ),
+  );
+
+/**
+ * What onboarding needs before anyone has signed in: the settings read, and
+ * the GitHub host and client id that sign-in itself depends on.
+ */
+const openSettingsRoutes = new Elysia({ prefix: "/api/settings" })
+  .get("/", getSettings)
+  .put("/github", (ctx) => putSettings(ctx.body), { body: githubConfigSchema });
+
+const signedInSettingsRoutes = new Elysia({ prefix: "/api/settings" })
+  .use(withAuth)
+  .put("/", (ctx) => putSettings(ctx.body), { body: settingsPatchSchema })
+  .get(
+    "/models",
+    (ctx) =>
+      runRoute(
+        Effect.gen(function* () {
+          const agentParam = ctx.query?.agent;
+          const agent: AcpAgentId =
+            agentParam && isAcpAgentId(agentParam)
+              ? agentParam
+              : yield* Effect.flatMap(SettingsService, (s) => s.resolveAgent());
+          const models = yield* Effect.promise(() => listAgentModels(agent));
+          return { models, agent };
+        }),
+      ),
     {
-      body: t.Partial(
+      query: t.Optional(
         t.Object({
-          aiProvider: t.String(),
-          aiModel: t.String(),
-          aiSuggestionsModel: t.String(),
-          aiThinkingEffort: t.Union([
-            // "Size it for me" sentinel, see AUTO_SENTINEL.
-            t.Literal("revv:auto"),
-            t.Literal("ultra"),
-            t.Literal("ultrathink"),
-            t.Literal("max"),
-            t.Literal("extra-high"),
-            t.Literal("high"),
-            t.Literal("medium"),
-            t.Literal("low"),
-          ]),
-          aiMaxTurns: t.Number({ minimum: 10, maximum: 500 }),
-          aiAgent: aiAgentSchema,
-          theme: t.Union([t.Literal("system"), t.Literal("light"), t.Literal("dark")]),
-          diffViewMode: t.Union([t.Literal("unified"), t.Literal("split")]),
-          autoFetchInterval: t.Number(),
-          githubHost: t.String({ minLength: 1 }),
-          githubClientId: t.String(),
-          recap: t.Partial(
-            t.Object({
-              enabled: t.Boolean(),
-              dailyEnabled: t.Boolean(),
-              weeklyEnabled: t.Boolean(),
-              agent: recapAgentSchema,
-            }),
-          ),
-          cache: t.Partial(
-            t.Object({
-              enabled: t.Boolean(),
-              bucket: t.String(),
-              uploadsEnabled: t.Boolean(),
-              downloadsEnabled: t.Boolean(),
-              signing: t.Partial(
-                t.Object({
-                  mode: t.Union([t.Literal("off"), t.Literal("permissive"), t.Literal("strict")]),
-                  keyPath: t.String(),
-                  trustedSignerHosts: t.Array(t.String()),
-                }),
-              ),
-            }),
-          ),
-          jev: t.Partial(t.Object({ enabled: t.Boolean() })),
-          updateChannel: updateChannelSchema.optional,
-          baseConflictStrategy: baseConflictStrategySchema,
+          agent: t.Optional(literalUnion(ACP_AGENT_IDS)),
         }),
       ),
     },
   )
-  // Key management lives in its own sub-router because every route on it is
-  // individually `withAuth`-guarded, unlike this one.
-  .use(settingsJevRoutes)
-  .get("/cache/status", async (ctx) => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const blob = yield* BlobStore;
-          return yield* blob.status();
-        }),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-  .post("/cache/signing/test", async (ctx) => {
-    try {
-      const probe = "revv-signing-test";
-      const result = await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const signerSvc = yield* SshSigner;
-          const signed = yield* signerSvc.sign(probe);
-          yield* signerSvc.verify(probe, signed.signature, signed.signerHost, signed.signerLogin);
-          return {
-            ok: true as const,
-            signerLogin: signed.signerLogin,
-            signerHost: signed.signerHost,
-            signatureNamespace: signed.signatureNamespace,
-          };
-        }).pipe(
-          Effect.catch((e) =>
-            Effect.succeed({
-              ok: false as const,
-              error: (e as { message?: string }).message ?? String(e),
-            }),
-          ),
+  .put(
+    "/jev/api-key",
+    (ctx) =>
+      runRoute(setJevApiKey(ctx.body.apiKey).pipe(Effect.map((hasApiKey) => ({ hasApiKey })))),
+    { body: t.Object({ apiKey: t.String() }) },
+  )
+  .delete("/jev/api-key", () => runRoute(clearJevApiKey.pipe(Effect.as({ hasApiKey: false }))))
+  // Lets the user tell a bad key from a bad network without generating a
+  // walkthrough. Mirrors `/cache/signing/test`: failures return `{ ok: false, error }`, not a non-2xx.
+  .post("/jev/test", () =>
+    runRoute(
+      Effect.flatMap(JevService, (jev) => jev.testConnection()).pipe(
+        Effect.map((r) => ({ ok: true as const, model: r.model, latencyMs: r.latencyMs })),
+        Effect.catchTag("JevUnavailable", (e) =>
+          Effect.succeed({
+            ok: false as const,
+            error: e.message || TEST_FAILURE_MESSAGE[e.reason],
+          }),
         ),
-      );
-      return result;
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-  .get("/cache/adc-status", async (ctx) => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.sync(() => {
-          const { existsSync } = require("node:fs");
-          const { homedir } = require("node:os");
-          const { join } = require("node:path");
-
-          // 1. Probe for gcloud binary (needed for validation)
-          let gcloudPath: string | null = null;
-          try {
-            gcloudPath = Bun.which("gcloud");
-          } catch {
-            // Bun.which throws if not found
-          }
-          if (!gcloudPath) {
-            const home = homedir();
-            const candidates = [
-              join(home, "google-cloud-sdk", "bin", "gcloud"),
-              "/opt/homebrew/bin/gcloud",
-              "/usr/local/bin/gcloud",
-              "/usr/bin/gcloud",
-            ];
-            for (const c of candidates) {
-              if (existsSync(c)) {
-                gcloudPath = c;
-                break;
-              }
-            }
-          }
-
-          // 2. Check for explicit env override (service-account keys or
-          // manually-set paths). We don't validate these with gcloud because
-          // service-account JSON keys don't work with `application-default
-          // print-access-token`; we trust the explicit configuration.
-          const envPath = process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
-          if (envPath && envPath.length > 0 && existsSync(envPath)) {
-            return {
-              available: true,
-              source: "env",
-              gcloudFound: gcloudPath !== null,
-              gcloudPath: gcloudPath ?? null,
-              adcPath: envPath,
-            };
-          }
-
-          // 3. Default ADC path
-          const home = homedir();
-          const adcPath = join(home, ".config", "gcloud", "application_default_credentials.json");
-
-          const adcExists = adcPath.length > 0 && existsSync(adcPath);
-
-          // Validate by asking gcloud to print an access token.
-          // File-existence alone isn't enough: `gcloud auth revoke` doesn't
-          // delete application_default_credentials.json, so the stale file
-          // would still report "ready".
-          function isAdcValid(): boolean {
-            if (!gcloudPath) return adcExists; // can't validate, fall back to file check
-            try {
-              const { spawnSync } = require("node:child_process");
-              const result = spawnSync(
-                gcloudPath,
-                ["auth", "application-default", "print-access-token"],
-                { timeout: 5000, stdio: ["ignore", "pipe", "pipe"] },
-              );
-              return result.status === 0;
-            } catch {
-              return false;
-            }
-          }
-
-          return {
-            available: adcExists && isAdcValid(),
-            source: adcExists ? "default" : null,
-            gcloudFound: gcloudPath !== null,
-            gcloudPath: gcloudPath ?? null,
-            adcPath: adcPath.length > 0 ? adcPath : null,
-          };
-        }),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-  .post("/cache/adc-login", async (ctx) => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.sync(() => {
-          let gcloudPath: string | null = null;
-          try {
-            gcloudPath = Bun.which("gcloud");
-          } catch {
-            // fall through
-          }
-          if (!gcloudPath) {
-            const { homedir } = require("node:os");
-            const { join } = require("node:path");
-            const { existsSync } = require("node:fs");
-            const home = homedir();
-            const candidates = [
-              join(home, "google-cloud-sdk", "bin", "gcloud"),
-              "/opt/homebrew/bin/gcloud",
-              "/usr/local/bin/gcloud",
-              "/usr/bin/gcloud",
-            ];
-            for (const c of candidates) {
-              if (existsSync(c)) {
-                gcloudPath = c;
-                break;
-              }
-            }
-          }
-
-          if (!gcloudPath) {
-            return {
-              started: false,
-              error: "gcloud CLI not found. Install the Google Cloud SDK first.",
-            };
-          }
-
-          const proc = Bun.spawn([gcloudPath, "auth", "application-default", "login"], {
-            detached: true,
-            stdio: ["ignore", "ignore", "ignore"],
-          });
-
-          // Unref so the server doesn't wait for the child to exit
-          if (typeof proc.unref === "function") {
-            proc.unref();
-          }
-
-          return { started: true, pid: proc.pid };
-        }),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-  .get("/ai-status", async (ctx) => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const ai = yield* AiService;
-          const settingsSvc = yield* SettingsService;
-          const configured = yield* ai.isConfigured();
-          const settings = yield* settingsSvc.getSettings();
-          return { configured, model: settings.aiModel, aiAgent: settings.aiAgent };
-        }),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-  .get(
-    "/models",
-    async (ctx) => {
-      try {
-        const agentParam = ctx.query?.agent;
-        const agent: AcpAgentId =
-          agentParam && isAcpAgentId(agentParam)
-            ? agentParam
-            : await AppRuntime.runPromise(Effect.flatMap(SettingsService, (s) => s.resolveAgent()));
-        const models = await listCliModels(agent);
-        return { models, agent };
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
-    {
-      query: t.Optional(
-        t.Object({
-          agent: t.Optional(aiAgentSchema),
-        }),
       ),
-    },
+    ),
   );
+
+export const settingsRoutes = new Elysia()
+  .use(openSettingsRoutes)
+  .use(signedInSettingsRoutes)
+  .use(teamCacheRoutes);

@@ -14,31 +14,33 @@ import {
   Root as PopoverRoot,
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
+import { getSelectedPrId } from "$lib/stores/route.svelte";
 import {
   getSettings,
   getThinkingEffortOptions,
   isAutoEffortOffered,
-  resolveChatAgentId,
   updateSettings,
 } from "$lib/stores/settings.svelte";
-import { sizingForSelectedPr } from "$lib/stores/walkthrough-sizing.svelte";
+import { ensurePrSizing, getPrSizing } from "$lib/walkthrough/sizing.svelte";
 import SelectTrigger from "./SelectTrigger.svelte";
 
 let open = $state(false);
-// Thinking-effort options follow the selected chat agent's capabilities.
-let currentId = $derived(resolveChatAgentId(getSettings()));
+let currentId = $derived(getSettings().aiAgent);
 let options = $derived(getThinkingEffortOptions(currentId));
 let visible = $derived(options.length > 0);
-let stored = $derived(getSettings()?.aiThinkingEffort ?? "medium");
+let stored = $derived(getSettings().aiThinkingEffort);
 let isAuto = $derived(isAutoSentinel(stored));
 let currentEffort = $derived(
-  isAuto ? null : clampThinkingEffort(currentId, stored as ThinkingEffort, getSettings()?.aiModel),
+  isAuto ? null : clampThinkingEffort(currentId, stored as ThinkingEffort, getSettings().aiModel),
 );
 
 let autoOffered = $derived(isAutoEffortOffered());
 
 // What Auto resolves to for this PR at its current head; tracking the SHA re-sizes on pull.
-const selectedSizing = sizingForSelectedPr(() => isAuto && autoOffered);
+const selectedSizing = $derived(getPrSizing(getSelectedPrId(), isAuto && autoOffered));
+$effect(() => {
+  if (isAuto && autoOffered) ensurePrSizing(getSelectedPrId());
+});
 let sizing = $derived(selectedSizing.sizing);
 
 let autoEffort = $derived(
@@ -59,11 +61,9 @@ let triggerTitle = $derived(
     : undefined,
 );
 
-// If the selected effort isn't valid for the current agent (e.g. a Claude-only
-// tier after switching to codex, or any tier after switching to an agent with
-// no thinking-effort knob), the launch path clamps it (see presets.ts). The
-// persisted preference is intentionally left untouched here — switching back
-// to the original agent should restore the original tier, not a clamped one.
+// An effort the current agent doesn't support is clamped at launch (the server
+// agent adapters). The stored preference stays, so switching back to the
+// original agent restores its tier.
 
 function select(value: ThinkingEffortSetting) {
   updateSettings({ aiThinkingEffort: value });

@@ -1,8 +1,6 @@
 /**
- * Named GSAP timeline recipes for bits-ui content surfaces. Each returns a
- * Timeline so `bitsAnim` can drive it from `data-state` changes.
- *
- * If a new preset is needed, add it here — but only once a real callsite needs it.
+ * GSAP timeline recipes for bits-ui content surfaces. Each returns a Timeline
+ * so `bitsAnim` can drive it from `data-state` changes.
  */
 import { gsap } from "./gsap";
 import { tokens } from "./tokens";
@@ -12,9 +10,8 @@ export type PresetFn<TOptions = void> = (el: Element, opts?: TOptions) => gsap.c
 type Side = "top" | "right" | "bottom" | "left";
 
 /**
- * Pop-in for a surface anchored to a trigger. The surface "grows out of" the
- * trigger by starting offset along its anchor axis: a top-side popover (trigger
- * BELOW) starts a few pixels lower and slides up; mirror on all four sides.
+ * The surface grows out of its trigger: a `top`-side popover (trigger below
+ * it) starts a few pixels lower and slides up, mirrored on all four sides.
  */
 function popInFromSide(el: Element, side: Side, fromScale: number): gsap.core.Timeline {
   const axis = side === "left" || side === "right" ? "x" : "y";
@@ -51,9 +48,8 @@ export const dialogSpringOut: PresetFn = (el) =>
   });
 
 /**
- * Backdrop fade for a dialog/sheet overlay. Timed to match `dialogSpringIn` /
- * `dialogSpringOut` (same durations + easings) so the scrim and the surface
- * move together instead of the scrim snapping in ahead of the spring.
+ * Same durations and easings as `dialogSpringIn` / `dialogSpringOut`, so the
+ * scrim and the surface move together.
  */
 export const overlayFadeIn: PresetFn = (el) =>
   gsap
@@ -88,6 +84,18 @@ export const tooltipPopOut: PresetFn = (el) =>
     duration: tokens.instant,
     ease: tokens.easeSoft,
   });
+
+export const collapsibleOpen: PresetFn = (el) =>
+  gsap
+    .timeline()
+    .fromTo(
+      el,
+      { height: 0 },
+      { height: "auto", duration: tokens.quick, ease: tokens.easeOutExpo, clearProps: "height" },
+    );
+
+export const collapsibleClose: PresetFn = (el) =>
+  gsap.timeline().to(el, { height: 0, duration: tokens.quick, ease: tokens.easeOutExpo });
 
 /**
  * Background-tint pulse on a settings row that search just landed on. Tweens

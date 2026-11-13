@@ -22,8 +22,8 @@ export const walkthroughBlocks = sqliteTable(
     walkthroughId: text("walkthrough_id")
       .notNull()
       .references(() => walkthroughs.id, { onDelete: "cascade" }),
-    /** Phase this block belongs to. Currently only `'diff_analysis'` is populated. */
-    phase: text("phase").notNull().default("diff_analysis"),
+    /** Only Phase B writes blocks, so this is always `'diff_analysis'`. Not sent to clients. */
+    phase: text("phase").$type<"diff_analysis">().notNull().default("diff_analysis"),
     /**
      * Foreign-key-style pointer to the parent `walkthrough_semantic_steps`
      * row (composite key (walkthroughId, semanticStepIndex)). Required for
@@ -38,22 +38,12 @@ export const walkthroughBlocks = sqliteTable(
      * deterministically without a separate sequence table.
      */
     order: integer("order").notNull(),
-    /**
-     * Position of this atomic block *within* its parent semantic step.
-     * Monotonic, zero-based, resets in each semantic step. Sort order across
-     * the walkthrough is `(semanticStepIndex, stepIndex)`.
-     */
     stepIndex: integer("step_index").notNull(),
     type: text("type").notNull(),
     data: text("data").notNull(), // JSON of the full WalkthroughBlock
     createdAt: text("created_at").notNull(),
   },
   (t) => ({
-    /**
-     * One row per (walkthroughId, phase, semanticStepIndex, stepIndex). Phase B
-     * idempotency relies on this: `add_diff_step` is an `onConflictDoUpdate`
-     * on this target, so retries never duplicate rows.
-     */
     phaseStepUnique: uniqueIndex("walkthrough_blocks_phase_step_unique").on(
       t.walkthroughId,
       t.phase,

@@ -1,17 +1,8 @@
-// ── Phosphor icons for imperative DOM callers ─────────────────────────────
-//
-// `@pierre/diff`'s header callbacks must return light-DOM `Element`s built by
-// hand, so they can't render a `phosphor-svelte` component. Before this module
-// those call sites hand-rolled their own 16-grid, 1.5px-stroke SVGs, which put
-// a second icon geometry on screen next to the real phosphor set.
-//
-// This keeps one icon system by carrying phosphor's own 256-grid path data for
-// the handful of glyphs an imperative caller needs. Paths are copied verbatim
-// from `phosphor-svelte/lib/<Icon>.svelte`; the weight names match the
-// component API, so a call site reads the same either way.
-//
-// Add a glyph here only when a component genuinely can't be used. Everything
-// else imports from `phosphor-svelte/lib/*`.
+// `@pierre/diff`'s header callbacks must return hand-built light-DOM
+// `Element`s, so they can't render a `phosphor-svelte` component. Paths are
+// copied verbatim from `phosphor-svelte/lib/<Icon>.svelte` so the app keeps one
+// icon geometry. Add a glyph here only when a component genuinely can't be
+// used.
 
 type Weight = "regular" | "fill";
 
@@ -29,8 +20,6 @@ const PATHS: Record<string, Record<Weight, string>> = {
 };
 
 /**
- * Markup for one phosphor glyph, matching what the Svelte component renders.
- *
  * `aria-hidden` mirrors the app-wide `IconContext` default in
  * `routes/+layout.svelte`: these are decorative, and the button that holds
  * them carries the `aria-label`.

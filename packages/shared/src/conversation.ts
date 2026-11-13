@@ -1,13 +1,9 @@
-// ── PR conversation ─────────────────────────────────────────────────────────
-//
-// What the Conversation tab shows: the GitHub "Conversation" page of a pull
-// request (description, reviewers, assignees, labels, timeline) plus the CI
-// rollup of its head commit. Fetched on demand from GitHub and cached as a
-// snapshot; GitHub stays the source of truth, so nothing here is journaled.
+// The GitHub "Conversation" page of a pull request plus its head's CI rollup.
+// Fetched on demand and cached as a snapshot; GitHub stays the source of
+// truth, so nothing here is journaled.
 
 import type { CodeownersFile } from "./codeowners";
 
-/** A GitHub account as the conversation renders it. */
 export interface ConversationActor {
   readonly login: string;
   readonly name: string | null;
@@ -37,7 +33,6 @@ export type ReviewerEntry =
   | {
       readonly kind: "user";
       readonly actor: ConversationActor;
-      /** A review is requested from them right now. */
       readonly requested: boolean;
       /** GitHub requested them because CODEOWNERS names them. */
       readonly asCodeOwner: boolean;
@@ -54,6 +49,16 @@ export type ReviewerEntry =
       readonly asCodeOwner: boolean;
     };
 
+/**
+ * The verdict a reviewer stands on, or null while their review is awaited. A
+ * re-request after a plain comment waits for a real review; one after an
+ * approval or a change request keeps that verdict until they review again.
+ */
+export function reviewerVerdict(reviewer: ReviewerEntry): ReviewVerdict | null {
+  if (reviewer.kind === "team" || reviewer.verdict === null) return null;
+  return reviewer.requested && reviewer.verdict === "commented" ? null : reviewer.verdict;
+}
+
 export interface LinkedIssue {
   readonly number: number;
   readonly title: string;
@@ -67,8 +72,6 @@ export interface PrMilestone {
   readonly dueOn: string | null;
   readonly state: "open" | "closed";
 }
-
-// ── Timeline ────────────────────────────────────────────────────────────────
 
 interface TimelineBase {
   /** GitHub node id; stable across fetches. */
@@ -109,7 +112,6 @@ export interface TimelineCommit extends TimelineBase {
   readonly ci: CiRollupState | null;
 }
 
-/** One-line timeline entries: someone changed something about the PR. */
 export type TimelineEvent = TimelineBase & { readonly actor: ConversationActor } & (
     | { readonly kind: "labeled" | "unlabeled"; readonly label: PrLabel }
     | { readonly kind: "assigned" | "unassigned"; readonly assignee: string }
@@ -147,8 +149,6 @@ export type TimelineEvent = TimelineBase & { readonly actor: ConversationActor }
   );
 
 export type TimelineItem = TimelineComment | TimelineReview | TimelineCommit | TimelineEvent;
-
-// ── CI ──────────────────────────────────────────────────────────────────────
 
 /** GitHub's combined state for a commit's checks and statuses. */
 export type CiRollupState = "success" | "failure" | "pending" | "error" | "expected";
@@ -194,6 +194,42 @@ export interface CiRollup {
   readonly checks: readonly CiCheck[];
 }
 
+/**
+ * A rollup state read as a check bucket. `expected` is a required check that
+ * hasn't reported yet, so it is pending; `error` fails like `failure`.
+ */
+export function rollupBucket(state: CiRollupState | null | undefined): CiCheckBucket | null {
+  switch (state) {
+    case "success":
+      return "pass";
+    case "failure":
+    case "error":
+      return "fail";
+    case "pending":
+    case "expected":
+      return "pending";
+    default:
+      return null;
+  }
+}
+
+export function ciHasPending(rollup: CiRollup | null | undefined): boolean {
+  if (!rollup) return false;
+  return (
+    rollupBucket(rollup.state) === "pending" || rollup.checks.some((c) => c.bucket === "pending")
+  );
+}
+
+export function ciStanding(rollup: CiRollup | null | undefined): CiCheckBucket | null {
+  if (!rollup) return null;
+  const aggregate = rollupBucket(rollup.state);
+  if (aggregate === "fail" || rollup.checks.some((c) => c.bucket === "fail")) return "fail";
+  if (aggregate === "pending" || rollup.checks.some((c) => c.bucket === "pending")) {
+    return "pending";
+  }
+  return aggregate;
+}
+
 export interface CheckAnnotation {
   readonly path: string;
   readonly startLine: number;
@@ -227,8 +263,6 @@ export interface CheckDetails {
   readonly logUnavailable: "not_actions" | "permission" | "expired" | "running" | null;
 }
 
-// ── Stack ───────────────────────────────────────────────────────────────────
-
 /**
  * Where a stacked PR stands, as GitHub's stack list labels it: merged and
  * closed are final; an open PR is a draft, ready (mergeable once the PRs
@@ -245,8 +279,6 @@ export interface PrStackEntry {
   readonly headRef: string;
   readonly status: StackEntryStatus;
 }
-
-// ── The whole page ──────────────────────────────────────────────────────────
 
 export interface PrConversation {
   readonly prId: string;
@@ -290,7 +322,6 @@ export interface PrConversation {
   readonly fetchedAt: string;
 }
 
-/** Fill each actor's `avatarContent` from the conversation's `avatars` map. */
 export function hydrateConversationAvatars(conversation: PrConversation): PrConversation {
   const { avatars } = conversation;
   const actor = (a: ConversationActor): ConversationActor =>
@@ -351,7 +382,6 @@ export interface ConversationWriteResult {
   readonly conversation: PrConversation | null;
 }
 
-/** Picker rows for the sidebar's reviewer / assignee / label editors. */
 export interface ActorOption {
   readonly login: string;
   readonly name: string | null;

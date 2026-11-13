@@ -5,7 +5,7 @@
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>Revv</title>
 		<script>
-			// Prevent flash of wrong theme — runs synchronously before first paint
+			// Runs synchronously before first paint so the wrong theme never flashes.
 			(() => {
 				var s = localStorage.getItem('revv-theme');
 				var d =

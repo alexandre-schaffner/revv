@@ -1,12 +1,10 @@
-/**
- * What a sync cycle tells the user: the per-account `prs:sync-summary`
- * notifications, and the walkthroughs auto-started for new review requests.
- */
-import type { PullRequest, Repository, SyncChange } from "@revv/shared";
+import { loginsMatch, type PullRequest, type Repository, type SyncChange } from "@revv/shared";
+import type { Context } from "effect";
 import { Cause, Effect } from "effect";
-import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
-import type { PollDeps, SyncCycle } from "./poll-cycle";
+import type { Realtime } from "./Realtime";
+import type { WalkthroughService } from "./walkthrough/Walkthrough";
+import type { WalkthroughJobs } from "./walkthrough/WalkthroughJobs";
 
 export interface CycleOutcome {
   readonly allRepos: readonly Repository[];
@@ -18,27 +16,26 @@ export interface CycleOutcome {
   readonly closedPrIds: readonly string[];
 }
 
-/**
- * The notification-worthy differences between the pre-sync rows and this
- * cycle's. Reads each repo's account `githubLogin` from `cycle.accountById`, so
- * it must run after anything that refreshes account identities.
- */
-export function collectSyncChanges(cycle: SyncCycle, outcome: CycleOutcome): SyncChange[] {
+/** Who each account is, for telling which PRs are "for me". */
+export interface CycleViewers {
+  readonly repoToAccountId: ReadonlyMap<string, string>;
+  /** The viewer login of each account (`GitHubAccounts.viewerLogin`). */
+  readonly viewerLoginByAccount: ReadonlyMap<string, string | null>;
+}
+
+/** The notification-worthy differences between the pre-sync rows and this cycle's. */
+export function collectSyncChanges(viewers: CycleViewers, outcome: CycleOutcome): SyncChange[] {
   const { allRepos, allPrs, existingMap, closedPrIds } = outcome;
   const changes: SyncChange[] = [];
   const repoFullName = (repositoryId: string) =>
     allRepos.find((r) => r.id === repositoryId)?.fullName ?? repositoryId;
 
   for (const pr of allPrs) {
-    // The "is this PR for me" check is per-account: each repo is owned by
-    // exactly one OAuth account, and `account.github_login` is that account's
-    // GitHub identity. Using the first user's githubLogin (the previous
-    // behavior) misattributes review requests as soon as multiple users or
-    // multiple accounts on the same host exist.
-    const accIdForLogin = cycle.repoToAccountId.get(pr.repositoryId);
-    const userLogin = accIdForLogin
-      ? (cycle.accountById.get(accIdForLogin)?.githubLogin ?? null)
-      : null;
+    // Per repo: each is owned by one account, whose viewer is "me".
+    const accountId = viewers.repoToAccountId.get(pr.repositoryId);
+    const userLogin = accountId ? (viewers.viewerLoginByAccount.get(accountId) ?? null) : null;
+    const requested = (reviewers: readonly string[]) =>
+      userLogin !== null && reviewers.some((login) => loginsMatch(login, userLogin));
     const existing = existingMap.get(pr.id);
     const base = {
       prId: pr.id,
@@ -48,18 +45,14 @@ export function collectSyncChanges(cycle: SyncCycle, outcome: CycleOutcome): Syn
     };
 
     if (!existing) {
-      if (userLogin && pr.requestedReviewers.includes(userLogin)) {
+      if (requested(pr.requestedReviewers)) {
         changes.push({ kind: "review_requested", ...base });
-      } else if (userLogin && pr.authorLogin === userLogin) {
+      } else if (userLogin !== null && loginsMatch(pr.authorLogin, userLogin)) {
         changes.push({ kind: "pr_authored", ...base });
       }
     } else if (existing.headSha !== pr.headSha) {
       changes.push({ kind: "pr_updated", ...base });
-    } else if (
-      userLogin &&
-      pr.requestedReviewers.includes(userLogin) &&
-      !existing.requestedReviewers.includes(userLogin)
-    ) {
+    } else if (requested(pr.requestedReviewers) && !requested(existing.requestedReviewers)) {
       changes.push({ kind: "review_requested", ...base });
     }
   }
@@ -85,53 +78,58 @@ export function collectSyncChanges(cycle: SyncCycle, outcome: CycleOutcome): Syn
  * opens the PR.
  */
 export const announceSyncChanges = (
-  deps: PollDeps,
-  cycle: SyncCycle,
+  svc: {
+    readonly realtime: Context.Service.Shape<typeof Realtime>;
+    readonly walkthroughService: Context.Service.Shape<typeof WalkthroughService>;
+    readonly walkthroughJobs: Context.Service.Shape<typeof WalkthroughJobs>;
+  },
+  viewers: CycleViewers,
   outcome: CycleOutcome,
   changes: readonly SyncChange[],
 ): Effect.Effect<void> =>
   Effect.gen(function* () {
     const { allPrs, existingMap, closedPrIds } = outcome;
-    // Group changes by account and broadcast per-account. Closed PRs are no
-    // longer present in `allPrs`, so resolve their account from the pre-sync
-    // row instead of dropping them into an `unknown` bucket.
+    // Closed PRs are no longer in `allPrs`: their account comes from the
+    // pre-sync row.
     const changeAccountByPrId = new Map<string, string>();
-    for (const pr of allPrs) {
-      const accountId = cycle.repoToAccountId.get(pr.repositoryId);
+    for (const pr of [...allPrs, ...closedPrIds.flatMap((id) => existingMap.get(id) ?? [])]) {
+      const accountId = viewers.repoToAccountId.get(pr.repositoryId);
       if (accountId) changeAccountByPrId.set(pr.id, accountId);
-    }
-    for (const prId of closedPrIds) {
-      const pr = existingMap.get(prId);
-      if (!pr) continue;
-      const accountId = cycle.repoToAccountId.get(pr.repositoryId);
-      if (accountId) changeAccountByPrId.set(prId, accountId);
     }
 
     const changesByAccount = Map.groupBy(
-      changes,
-      (c) => changeAccountByPrId.get(c.prId) ?? "unknown",
+      changes.filter((c) => changeAccountByPrId.has(c.prId)),
+      (c) => changeAccountByPrId.get(c.prId) ?? "",
     );
     for (const [accountId, accountChanges] of changesByAccount) {
-      yield* deps.broadcaster.broadcastToAccount(accountId, {
+      yield* svc.realtime.toAccount(accountId, {
         type: "prs:sync-summary",
         data: accountChanges,
       });
     }
 
-    // Fire-and-forget: the sync loop must not block on AI work, and
-    // `startJob` already daemon-forks the actual generation fiber.
+    // Detached: the sync loop must not wait on AI work. `startJob` runs the
+    // generation itself in a job fiber.
     for (const change of changes) {
       if (change.kind !== "review_requested") continue;
       const pr = allPrs.find((p) => p.id === change.prId);
       if (!pr || pr.headSha === null) continue;
-      const cached = yield* withDb(deps.db, deps.walkthroughService.getCached(pr.id, pr.headSha));
-      if (cached !== null) continue;
+      const uncached = yield* svc.walkthroughService.getCached(pr.id, pr.headSha).pipe(
+        Effect.map((cached) => cached === null),
+        Effect.catchTag("DbError", (err) =>
+          Effect.sync(() => {
+            logError("PollScheduler", `auto-walkthrough skipped for PR ${pr.id}:`, err.message);
+            return false;
+          }),
+        ),
+      );
+      if (!uncached) continue;
       yield* Effect.forkDetach(
-        deps.walkthroughJobs
+        svc.walkthroughJobs
           .startJob({
             prId: pr.id,
-            userId: "single-user",
             trigger: "review_requested",
+            replace: "none",
           })
           .pipe(
             Effect.catchCause((cause) =>

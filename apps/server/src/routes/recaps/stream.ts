@@ -1,160 +1,96 @@
-// ── Recap SSE stream ────────────────────────────────────────────────────────
-//
-// GET /api/recaps/:id/stream — SSE endpoint for live recap generation.
-//
-// Thin subscriber around {@link ProjectRecapJobs}. Mirrors the walkthrough
-// SSE handler pattern but radically simpler:
-//   • No SSR pre-render.
-//   • No clone polling.
-//   • Reconnect emits the current `lede` + each `entry` / theme_summary
-//     snapshot from the DB, then attaches to live events if the job is
-//     still running.
+// A reconnect replays the current `lede`, each entry and theme summary from
+// the DB, then attaches to live events while the job is still running.
 
-import type { ProjectRecapStatus } from "@revv/shared";
+import type { ProjectRecap, RecapStreamEvent } from "@revv/shared";
 import { Effect } from "effect";
-import { AppRuntime } from "../../runtime";
-import { ProjectRecapService } from "../../services/ProjectRecap";
-import { ProjectRecapJobs } from "../../services/ProjectRecapJobs";
-import { createSseStream, sseHeaders } from "../reviews/sse";
+import { httpErrorOf } from "../../domain/errors";
+import { ProjectRecapService } from "../../services/recaps/ProjectRecap";
+import { ProjectRecapJobs, recapTerminalEvent } from "../../services/recaps/ProjectRecapJobs";
+import { openSse, runStream, type SseChannel } from "../sse";
 
-function emitSnapshot(
-  writer: { send: (event: import("@revv/shared").RecapStreamEvent) => void },
-  row: import("@revv/shared").ProjectRecap,
-): void {
+function emitSnapshot(channel: SseChannel<RecapStreamEvent>, row: ProjectRecap): void {
   if (row.lede) {
-    writer.send({ type: "lede", data: { lede: row.lede } });
+    channel.send({ type: "lede", data: { lede: row.lede } });
   }
   for (const entry of row.entries) {
-    writer.send({ type: "entry", data: { entry } });
+    channel.send({ type: "entry", data: { entry } });
   }
   for (const summary of row.themeSummaries) {
-    writer.send({ type: "theme_summary", data: { summary } });
+    channel.send({ type: "theme_summary", data: { summary } });
   }
 }
 
-export function recapStreamHandler(ctx: { params: { id: string } }): Response {
-  const { stream, writer, stopHeartbeat, onCancel } = createSseStream();
-  onCancel(() => stopHeartbeat());
+const endsStream = (event: RecapStreamEvent): boolean =>
+  event.type === "done" ||
+  event.type === "stopped" ||
+  event.type === "error" ||
+  event.type === "restarted";
 
-  void (async () => {
-    try {
-      // Phase 1: Read recap row.
-      const row = await AppRuntime.runPromise(
-        Effect.flatMap(ProjectRecapService, (s) => s.getById(ctx.params.id)),
-      );
+/** A finished row: a complete one replays its content first. */
+function replayFinished(
+  channel: SseChannel<RecapStreamEvent>,
+  row: ProjectRecap,
+  end: RecapStreamEvent,
+): void {
+  if (end.type === "done") {
+    emitSnapshot(channel, row);
+    channel.send(end);
+    channel.done();
+    return;
+  }
+  channel.send(end);
+  channel.close();
+}
 
-      const status = row.status as ProjectRecapStatus;
+export function recapStreamHandler(ctx: { params: { id: string } }): Promise<Response> {
+  const recapId = ctx.params.id;
+  return runStream(
+    Effect.gen(function* () {
+      const recaps = yield* ProjectRecapService;
+      const jobs = yield* ProjectRecapJobs;
+      const row = yield* recaps.getById(recapId);
+      const { response, channel } = openSse<RecapStreamEvent>();
 
-      // Terminal: complete.
-      if (status === "complete") {
-        emitSnapshot(writer, row);
-        writer.send({ type: "done", data: { recapId: row.id } });
-        writer.sendDone();
-        return;
+      const finished = recapTerminalEvent(row);
+      if (finished) {
+        replayFinished(channel, row, finished);
+        return response;
       }
 
-      // Terminal: error.
-      if (status === "error") {
-        writer.send({
-          type: "error",
-          data: {
-            code: "RecapGenerationError",
-            message: row.errorMessage ?? "Recap generation failed",
-          },
+      yield* Effect.gen(function* () {
+        // The budgeted resume when the run writing this row died.
+        yield* jobs.attach(recapId);
+
+        // Subscribed in buffered mode before the snapshot read, so nothing
+        // committed in between is missed.
+        const sub = yield* jobs.subscribe(recapId, (event) => {
+          channel.send(event);
+          if (endsStream(event)) channel.close();
         });
-        writer.close();
-        return;
-      }
 
-      // Terminal: superseded.
-      if (status === "superseded") {
-        writer.send({
-          type: "error",
-          data: { code: "Superseded", message: "This recap has been superseded." },
-        });
-        writer.close();
-        return;
-      }
+        if (!sub.found) {
+          // No live run: it finished, or its resume was refused.
+          const now = yield* recaps.getById(recapId);
+          const end = recapTerminalEvent(now);
+          if (end) replayFinished(channel, now, end);
+          else channel.close();
+          return;
+        }
 
-      // Live: generating.
-      // Ensure the job is running (idempotent — startJob reuses existing).
-      const started = await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const jobs = yield* ProjectRecapJobs;
-          // We need the period boundaries from the row to start/resume.
-          return yield* jobs.startJob({
-            recapId: row.id,
-            repoId: row.repositoryId,
-            period: row.period,
-            periodStart: row.periodStart,
-            periodEnd: row.periodEnd,
-            trigger: "manual",
-          });
-        }),
-      ).catch(() => null);
-
-      if (!started) {
-        writer.send({
-          type: "error",
-          data: { code: "StartFailed", message: "Could not start or attach to recap job." },
-        });
-        writer.close();
-        return;
-      }
-
-      // Subscribe in buffered mode BEFORE reading the DB snapshot.
-      const sub = await AppRuntime.runPromise(
-        Effect.flatMap(ProjectRecapJobs, (jobs) =>
-          jobs.subscribe(row.id, (event) => {
-            writer.send(event);
-            if (event.type === "done" || event.type === "error") {
-              writer.close();
-            }
+        channel.onClose(sub.unsubscribe);
+        // Buffered events go out in arrival order before the snapshot, which
+        // is re-read so writes committed since the first read are in it.
+        sub.flush();
+        emitSnapshot(channel, yield* recaps.getById(recapId));
+      }).pipe(
+        Effect.catch((err) =>
+          Effect.sync(() => {
+            const { code, message, details } = httpErrorOf(err);
+            channel.fail({ ...details, code, message });
           }),
         ),
       );
-
-      if (!sub.found) {
-        // Job finished between startJob and subscribe.
-        // Re-read the row to get final state.
-        const finalRow = await AppRuntime.runPromise(
-          Effect.flatMap(ProjectRecapService, (s) => s.getById(ctx.params.id)),
-        );
-        if (finalRow.status === "complete") {
-          emitSnapshot(writer, finalRow);
-          writer.send({ type: "done", data: { recapId: finalRow.id } });
-        } else if (finalRow.status === "error") {
-          writer.send({
-            type: "error",
-            data: {
-              code: "RecapGenerationError",
-              message: finalRow.errorMessage ?? "Recap generation failed",
-            },
-          });
-        }
-        writer.close();
-        return;
-      }
-
-      onCancel(sub.unsubscribe);
-
-      // Flush buffered events (delivered through the subscriber callback
-      // in arrival order) BEFORE reading the snapshot. Then re-read the
-      // row so any writes committed between phase 1 and now are reflected
-      // in the replay snapshot.
-      sub.flush();
-
-      const snapshot = await AppRuntime.runPromise(
-        Effect.flatMap(ProjectRecapService, (s) => s.getById(ctx.params.id)),
-      ).catch(() => row);
-
-      emitSnapshot(writer, snapshot);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      writer.send({ type: "error", data: { code: "SetupError", message } });
-      writer.close();
-    }
-  })();
-
-  return new Response(stream, { headers: sseHeaders });
+      return response;
+    }),
+  );
 }

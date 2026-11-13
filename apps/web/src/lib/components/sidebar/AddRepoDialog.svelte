@@ -4,7 +4,6 @@ import CloudArrowDown from "phosphor-svelte/lib/CloudArrowDown";
 import FolderOpen from "phosphor-svelte/lib/FolderOpen";
 import * as Dialog from "$lib/components/ui/dialog/index.js";
 import { gsapFade, gsapFadeY, gsapPress, tokens } from "$lib/motion";
-import { fetchDefaultCloneBaseDir } from "$lib/stores/prs.svelte";
 import AddRepoForm from "./AddRepoForm.svelte";
 import LinkRepoForm from "./LinkRepoForm.svelte";
 import RepoDialogHeader from "./RepoDialogHeader.svelte";
@@ -17,13 +16,9 @@ let {
   onOpenChange: (open: boolean) => void;
 } = $props();
 
-const LAST_CLONE_BASE_KEY = "revv:lastCloneBaseDir";
 type View = "choose" | "clone" | "link";
 
 let view = $state<View>("choose");
-// Empty = "use the server's default base" (shown as the placeholder, fetched
-// from the server). Only a user-chosen custom base is ever held here.
-let cloneBasePath = $state("");
 
 // Reset to the source chooser *before* the reopened modal paints. $effect.pre
 // runs ahead of the dialog content's DOM update in the same flush, so when
@@ -33,28 +28,14 @@ let cloneBasePath = $state("");
 $effect.pre(() => {
   if (!open) return;
   view = "choose";
-  void fetchDefaultCloneBaseDir();
-  const saved =
-    typeof localStorage === "undefined" ? null : localStorage.getItem(LAST_CLONE_BASE_KEY);
-  cloneBasePath = saved?.trim() ? saved : "";
 });
-
-function rememberCloneBase(path: string): void {
-  cloneBasePath = path;
-  // Persist only an explicit custom base; an empty value means "default", which
-  // we never want to pin (it would survive a later server-default change).
-  if (path.trim()) localStorage.setItem(LAST_CLONE_BASE_KEY, path);
-  else localStorage.removeItem(LAST_CLONE_BASE_KEY);
-}
 </script>
 
 <Dialog.Root {open} {onOpenChange}>
   <Dialog.Content
     class={[
       'flex flex-col !gap-0 !p-0 sm:!max-w-[480px] overflow-hidden',
-      // Only the clone view has a scrolling repo list, so it takes a stable
-      // height to keep the modal from resizing as the list loads in. The source
-      // chooser and the link form are short, so they hug their content.
+      // Only the clone view's list loads in, so only it takes a fixed height.
       view === 'clone' ? 'h-[min(580px,82vh)]' : 'max-h-[min(580px,82vh)]',
     ]}
     showCloseButton={false}
@@ -98,13 +79,7 @@ function rememberCloneBase(path: string): void {
             <ArrowLeft size={12} />
             <span>Sources</span>
           </button>
-          <AddRepoForm
-            onClose={() => onOpenChange(false)}
-            showLocation
-            {cloneBasePath}
-            onCloneBasePathChange={(path) => (cloneBasePath = path)}
-            onCloneSuccess={rememberCloneBase}
-          />
+          <AddRepoForm onClose={() => onOpenChange(false)} />
         </div>
       {:else}
         <div
@@ -124,11 +99,8 @@ function rememberCloneBase(path: string): void {
 </Dialog.Root>
 
 <style>
-  /* Stack the view layers in a single grid cell so that during a view change
-     the outgoing (fading) layer and the incoming layer overlap instead of
-     stacking. The container's height is then the max of the layers (governed
-     by the incoming view), never the sum — so the modal never balloons tall
-     mid-transition and then shrinks back. */
+  /* Every view layer shares one grid cell, so mid-transition the outgoing and
+     incoming layers overlap and the modal's height is the max, never the sum. */
   .view-stack {
     display: grid;
   }

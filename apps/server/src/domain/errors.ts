@@ -1,10 +1,10 @@
+import type { ApiErrorCode, ProposedCommit } from "@revv/shared";
 import { Data } from "effect";
 
 export class ProfilingError extends Data.TaggedError("ProfilingError")<{
   readonly cause: unknown;
 }> {}
 
-// GitHub API errors
 export class GitHubRateLimitError extends Data.TaggedError("GitHubRateLimitError")<{
   readonly resetAt: Date;
   readonly retryAfter?: number;
@@ -16,10 +16,22 @@ export class GitHubAuthError extends Data.TaggedError("GitHubAuthError")<{
   readonly message: string;
 }> {}
 
+/** No client id to sign in to `host` with: none bundled, configured, or entered for it. */
+export class MissingGitHubClientIdError extends Data.TaggedError("MissingGitHubClientIdError")<{
+  readonly host: string;
+  readonly message: string;
+}> {}
+
+/** The client id for `host` isn't a GitHub App or OAuth App client id, or GitHub refused it. */
+export class InvalidGitHubClientIdError extends Data.TaggedError("InvalidGitHubClientIdError")<{
+  readonly host: string;
+  readonly message: string;
+}> {}
+
 /**
  * Transport-level failure: DNS, TLS, connection reset, request timeout, a
  * 5xx/408 from GitHub, or GraphQL's "Something went wrong while executing
- * your query" (GitHub's own failure, sent as a 200). **Retryable** — `retryTransient` in `github-rest.ts`
+ * your query" (GitHub's own failure, sent as a 200). **Retryable** — `retryTransient` in `services/github/transport.ts`
  * only retries this class, so nothing else may be mapped to it.
  */
 export class GitHubNetworkError extends Data.TaggedError("GitHubNetworkError")<{
@@ -72,7 +84,11 @@ export type GitHubError =
   | GitHubApiError
   | GitHubNotFoundError;
 
-// General errors
+/** GitHub couldn't be reached or is rate-limiting: try later, or serve what's cached. */
+export function isGitHubUnreachable(e: unknown): e is GitHubNetworkError | GitHubRateLimitError {
+  return e instanceof GitHubNetworkError || e instanceof GitHubRateLimitError;
+}
+
 export class NotFoundError extends Data.TaggedError("NotFoundError")<{
   readonly resource: string;
   readonly id: string;
@@ -90,42 +106,21 @@ export class ExternalIntegrationError extends Data.TaggedError("ExternalIntegrat
     | "INVALID_PROJECT"
     | "PR_NOT_FOUND"
     | "INSTALL_FAILED"
-    | "NOT_CONNECTED"
     | "INTERNAL";
   readonly cause?: unknown;
 }> {}
 
-export function externalIntegrationHttpStatus(error: ExternalIntegrationError): number {
-  switch (error.code) {
-    case "INVALID_CREDENTIAL":
-      return 403;
-    case "INVALID_PROJECT":
-    case "PR_NOT_FOUND":
-      return 404;
-    case "NOT_CONNECTED":
-      return 409;
-    case "INSTALL_FAILED":
-      return 400;
-    case "INTERNAL":
-      return 500;
-  }
-}
+/** `auth`: the agent isn't signed in, or Revv can't read its login. */
+export type AgentFailureKind = "auth" | "other";
 
-// AI errors
 export class AiGenerationError extends Data.TaggedError("AiGenerationError")<{
   readonly cause: unknown;
   readonly message?: string;
+  readonly kind?: AgentFailureKind;
 }> {}
 
 // biome-ignore lint/complexity/noBannedTypes: Effect TaggedError pattern requires {}
 export class AiNotConfiguredError extends Data.TaggedError("AiNotConfiguredError")<{}> {}
-
-export class OpencodeNotSelectedError extends Data.TaggedError("OpencodeNotSelectedError")<{
-  readonly selectedAgent: string;
-}> {}
-
-// biome-ignore lint/complexity/noBannedTypes: Effect TaggedError pattern requires {}
-export class OpencodeUnhealthyError extends Data.TaggedError("OpencodeUnhealthyError")<{}> {}
 
 /**
  * Why a TypeSafe System One (Jev) call produced no answer.
@@ -156,15 +151,11 @@ export class JevUnavailable extends Data.TaggedError("JevUnavailable")<{
   readonly cause?: unknown;
 }> {}
 
-export type AiError =
-  | AiGenerationError
-  | AiNotConfiguredError
-  | OpencodeNotSelectedError
-  | OpencodeUnhealthyError;
+export type AiError = AiGenerationError | AiNotConfiguredError;
 
-export class ReviewError extends Data.TaggedError("ReviewError")<{
+/** The caller may see the resource but not do this to it; `message` says why. */
+export class ForbiddenError extends Data.TaggedError("ForbiddenError")<{
   readonly message: string;
-  readonly code?: string;
 }> {}
 
 export class SyncError extends Data.TaggedError("SyncError")<{
@@ -173,17 +164,12 @@ export class SyncError extends Data.TaggedError("SyncError")<{
   readonly cause?: unknown;
 }> {}
 
-// Clone errors
 export class CloneError extends Data.TaggedError("CloneError")<{
   readonly message: string;
   readonly cause?: unknown;
 }> {}
 
 export class CloneNotReadyError extends Data.TaggedError("CloneNotReadyError")<{
-  readonly repoId: string;
-}> {}
-
-export class CloneInProgressError extends Data.TaggedError("CloneInProgressError")<{
   readonly repoId: string;
 }> {}
 
@@ -213,9 +199,63 @@ export class StackRejectedError extends Data.TaggedError("StackRejectedError")<{
   readonly rejection: StackRejection;
 }> {}
 
-/** Another push (a chat push or a base sync) already holds the PR's push lock. */
+/** Another flow is already pushing to `branch` (see `BranchPushLock`). */
 export class ConcurrentPushError extends Data.TaggedError("ConcurrentPushError")<{
+  readonly branch: string;
+  readonly heldBy: "chat-push" | "base-sync" | "stack-rebase";
+}> {}
+
+/** What holds a PR's agent workspace (see `PrWorkspace`). */
+export type WorkspaceHolder = "chat-turn" | "warm-up" | "push" | "branch-edit" | "prune";
+
+export class WorkspaceBusyError extends Data.TaggedError("WorkspaceBusyError")<{
   readonly prId: string;
+  readonly heldBy: WorkspaceHolder;
+}> {}
+
+export class DirtyWorktreeError extends Data.TaggedError("DirtyWorktreeError")<{
+  readonly message: string;
+}> {}
+
+export class NoChangesError extends Data.TaggedError("NoChangesError")<{
+  readonly prId: string;
+}> {}
+
+export class NoChatSessionError extends Data.TaggedError("NoChatSessionError")<{
+  readonly prId: string;
+}> {}
+
+/** A plan still awaits a decision, or the plan a request names doesn't exist. */
+export class PlanGateError extends Data.TaggedError("PlanGateError")<{
+  readonly reason: "pending" | "not-found";
+  readonly planId: string;
+}> {}
+
+/** A chat message's attachment is over a size cap, or isn't what its kind says. */
+export class AttachmentRejectedError extends Data.TaggedError("AttachmentRejectedError")<{
+  readonly reason: "too-large" | "invalid";
+  readonly message: string;
+}> {}
+
+/** Rewriting the agent's commits hit a conflict; the branch was put back as it was. */
+export class AgentBranchConflictError extends Data.TaggedError("AgentBranchConflictError")<{
+  readonly message: string;
+}> {}
+
+/** Git couldn't do what was asked. `args` and the redacted `stderr` are set when a command failed. */
+export class GitOperationError extends Data.TaggedError("GitOperationError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+  readonly args?: readonly string[];
+  readonly stderr?: string;
+}> {}
+
+export class PushRejectedError extends Data.TaggedError("PushRejectedError")<{
+  readonly message: string;
+}> {}
+
+export class InvalidBranchNameError extends Data.TaggedError("InvalidBranchNameError")<{
+  readonly message: string;
 }> {}
 
 /**
@@ -257,60 +297,21 @@ export class WorktreeBlockedByUnpushedCommits extends Data.TaggedError(
   readonly branchName: string;
   readonly oldHeadSha: string;
   readonly newHeadSha: string;
-  readonly commits: ReadonlyArray<{
-    sha: string;
-    shortSha: string;
-    subject: string;
-    committedAt: string;
-    files: string[];
-  }>;
+  readonly commits: readonly ProposedCommit[];
 }> {}
 
-// ── Project Recap errors ───────────────────────────────────────────────────
-
-/**
- * Raised when a recap row can't be found by id. Used by the manual
- * regenerate / detail endpoints to return 404 cleanly.
- */
 export class RecapNotFoundError extends Data.TaggedError("RecapNotFoundError")<{
   readonly recapId: string;
 }> {}
 
-/**
- * Raised by the recap MCP tool surface when an out-of-order or
- * structurally-invalid call lands (e.g. `complete_recap` before `set_lede`,
- * or `add_pr_entry` with a pr_id not in the source bundle). The agent
- * receives this as a structured error result and can recover by issuing
- * the right call.
- */
-export class RecapPreconditionError extends Data.TaggedError("RecapPreconditionError")<{
-  readonly recapId: string;
-  readonly reason: string;
-}> {}
-
-/**
- * Raised when a recap row exceeds `RECAP_MAX_RESUME_ATTEMPTS` across
- * server restarts. The orchestrator flips the row to `'error'` and stops
- * relaunching it; this error type is the audit-log marker.
- */
-export class RecapBudgetExceededError extends Data.TaggedError("RecapBudgetExceededError")<{
-  readonly recapId: string;
-  readonly attempts: number;
-}> {}
-
-// Database errors
 export class DbError extends Data.TaggedError("DbError")<{
   readonly message: string;
   readonly cause?: unknown;
 }> {}
 
-// ── Remote walkthrough cache errors ────────────────────────────────────────
-//
-// `BlobStore*` errors describe failures at the storage-backend layer
-// (GCS/S3/etc.). `Cache*` errors describe failures at the snapshot-level
-// service that sits on top. The orchestrator treats every cache error as
-// "miss + fall back to running the agent" — no error escapes to the user
-// modulo settings-page health checks.
+// The orchestrator treats every cache error as "miss, fall back to running
+// the agent": none reaches the user except through the settings page's
+// health checks.
 
 /**
  * The configured blob store is unreachable, misconfigured, or rejected
@@ -321,16 +322,6 @@ export class DbError extends Data.TaggedError("DbError")<{
 export class BlobStoreUnavailable extends Data.TaggedError("BlobStoreUnavailable")<{
   readonly message: string;
   readonly cause?: unknown;
-}> {}
-
-/**
- * The blob exists but its metadata or body is unusable (missing
- * `schemaVersion`, `contentSha256` mismatch, gunzip failure). Cache hit
- * is downgraded to a miss; no row mutation.
- */
-export class BlobCorrupt extends Data.TaggedError("BlobCorrupt")<{
-  readonly key: string;
-  readonly reason: string;
 }> {}
 
 /**
@@ -363,10 +354,6 @@ export class ImportError extends Data.TaggedError("ImportError")<{
   readonly cause?: unknown;
 }> {}
 
-export type RecapError = RecapNotFoundError | RecapPreconditionError | RecapBudgetExceededError;
-
-// ── SSH cache-signing errors ────────────────────────────────────────────────
-
 /** `ssh-keygen` binary is absent from PATH or the configured path. */
 export class SshKeygenMissing extends Data.TaggedError("SshKeygenMissing")<{
   readonly message: string;
@@ -374,8 +361,8 @@ export class SshKeygenMissing extends Data.TaggedError("SshKeygenMissing")<{
 
 /**
  * The local machine cannot sign right now — key not found, auto-detect
- * failed, or ssh-keygen returned an unexpected error. Push fails loudly
- * (fire-and-forget contract unchanged); the walkthrough still completes.
+ * failed, or ssh-keygen returned an unexpected error. The push fails loudly;
+ * the walkthrough still completes.
  */
 export class SshSigningUnavailable extends Data.TaggedError("SshSigningUnavailable")<{
   readonly message: string;
@@ -394,17 +381,257 @@ export class SshKeysFetchFailed extends Data.TaggedError("SshKeysFetchFailed")<{
   readonly cause?: unknown;
 }> {}
 
-/**
- * Type guard for ReviewError.
- * Checks both instanceof (for directly thrown errors) and _tag (defensive for
- * serialized/deserialized errors crossing async boundaries, e.g. Effect channels).
- */
-export function isReviewError(e: unknown): e is ReviewError {
+// Every error above answers an HTTP request the same way wherever it
+// surfaces: a REST route, a stream refused before it starts, or the external
+// agent's MCP route. Adding an error class means adding its row here.
+
+export type HttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 415 | 422 | 429 | 500 | 502 | 503;
+
+export interface HttpError {
+  readonly status: HttpErrorStatus;
+  readonly code: ApiErrorCode;
+  readonly message: string;
+  /** Extra body fields the client reads for this code. */
+  readonly details?: Readonly<Record<string, unknown>>;
+}
+
+type AppError =
+  | ProfilingError
+  | GitHubRateLimitError
+  | GitHubAuthError
+  | MissingGitHubClientIdError
+  | InvalidGitHubClientIdError
+  | GitHubNetworkError
+  | GitHubApiError
+  | GitHubAccessDeniedError
+  | GitHubNotFoundError
+  | RepoNotAccessibleError
+  | NotFoundError
+  | ValidationError
+  | ExternalIntegrationError
+  | AiGenerationError
+  | AiNotConfiguredError
+  | JevUnavailable
+  | ForbiddenError
+  | SyncError
+  | CloneError
+  | CloneNotReadyError
+  | StackRejectedError
+  | ConcurrentPushError
+  | WorkspaceBusyError
+  | DirtyWorktreeError
+  | NoChangesError
+  | NoChatSessionError
+  | AgentBranchConflictError
+  | GitOperationError
+  | PushRejectedError
+  | InvalidBranchNameError
+  | BaseConflictsRejectedError
+  | HeadShaMismatchError
+  | WorktreeBlockedByUnpushedCommits
+  | PlanGateError
+  | AttachmentRejectedError
+  | RecapNotFoundError
+  | DbError
+  | BlobStoreUnavailable
+  | CacheUnavailable
+  | CacheSerialization
+  | ImportError
+  | SshKeygenMissing
+  | SshSigningUnavailable
+  | SshSignatureInvalid
+  | SshKeysFetchFailed;
+
+const http = (
+  status: HttpErrorStatus,
+  code: ApiErrorCode,
+  message: string,
+  details?: Readonly<Record<string, unknown>>,
+): HttpError => (details ? { status, code, message, details } : { status, code, message });
+
+const notFoundMessage = (resource: string): string =>
+  `${resource.charAt(0).toUpperCase()}${resource.slice(1)} not found`;
+
+const internal = (message: string): HttpError => http(500, "INTERNAL_ERROR", message);
+
+const STACK_REJECTION_HTTP = {
+  stale: [409, "STALE"],
+  busy: [409, "BUSY"],
+  "replay-conflict": [409, "REPLAY_CONFLICT"],
+  "lease-lost": [409, "STALE"],
+  invalid: [400, "INVALID"],
+  failed: [422, "FAILED"],
+} as const satisfies Record<StackRejection["reason"], readonly [HttpErrorStatus, ApiErrorCode]>;
+
+const BASE_CONFLICTS_REJECTION_HTTP = {
+  busy: [409, "BUSY"],
+  stale: [409, "STALE"],
+  invalid: [422, "INVALID"],
+  unavailable: [503, "UNAVAILABLE"],
+  failed: [500, "FAILED"],
+} as const satisfies Record<BaseConflictsRejection, readonly [HttpErrorStatus, ApiErrorCode]>;
+
+const EXTERNAL_INTEGRATION_HTTP = {
+  INVALID_CREDENTIAL: [403, "FORBIDDEN"],
+  INVALID_PROJECT: [404, "NOT_FOUND"],
+  PR_NOT_FOUND: [404, "NOT_FOUND"],
+  INSTALL_FAILED: [400, "FAILED"],
+  INTERNAL: [500, "INTERNAL_ERROR"],
+} as const satisfies Record<
+  ExternalIntegrationError["code"],
+  readonly [HttpErrorStatus, ApiErrorCode]
+>;
+
+const HTTP_ERRORS: {
+  readonly [Tag in AppError["_tag"]]: (e: Extract<AppError, { _tag: Tag }>) => HttpError;
+} = {
+  NotFoundError: (e) => http(404, "NOT_FOUND", notFoundMessage(e.resource)),
+  RecapNotFoundError: () => http(404, "NOT_FOUND", notFoundMessage("recap")),
+  ValidationError: (e) => http(400, "INVALID", e.message),
+  ForbiddenError: (e) => http(403, "FORBIDDEN", e.message),
+  GitHubAuthError: () => http(401, "GITHUB_AUTH_ERROR", "GitHub token expired or invalid"),
+  MissingGitHubClientIdError: (e) =>
+    http(400, "MISSING_GITHUB_CLIENT_ID", e.message, { host: e.host }),
+  InvalidGitHubClientIdError: (e) =>
+    http(400, "INVALID_GITHUB_CLIENT_ID", e.message, { host: e.host }),
+  GitHubAccessDeniedError: (e) => http(403, "FORBIDDEN", e.message),
+  GitHubNotFoundError: () => http(404, "NOT_FOUND", "Not found on GitHub"),
+  RepoNotAccessibleError: (e) =>
+    http(404, "NOT_FOUND", e.message, {
+      detail: e.detail,
+      ...(e.action ? { action: e.action } : {}),
+    }),
+  GitHubRateLimitError: (e) =>
+    http(
+      429,
+      "GITHUB_RATE_LIMITED",
+      `GitHub rate limit exceeded, resets at ${e.resetAt.toISOString()}`,
+    ),
+  GitHubNetworkError: (e) => http(502, "GITHUB_ERROR", `GitHub API error: ${String(e.cause)}`),
+  // GitHub rejected the request on its merits: pass its 4xx through. A 401,
+  // 403 or 404 never gets here; each has its own class.
+  GitHubApiError: (e) =>
+    http(
+      e.status >= 400 && e.status < 500 ? (e.status as HttpErrorStatus) : 502,
+      "GITHUB_ERROR",
+      `GitHub API error: ${String(e.cause)}`,
+    ),
+  SyncError: (e) => http(502, "GITHUB_ERROR", e.message),
+  AiNotConfiguredError: () =>
+    http(
+      400,
+      "NOT_CONFIGURED",
+      "The selected AI agent can't be launched — install it or pick another in Settings",
+    ),
+  AiGenerationError: (e) =>
+    http(
+      500,
+      e.kind === "auth" ? "AGENT_AUTH_REQUIRED" : "GENERATION_ERROR",
+      e.message ?? `Generation failed: ${String(e.cause)}`,
+    ),
+  JevUnavailable: (e) =>
+    http(503, "UNAVAILABLE", e.message ?? `TypeSafe is unavailable (${e.reason})`),
+  ExternalIntegrationError: (e) => {
+    const [status, code] = EXTERNAL_INTEGRATION_HTTP[e.code];
+    return http(status, code, e.message);
+  },
+  CloneNotReadyError: () => http(409, "UNAVAILABLE", "Repository clone is not ready yet"),
+  CloneError: (e) => http(502, "FAILED", e.message),
+  StackRejectedError: (e) => {
+    const [status, code] = STACK_REJECTION_HTTP[e.rejection.reason];
+    return http(
+      status,
+      code,
+      e.message,
+      e.rejection.reason === "replay-conflict" ? { files: e.rejection.files } : undefined,
+    );
+  },
+  BaseConflictsRejectedError: (e) => {
+    const [status, code] = BASE_CONFLICTS_REJECTION_HTTP[e.reason];
+    return http(status, code, e.message);
+  },
+  HeadShaMismatchError: (e) =>
+    http(
+      409,
+      "STALE",
+      `GitHub reports head ${e.githubHeadSha.slice(0, 7)}, not the requested ${e.expectedHeadSha.slice(0, 7)}`,
+    ),
+  WorktreeBlockedByUnpushedCommits: (e) =>
+    http(409, "WORKTREE_BLOCKED", "PR head advanced but worktree has unpushed agent commits", {
+      worktreePath: e.worktreePath,
+      branchName: e.branchName,
+      oldHeadSha: e.oldHeadSha,
+      newHeadSha: e.newHeadSha,
+      commits: e.commits,
+    }),
+  PlanGateError: (e) =>
+    e.reason === "pending"
+      ? http(
+          409,
+          "PLAN_PENDING",
+          "A plan is awaiting your decision. Approve or reject it before sending a new message.",
+          { planId: e.planId },
+        )
+      : http(404, "PLAN_NOT_FOUND", "Plan not found", { planId: e.planId }),
+  AttachmentRejectedError: (e) =>
+    e.reason === "too-large"
+      ? http(413, "ATTACHMENT_TOO_LARGE", e.message)
+      : http(415, "ATTACHMENT_INVALID", e.message),
+  ConcurrentPushError: (e) =>
+    http(
+      409,
+      "CONCURRENT_PUSH",
+      e.heldBy === "chat-push"
+        ? `A push of the agent's commits to ${e.branch} is already running`
+        : e.heldBy === "base-sync"
+          ? `Revv is already bringing ${e.branch} up to date`
+          : `Revv is rebasing the stack ${e.branch} belongs to`,
+    ),
+  WorkspaceBusyError: (e) =>
+    e.heldBy === "chat-turn"
+      ? http(409, "CHAT_STREAMING", "Wait for the chat agent to finish")
+      : e.heldBy === "push"
+        ? http(409, "CONCURRENT_PUSH", "A push of the agent's commits is already running")
+        : e.heldBy === "prune"
+          ? http(409, "BUSY", "Revv is removing this PR's worktree")
+          : e.heldBy === "warm-up"
+            ? http(409, "BUSY", "Revv is preparing the chat agent's worktree")
+            : http(409, "BUSY", "Revv is still rewriting the agent's commits"),
+  DirtyWorktreeError: (e) => http(409, "DIRTY_WORKTREE", e.message),
+  NoChangesError: () => http(422, "NO_CHANGES", "No agent commits to push"),
+  NoChatSessionError: () =>
+    http(404, "NO_CHAT_SESSION", "No chat session for this PR — start a chat first"),
+  AgentBranchConflictError: (e) => http(409, "REPLAY_CONFLICT", e.message),
+  InvalidBranchNameError: (e) => http(400, "INVALID_BRANCH_NAME", e.message),
+  PushRejectedError: (e) => http(502, "PUSH_REJECTED", e.message),
+  GitOperationError: (e) => http(500, "FAILED", e.message),
+  DbError: (e) => internal(e.message),
+  ProfilingError: (e) => internal(String(e.cause)),
+  BlobStoreUnavailable: (e) => internal(e.message),
+  CacheUnavailable: (e) => internal(e.message),
+  CacheSerialization: (e) => internal(e.message),
+  ImportError: (e) => internal(e.reason),
+  SshKeygenMissing: (e) => internal(e.message),
+  SshSigningUnavailable: (e) => internal(e.message),
+  SshSignatureInvalid: (e) => internal(e.message),
+  SshKeysFetchFailed: (e) => internal(`Couldn't fetch ${e.login}'s keys from ${e.host}`),
+};
+
+export function isAppError(e: unknown): e is AppError {
   return (
-    e instanceof ReviewError ||
-    (e !== null &&
-      typeof e === "object" &&
-      "_tag" in e &&
-      (e as { _tag: unknown })._tag === "ReviewError")
+    typeof e === "object" &&
+    e !== null &&
+    "_tag" in e &&
+    typeof e._tag === "string" &&
+    Object.hasOwn(HTTP_ERRORS, e._tag)
   );
+}
+
+/** How `e` answers an HTTP request. Anything that isn't a domain error is a 500. */
+export function httpErrorOf(e: unknown): HttpError {
+  if (isAppError(e)) {
+    const toHttp = HTTP_ERRORS[e._tag] as (error: AppError) => HttpError;
+    return toHttp(e);
+  }
+  return internal(e instanceof Error ? e.message : "Internal server error");
 }

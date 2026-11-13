@@ -2,14 +2,9 @@
 import type { Snippet } from "svelte";
 import type { HTMLInputAttributes } from "svelte/elements";
 
-// Shared icon-prefixed input for the add-repository flows. Encapsulates the
-// warm-stone field style + accent focus ring so the search, clone-location,
-// path, and identity inputs read identically instead of each re-rolling the CSS.
 interface Props extends Omit<HTMLInputAttributes, "class"> {
   value?: string;
-  /** Leading icon, rendered inside the field on the left. */
   icon: Snippet;
-  /** Optional trailing affordance (e.g. a clear button), pinned to the right. */
   trailing?: Snippet;
   /** Focus the input on mount (wrapped in rAF so it lands after view motion). */
   autofocusOnMount?: boolean;

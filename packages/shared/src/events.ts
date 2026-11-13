@@ -1,52 +1,29 @@
-// ── Global event stream (SSE) envelopes ─────────────────────────────────────
-//
-// Server → client messages delivered over the long-lived `GET /api/events`
-// SSE connection. One stream per client tab, lifetime = session.
-//
-// This is the single server -> client realtime channel. Inbound commands use
-// REST endpoints instead of this stream.
+// Envelopes on the `GET /api/events` SSE stream: one per client tab, the only
+// server → client realtime channel. Inbound commands use REST endpoints.
 
 import type { HunkScanRow, HunkScanStatus } from "./hunk-scan";
 import type {
-  NewPrCommit,
-  NewPrMessage,
-  NewPrSession,
-  NewPrSessionSnapshot,
-  NewPrSessionStatus,
-} from "./new-pr-session";
-import type { ProjectRecap, ProjectRecapStatus, RecapPeriod } from "./recap";
-import type { StackBriefStatus, StackMergeRun } from "./stacks";
-import type {
   CloneStatus,
-  CommentThread,
+  MergeEligibility,
   PullRequest,
   Repository,
   SyncChange,
-  ThreadMessage,
-  ThreadStatus,
-  ThreadSummary,
-} from "./types";
-import type { WalkthroughStreamEvent } from "./walkthrough";
+} from "./pull-requests";
+import type { ProjectRecap, ProjectRecapStatus, RecapPeriod } from "./recap";
+import type { CommentThread, ThreadMessage, ThreadStatus } from "./review";
+import type { StackBriefStatus, StackMergeRun } from "./stacks";
+import type { WalkthroughDurableEvent, WalkthroughLiveEvent } from "./walkthrough";
 
 /**
- * Per-event envelope for walkthrough content + lifecycle. Replaces the
- * legacy per-PR walkthrough SSE stream and the four standalone WS
- * lifecycle envelopes (`walkthrough:complete`, `walkthrough:error`,
- * `walkthrough:cache-hit`, `walkthrough:edited`).
+ * Delta: a walkthrough's content or lifecycle event (see `WalkthroughDurableEvent`).
  *
- *   prId           — the PR this walkthrough belongs to (route key on the
- *                    client; entries are stored by prId for sidebar +
- *                    detail-view consumption regardless of active page).
- *   walkthroughId  — DB row id; used to scope `lastSeenSeq` cursors so the
- *                    cursor naturally resets across regenerate/supersede
- *                    boundaries.
- *   seq            — monotonic per-walkthrough counter sourced from
- *                    `walkthroughs.next_seq` (atomic with content writes).
- *                    Client drops envelopes with `seq <= lastSeenSeq` for
- *                    the in-flight reconnect race. See SSE-rewrite plan §4.2.
- *   event          — the actual payload (content event, lifecycle event,
- *                    or chat-edit deletion). Same union the legacy SSE used,
- *                    extended with `lifecycle:*` variants.
+ *   prId           — the PR this walkthrough belongs to; the client keys its
+ *                    entries on it.
+ *   walkthroughId  — the row; scopes the client's `lastSeenSeq` cursor so it
+ *                    resets across regenerate/supersede.
+ *   seq            — `walkthroughs.next_seq`, bumped in the DB for every
+ *                    durable event. The client drops `seq <= lastSeenSeq`
+ *                    (the reconnect race) and re-reads the row to catch up.
  */
 export interface WalkthroughEventEnvelope {
   type: "walkthrough:event";
@@ -54,16 +31,24 @@ export interface WalkthroughEventEnvelope {
     prId: string;
     walkthroughId: string;
     seq: number;
-    event: WalkthroughStreamEvent;
+    event: WalkthroughDurableEvent;
   };
 }
 
-// ── First pass (per PR head, independent of any walkthrough) ───────────────
-//
-// Rows are committed to `hunk_scan_rows` before each event, so a client that
-// misses one reconciles from `POST /api/reviews/:id/hunk-scan`. Every arm is
-// keyed on `(prId, headSha)`: a pull starts a new scan rather than mutating
-// the old one.
+/** Delta, live-only (see `WalkthroughLiveEvent`): no seq, never replayed. */
+export interface WalkthroughLiveEnvelope {
+  type: "walkthrough:live";
+  data: {
+    prId: string;
+    walkthroughId: string;
+    event: WalkthroughLiveEvent;
+  };
+}
+
+// First pass, per PR head and independent of any walkthrough. Rows are
+// committed to `hunk_scan_rows` before each event, so a client that misses one
+// reconciles from `POST /api/reviews/:id/hunk-scan`. Every arm is keyed on
+// `(prId, headSha)`: a pull starts a new scan rather than mutating the old one.
 
 /**
  * Full-state: every hunk the scan will consider, skipped ones included, with
@@ -103,11 +88,16 @@ export type HunkScanEventMessage =
   | HunkScanHunkEnvelope
   | HunkScanCompleteEnvelope;
 
+/**
+ * Full state: every open PR the account on `host` syncs. The stream carries
+ * every account of the user, so a client showing another host's list ignores it.
+ */
 export interface PrsUpdatedEnvelope {
   type: "prs:updated";
-  data: PullRequest[];
+  data: { host: string; prs: PullRequest[] };
 }
 
+/** Delta: one PR closed or merged; it leaves the open list for the archive. */
 export interface PrArchivedEnvelope {
   type: "pr:archived";
   data: {
@@ -116,6 +106,38 @@ export interface PrArchivedEnvelope {
     status: "closed" | "merged";
     closedAt: string;
   };
+}
+
+/**
+ * Signal: the PR's diff files for `headSha` landed in the server's diff cache.
+ * Previews that answered `pending` because the diff wasn't cached yet (sizing,
+ * the first pass) ask again for that head.
+ */
+export interface DiffCachedEnvelope {
+  type: "diff:cached";
+  data: { prId: string; headSha: string };
+}
+
+/**
+ * Full state: whether the viewer can merge the PR, once GitHub finished
+ * computing mergeability (or the server stopped waiting; the answer may then
+ * still be settling). Follows a `GET /api/prs/:id/merge-eligibility` that
+ * answered while GitHub was still computing.
+ */
+export interface PrMergeEligibilityEnvelope {
+  type: "pr:merge-eligibility";
+  data: { prId: string; eligibility: MergeEligibility };
+}
+
+/**
+ * Signal: the server stopped waiting on GitHub's repo statistics after a
+ * `GET /api/repos/:id/activity` answered `computing`. `ready` is whether
+ * they're in; when they are, re-read the activity. When not, GitHub is still
+ * computing and the client stops waiting.
+ */
+export interface RepoActivitySettledEnvelope {
+  type: "repo-activity:settled";
+  data: { repoId: string; ready: boolean };
 }
 
 /**
@@ -159,118 +181,137 @@ export interface StackBriefStatusChangedEnvelope {
   data: { repositoryId: string; stackNumber: number; briefId: string; status: StackBriefStatus };
 }
 
+/** Signal: a PR-list sync cycle started; sent once to each user it syncs or who asked for it. */
 export interface PrsSyncStartedEnvelope {
   type: "prs:sync-started";
 }
 
+/** Signal: the PR-list sync cycle finished; `prs:updated` carried any change. */
 export interface PrsSyncCompleteEnvelope {
   type: "prs:sync-complete";
-  data: {
-    count: number;
-    timestamp: string;
-    cached?: number;
-    refetched?: number;
-  };
 }
 
+/**
+ * Signal: the PR-list sync cycle failed; no `prs:sync-complete` follows.
+ * `message` is user-facing, never a raw cause.
+ */
+export interface PrsSyncFailedEnvelope {
+  type: "prs:sync-failed";
+  data: { message: string };
+}
+
+/**
+ * Full state: every repository the account on `host` has added. A client
+ * showing another host's list ignores it.
+ */
 export interface ReposUpdatedEnvelope {
   type: "repos:updated";
-  data: Repository[];
+  data: { host: string; repos: Repository[] };
 }
 
+/** Full state of one repository's clone status. */
 export interface ReposCloneStatusEnvelope {
   type: "repos:clone-status";
   data: { repoId: string; status: CloneStatus; error?: string };
 }
 
+/**
+ * Full state of the signed-in user's GitHub identity on `host`, after GitHub
+ * reported a new login or avatar for that account. The stream carries every
+ * account of the user, so a client applies it to the account on `host`.
+ * `avatarContent` is the cached data URL, as on `/api/auth/accounts`: GitHub
+ * Enterprise avatar URLs are signed and expire.
+ */
 export interface UserUpdatedEnvelope {
   type: "user:updated";
   data: {
     id: string;
     name: string;
     email: string;
-    image: string | null;
+    host: string;
+    avatarContent: string | null;
     githubLogin: string | null;
   };
 }
 
-export interface ErrorEnvelope {
-  type: "error";
-  data: { code: string; message: string; retryAfter?: number };
-}
-
+/** Full state: the account on `host` needs a new sign-in. */
 export interface AuthReauthRequiredEnvelope {
   type: "auth:reauth-required";
   data: { host: string; githubLogin: string | null };
 }
 
+/** Full state: the account on `host` no longer needs one. */
 export interface AuthReauthClearedEnvelope {
   type: "auth:reauth-cleared";
   data: { host: string };
 }
 
+/** Delta: a thread and its first message, on `prId`'s review. */
 export interface ThreadCreatedEnvelope {
   type: "thread:created";
-  data: { sessionId: string; thread: CommentThread; message: ThreadMessage };
+  data: { prId: string; thread: CommentThread; message: ThreadMessage };
 }
 
+/** Full state of one thread's status. */
 export interface ThreadUpdatedEnvelope {
   type: "thread:updated";
-  data: { threadId: string; status: ThreadStatus };
+  /** Full state of the thread's status: `resolvedAt` is null unless the status resolves it. */
+  data: { threadId: string; status: ThreadStatus; resolvedAt: string | null };
 }
 
+/** Delta: a new message on a thread. An edit to an existing one is `thread:message:edited`. */
 export interface ThreadMessageEnvelope {
   type: "thread:message";
   data: { threadId: string; message: ThreadMessage };
 }
 
+/** Signal: `prId`'s threads were pulled from GitHub; re-read the session. */
 export interface ThreadsSyncedEnvelope {
   type: "threads:synced";
-  data: { prId: string; summary: ThreadSummary; timestamp: string };
+  data: { prId: string; timestamp: string };
 }
 
-export interface ThreadsNewReplyEnvelope {
-  type: "threads:new-reply";
-  data: { prId: string; thread: CommentThread; message: ThreadMessage };
+/**
+ * Signal: a push posted `prId`'s comments to GitHub and linked them, so a
+ * posted draft is no longer editable; re-read the session. Not a pull: the
+ * PR's last sync and sync error stand.
+ */
+export interface ThreadsLinkedEnvelope {
+  type: "threads:linked";
+  data: { prId: string };
 }
 
+/** Delta: what changed in the last sync, for notifications; not state. */
 export interface PrsSyncSummaryEnvelope {
   type: "prs:sync-summary";
   data: SyncChange[];
 }
 
+/** Delta: a thread is gone. */
 export interface ThreadDeletedEnvelope {
   type: "thread:deleted";
   data: { threadId: string };
 }
 
+/** Full state of one message whose body changed, in Revv or on GitHub. */
 export interface ThreadMessageEditedEnvelope {
   type: "thread:message:edited";
   data: { threadId: string; message: ThreadMessage };
 }
 
+/** Delta: one message of a thread is gone. */
 export interface ThreadMessageDeletedEnvelope {
   type: "thread:message:deleted";
   data: { threadId: string; messageId: string };
 }
 
+/** Signal: pulling `prId`'s threads failed; ends that thread sync. */
 export interface ThreadsSyncErrorEnvelope {
   type: "threads:sync-error";
   data: { prId: string; message: string };
 }
 
-export interface ChatQuestionResolvedEnvelope {
-  type: "chat:question-resolved";
-  data: {
-    prId: string;
-    questionId: string;
-    status: "answered" | "rejected";
-    answers?: Record<string, ReadonlyArray<string>>;
-    customAnswers?: Record<string, string>;
-    supersededPlanId?: string;
-  };
-}
-
+/** Full state of one recap's lifecycle (status and terminal fields). */
 export interface RecapStatusChangedEnvelope {
   type: "recap:status-changed";
   data: {
@@ -283,87 +324,10 @@ export interface RecapStatusChangedEnvelope {
   };
 }
 
+/** Delta: a new recap row. */
 export interface RecapAddedEnvelope {
   type: "recap:added";
   data: { recap: ProjectRecap };
-}
-
-export interface NewPrSessionCreatedEnvelope {
-  type: "new-pr-session:created";
-  data: { snapshot: NewPrSessionSnapshot };
-}
-
-export interface NewPrSessionMessageAppendedEnvelope {
-  type: "new-pr-session:message-appended";
-  data: { sessionId: string; message: NewPrMessage };
-}
-
-export interface NewPrSessionAgentTurnStartedEnvelope {
-  type: "new-pr-session:agent-turn-started";
-  data: { sessionId: string; turnId: string };
-}
-
-export interface NewPrSessionAgentTurnEndedEnvelope {
-  type: "new-pr-session:agent-turn-ended";
-  data: {
-    sessionId: string;
-    turnId: string;
-    status: "completed" | "interrupted" | "error";
-    errorMessage?: string;
-  };
-}
-
-export interface NewPrSessionCommitRecordedEnvelope {
-  type: "new-pr-session:commit-recorded";
-  data: { sessionId: string; commit: NewPrCommit };
-}
-
-export interface NewPrSessionMetadataUpdatedEnvelope {
-  type: "new-pr-session:metadata-updated";
-  data: {
-    sessionId: string;
-    title?: string | null;
-    body?: string | null;
-  };
-}
-
-export interface NewPrSessionWorktreeChangedEnvelope {
-  type: "new-pr-session:worktree-changed";
-  data: { sessionId: string; changedPaths: ReadonlyArray<string> };
-}
-
-export interface NewPrSessionSyncedEnvelope {
-  type: "new-pr-session:synced";
-  data: { sessionId: string; newBaseSha: string };
-}
-
-export interface NewPrSessionSyncConflictedEnvelope {
-  type: "new-pr-session:sync-conflicted";
-  data: { sessionId: string; conflictedPaths: ReadonlyArray<string> };
-}
-
-export interface NewPrSessionStatusChangedEnvelope {
-  type: "new-pr-session:status-changed";
-  data: {
-    sessionId: string;
-    status: NewPrSessionStatus;
-    errorMessage?: string;
-  };
-}
-
-export interface NewPrSessionPrOpenedEnvelope {
-  type: "new-pr-session:pr-opened";
-  data: {
-    sessionId: string;
-    prId: string;
-    externalId: number;
-    url: string;
-  };
-}
-
-export interface NewPrSessionUpdatedEnvelope {
-  type: "new-pr-session:updated";
-  data: { session: NewPrSession };
 }
 
 export type ThreadEventMessage =
@@ -371,7 +335,7 @@ export type ThreadEventMessage =
   | ThreadUpdatedEnvelope
   | ThreadMessageEnvelope
   | ThreadsSyncedEnvelope
-  | ThreadsNewReplyEnvelope
+  | ThreadsLinkedEnvelope
   | ThreadDeletedEnvelope
   | ThreadMessageEditedEnvelope
   | ThreadMessageDeletedEnvelope
@@ -379,35 +343,26 @@ export type ThreadEventMessage =
 
 export type ServerEventMessage =
   | WalkthroughEventEnvelope
+  | WalkthroughLiveEnvelope
   | HunkScanEventMessage
   | PrsUpdatedEnvelope
   | PrArchivedEnvelope
   | PrConversationUpdatedEnvelope
+  | DiffCachedEnvelope
+  | PrMergeEligibilityEnvelope
+  | RepoActivitySettledEnvelope
   | StackUpdatedEnvelope
   | StackMergeProgressEnvelope
   | StackBriefStatusChangedEnvelope
   | PrsSyncStartedEnvelope
   | PrsSyncCompleteEnvelope
+  | PrsSyncFailedEnvelope
   | ReposUpdatedEnvelope
   | ReposCloneStatusEnvelope
   | UserUpdatedEnvelope
-  | ErrorEnvelope
   | AuthReauthRequiredEnvelope
   | AuthReauthClearedEnvelope
   | ThreadEventMessage
   | PrsSyncSummaryEnvelope
-  | ChatQuestionResolvedEnvelope
   | RecapStatusChangedEnvelope
-  | RecapAddedEnvelope
-  | NewPrSessionCreatedEnvelope
-  | NewPrSessionMessageAppendedEnvelope
-  | NewPrSessionAgentTurnStartedEnvelope
-  | NewPrSessionAgentTurnEndedEnvelope
-  | NewPrSessionCommitRecordedEnvelope
-  | NewPrSessionMetadataUpdatedEnvelope
-  | NewPrSessionWorktreeChangedEnvelope
-  | NewPrSessionSyncedEnvelope
-  | NewPrSessionSyncConflictedEnvelope
-  | NewPrSessionStatusChangedEnvelope
-  | NewPrSessionPrOpenedEnvelope
-  | NewPrSessionUpdatedEnvelope;
+  | RecapAddedEnvelope;

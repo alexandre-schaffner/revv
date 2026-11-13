@@ -1,12 +1,10 @@
-// ── First pass: per-hunk smell scan ─────────────────────────────────────────
-//
-// One scan per PR head SHA: the orchestrator asks Jev to judge every
-// substantive hunk against nine smells, starting when the review page opens
-// (or when a walkthrough job needs it first). The answers are probabilities
-// only — no prose, no line spans — so they reach the agent as leads to verify
-// and the UI as a separate layer of the review. Floors live here because both
-// sides apply them: the server to pick prompt leads, the web to decide what a
-// chip shows.
+// The first pass: Jev's smell probabilities for every substantive hunk of one
+// PR head. Probabilities only — no prose, no line spans — so they reach the
+// agent as leads to verify and the UI as a separate layer of the review.
+// Floors live here because both sides apply them: the server to pick prompt
+// leads, the web to decide what a chip shows.
+
+import type { HunkHeader } from "./diff-hunks";
 
 export const HUNK_SMELLS = [
   "vulnerability",
@@ -100,21 +98,13 @@ export function isHunkScanFinished(status: HunkScanStatus | null): boolean {
   return status === "complete" || status === "partial";
 }
 
-/** A hunk's span in the unified diff, as its `@@` header gives it. */
-export interface HunkRange {
-  oldStart: number;
-  oldLines: number;
-  newStart: number;
-  newLines: number;
-}
-
 /** Last new-side line of a hunk; a pure deletion still names the line it sits at. */
-export function hunkNewEnd(range: Pick<HunkRange, "newStart" | "newLines">): number {
+export function hunkNewEnd(range: Pick<HunkHeader, "newStart" | "newLines">): number {
   return range.newStart + Math.max(range.newLines, 1) - 1;
 }
 
 /** One hunk of the first pass, as persisted in `hunk_scan_rows`. */
-export interface HunkScanRow extends HunkRange {
+export interface HunkScanRow extends HunkHeader {
   filePath: string;
   /** Position among the file's `@@` hunks — the same index `@pierre/diffs` assigns. */
   hunkIndex: number;
@@ -125,12 +115,10 @@ export interface HunkScanRow extends HunkRange {
   scannedAt: string | null;
 }
 
-/** A hunk's identity within one scan: its file and its position there. */
 export function hunkKey(row: { readonly filePath: string; readonly hunkIndex: number }): string {
   return `${row.filePath}\0${row.hunkIndex}`;
 }
 
-/** A hunk the scan means to ask about and hasn't heard back on yet. */
 export function isHunkRowPending(row: {
   readonly signals: unknown;
   readonly skipReason: unknown;
@@ -147,7 +135,7 @@ export interface HunkScanSnapshot {
 
 /**
  * `POST /api/reviews/:id/hunk-scan`. `off` when TypeSafe is off or has no key;
- * `pending` until the PR's diff is cached (the client retries); otherwise the
+ * `pending` until the PR's diff is cached (announced as `diff:cached`); otherwise the
  * scan for the PR's current head, started if it hadn't been.
  */
 export type HunkScanEnsureResult =

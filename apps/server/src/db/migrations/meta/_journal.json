@@ -358,6 +358,83 @@
       "when": 1792608110977,
       "tag": "0470_pr_diff_files_range",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "6",
+      "when": 1793990488354,
+      "tag": "0480_recap_stopped_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "6",
+      "when": 1793996729162,
+      "tag": "0490_review_session_per_pr",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "6",
+      "when": 1794600000000,
+      "tag": "0500_remote_users_host",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "6",
+      "when": 1794700000000,
+      "tag": "0510_jobs_kernel",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "6",
+      "when": 1794800000000,
+      "tag": "0520_thread_status_push_pending",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "6",
+      "when": 1794900000000,
+      "tag": "0530_account_client_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "6",
+      "when": 1795000000000,
+      "tag": "0540_drop_stack_user_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "6",
+      "when": 1795100000000,
+      "tag": "0550_repo_clone_written",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "6",
+      "when": 1795200000000,
+      "tag": "0560_pinned_prs_order_not_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "6",
+      "when": 1795300000000,
+      "tag": "0570_drop_stack_account_ids",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "6",
+      "when": 1795400000000,
+      "tag": "0580_pr_diff_commits",
+      "breakpoints": true
     }
   ]
 }

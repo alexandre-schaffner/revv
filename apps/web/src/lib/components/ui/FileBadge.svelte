@@ -93,7 +93,6 @@ const tooltip = $derived(
     text-align: left;
     overflow: hidden;
     width: fit-content;
-    /* reset button styles */
     appearance: none;
     text-decoration: none;
   }

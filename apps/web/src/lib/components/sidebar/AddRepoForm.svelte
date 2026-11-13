@@ -9,79 +9,62 @@ import Plus from "phosphor-svelte/lib/Plus";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import Trash from "phosphor-svelte/lib/Trash";
 import { toast } from "svelte-sonner";
-import { toastAddRepoError } from "$lib/components/shared/add-repo-toast";
-import CloneStatusIndicator from "$lib/components/shared/CloneStatusIndicator.svelte";
-import OwnerAvatar from "$lib/components/shared/OwnerAvatar.svelte";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import { Badge } from "$lib/components/ui/badge/index.js";
 import { Button } from "$lib/components/ui/button/index.js";
 import * as Command from "$lib/components/ui/command/index.js";
 import {
-  addRepo,
-  deleteRepo,
+  filterRepos,
+  groupByOwner,
+  indexByFullName,
+  isRepoSlug,
+  repoKey,
+} from "$lib/repos/add-repo";
+import { CloneBase, useAvailableRepos } from "$lib/repos/add-repo.svelte";
+import { toastAddRepoError } from "$lib/repos/add-repo-toast";
+import {
   fetchAvailableRepos,
   getAvailablePrCount,
   getAvailablePrCountsLoaded,
   getAvailableRepos,
-  getAvailableReposFetchFailed,
   getAvailableReposLoading,
-  getDefaultCloneBaseDir,
-  getPullRequests,
-  getRepositories,
-  retryClone,
-} from "$lib/stores/prs.svelte";
+} from "$lib/repos/catalog.svelte";
+import { RepoRemoval } from "$lib/repos/repo-removal.svelte";
+import { getPullRequests } from "$lib/stores/prs.svelte";
+import { addRepo, getRepositories, retryClone } from "$lib/stores/repos.svelte";
+import CloneStatusIndicator from "./CloneStatusIndicator.svelte";
+import OwnerAvatar from "./OwnerAvatar.svelte";
 import RepoDeleteConfirm from "./RepoDeleteConfirm.svelte";
 import RepoDialogHeader from "./RepoDialogHeader.svelte";
 import RepoField from "./RepoField.svelte";
 
-// Shared "Add Repository" picker. Built on the shadcn `Command` (cmdk)
-// primitive so the search input is pinned, the list is the only scroll
-// region, and keyboard nav / selection come for free. Renders without a
-// modal wrapper so it can be embedded inline; the parent supplies padding.
-let {
-  onClose,
-  autoFocus = true,
-  showTitle = true,
-  showLocation = false,
-  cloneBasePath = "",
-  onCloneBasePathChange,
-  onCloneSuccess,
-}: {
-  onClose?: () => void;
-  autoFocus?: boolean;
-  showTitle?: boolean;
-  showLocation?: boolean;
-  cloneBasePath?: string;
-  onCloneBasePathChange?: (path: string) => void;
-  onCloneSuccess?: (basePath: string) => void;
-} = $props();
+// Renders without a modal wrapper; the parent supplies padding.
+let { onClose }: { onClose?: () => void } = $props();
 
-const MANUAL_REPO_REGEX = /^[\w.-]+\/[\w.-]+$/;
-const MAX_AUTO_RETRIES = 3;
-const AUTO_RETRY_DELAY_MS = 2000;
 const MANUAL_IMPORT_VALUE = "__manual_import__";
+
+const catalog = useAvailableRepos();
+const removal = new RepoRemoval();
+const cloneBase = new CloneBase();
 
 let search = $state("");
 let addingRepos = $state(new Set<string>());
-let removingRepos = $state(new Set<string>());
 let isManualLoading = $state(false);
 let browsing = $state(false);
-let repoPendingDelete = $state<Repository | null>(null);
-let autoRetries = $state(0);
 let searchEl = $state<HTMLInputElement | null>(null);
 
 // Focus the search on mount (rAF so it lands after the dialog's open motion),
 // avoiding the `autofocus` attribute and its a11y lint.
 $effect(() => {
-  if (autoFocus && searchEl) requestAnimationFrame(() => searchEl?.focus());
+  if (searchEl) requestAnimationFrame(() => searchEl?.focus());
 });
 
-// Reactive map of tracked repos so clone-status changes ripple through.
-let trackedByFullName = $derived(
-  new Map<string, Repository>(getRepositories().map((r) => [r.fullName, r])),
-);
+let trackedByKey = $derived(indexByFullName(getRepositories()));
 
-// Open-PR count per tracked repo, surfaced as a row badge.
+function trackedRepo(fullName: string): Repository | undefined {
+  return trackedByKey.get(repoKey(fullName));
+}
+
 let openPrCountByRepoId = $derived.by(() => {
   const m = new Map<string, number>();
   for (const pr of getPullRequests()) {
@@ -92,84 +75,32 @@ let openPrCountByRepoId = $derived.by(() => {
 
 let trimmedSearch = $derived(search.trim());
 
-let filteredAvailable = $derived(
-  trimmedSearch === ""
-    ? getAvailableRepos()
-    : getAvailableRepos().filter((repo) => {
-        const q = trimmedSearch.toLowerCase();
-        return (
-          repo.fullName.toLowerCase().includes(q) ||
-          repo.owner.toLowerCase().includes(q) ||
-          repo.name.toLowerCase().includes(q)
-        );
-      }),
-);
+let filteredAvailable = $derived(filterRepos(getAvailableRepos(), trimmedSearch));
 
-let groupedByOwner = $derived.by(() => {
-  const groups = new Map<string, typeof filteredAvailable>();
-  for (const repo of filteredAvailable) {
-    const existing = groups.get(repo.owner);
-    if (existing) existing.push(repo);
-    else groups.set(repo.owner, [repo]);
-  }
-  return groups;
-});
+let groupedByOwner = $derived(groupByOwner(filteredAvailable));
 
-// The manual-import row appears when the query parses as owner/name AND
-// there is no exact match in the browsable list. This unifies the old
-// Manual tab into the single search input.
 let showManualImport = $derived.by(() => {
-  if (!MANUAL_REPO_REGEX.test(trimmedSearch)) return false;
-  const lowered = trimmedSearch.toLowerCase();
-  return !filteredAvailable.some((r) => r.fullName.toLowerCase() === lowered);
+  if (!isRepoSlug(trimmedSearch)) return false;
+  const key = repoKey(trimmedSearch);
+  return !filteredAvailable.some((r) => repoKey(r.fullName) === key);
 });
 
-let isManualAlreadyTracked = $derived(showManualImport && trackedByFullName.has(trimmedSearch));
+let isManualAlreadyTracked = $derived(showManualImport && trackedRepo(trimmedSearch) !== undefined);
 
-// One source of truth for which list state to render.
 let listState = $derived.by<"loading" | "error" | "empty" | "no-match" | "groups">(() => {
   const hasRepos = getAvailableRepos().length > 0;
   if (hasRepos) return filteredAvailable.length > 0 ? "groups" : "no-match";
-  if (getAvailableReposLoading()) return "loading";
-  if (getAvailableReposFetchFailed()) {
-    return autoRetries < MAX_AUTO_RETRIES ? "loading" : "error";
-  }
+  if (catalog.loading) return "loading";
+  if (catalog.failed) return "error";
   return "empty";
 });
 
-$effect(() => {
-  if (
-    getAvailableRepos().length === 0 &&
-    !getAvailableReposLoading() &&
-    !getAvailableReposFetchFailed()
-  ) {
-    fetchAvailableRepos();
-  }
-});
-
-// Auto-retry: a freshly-issued GitHub token can briefly 401 during the race
-// between sign-in and propagation. Retry a few times before falling back to
-// the manual Retry button.
-$effect(() => {
-  if (!getAvailableReposFetchFailed() || autoRetries >= MAX_AUTO_RETRIES) return;
-  const timer = setTimeout(() => {
-    autoRetries++;
-    fetchAvailableRepos(true);
-  }, AUTO_RETRY_DELAY_MS);
-  return () => clearTimeout(timer);
-});
-
-function retryFetch(): void {
-  autoRetries = 0;
-  fetchAvailableRepos(true);
-}
-
 async function handleAdd(repoFullName: string) {
-  if (addingRepos.has(repoFullName) || trackedByFullName.has(repoFullName)) return;
+  if (addingRepos.has(repoFullName) || trackedRepo(repoFullName)) return;
   addingRepos = new Set([...addingRepos, repoFullName]);
   try {
     await addRepo(addBody(repoFullName));
-    rememberCloneBase();
+    cloneBase.remember();
   } catch (e) {
     toastAddRepoError(e, "Failed to add repository");
   } finally {
@@ -179,35 +110,20 @@ async function handleAdd(repoFullName: string) {
   }
 }
 
-async function handleRemove(repoId: string) {
-  if (removingRepos.has(repoId)) return;
-  removingRepos = new Set([...removingRepos, repoId]);
-  try {
-    await deleteRepo(repoId);
-    repoPendingDelete = null;
-  } catch {
-    // toast handled by store
-  } finally {
-    const next = new Set(removingRepos);
-    next.delete(repoId);
-    removingRepos = next;
-  }
-}
-
 async function handleManualImport() {
   const slug = trimmedSearch;
-  if (!MANUAL_REPO_REGEX.test(slug)) {
+  if (!isRepoSlug(slug)) {
     toast.error("Enter a valid repository in owner/name format");
     return;
   }
-  if (trackedByFullName.has(slug)) {
+  if (trackedRepo(slug)) {
     toast.error("Repository is already tracked");
     return;
   }
   isManualLoading = true;
   try {
     await addRepo(addBody(slug));
-    rememberCloneBase();
+    cloneBase.remember();
     search = "";
     onClose?.();
   } catch (e) {
@@ -218,39 +134,22 @@ async function handleManualImport() {
 }
 
 let trackedCount = $derived(getRepositories().length);
-let trimmedCloneBasePath = $derived(cloneBasePath.trim());
-// Empty field falls back to the server's default base; both the preview and
-// the submitted `basePath` read through this single value, never a literal.
-let effectiveBase = $derived(trimmedCloneBasePath || getDefaultCloneBaseDir() || "");
-let resolvedClonePath = $derived.by(() => {
-  if (!showLocation || !effectiveBase || !MANUAL_REPO_REGEX.test(trimmedSearch)) return null;
-  const [owner, name] = trimmedSearch.split("/");
-  if (!owner || !name) return null;
-  return `${effectiveBase.replace(/\/$/, "")}/${owner}/${name}`;
-});
+let resolvedClonePath = $derived(
+  isRepoSlug(trimmedSearch) ? cloneBase.previewFor(trimmedSearch) : null,
+);
 
-function addBody(repoFullName: string) {
-  if (!showLocation) return repoFullName;
-  // Only send a custom base; an empty field defers to the server's default
-  // (omitting `basePath`) rather than echoing a guessed path.
-  if (!trimmedCloneBasePath) return { fullName: repoFullName, mode: "clone" as const };
-  return { fullName: repoFullName, mode: "clone" as const, basePath: trimmedCloneBasePath };
-}
-
-function rememberCloneBase(): void {
-  if (!showLocation) return;
-  onCloneSuccess?.(trimmedCloneBasePath);
+function addBody(fullName: string) {
+  const basePath = cloneBase.custom;
+  return basePath === undefined
+    ? { fullName, mode: "clone" as const }
+    : { fullName, mode: "clone" as const, basePath };
 }
 
 async function browseForCloneBase(): Promise<void> {
   if (browsing) return;
   browsing = true;
   try {
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const selected = await open({ directory: true });
-    if (typeof selected === "string") onCloneBasePathChange?.(selected);
-  } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to open folder picker");
+    await cloneBase.browse();
   } finally {
     browsing = false;
   }
@@ -270,11 +169,8 @@ function prCountFor(
 	loop
 	class="add-repo flex h-auto min-h-0 flex-1 flex-col overflow-visible bg-transparent"
 >
-	{#if showTitle}
-		<RepoDialogHeader title="Add Repository" meta={trackedCount > 0 ? `${trackedCount} tracked` : undefined} />
-	{/if}
+	<RepoDialogHeader title="Add Repository" meta={trackedCount > 0 ? `${trackedCount} tracked` : undefined} />
 
-	<!-- Search (pinned). cmdk owns keyboard nav + selection. -->
 	<div class="search-shell">
 		<Command.Input
 			bind:ref={searchEl}
@@ -295,36 +191,33 @@ function prCountFor(
 		</Button>
 	</div>
 
-	{#if showLocation}
-		<div class="location-row">
-			<RepoField
-				placeholder={getDefaultCloneBaseDir() ?? 'Default clone location'}
-				aria-label="Clone location"
-				value={cloneBasePath}
-				oninput={(e) => onCloneBasePathChange?.(e.currentTarget.value)}
-				autocomplete="off"
-				spellcheck="false"
-			>
-				{#snippet icon()}<Folder size={13} />{/snippet}
-			</RepoField>
-			<Button
-				variant="outline"
-				size="sm"
-				class="h-8 rounded-[var(--radius-card)]"
-				onclick={() => void browseForCloneBase()}
-				disabled={browsing}
-				title="Browse for folder"
-			>
-				<Folder size={13} />
-				<span>Browse</span>
-			</Button>
+	<div class="location-row">
+		<RepoField
+			placeholder={cloneBase.defaultPath ?? 'Default clone location'}
+			aria-label="Clone location"
+			bind:value={cloneBase.path}
+			autocomplete="off"
+			spellcheck="false"
+		>
+			{#snippet icon()}<Folder size={13} />{/snippet}
+		</RepoField>
+		<Button
+			variant="outline"
+			size="sm"
+			class="h-8 rounded-[var(--radius-card)]"
+			onclick={() => void browseForCloneBase()}
+			disabled={browsing}
+			title="Browse for folder"
+		>
+			<Folder size={13} />
+			<span>Browse</span>
+		</Button>
+	</div>
+	{#if resolvedClonePath}
+		<div class="resolved-path">
+			<ArrowRight size={11} />
+			<span>{resolvedClonePath}</span>
 		</div>
-		{#if resolvedClonePath}
-			<div class="resolved-path">
-				<ArrowRight size={11} />
-				<span>{resolvedClonePath}</span>
-			</div>
-		{/if}
 	{/if}
 
 	<Command.List class="add-repo-list">
@@ -342,7 +235,7 @@ function prCountFor(
 			<Command.Empty forceMount>
 				<div class="state-block">
 					<span>Couldn't load your repositories. Your GitHub session may have expired.</span>
-					<Button variant="outline" size="sm" onclick={retryFetch}>
+					<Button variant="outline" size="sm" onclick={catalog.retry}>
 						<ArrowsClockwise size={13} />
 						<span>Retry</span>
 					</Button>
@@ -352,7 +245,7 @@ function prCountFor(
 			<Command.Empty forceMount>
 				<div class="state-block">
 					<span>No repositories available yet.</span>
-					<Button variant="outline" size="sm" onclick={retryFetch}>
+					<Button variant="outline" size="sm" onclick={catalog.retry}>
 						<ArrowsClockwise size={13} />
 						<span>Refresh</span>
 					</Button>
@@ -415,11 +308,11 @@ function prCountFor(
 						<span class="org-heading-name">{owner}</span>
 					{/snippet}
 					{#each repos as repo (repo.fullName)}
-						{@const trackedRepo = trackedByFullName.get(repo.fullName)}
-						{@const isTracked = trackedRepo !== undefined}
+						{@const tracked = trackedRepo(repo.fullName)}
+						{@const isTracked = tracked !== undefined}
 						{@const isAdding = addingRepos.has(repo.fullName)}
-						{@const isRemoving = trackedRepo ? removingRepos.has(trackedRepo.id) : false}
-						{@const prCount = prCountFor(repo, trackedRepo)}
+						{@const isRemoving = tracked ? removal.isRemoving(tracked.id) : false}
+						{@const prCount = prCountFor(repo, tracked)}
 						<Command.Item
 							value={repo.fullName}
 							keywords={[repo.name, repo.owner]}
@@ -440,15 +333,15 @@ function prCountFor(
 							<div class="repo-meta">
 								{#if isAdding}
 									<Spinner size={13} class="motion-essential-spin text-accent" />
-								{:else if isTracked && trackedRepo.cloneStatus !== 'ready'}
+								{:else if isTracked && tracked.cloneStatus !== 'ready'}
 									<CloneStatusIndicator
-										status={trackedRepo.cloneStatus}
-										error={trackedRepo.cloneError}
-										onRetry={() => retryClone(trackedRepo.id)}
+										status={tracked.cloneStatus}
+										error={tracked.cloneError}
+										onRetry={() => retryClone(tracked.id)}
 										size={13}
 										showLabel
 									/>
-								{:else if isTracked && !trackedRepo.managed}
+								{:else if isTracked && !tracked.managed}
 									<Badge variant="secondary" class="meta-badge meta-badge--linked" title="Linked clone">
 										<LinkSimple size={10} />
 										Linked
@@ -468,7 +361,7 @@ function prCountFor(
 										class="remove-btn"
 										onclick={(e) => {
 											e.stopPropagation();
-											repoPendingDelete = trackedRepo;
+											removal.request(tracked);
 										}}
 										disabled={isRemoving}
 										aria-label="Remove {repo.fullName}"
@@ -497,28 +390,19 @@ function prCountFor(
 </Command.Root>
 
 <RepoDeleteConfirm
-	repo={repoPendingDelete}
-	open={repoPendingDelete !== null}
-	deleting={repoPendingDelete ? removingRepos.has(repoPendingDelete.id) : false}
-	onOpenChange={(nextOpen) => {
-		if (!nextOpen && (!repoPendingDelete || !removingRepos.has(repoPendingDelete.id))) {
-			repoPendingDelete = null;
-		}
-	}}
-	onConfirm={() => {
-		if (repoPendingDelete) void handleRemove(repoPendingDelete.id);
-	}}
+	repo={removal.pending}
+	open={removal.pending !== null}
+	deleting={removal.deleting}
+	onOpenChange={removal.onOpenChange}
+	onConfirm={() => void removal.confirm()}
 />
 
 <style>
-	/* ── Search (cmdk input restyled as a pill field) ───── */
 	.search-shell {
 		position: relative;
 		flex-shrink: 0;
 	}
 
-	/* Restyle the shadcn command-input wrapper into the warm-paper pill the
-	   rest of the add-repo surface uses, and clear its default bottom rule. */
 	.search-shell :global([data-slot="command-input-wrapper"]) {
 		height: 32px;
 		gap: 7px;
@@ -565,7 +449,6 @@ function prCountFor(
 		color: var(--color-text-muted);
 	}
 
-	/* ── Location row ───────────────────────────────────── */
 	.location-row {
 		display: flex;
 		gap: 6px;
@@ -594,13 +477,9 @@ function prCountFor(
 		white-space: nowrap;
 	}
 
-	/* ── List (the only scroll region) ──────────────────────
-	   cmdk- and component-prop classes (.add-repo, .add-repo-list,
-	   [data-command-*], .repo-item, .repo-avatar, .meta-badge) live on
-	   elements that don't carry this component's scope hash (they're set via
-	   child-component `class` props or generated by bits-ui), so these
-	   selectors are fully `:global(...)`, mirroring CommandPalette. Own-DOM
-	   layout classes below stay scoped. */
+	/* These elements don't carry this component's scope hash (set through
+	   child-component `class` props or generated by bits-ui), so their
+	   selectors are `:global`. */
 	:global(.add-repo .add-repo-list) {
 		flex: 1;
 		min-height: 0;
@@ -625,7 +504,6 @@ function prCountFor(
 		background-clip: padding-box;
 	}
 
-	/* ── Group + heading ────────────────────────────────── */
 	:global(.add-repo [data-command-group]) {
 		padding: 0;
 	}
@@ -661,7 +539,6 @@ function prCountFor(
 		white-space: nowrap;
 	}
 
-	/* ── Rows (cmdk items) ──────────────────────────────── */
 	:global(.add-repo [data-command-item]) {
 		display: flex;
 		align-items: center;
@@ -713,7 +590,6 @@ function prCountFor(
 		flex-shrink: 0;
 	}
 
-	/* ── Manual-import row ──────────────────────────────── */
 	:global(.add-repo .import-item) {
 		align-items: flex-start;
 		gap: 8px;
@@ -752,7 +628,6 @@ function prCountFor(
 		line-height: 1.4;
 	}
 
-	/* ── Right-side metadata ────────────────────────────── */
 	:global(.add-repo .meta-badge) {
 		height: 18px;
 		padding: 0 7px;
@@ -818,7 +693,6 @@ function prCountFor(
 		opacity: 0.5;
 	}
 
-	/* ── State blocks (empty / error / no-match) ────────── */
 	.state-block {
 		display: flex;
 		flex-direction: column;
@@ -855,7 +729,6 @@ function prCountFor(
 		color: var(--color-text-secondary);
 	}
 
-	/* ── Skeleton loading ───────────────────────────────── */
 	.skeleton-list {
 		display: flex;
 		flex-direction: column;
@@ -893,7 +766,6 @@ function prCountFor(
 		border: 0;
 	}
 
-	/* ── Footer ─────────────────────────────────────────── */
 	.footer {
 		display: flex;
 		align-items: center;

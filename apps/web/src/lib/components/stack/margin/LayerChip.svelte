@@ -1,11 +1,11 @@
 <script lang="ts">
 import type { StackLayer } from "@revv/shared";
 import { gsapHover } from "$lib/motion";
+import { openStackLayer } from "$lib/stacks/open-layer";
+import { plainTitle, type StackPlace } from "$lib/stacks/stack-margin";
 import { setHoveredLayer } from "$lib/stores/stack-hover.svelte";
-import { openLayer } from "$lib/stores/stack-nav.svelte";
 import StackLayerGlyph from "../StackLayerGlyph.svelte";
 import LayerPeek from "./LayerPeek.svelte";
-import { plainTitle, type StackPlace } from "./stack-margin";
 
 interface Props {
   layer: StackLayer;
@@ -33,7 +33,9 @@ const label = $derived(
 function show(event: Event): void {
   setHoveredLayer(layer.number);
   const chip = event.currentTarget as HTMLElement;
-  const host = chip.closest<HTMLElement>("[data-margin-note]");
+  // A chip in a margin note peeks against the note; one in walkthrough prose
+  // against the span it was minted into.
+  const host = chip.closest<HTMLElement>("[data-margin-note]") ?? chip.parentElement;
   if (!host) return;
   const c = chip.getBoundingClientRect();
   const h = host.getBoundingClientRect();
@@ -74,7 +76,7 @@ function hide(): void {
 	onblur={hide}
 	onclick={() => {
 		hide();
-		openLayer(layer);
+		if (!here) openStackLayer(place.prId, layer);
 	}}
 >
 	<StackLayerGlyph status={layer.status} size={11} />

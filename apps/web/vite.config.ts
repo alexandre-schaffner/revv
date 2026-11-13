@@ -4,11 +4,9 @@ import tailwindcss from "@tailwindcss/vite";
 import { sveltePhosphorOptimize } from "phosphor-svelte/vite";
 import { defineConfig, type Plugin } from "vite";
 
-// Short commit hash snapshotted at build time. We display this in
-// Settings → Updates → "Current version" instead of the semver from
-// tauri.conf.json so every build is individually identifiable during the
-// alpha. Falls back to 'unknown' when git isn't available (shallow clone,
-// CI without fetch-depth, source tarballs, …).
+// Settings → Updates → "Current version" shows this instead of the semver from
+// tauri.conf.json, so every build is individually identifiable during the
+// alpha.
 const commitHash =
   process.env.REVV_BUILD_SHA?.slice(0, 7) ||
   (() => {
@@ -31,12 +29,7 @@ const PR_LENS_CRYPTO_STUB = "\0pr-lens-node-crypto-stub";
 // from that one package, to a stub that throws only if it is ever really called.
 //
 // Delete this once the renderer stops re-exporting its manifest module from the
-// browser entry — which is the one way this plugin could rot quietly, since a
-// stub nobody imports costs nothing and says nothing. `buildEnd` warns when the
-// browser build completes without the redirect ever firing, so "you can delete
-// me now" is a message rather than something you have to go looking for.
-// (The other failure — the importer-path match going stale on a rename — is
-// already loud: the build stops on `"createHash" is not exported`.)
+// browser entry; `buildEnd` warns when a browser build never hits the redirect.
 const prLensNodeCryptoStub = (): Plugin => {
   let redirected = false;
   let isBuild = false;
@@ -89,9 +82,8 @@ export default defineConfig({
     format: "es",
   },
   build: {
-    // shiki grammars + highlighter bring a few chunks past the default 500 kB
-    // threshold; they're already lazy-loaded per language. Bump the warning
-    // limit rather than emit noise on every build.
+    // Shiki's grammars push a few chunks past the default 500 kB; they're
+    // already lazy-loaded per language.
     chunkSizeWarningLimit: 1024,
   },
 });

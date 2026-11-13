@@ -29,11 +29,7 @@ export async function openExternal(url: string): Promise<void> {
   }
 }
 
-/**
- * Click handler for a container of rendered markdown: links leave through
- * {@link openExternal} and never navigate the webview. In-page anchors
- * (`#…`) keep their default.
- */
+/** Click handler for a container of rendered markdown. */
 export function interceptExternalLinks(event: MouseEvent): void {
   if (!(event.target instanceof Element)) return;
   const anchor = event.target.closest("a[href]");

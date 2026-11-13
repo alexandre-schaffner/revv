@@ -32,18 +32,11 @@ export const walkthroughSemanticSteps = sqliteTable(
     semanticStepIndex: integer("semantic_step_index").notNull(),
     /** Short title — the chapter name shown in the UI. */
     title: text("title").notNull(),
-    /**
-     * Optional 1–2 sentence prelude rendered under the chapter title. Nullable
-     * — many sections need no preface beyond their title and inner blocks.
-     */
+    /** Optional 1–2 sentence prelude rendered under the chapter title. */
     summary: text("summary"),
     createdAt: text("created_at").notNull(),
   },
   (t) => ({
-    /**
-     * One row per (walkthroughId, semanticStepIndex). `add_semantic_step` upserts
-     * on this target so a retry of the same call after a crash replays as a no-op.
-     */
     semanticStepUnique: uniqueIndex("walkthrough_semantic_steps_unique").on(
       t.walkthroughId,
       t.semanticStepIndex,

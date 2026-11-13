@@ -1,5 +1,3 @@
-// ── Conversation ────────────────────────────────────────────────────────────
-//
 // The Conversation tab's data: the PR's GitHub conversation (description,
 // reviewers, assignees, labels, timeline) and the head commit's CI checks.
 // GitHub is the source of truth, so this store only ever mirrors it:
@@ -8,10 +6,11 @@
 //   first, then a fresh fetch replaces it. A conversation never replaces a
 //   newer one (`fetchedAt`), and a load that raced a write is dropped.
 // - Writes are optimistic. The local copy changes at once (a patch from
-//   `conversation-patches.ts`), the server applies the write on GitHub and
+//   `lib/conversation/patches.ts`), the server applies the write on GitHub and
 //   answers the re-read conversation, which replaces the optimistic copy; a
 //   failure undoes the rows the patch touched, nothing else.
-// - The tab polls pending CI while it's on screen (see `watchChecks`).
+// - While the tab is on screen (`watchConversation`), pending CI is polled and
+//   a return to the window re-reads the conversation.
 
 import type {
   ActorOption,
@@ -20,15 +19,14 @@ import type {
   ConversationWrite,
   ConversationWriteResult,
   PrConversation,
-  PrConversationResponse,
   PrLabel,
   ReviewerOptions,
 } from "@revv/shared";
-import { hydrateConversationAvatars } from "@revv/shared";
+import { ciHasPending, hydrateConversationAvatars } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
-import { plain, thrownMessage } from "$lib/api/wire";
+import { apiErrorCode, call } from "$lib/api/errors";
+import { thrownMessage } from "$lib/api/wire";
 import {
   addAssigneesPatch,
   addLabelsPatch,
@@ -42,8 +40,9 @@ import {
   removeLabelsPatch,
   removeReviewersPatch,
   requestReviewersPatch,
-} from "$lib/utils/conversation-patches";
+} from "$lib/conversation/patches";
 import { RequestState } from "./_types";
+import { type Answer, createResource } from "./resource";
 
 /**
  * Affordances GitHub refused with a 403 this session. A GitHub App install
@@ -79,8 +78,10 @@ const FRESH_FOR_MS = 30_000;
 
 let entries = $state(new Map<string, ConversationEntry>());
 
-/** In-flight loads per PR; plain Map, nothing renders it. */
-const inflight = new Map<string, Promise<void>>();
+const reads = createResource<void, true>({
+  fetch: (prId) => fetchConversation(prId),
+  freshForMs: FRESH_FOR_MS,
+});
 
 /**
  * Bumped when a write starts and when it lands. A load that began under an
@@ -91,6 +92,7 @@ const writeGeneration = new Map<string, number>();
 function setEntry(prId: string, entry: ConversationEntry): void {
   entries.set(prId, entry);
   entries = new Map(entries);
+  if (prId === watched) syncChecksPoll();
 }
 
 function updateEntry(prId: string, updater: (entry: ConversationEntry) => ConversationEntry): void {
@@ -101,13 +103,31 @@ export function getConversation(prId: string): ConversationEntry {
   return entries.get(prId) ?? EMPTY;
 }
 
-/** The loaded conversation, or null while it isn't. */
+export interface ConversationAbilities {
+  /** Edit the description, reviewers, assignees and labels. */
+  readonly canEdit: boolean;
+  /** Post, edit and delete comments. */
+  readonly canComment: boolean;
+  /** Re-run Actions jobs. */
+  readonly canRerun: boolean;
+}
+
+/** What the viewer may change, by GitHub's say and by what it refused this session. */
+export function getAbilities(prId: string): ConversationAbilities {
+  const entry = getConversation(prId);
+  const conversation = entry.request.status === "ok" ? entry.request.data : null;
+  return {
+    canEdit: !!conversation?.viewerCanUpdate && !entry.denied.has("edit"),
+    canComment: !entry.denied.has("edit"),
+    canRerun: !!conversation?.viewerCanPush && !entry.denied.has("rerun"),
+  };
+}
+
 function dataOf(prId: string): PrConversation | null {
   const request = getConversation(prId).request;
   return request.status === "ok" ? request.data : null;
 }
 
-/** Rewrite the loaded conversation in place; a no-op while there's none. */
 function updateData(prId: string, updater: (conversation: PrConversation) => PrConversation): void {
   updateEntry(prId, (entry) =>
     entry.request.status === "ok"
@@ -129,93 +149,78 @@ function accept(prId: string, conversation: PrConversation, stale: boolean): voi
   });
 }
 
-/** A conversation off the wire, ready to render. */
-function received(value: unknown): PrConversation {
-  return hydrateConversationAvatars(plain(value) as PrConversation);
+/** A failed GitHub request, worded for this tab. */
+function describeFailure(e: unknown): string {
+  if (apiErrorCode(e) === "GITHUB_RATE_LIMITED") {
+    return "GitHub's rate limit is exhausted. Try again shortly.";
+  }
+  return thrownMessage(e);
 }
-
-function describeFailure(error: { status: number; value?: unknown }): string {
-  if (error.status === 429) return "GitHub's rate limit is exhausted. Try again shortly.";
-  // A 502 is any upstream failure GitHub answered badly, not only an outage;
-  // the server's own wording says which.
-  return apiErrorMessage(
-    error,
-    error.status === 502 ? "GitHub couldn't be reached" : "Request failed",
-  );
-}
-
-// ── Reads ───────────────────────────────────────────────────────────────────
 
 /**
- * Load the conversation. With data younger than {@link FRESH_FOR_MS} it does
- * nothing unless `force`; concurrent calls share one fetch.
+ * Load the conversation. A fresh read of GitHub younger than
+ * {@link FRESH_FOR_MS} is enough unless `force`; concurrent calls share one fetch.
  */
-export function loadConversation(prId: string, opts: { force?: boolean } = {}): Promise<void> {
-  const current = dataOf(prId);
-  if (
-    !opts.force &&
-    current &&
-    !getConversation(prId).stale &&
-    Date.now() - Date.parse(current.fetchedAt) < FRESH_FOR_MS
-  ) {
-    return Promise.resolve();
-  }
-  const running = inflight.get(prId);
-  if (running) return running;
-  const run = fetchConversation(prId).finally(() => inflight.delete(prId));
-  inflight.set(prId, run);
-  return run;
+export async function loadConversation(
+  prId: string,
+  opts: { force?: boolean } = {},
+): Promise<void> {
+  await (opts.force ? reads.refresh(prId) : reads.load(prId));
 }
 
 /** The server's cached snapshot, which costs GitHub nothing. */
 async function loadSnapshot(prId: string): Promise<void> {
   try {
-    const { data } = await api.api.prs({ id: prId }).conversation.cached.get();
-    if (data && "conversation" in data && data.conversation) {
-      accept(prId, received(data.conversation), getConversation(prId).stale);
+    const { conversation } = await call(
+      api.api.prs({ id: prId }).conversation.cached.get(),
+      "Snapshot failed",
+    );
+    if (conversation) {
+      accept(prId, hydrateConversationAvatars(conversation), getConversation(prId).stale);
     }
   } catch {
     // Whoever asked has something better to fall back on.
   }
 }
 
-async function fetchConversation(prId: string): Promise<void> {
+/** Ok once GitHub's own answer is on screen; an error keeps the next load asking. */
+async function fetchConversation(prId: string): Promise<Answer<true>> {
   const generation = writeGeneration.get(prId) ?? 0;
   if (dataOf(prId) === null) {
     updateEntry(prId, (entry) => ({ ...entry, request: RequestState.loading() }));
-    // First paint from the server's snapshot while GitHub answers.
     await loadSnapshot(prId);
   }
 
-  const failed = (message: string) =>
+  const failed = (message: string): Answer<true> => {
     updateEntry(prId, (entry) => ({
       ...entry,
       // Keep showing what we have; only an empty tab shows the error.
       request: entry.request.status === "ok" ? entry.request : RequestState.error(message),
       stale: entry.request.status === "ok",
     }));
+    return { status: "error", error: message };
+  };
 
   try {
-    const { data, error } = await api.api.prs({ id: prId }).conversation.get();
-    if (error || !data || !("conversation" in data)) {
-      failed(error ? describeFailure(error) : "Unexpected response");
-      return;
-    }
+    const data = await call(api.api.prs({ id: prId }).conversation.get(), "Request failed");
     // A write began meanwhile; this answer may predate it.
-    if ((writeGeneration.get(prId) ?? 0) !== generation && dataOf(prId) !== null) return;
-    const response = plain(data) as PrConversationResponse;
-    accept(prId, hydrateConversationAvatars(response.conversation), response.stale);
+    if ((writeGeneration.get(prId) ?? 0) !== generation && dataOf(prId) !== null) {
+      return { status: "ok", data: true };
+    }
+    accept(prId, hydrateConversationAvatars(data.conversation), data.stale);
+    return data.stale
+      ? { status: "error", error: "GitHub couldn't be reached" }
+      : { status: "ok", data: true };
   } catch (e) {
-    failed(thrownMessage(e));
+    return failed(describeFailure(e));
   }
 }
 
 /** Re-read only the CI rollup; cheap enough to poll. Null when the ask failed. */
 async function refreshChecks(prId: string): Promise<{ rollup: CiRollup | null } | null> {
   try {
-    const { data, error } = await api.api.prs({ id: prId }).checks.get();
-    if (error || !data || !("rollup" in data)) return null;
-    const rollup = plain(data.rollup) as CiRollup | null;
+    const data = await call(api.api.prs({ id: prId }).checks.get(), "Checks failed");
+    const rollup = data.rollup;
     const ciAccess = data.access;
     updateData(prId, (c) => ({ ...c, ci: rollup, ciAccess }));
     refreshSettledDetails(prId, rollup);
@@ -225,7 +230,6 @@ async function refreshChecks(prId: string): Promise<{ rollup: CiRollup | null } 
   }
 }
 
-/** True once a check's output can't change any more. */
 function isFinal(details: RequestState<CheckDetails> | undefined): boolean {
   return details?.status === "ok" && details.data.completed;
 }
@@ -241,14 +245,13 @@ export async function loadCheckDetails(prId: string, checkRunId: number): Promis
     });
   put(RequestState.loading());
   try {
-    const { data, error } = await api.api.prs({ id: prId }).checks({ checkRunId }).get();
-    if (error || !data || !("checkRunId" in data)) {
-      put(RequestState.error(error ? describeFailure(error) : "Unexpected response"));
-      return;
-    }
-    put(RequestState.ok(plain(data) as CheckDetails));
+    put(
+      RequestState.ok(
+        await call(api.api.prs({ id: prId }).checks({ checkRunId }).get(), "Request failed"),
+      ),
+    );
   } catch (e) {
-    put(RequestState.error(thrownMessage(e)));
+    put(RequestState.error(describeFailure(e)));
   }
 }
 
@@ -265,27 +268,23 @@ function refreshSettledDetails(prId: string, rollup: CiRollup | null): void {
   }
 }
 
-// ── Pickers ─────────────────────────────────────────────────────────────────
-
 export async function loadReviewerOptions(prId: string, q: string): Promise<ReviewerOptions> {
-  const { data, error } = await api.api.prs({ id: prId })["reviewer-options"].get({ query: { q } });
-  if (error || !data || !("users" in data)) throw new Error("Reviewer options failed");
-  return data;
+  return call(
+    api.api.prs({ id: prId })["reviewer-options"].get({ query: { q } }),
+    "Reviewer options failed",
+  );
 }
 
 export async function loadAssigneeOptions(prId: string, q: string): Promise<ActorOption[]> {
-  const { data, error } = await api.api.prs({ id: prId })["assignee-options"].get({ query: { q } });
-  if (error || !Array.isArray(data)) throw new Error("Assignee options failed");
-  return data;
+  return call(
+    api.api.prs({ id: prId })["assignee-options"].get({ query: { q } }),
+    "Assignee options failed",
+  );
 }
 
 export async function loadLabelOptions(prId: string): Promise<PrLabel[]> {
-  const { data, error } = await api.api.prs({ id: prId })["label-options"].get();
-  if (error || !Array.isArray(data)) throw new Error("Label options failed");
-  return data;
+  return call(api.api.prs({ id: prId })["label-options"].get(), "Label options failed");
 }
-
-// ── CI polling ──────────────────────────────────────────────────────────────
 
 const POLL_FIRST_MS = 20_000;
 /** GitHub registers a re-run within seconds; the first look comes sooner. */
@@ -294,26 +293,41 @@ const POLL_MAX_MS = 60_000;
 /** Polls with nothing pending before a re-run is taken to have been a no-op. */
 const RERUN_GRACE_POLLS = 3;
 
+let watched: string | null = null;
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let pollPrId: string | null = null;
 
-export function hasPendingChecks(rollup: CiRollup | null | undefined): boolean {
-  return (
-    rollup?.state === "pending" ||
-    rollup?.state === "expected" ||
-    (rollup?.checks.some((c) => c.bucket === "pending") ?? false)
-  );
+/**
+ * The conversation tab is on screen for `prId`: load it, and keep its CI
+ * current while something is pending (or a re-run hasn't shown up yet).
+ * Returns the stop function for the tab's `$effect` teardown.
+ */
+export function watchConversation(prId: string): () => void {
+  watched = prId;
+  void loadConversation(prId);
+  syncChecksPoll();
+  return () => {
+    if (watched !== prId) return;
+    watched = null;
+    stopChecksPoll();
+  };
 }
 
-/**
- * Poll the PR's CI, backing off from 20s to 60s, pausing while the window is
- * hidden, and stopping once nothing is pending (or a re-run's grace polls
- * ran out). A failed poll backs off and tries again. One PR at a time:
- * watching another stops the first. The tab owns when to watch; this
- * returns the stop function for its `$effect` teardown.
- */
-export function watchChecks(prId: string): () => void {
-  stopWatchingChecks();
+/** Back in the window: what's on screen may have moved on GitHub meanwhile. */
+export function onWindowForeground(): void {
+  if (watched) void loadConversation(watched);
+}
+
+function syncChecksPoll(): void {
+  const prId = watched;
+  if (prId === null || pollPrId === prId) return;
+  const entry = getConversation(prId);
+  if (!ciHasPending(dataOf(prId)?.ci) && !entry.awaitingRerun) return;
+  pollChecks(prId);
+}
+
+function pollChecks(prId: string): void {
+  stopChecksPoll();
   pollPrId = prId;
   let delay = getConversation(prId).awaitingRerun ? POLL_AFTER_RERUN_MS : POLL_FIRST_MS;
   let graceLeft = RERUN_GRACE_POLLS;
@@ -321,6 +335,10 @@ export function watchChecks(prId: string): () => void {
   const schedule = () => {
     pollTimer = setTimeout(() => void tick(), delay);
     delay = Math.min(delay * 1.5, POLL_MAX_MS);
+  };
+  const settle = () => {
+    pollTimer = null;
+    pollPrId = null;
   };
   const tick = async () => {
     pollTimer = null;
@@ -337,7 +355,7 @@ export function watchChecks(prId: string): () => void {
       return;
     }
     const awaiting = getConversation(prId).awaitingRerun;
-    if (hasPendingChecks(answer.rollup)) {
+    if (ciHasPending(answer.rollup)) {
       if (awaiting) updateEntry(prId, (entry) => ({ ...entry, awaitingRerun: false }));
       schedule();
       return;
@@ -346,22 +364,20 @@ export function watchChecks(prId: string): () => void {
       schedule();
       return;
     }
+    settle();
     if (awaiting) updateEntry(prId, (entry) => ({ ...entry, awaitingRerun: false }));
     // Settled: the timeline's per-commit CI glyphs are now out of date too.
     if (answer.rollup?.state !== before) void loadConversation(prId, { force: true });
   };
 
   schedule();
-  return stopWatchingChecks;
 }
 
-function stopWatchingChecks(): void {
+function stopChecksPoll(): void {
   if (pollTimer !== null) clearTimeout(pollTimer);
   pollTimer = null;
   pollPrId = null;
 }
-
-// ── Writes ──────────────────────────────────────────────────────────────────
 
 function capabilityOf(write: ConversationWrite): DeniedCapability {
   return write.kind === "rerun_failed" || write.kind === "rerun_job" ? "rerun" : "edit";
@@ -377,7 +393,7 @@ function bumpGeneration(prId: string): void {
  */
 export function acceptWriteResult(prId: string, result: ConversationWriteResult): void {
   bumpGeneration(prId);
-  if (result.conversation) accept(prId, received(result.conversation), false);
+  if (result.conversation) accept(prId, hydrateConversationAvatars(result.conversation), false);
   else void loadConversation(prId, { force: true });
 }
 
@@ -411,22 +427,18 @@ async function applyWrite(
 
   let result: ConversationWriteResult;
   try {
-    const { data, error } = await api.api.prs({ id: prId }).conversation.writes.post(write);
-    if (error || !data || !("conversation" in data)) {
-      // Eden types only the statuses the route declares; handleAppError
-      // answers GitHub's refusal with a 403 the schema doesn't list.
-      const status: number | undefined = error?.status;
-      if (status === 403) {
-        return fail(
-          "GitHub refused this change for your account. Open the PR on GitHub to make it.",
-          true,
-        );
-      }
-      return fail(error ? describeFailure(error) : "GitHub didn't accept the change.", false);
-    }
-    result = data;
+    result = await call(
+      api.api.prs({ id: prId }).conversation.writes.post(write),
+      "GitHub didn't accept the change",
+    );
   } catch (e) {
-    return fail(e instanceof Error ? e.message : "GitHub couldn't be reached.", false);
+    if (apiErrorCode(e) === "FORBIDDEN") {
+      return fail(
+        "GitHub refused this change for your account. Open the PR on GitHub to make it.",
+        true,
+      );
+    }
+    return fail(describeFailure(e), false);
   }
 
   acceptWriteResult(prId, result);
@@ -524,8 +536,6 @@ export async function rerunJob(prId: string, jobId: number): Promise<void> {
   await applyWrite(prId, { kind: "rerun_job", jobId });
 }
 
-// ── SSE ─────────────────────────────────────────────────────────────────────
-
 export function onPrConversationUpdated(data: { prId: string; fetchedAt: string | null }): void {
   if (!entries.has(data.prId)) return;
   if (data.fetchedAt === null) {
@@ -536,4 +546,17 @@ export function onPrConversationUpdated(data: { prId: string; fetchedAt: string 
   const current = dataOf(data.prId);
   if (current && current.fetchedAt >= data.fetchedAt) return;
   void loadSnapshot(data.prId);
+}
+
+/** A `pr:conversation-updated` sent while the stream was down reached no one. */
+export function onEventsReconnected(): void {
+  for (const prId of entries.keys()) void loadSnapshot(prId);
+}
+
+export function reset(): void {
+  watched = null;
+  stopChecksPoll();
+  reads.reset();
+  writeGeneration.clear();
+  entries = new Map();
 }

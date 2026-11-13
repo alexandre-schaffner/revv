@@ -1,9 +1,10 @@
 <script lang="ts">
 import type { Attachment } from "svelte/attachments";
+import { drawEngraving } from "$lib/components/repo/engraving/engraving";
+import type { EngravingOptions, Inks } from "$lib/components/repo/engraving/props";
 import { gsap, turnLook } from "$lib/motion";
-import { drawEngraving, type EngravingInk, type EngravingOptions } from "$lib/utils/engraving";
 
-interface Props extends EngravingInk {
+interface Props extends Inks {
   seed: string;
   time: "day" | "night";
   textWidth: number | null;

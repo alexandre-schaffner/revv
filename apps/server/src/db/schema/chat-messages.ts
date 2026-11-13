@@ -5,11 +5,6 @@ import { chatSessions } from "./chat-sessions";
  * Right-pane chat transcript — one row per user message, one row per
  * contiguous run of assistant prose.
  *
- * Persists what used to live only in Svelte runes + the agent's own session
- * storage (Claude SDK JSONL, opencode daemon). With this table the transcript
- * survives desktop reloads, daemon restarts, agent-side session-storage churn,
- * and (when paired with B3 from the gap-analysis roadmap) reconnect-mid-stream.
- *
  * Lifecycle:
  *   - User message: inserted at turn start with role='user', is_streaming=0,
  *                   content=<the user's text>, finalized_at=created_at.
@@ -19,17 +14,15 @@ import { chatSessions } from "./chat-sessions";
  *                   On finalize: is_streaming=0, finalized_at set. On error:
  *                   `error` populated with the inline-error chip text.
  *                   A narrate→tool→narrate turn yields two assistant rows
- *                   split by the activity; see `sealAssistantMessage` in
- *                   routes/chat-helpers.ts.
+ *                   split by the activity; see `services/chat/turn-journal.ts`.
  *
  * Sequence is per-session monotonic, allocated against
  * `chat_sessions.next_sequence` so it shares one ordering space with
  * `chat_activities`. This lets the UI interleave activity rows between
  * user and assistant turns without timestamp-jitter ambiguity.
  *
- * `turn_id` groups (user_message, assistant_message, activities) for the same
- * user→agent exchange. Used today only for foreign-key style grouping; will
- * become load-bearing for E1 (turn-level revert / checkpoint diffs).
+ * `turn_id` groups the user message, assistant messages and activities of one
+ * user→agent exchange.
  */
 export const chatMessages = sqliteTable(
   "chat_messages",

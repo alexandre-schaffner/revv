@@ -46,7 +46,7 @@ The SSE channel carries per-job Phase A→D events from MCP tool handlers to the
 
 | Layer | File | Responsibility |
 |---|---|---|
-| Stream primitives | `apps/server/src/routes/reviews/sse.ts` | `createSseStream()`, 15s heartbeat (`: ping`), idempotent `close`, `send` returns `false` on enqueue throw. |
+| Stream primitives | `apps/server/src/routes/sse.ts` | `openSse()` / `pipeToSse()`, 15s heartbeat (`: ping`, or a named `heartbeat` event for `EventSource`), idempotent `close`, `send` returns `false` on enqueue throw. |
 | Route handler | `apps/server/src/routes/reviews/handlers/walkthrough-stream.ts` | Subscribe → DB snapshot replay → flush buffer → live forward. Replay dedup. |
 | Client transport | `apps/web/src/lib/services/walkthrough-sse.ts` + `apps/web/src/lib/stores/walkthrough-stream.svelte.ts` | Fetch + body reader + parser, inactivity (90s) and exploration-stall (3min) guards, abort controller, reconciliation poll on unexpected end. |
 
@@ -57,7 +57,7 @@ Event envelope shape is defined in `packages/shared/src/walkthrough.ts` as the `
 | Invariant | Evidence |
 |---|---|
 | #1 / #8 — DB authoritative, commit-first | SSE handler does DB snapshot replay before live forward; cache hydration always reads DB. (`walkthrough-stream.ts` `subscribe → snapshot → flush → live`.) |
-| #7 — Chat-edit carve-out | Post-completion edits go through the `walkthrough:event` SSE envelope (`lifecycle:edited`) on the global bus only. Verified at `apps/server/src/routes/mcp/chat-context.ts` `emit()`. |
+| #7 — Chat-edit carve-out | Post-completion edits go through the `walkthrough:event` SSE envelope (`lifecycle:edited`) on the global bus only. Verified at `apps/server/src/services/walkthrough/edits.ts` `publishWalkthroughEdit`. |
 | Reconcile on reconnect | Client's `scheduleReconciliationPoll` calls `hydrateFromCache(prId)` on unexpected stream end with exponential backoff. (`walkthrough-stream.svelte.ts:216–252`.) |
 | Per-job worktree teardown | Worktree registered as scope finalizer in `WalkthroughJobs`; cleanup runs on every exit path including `kill -9`-style fiber interruption. |
 | Strong typing | `WalkthroughStreamEvent` union is shared end-to-end. No `unknown`/`any` widening at the SSE boundary. |
@@ -141,7 +141,7 @@ Event envelope shape is defined in `packages/shared/src/walkthrough.ts` as the `
 |---|---|
 | **Severity** | Low |
 | **Walkthrough impact** | Low |
-| **Location** | `apps/server/src/routes/reviews/sse.ts:86–107` |
+| **Location** | `apps/server/src/routes/sse.ts` (`openSse` `write`) |
 | **Failure mode** | `controller.enqueue()` throws when the stream's internal buffer fills (slow client, network lag). The write helper catches the throw and marks the subscriber cancelled; no retry, no flow control. The job continues, the client reconnects and reconciles — but the failure mode is invisible. |
 | **Remediation** | Optionally track `controller.desiredSize`; surface a single warning log per subscriber when enqueue throws (rather than the silent `false` return). Real backpressure is out of scope for a single-user app. |
 
@@ -204,7 +204,7 @@ The non-walkthrough envelopes are catalogued in [§4 Tangential findings](#4-tan
 | #8 commit-first | `lifecycle:complete` site at `WalkthroughJobs.ts` awaits `setStatus(..., 'complete', ...)` *then* broadcasts, with a 5s timeout-and-swallow on the broadcast. |
 | Reconnect reconciliation | Client `open` handler (on reconnect, `openCount > 1`) calls `reconcileOnReconnect()` → `fetchRepos/fetchPrs/fetchPinnedPrs` + `hydrateFromCache(selectedPrId)` + `loadSession`. Invariant #8 honored. |
 | Strong typing | `ServerEventMessage` union shared end-to-end; client `dispatch(msg: ServerEventMessage)` cases the union with an exhaustive `never` check and no `any` widening. |
-| Auth | Bearer-token-via-`?token=` query param validated against `better-auth` (`Identity`) in the SSE route; missing/invalid token → 401. An unresolvable account opens an observer-only (`"unresolved"`) connection that receives no scoped broadcasts. |
+| Auth | Bearer-token-via-`?token=` query param validated against `GitHubAccounts.sessionUser` in the SSE route; missing/invalid token → 401. One stream per local user carries every account of theirs; each push is addressed to the user owning its account, repository or PR (`Realtime`). |
 
 ### 2.4 Findings
 

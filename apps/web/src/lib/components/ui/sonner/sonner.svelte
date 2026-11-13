@@ -10,13 +10,9 @@ import { getResolvedTheme } from "$lib/stores/theme.svelte";
 let { ...restProps }: SonnerProps = $props();
 
 // Sonner needs a concrete light/dark to stamp `data-theme` on the toaster,
-// which drives every one of its styles the inline `--normal-*` overrides below
-// don't reach. Feed it the *resolved* theme from Revv's own store rather than
-// `"system"`: "system" would make sonner consult prefers-color-scheme directly
-// and render dark toasts whenever the OS is dark, even with the app set to
-// light. (This used to read `mode-watcher`'s store — a second theme library
-// whose ModeWatcher component this app never mounts, so it tracked nothing but
-// the OS.)
+// which drives every style the inline `--normal-*` overrides below don't
+// reach. "system" would make it consult prefers-color-scheme and render dark
+// toasts whenever the OS is dark, even with the app set to light.
 const theme = $derived(getResolvedTheme());
 </script>
 

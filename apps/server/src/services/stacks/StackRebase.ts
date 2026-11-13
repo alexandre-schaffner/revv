@@ -3,25 +3,26 @@
 // exposes no API for its server-side rebase, so Revv runs the same cascade in
 // the repo's clone (`stack-rebase-git.ts`) and pushes the result.
 
-import { join } from "node:path";
 import { isOpenLayer, type StackRebaseResult } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
-import { serverEnv } from "../../config";
 import {
-  DbError,
   type GitHubError,
   NotFoundError,
   StackRejectedError,
   type StackRejection,
 } from "../../domain/errors";
+import { dbTry } from "../../effects/db-try";
 import { logError } from "../../logger";
-import { Broadcaster } from "../Broadcaster";
-import { worktreeHolderPath } from "../clone-policy";
+import { RepoCloneService } from "../clone/RepoClone";
 import { DbService } from "../Db";
-import { GitHubGateway } from "../GitHub";
+import { BranchPushLock } from "../git/branch-push-lock";
+import { gitTry } from "../git/ops";
+import { describeFiles } from "../git/scratch";
+import { GitHubGateway } from "../github/gateway";
+import type { GitHubStack } from "../github/stacks";
 import { type PrContextBasic, PrContextService } from "../PrContext";
-import type { SettingsService } from "../Settings";
-import type { GitHubStack } from "./map";
+import { PrMirror } from "../PrMirror";
+import { prIdsByNumber } from "./reads";
 import { planStackRebase } from "./rebase-plan";
 import { type StackError, StackService } from "./StackService";
 import { liveRunFor } from "./stack-merge-runs";
@@ -39,8 +40,6 @@ export class StackRebaseService extends Context.Service<
      */
     readonly rebase: (
       prId: string,
-      userId: string,
-      accountId: string,
       expectedHeads: Readonly<Record<string, string>>,
     ) => Effect.Effect<StackRebaseResult, StackRebaseError>;
     /**
@@ -51,7 +50,6 @@ export class StackRebaseService extends Context.Service<
     readonly rebaseStack: (
       ctx: PrContextBasic,
       stack: GitHubStack,
-      accountId: string,
       proceed?: Effect.Effect<boolean>,
     ) => Effect.Effect<StackRebaseResult, StackRejectedError | GitHubError>;
   }
@@ -60,53 +58,38 @@ export class StackRebaseService extends Context.Service<
 const rejected = (rejection: StackRejection, message: string) =>
   Effect.fail(new StackRejectedError({ message, rejection }));
 
-function describeFiles(files: readonly string[]): string {
-  const shown = files.slice(0, 3).join(", ");
-  return files.length > 3 ? `${shown} and ${files.length - 3} more` : shown;
-}
-
 export const StackRebaseServiceLive = Layer.effect(
   StackRebaseService,
   Effect.gen(function* () {
-    const context = yield* Effect.context<DbService | SettingsService>();
-    const { db } = Context.get(context, DbService);
+    const { db } = yield* DbService;
     const stacks = yield* StackService;
     const github = yield* GitHubGateway;
     const prContext = yield* PrContextService;
-    const broadcaster = yield* Broadcaster;
+    const pushLock = yield* BranchPushLock;
+    const repoClone = yield* RepoCloneService;
+    const mirror = yield* PrMirror;
 
-    const rebasing = new Set<string>();
-
-    const replayInput = (ctx: PrContextBasic, stack: GitHubStack, steps: ReplayInput["steps"]) =>
-      Effect.gen(function* () {
-        const { repo } = ctx;
-        const [owner, name] = repo.fullName.split("/");
-        if (repo.cloneStatus !== "ready" || !repo.clonePath || !owner || !name) {
-          return yield* rejected(
-            { reason: "invalid" },
-            `Revv's copy of ${repo.fullName} isn't ready yet`,
-          );
-        }
-        const host = repo.githubHost || serverEnv.githubHost;
-        return {
-          clonePath: repo.clonePath,
-          scratchPath: join(worktreeHolderPath(owner, name), `stack-${stack.number}-rebase`),
-          remoteUrl: `https://x-access-token:${ctx.token}@${host}/${repo.fullName}.git`,
-          baseRefName: stack.baseRefName,
-          stackNumber: stack.number,
-          steps,
-        } satisfies ReplayInput;
-      });
+    const replayInput = (ctx: PrContextBasic, stack: GitHubStack, steps: ReplayInput["steps"]) => {
+      const place = repoClone.scratchPlace(ctx.repo, ctx.client.token, (layout) =>
+        layout.scratch.stackRebase(ctx.repo.id, stack.number),
+      );
+      return place
+        ? Effect.succeed({
+            ...place,
+            baseRefName: stack.baseRefName,
+            stackNumber: stack.number,
+            steps,
+          } satisfies ReplayInput)
+        : rejected({ reason: "invalid" }, `Revv's copy of ${ctx.repo.fullName} isn't ready yet`);
+    };
 
     const gitStep = <A>(what: string, run: () => Promise<A>) =>
-      Effect.tryPromise({
-        try: run,
-        catch: (cause) =>
-          new StackRejectedError({
-            message: `${what}: ${cause instanceof Error ? cause.message : String(cause)}`,
-            rejection: { reason: "failed" },
-          }),
-      });
+      gitTry(run, what).pipe(
+        Effect.mapError(
+          (err) =>
+            new StackRejectedError({ message: err.message, rejection: { reason: "failed" } }),
+        ),
+      );
 
     const replayAndPush = (input: ReplayInput, proceed: Effect.Effect<boolean>) =>
       Effect.gen(function* () {
@@ -135,12 +118,13 @@ export const StackRebaseServiceLive = Layer.effect(
         const push = yield* gitStep("Pushing the stack failed", () =>
           pushStack(input.clonePath, input.remoteUrl, moved),
         );
-        if (push.kind !== "pushed") {
+        if (push.kind === "moved") {
           return yield* rejected(
-            { reason: push.kind === "moved" ? "lease-lost" : "failed" },
-            push.message,
+            { reason: "lease-lost" },
+            "A layer got new commits while Revv was rebasing — nothing was pushed, try again",
           );
         }
+        if (push.kind !== "pushed") return yield* rejected({ reason: "failed" }, push.message);
         return moved.map(({ number, from, to }) => ({ number, from, to }));
       }).pipe(
         Effect.ensuring(
@@ -152,9 +136,22 @@ export const StackRebaseServiceLive = Layer.effect(
         ),
       );
 
+    /** GitHub took the retarget: record it before the next poll would. */
+    const recordRetarget = (ctx: PrContextBasic, number: number, targetBranch: string) =>
+      Effect.gen(function* () {
+        const id = (yield* dbTry("retargeted PR lookup", () =>
+          prIdsByNumber(db, ctx.repo.id, [number]),
+        )).get(number);
+        if (id) yield* mirror.recordMutation(id, { kind: "base", targetBranch });
+      }).pipe(
+        Effect.catch((err) =>
+          Effect.sync(() => logError("stack-rebase", `recording #${number}'s new base`, err)),
+        ),
+      );
+
     const checkMembership = (ctx: PrContextBasic, stack: GitHubStack, number: number) =>
       Effect.gen(function* () {
-        const reread = yield* stacks.fetchFresh({ ...ctx, pr: { ...ctx.pr, externalId: number } });
+        const reread = yield* stacks.fetchFresh(ctx, number);
         const contradicted = membershipAfterRetarget(stack, number, reread);
         if (contradicted) logContradiction("stack-rebase", contradicted);
       }).pipe(
@@ -168,73 +165,66 @@ export const StackRebaseServiceLive = Layer.effect(
     const rebaseStack = (
       ctx: PrContextBasic,
       stack: GitHubStack,
-      accountId: string,
       proceed: Effect.Effect<boolean> = Effect.succeed(true),
     ) =>
-      Effect.gen(function* () {
-        const key = `${ctx.repo.id}:${stack.number}`;
-        if (rebasing.has(key)) {
-          return yield* rejected({ reason: "busy" }, "This stack is already being rebased");
-        }
-        rebasing.add(key);
-        return yield* Effect.gen(function* () {
+      Effect.scoped(
+        Effect.gen(function* () {
           const planned = planStackRebase(stack);
           if (!planned.ok) return yield* rejected({ reason: "invalid" }, planned.message);
           const { plan } = planned;
 
+          yield* pushLock
+            .hold(
+              plan.steps.map((step) => ({ repoId: ctx.repo.id, branch: step.headRef })),
+              "stack-rebase",
+            )
+            .pipe(
+              Effect.catchTag("ConcurrentPushError", (busy) =>
+                rejected(
+                  { reason: "busy" },
+                  busy.heldBy === "stack-rebase"
+                    ? "This stack is already being rebased"
+                    : `Another push to ${busy.branch} is already running`,
+                ),
+              ),
+            );
           const input = yield* replayInput(ctx, stack, plan.steps);
           const rebased = yield* replayAndPush(input, proceed);
 
           const retargeted: number[] = [];
           if (plan.retarget !== null) {
             const done = yield* Effect.result(
-              Effect.provide(
-                github.prs.updateBase(
-                  ctx.repo.fullName,
-                  plan.retarget,
-                  stack.baseRefName,
-                  ctx.token,
-                  ctx.apiBase,
-                ),
-                context,
+              github.prs.updateBase(
+                ctx.client,
+                ctx.repo.fullName,
+                plan.retarget,
+                stack.baseRefName,
               ),
             );
             if (done._tag === "Success") {
               retargeted.push(plan.retarget);
+              yield* recordRetarget(ctx, plan.retarget, stack.baseRefName);
               yield* checkMembership(ctx, stack, plan.retarget);
             } else {
               logError("stack-rebase", `retargeting #${plan.retarget} failed`, done.failure);
             }
           }
 
-          if (rebased.length > 0 || retargeted.length > 0) {
-            yield* stacks
-              .markStale(ctx.repo.id, stack.number)
-              .pipe(Effect.catch(() => Effect.void));
-            yield* broadcaster.broadcastToAccount(accountId, {
-              type: "stack:updated",
-              data: { repositoryId: ctx.repo.id, stackNumber: stack.number },
-            });
-          }
+          yield* mirror.recordPushes(
+            ctx,
+            rebased.map(({ number, to }) => ({ prNumber: number, newTip: to })),
+          );
           return { rebased, retargeted } satisfies StackRebaseResult;
-        }).pipe(Effect.ensuring(Effect.sync(() => rebasing.delete(key))));
-      });
+        }),
+      );
 
     const mergeRunning = (repositoryId: string, stackNumber: number) =>
-      Effect.try({
-        try: () => liveRunFor(db, repositoryId, stackNumber) !== undefined,
-        catch: (cause) => new DbError({ message: "stack merge run read failed", cause }),
-      });
+      dbTry("stack merge run read", () => liveRunFor(db, repositoryId, stackNumber) !== undefined);
 
-    const rebase = (
-      prId: string,
-      userId: string,
-      accountId: string,
-      expectedHeads: Readonly<Record<string, string>>,
-    ) =>
+    const rebase = (prId: string, expectedHeads: Readonly<Record<string, string>>) =>
       Effect.gen(function* () {
-        const ctx = yield* prContext.resolveBasic(prId, userId, accountId);
-        const stack = yield* stacks.fetchFresh(ctx);
+        const ctx = yield* prContext.forPr(prId);
+        const stack = yield* stacks.fetchFresh(ctx, ctx.pr.externalId);
         if (!stack) return yield* Effect.fail(new NotFoundError({ resource: "stack", id: prId }));
         if (!stack.viewerCanPush) {
           return yield* rejected({ reason: "invalid" }, `You can't push to ${ctx.repo.fullName}`);
@@ -250,8 +240,8 @@ export const StackRebaseServiceLive = Layer.effect(
         if (yield* mergeRunning(ctx.repo.id, stack.number)) {
           return yield* rejected({ reason: "invalid" }, "A merge of this stack is running");
         }
-        return yield* rebaseStack(ctx, stack, accountId);
-      }).pipe(Effect.provide(context));
+        return yield* rebaseStack(ctx, stack);
+      });
 
     return { rebase, rebaseStack };
   }),

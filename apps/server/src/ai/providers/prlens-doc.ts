@@ -1,20 +1,13 @@
-// ── prlens-doc ───────────────────────────────────────────────────────────────
-//
-// Write-time validation for the `prlens` diagram fences an agent embeds in
-// markdown blocks and annotations.
-//
-// The fence body is a PR Lens graph document, validated in the web app by
+// The `prlens` fence body is a PR Lens graph document, validated in the web app by
 // `@coldtea/pr-lens-schema` at render time. A document the schema rejects has
 // no fallback worth reading: the walkthrough shows a red schema complaint and
 // a pretty-printed dump of the JSON where the diagram should be, and by then
 // the run is over and the reader is the one who found out.
 //
-// So the same check runs here, on the write path, against the same package and
-// the same wrapper (`toGraphDocInput` in `@revv/shared`). A rejected document
-// fails the tool call with the schema's own message, which is a recoverable
-// error the agent fixes and retries — the tools are idempotent upserts, so a
-// retry of the corrected block is a plain overwrite (CLAUDE.md invariants #3
-// and #5).
+// So the same check runs on the write path, against the same package and the
+// same wrapper (`toGraphDocInput` in `@revv/shared`), and fails the tool call
+// with a recoverable error; the corrected retry is a plain idempotent overwrite
+// (CLAUDE.md invariants #3 and #5).
 
 import { formatIssues, SCHEMA_VERSION, safeParseGraphDoc } from "@coldtea/pr-lens-schema";
 import { isPrLensFenceLang, toGraphDocInput } from "@revv/shared";
@@ -41,19 +34,16 @@ function isPrLensInfo(info: string): boolean {
 }
 
 /**
- * Every top-level `prlens` fence body in a markdown source, in document order.
- *
- * Nested fences are deliberately not scanned: a ````markdown block that shows a
- * ```prlens example (as the walkthrough prompt itself does) renders as sample
- * text, never as a diagram, so validating its body would reject writes the
- * reader would never see fail. Skipping to each fence's close — rather than
- * treating every fence line as an opener — is what makes that true.
+ * Top-level fences only: a ````markdown block that shows a ```prlens example
+ * (as the walkthrough prompt itself does) renders as sample text, never as a
+ * diagram, so validating its body would reject writes the reader would never
+ * see fail.
  */
 export function prLensFenceBodies(markdown: string): string[] {
-  // `renderMarkdown` normalizes literal `\n` escapes (an AI output artefact)
-  // into real newlines before parsing, so a fence written on one escaped line
-  // still renders as a fence. Match that here, or the one shape most likely to
-  // be malformed is the one shape this never inspects.
+  // The web renderer turns literal `\n` escapes in agent markdown (an AI output
+  // artefact) into real newlines before parsing, so a fence written on one
+  // escaped line still renders as a fence. Match that here, or the one shape
+  // most likely to be malformed is the one shape this never inspects.
   const lines = markdown.replace(/\\n/g, "\n").split("\n");
   const bodies: string[] = [];
 
@@ -70,15 +60,12 @@ export function prLensFenceBodies(markdown: string): string[] {
     while (end < lines.length && !close.test(lines[end] ?? "")) end++;
 
     if (isPrLensInfo(info)) bodies.push(lines.slice(i + 1, end).join("\n"));
-    // Resume after the close (or at EOF for an unterminated fence), so a fence
-    // inside this one is never mistaken for a fence of its own.
     i = end;
   }
 
   return bodies;
 }
 
-/** The schema's verdict on one fence body, or null when it would render. */
 function fenceError(body: string): string | null {
   let parsed: unknown;
   try {
@@ -100,10 +87,6 @@ function fenceError(body: string): string | null {
 }
 
 /**
- * Validate every `prlens` fence in one piece of agent-written markdown.
- * Returns a recoverable error string naming the first rejected diagram, or
- * null when every fence (possibly none) is renderable.
- *
  * `label` names the field for the agent — "markdown block content", "code
  * block annotation" — so a block carrying prose and an annotation says which
  * of the two is broken.

@@ -1,35 +1,40 @@
+<script module lang="ts">
+import FolderSimple from "phosphor-svelte/lib/FolderSimple";
+import { defineSettingsPane } from "../settings-panes";
+
+export const pane = defineSettingsPane({
+  id: "repositories",
+  title: "Repositories",
+  description: "The repositories whose pull requests Revv syncs.",
+  icon: FolderSimple,
+  rows: {
+    list: {
+      label: "Tracked repositories",
+      keywords: ["repos", "remove", "delete", "add", "track"],
+    },
+  },
+});
+</script>
+
 <script lang="ts">
-import type { Repository } from "@revv/shared";
+import { isPublicGitHub, type Repository } from "@revv/shared";
 import Plus from "phosphor-svelte/lib/Plus";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import Trash from "phosphor-svelte/lib/Trash";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import RepoDeleteConfirm from "$lib/components/sidebar/RepoDeleteConfirm.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
-import { deleteRepo, getRepositories } from "$lib/stores/prs.svelte";
+import { RepoRemoval } from "$lib/repos/repo-removal.svelte";
+import { getRepositories } from "$lib/stores/repos.svelte";
 import { closeSettings } from "$lib/stores/settingsModal.svelte";
 import { openAddRepoDialog } from "$lib/stores/sidebar.svelte";
 import SettingsGroup from "../primitives/SettingsGroup.svelte";
 import SettingsPane from "../primitives/SettingsPane.svelte";
 import SettingsRow from "../primitives/SettingsRow.svelte";
-import { SETTINGS_PANES } from "../settings-index";
 
 const repositories = $derived(getRepositories());
 
-let removingRepoId = $state<string | null>(null);
-let repoPendingDelete = $state<Repository | null>(null);
-
-async function handleDeleteRepo(id: string): Promise<void> {
-  removingRepoId = id;
-  try {
-    await deleteRepo(id);
-    repoPendingDelete = null;
-  } catch {
-    // The store restores optimistic state and shows the failure toast.
-  } finally {
-    removingRepoId = null;
-  }
-}
+const removal = new RepoRemoval();
 
 // The add-repo dialog lives in the sidebar; hand over to it rather than
 // stacking a second modal on this one.
@@ -40,13 +45,13 @@ function handleAddRepository(): void {
 
 function repoHint(repo: Repository): string | undefined {
   const parts: string[] = [];
-  if (repo.githubHost !== "github.com") parts.push(repo.githubHost);
+  if (!isPublicGitHub(repo.githubHost)) parts.push(repo.githubHost);
   if (!repo.managed && repo.clonePath) parts.push(`Linked to ${repo.clonePath}`);
   return parts.length > 0 ? parts.join(" · ") : undefined;
 }
 </script>
 
-<SettingsPane {...SETTINGS_PANES.repositories}>
+<SettingsPane {pane}>
 	<SettingsGroup heading="Tracked repositories">
 		{#snippet actions()}
 			<span class="repo-count" aria-label="{repositories.length} repositories">{repositories.length}</span>
@@ -58,13 +63,17 @@ function repoHint(repo: Repository): string | undefined {
 
 		{#if repositories.length === 0}
 			<SettingsRow
-				id="repositories-list"
+				searchRow={pane.rows.list}
 				label="No repositories yet"
 				hint="Add a repository to start syncing its pull requests."
 			/>
 		{:else}
-			{#each repositories as repo (repo.id)}
-				<SettingsRow id="repo-{repo.id}" label={repo.fullName} hint={repoHint(repo)}>
+			{#each repositories as repo, i (repo.id)}
+				<SettingsRow
+					searchRow={i === 0 ? pane.rows.list : undefined}
+					label={repo.fullName}
+					hint={repoHint(repo)}
+				>
 					{#snippet leading()}
 						<RepoGradientAvatar fullName={repo.fullName} ownerAvatarUrl={repo.avatarUrl} size={22} radius={6} />
 					{/snippet}
@@ -72,12 +81,12 @@ function repoHint(repo: Repository): string | undefined {
 						<Button
 							variant="ghost"
 							size="icon-sm"
-							disabled={removingRepoId === repo.id}
-							onclick={() => (repoPendingDelete = repo)}
+							disabled={removal.isRemoving(repo.id)}
+							onclick={() => removal.request(repo)}
 							aria-label="Remove {repo.fullName}"
 							title="Remove repository"
 						>
-							{#if removingRepoId === repo.id}
+							{#if removal.isRemoving(repo.id)}
 								<Spinner size={13} class="motion-essential-spin" />
 							{:else}
 								<Trash size={13} />
@@ -91,17 +100,11 @@ function repoHint(repo: Repository): string | undefined {
 </SettingsPane>
 
 <RepoDeleteConfirm
-	repo={repoPendingDelete}
-	open={repoPendingDelete !== null}
-	deleting={repoPendingDelete ? removingRepoId === repoPendingDelete.id : false}
-	onOpenChange={(nextOpen) => {
-		if (!nextOpen && (!repoPendingDelete || removingRepoId !== repoPendingDelete.id)) {
-			repoPendingDelete = null;
-		}
-	}}
-	onConfirm={() => {
-		if (repoPendingDelete) void handleDeleteRepo(repoPendingDelete.id);
-	}}
+	repo={removal.pending}
+	open={removal.pending !== null}
+	deleting={removal.deleting}
+	onOpenChange={removal.onOpenChange}
+	onConfirm={() => void removal.confirm()}
 />
 
 <style>

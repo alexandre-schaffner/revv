@@ -14,7 +14,6 @@ export const pullRequests = sqliteTable(
     authorLogin: text("author_login").notNull(),
     requestedReviewers: text("requested_reviewers").notNull().default("[]"),
     status: text("status").notNull().default("open"),
-    reviewStatus: text("review_status").notNull().default("pending"),
     isDraft: integer("is_draft", { mode: "boolean" }).notNull().default(false),
     sourceBranch: text("source_branch").notNull(),
     targetBranch: text("target_branch").notNull(),
@@ -27,33 +26,24 @@ export const pullRequests = sqliteTable(
      * GraphQL stats endpoint. Distinguishes a real 0/0/0 from the list endpoint's placeholder.
      */
     diffStatsHeadSha: text("diff_stats_head_sha"),
-    /**
-     * How many `pr_diff_files` rows the last complete GitHub files fetch
-     * produced for this PR. Written only by `DiffCacheService.cacheFiles`, in
-     * the same transaction as the rows themselves.
-     *
-     * Deliberately separate from `changed_files`. That column is GitHub's own
-     * stat and counts file *entries*, which exceeds the number of distinct
-     * paths whenever a file's type changed (GitHub reports one `removed` and
-     * one `added` entry for the same path). `pr_diff_files` is keyed on
-     * `(prId, path)`, so the cached row count for such a PR can never reach
-     * `changed_files` — and the completeness guard, comparing the two, made
-     * every single page view re-fetch all 30 pages from GitHub. This column is
-     * the honest signal: "the cache holds everything the last fetch returned."
-     * Null on rows written before this column existed, which fall back to the
-     * `changed_files` comparison and self-heal after one fetch.
-     */
+    /** Retired: never written or read. */
     diffFilesCachedCount: integer("diff_files_cached_count"),
     /**
      * The `head_sha` and `base_sha` this row held when the fetch behind the
      * cached `pr_diff_files` rows started. Written only by
-     * `DiffCacheService.cacheFiles`, with the rows. The rows are this PR's
+     * `DiffCacheService.cacheDiff`, with the rows. The rows are this PR's
      * diff only while both still equal `head_sha` and `base_sha`; a null
      * `diff_files_head_sha` (never stamped, or fetched while the head was
      * unknown) never matches.
      */
     diffFilesHeadSha: text("diff_files_head_sha"),
     diffFilesBaseSha: text("diff_files_base_sha"),
+    /**
+     * The PR's commits for the same range as the cached `pr_diff_files`
+     * rows, as JSON `PrCommit[]` head first, written with them. Null on
+     * diffs cached before commits were, which read as not cached.
+     */
+    diffCommits: text("diff_commits"),
     headSha: text("head_sha"),
     baseSha: text("base_sha"),
     createdAt: text("created_at").notNull(),
@@ -68,10 +58,9 @@ export const pullRequests = sqliteTable(
      */
     commentsSyncedAt: text("comments_synced_at"),
     /**
-     * sha256(sorted(threadNodeId + lastCommentUpdatedAt)) — computed after each
-     * GraphQL thread pull. If unchanged on the next tick, skip all downstream
-     * DB writes and SSE events for this PR (Phase 3 optimization; stored now so
-     * migrations don't need to change again).
+     * Fingerprint of the PR's GitHub review threads as of the last GraphQL
+     * thread pull (`fingerprintThreads` in `services/Sync.ts`). A change marks
+     * the PR changed even when no row was written: a resolve, a thread vanishing.
      */
     threadsFingerprint: text("threads_fingerprint"),
     /**
@@ -91,10 +80,8 @@ export const pullRequests = sqliteTable(
   },
   (t) => ({
     /**
-     * Composite index for the windowed archive read path: "give me closed/merged
-     * PRs for repo R in [since, until]". Without this the recap pipeline's
-     * scheduler scans the entire pull_requests table on every period boundary
-     * check, and the sidebar's archive listing degrades as the table grows.
+     * The windowed archive read: closed/merged PRs of a repo in [since, until],
+     * for the recap pipeline and the sidebar's archive listing.
      */
     repoClosedAtIdx: index("pull_requests_repo_closed_at_idx").on(t.repositoryId, t.closedAt),
   }),

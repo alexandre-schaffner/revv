@@ -1,24 +1,23 @@
 <script lang="ts">
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
+import { getLoadedFiles, getReviewFiles } from "$lib/stores/diff-files.svelte";
 import { enterScrollMode, getActivePanel } from "$lib/stores/focus-mode.svelte";
-import { getSelectedPrId } from "$lib/stores/prs.svelte";
 import {
-  clearRepoFile,
   getActiveFilePath,
   getActiveTab,
-  getIsLoadingFiles,
-  getReviewFiles,
-  requestDiffScrollReset,
   setActiveFilePath,
   setActiveTab,
-} from "$lib/stores/review.svelte";
+} from "$lib/stores/pr-view-state.svelte";
+import { scrollDiffToTop } from "$lib/stores/review-nav.svelte";
+import { getSelectedPrId } from "$lib/stores/route.svelte";
 import { getFileSearchQuery, getSidebarView, setFileSearchQuery } from "$lib/stores/sidebar.svelte";
 import PierreFileTree from "./PierreFileTree.svelte";
 import SidebarFilesSearch from "./SidebarFilesSearch.svelte";
 
-const reviewFiles = $derived(getReviewFiles());
+const prId = $derived(getSelectedPrId());
+const reviewFiles = $derived(prId ? getLoadedFiles(prId) : []);
 const repoPaths = $derived(reviewFiles.map((f) => f.path));
-const status = $derived(getIsLoadingFiles() ? "loading" : "ready");
+const status = $derived(prId && getReviewFiles(prId).status === "loading" ? "loading" : "ready");
 const activePath = $derived(getActiveFilePath());
 const shouldFocus = $derived(getSidebarView() === "files");
 const panelActive = $derived(getActivePanel() === "sidebar");
@@ -40,18 +39,37 @@ $effect(() => {
 });
 const searchQuery = $derived(getFileSearchQuery());
 
+let search = $state<ReturnType<typeof SidebarFilesSearch>>();
+let tree = $state<ReturnType<typeof PierreFileTree>>();
+
+export function focusSearch(): void {
+  search?.focus();
+}
+
+export function moveFocus(delta: 1 | -1): void {
+  tree?.moveFocus(delta);
+}
+
+export function openFocused(): void {
+  tree?.openFocused();
+}
+
+/** False when there is nowhere left to go up in the tree. */
+export function collapseOrParent(): boolean {
+  return tree?.collapseOrParent() ?? false;
+}
+
 function handleSelect(path: string): void {
   if (!filePaths.has(path)) return;
   setActiveFilePath(path);
-  requestDiffScrollReset();
+  scrollDiffToTop();
   if (getActiveTab() !== "diff") setActiveTab("diff");
   enterScrollMode();
-  clearRepoFile();
 }
 </script>
 
 <div class="files-view">
-	<SidebarFilesSearch />
+	<SidebarFilesSearch bind:this={search} onSubmit={(query) => tree?.focusFirstMatch(query)} />
 
 	{#if status === 'loading' && repoPaths.length === 0}
 		<div class="placeholder">
@@ -59,6 +77,7 @@ function handleSelect(path: string): void {
 		</div>
 	{:else}
 		<PierreFileTree
+			bind:this={tree}
 			paths={repoPaths}
 			statusByPath={new Map()}
 			{statsMap}

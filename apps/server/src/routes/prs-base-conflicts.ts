@@ -3,58 +3,48 @@
 
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { AppRuntime } from "../runtime";
 import { BaseConflictsService } from "../services/base-conflicts/BaseConflicts";
-import { chatStreamToSSE, handleAppError, mapErrorToSSEResponse, withAccount } from "./middleware";
+import { runRoute, withAuth } from "./middleware";
+import { ownedBy } from "./ownership";
+import { pipeToSse, runStream } from "./sse";
 
 export const prBaseConflictsRoutes = new Elysia({ prefix: "/api/prs" })
-  .use(withAccount)
+  .use(withAuth)
+  .onBeforeHandle(ownedBy({ id: "pull request" }))
   .get(
     "/:id/base-conflicts",
-    async (ctx) => {
-      try {
-        return await AppRuntime.runPromise(
-          Effect.flatMap(BaseConflictsService, (s) =>
-            s.check({
-              prId: ctx.params.id,
-              userId: ctx.session.user.id,
-              accountId: ctx.account.accountId,
-              force: ctx.query.force === "1",
-            }),
-          ),
-        );
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
+    (ctx) =>
+      runRoute(
+        Effect.flatMap(BaseConflictsService, (s) =>
+          s.check({
+            prId: ctx.params.id,
+            force: ctx.query.force === "1",
+          }),
+        ),
+      ),
     { query: t.Object({ force: t.Optional(t.String()) }) },
   )
 
   // SSE: status / conflict-files / agent progress frames, ending in one `result`.
   .post(
     "/:id/base-conflicts/resolve",
-    async (ctx) => {
-      try {
-        const stream = await AppRuntime.runPromise(
-          Effect.flatMap(BaseConflictsService, (s) =>
-            s.resolve({
-              prId: ctx.params.id,
-              userId: ctx.session.user.id,
-              accountId: ctx.account.accountId,
-              expectedHeadSha: ctx.body.expectedHeadSha,
-            }),
-          ),
-        );
-        return new Response(chatStreamToSSE(stream), {
-          headers: {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            Connection: "keep-alive",
-          },
-        });
-      } catch (e) {
-        return mapErrorToSSEResponse(e);
-      }
-    },
+    (ctx) =>
+      runStream(
+        Effect.flatMap(BaseConflictsService, (s) =>
+          s.resolve({
+            prId: ctx.params.id,
+            expectedHeadSha: ctx.body.expectedHeadSha,
+          }),
+        ).pipe(Effect.map(pipeToSse)),
+      ),
     { body: t.Object({ expectedHeadSha: t.String({ pattern: "^[0-9a-f]{40}$" }) }) },
+  )
+
+  // Stops the run above while its agent works; it carries on without a client.
+  .post("/:id/base-conflicts/resolve/stop", (ctx) =>
+    runRoute(
+      Effect.flatMap(BaseConflictsService, (s) => s.stop(ctx.params.id)).pipe(
+        Effect.map((stopped) => ({ stopped })),
+      ),
+    ),
   );

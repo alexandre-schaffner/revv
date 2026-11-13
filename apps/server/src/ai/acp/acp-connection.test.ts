@@ -6,27 +6,8 @@ import {
   createSessionSelections,
   type SessionSelectionConnection,
   sanitizeMcpServerName,
-  selectAcpAuthMethod,
 } from "./acp-connection";
-import { looksLikeAuthFailure } from "./agent-keychain";
-
-describe("selectAcpAuthMethod", () => {
-  it("prefers the ChatGPT session over an API key for Codex", () => {
-    expect(
-      selectAcpAuthMethod("codex", [
-        { id: "api-key" },
-        { id: "chat-gpt" },
-        { id: "chat-gpt-device-code" },
-      ]),
-    ).toBe("chat-gpt");
-  });
-
-  it("keeps the agent's advertised default for other providers", () => {
-    expect(selectAcpAuthMethod("claude-code", [{ id: "api-key" }, { id: "oauth" }])).toBe(
-      "api-key",
-    );
-  });
-});
+import { looksLikeAuthFailure } from "./agent-failure";
 
 describe("acpErrorMessage", () => {
   it("names the cause the SDK tucks into data.details", () => {
@@ -64,8 +45,8 @@ describe("acpErrorMessage", () => {
 
 describe("agentStartupFailureMessage", () => {
   // npx run inside a Bun monorepo that npm can't parse dies before the
-  // adapter starts. That used to surface as "ACP connection closed" plus
-  // Keychain advice, which sent every user to the wrong fix.
+  // adapter starts; Keychain advice for that failure sends the user to the
+  // wrong fix.
   const npmFailure = [
     "npm error code EUNSUPPORTEDPROTOCOL",
     'npm error Unsupported URL Type "catalog:": catalog:v4',

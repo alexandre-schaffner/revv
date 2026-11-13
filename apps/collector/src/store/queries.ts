@@ -1,11 +1,9 @@
-// ── Read queries ─────────────────────────────────────────────────────────────
-//
-// Every query is windowed on `start_ms >= sinceMs` and optionally filtered by
-// service. Time buckets are computed with integer arithmetic on the epoch-ms
-// column rather than DuckDB's `time_bucket` so results cross the JSON boundary
-// as plain numbers (no timestamp objects to normalize on the client).
+// Time buckets use integer arithmetic on epoch ms rather than DuckDB's
+// `time_bucket`, which returns timestamp objects the JSON clients would have to
+// normalize.
 
 import type { DuckDBConnection } from "@duckdb/node-api";
+import { SPAN, SPAN_ATTR, SPAN_NAMESPACE } from "@revv/shared/telemetry";
 import type {
   GenerationRun,
   Kpis,
@@ -20,37 +18,31 @@ import type {
 
 type Row = Record<string, unknown>;
 
-// ── Span triage (derived at query time, no schema coupling) ─────────────────
-//
-// Categorise spans into the buckets that matter for a code-review tool, and
-// flag low-insight bookkeeping spans as "noise" so the per-operation views can
-// surface real work by default. Kept as SQL so every query classifies
-// identically. Coupled to span names by design (same spirit as the
-// `WalkthroughJobs.generate` KPI) — the names are the contract.
+const inNamespace = (...namespaces: (keyof typeof SPAN_NAMESPACE)[]) =>
+  namespaces.map((ns) => `name LIKE '${SPAN_NAMESPACE[ns]}.%'`).join(" OR ");
+
+// `claude_code.*` spans come from Claude Code's own OTel exporter, not Revv.
 const CATEGORY_SQL = `CASE
   WHEN service_name = 'revv-web' THEN 'rum'
-  WHEN name LIKE 'GitHub.%' THEN 'github'
+  WHEN ${inNamespace("github")} THEN 'github'
   -- The agent's own tool calls (Read/Grep/Bash in our worktree) are broken out
   -- from 'agent' on purpose: they are OUR latency, not the model's, and lumping
   -- them together is what made "the agent is slow" unactionable.
-  WHEN name LIKE 'Agent.%' OR name LIKE 'claude_code.tool%' THEN 'agent-tools'
-  WHEN name LIKE 'Mcp.%' THEN 'mcp'
-  WHEN name = 'WalkthroughJobs.generate' OR name LIKE 'Ai.%' OR name LIKE 'Chat.%'
-       OR name LIKE 'Acp.%' OR name LIKE 'Walkthrough.%' OR name LIKE 'claude_code.%'
-       OR name LIKE 'ProjectRecapJobs.%' OR service_name = 'revv-opencode' THEN 'agent'
-  WHEN name LIKE 'RepoClone.%' THEN 'git'
-  WHEN name LIKE '%Scheduler.%' OR name LIKE 'PollScheduler%' THEN 'sync'
-  WHEN name = 'http.request' THEN 'http'
+  WHEN ${inNamespace("agentTool")} OR name LIKE 'claude_code.tool%' THEN 'agent-tools'
+  WHEN ${inNamespace("mcp")} THEN 'mcp'
+  WHEN name = '${SPAN.walkthroughGenerate}'
+       OR ${inNamespace("ai", "chat", "acp", "walkthrough", "recapJobs")}
+       OR name LIKE 'claude_code.%' THEN 'agent'
+  WHEN ${inNamespace("repoClone")} THEN 'git'
+  WHEN name LIKE '%Scheduler.%' THEN 'sync'
+  WHEN name = '${SPAN.httpRequest}' THEN 'http'
   ELSE 'internal'
 END`;
 
-// Bookkeeping spans: correct to emit (the in-app debug ring buffer wants them)
-// but near-zero-duration / high-volume, so they bury real operations in the
-// summary table. Excluded by default; the dashboard can opt them back in.
-const NOISE_SQL = `name IN (
-  'WalkthroughJobs.emitEvent', 'WalkthroughJobs.setStatus', 'WalkthroughJobs.job',
-  'OpencodeSupervisor.jobStarted', 'OpencodeSupervisor.jobEnded', 'OpencodeSupervisor.stopNow'
-)`;
+// Bookkeeping spans: the server's in-memory debug ring buffer wants them, but
+// they are near-zero-duration and high-volume, so the summary hides them unless
+// asked (`includeNoise`).
+const NOISE_SQL = `name IN ('${SPAN.walkthroughEmitEvent}')`;
 
 /** Read rows, coercing DuckDB BIGINTs (returned as JS bigint) to numbers. */
 async function read(
@@ -71,14 +63,11 @@ const numOrNull = (v: unknown): number | null =>
   v === null || v === undefined ? null : typeof v === "number" && Number.isFinite(v) ? v : null;
 const s = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
 
-/** Build the trailing `AND service_name = ?` clause and its param, if filtering. */
 function svcClause(service: string | undefined, params: (string | number)[]): string {
   if (!service) return "";
   params.push(service);
   return ` AND service_name = $${params.length}`;
 }
-
-// ── Span row projection (shared by slow / errors / trace) ────────────────────
 
 const SPAN_SELECT = `
   trace_id, span_id, parent_span_id, name, service_name, start_ms, duration_ms,
@@ -119,8 +108,6 @@ function toSpanRecord(r: Row): SpanRecord {
     httpStatus: numOrNull(r.http_status),
   };
 }
-
-// ── Public queries ───────────────────────────────────────────────────────────
 
 export async function operationSummary(
   conn: DuckDBConnection,
@@ -211,7 +198,6 @@ export async function serviceTimeseries(
   opts: { sinceMs: number; untilMs?: number | undefined; bucketMs: number },
 ): Promise<ServiceTimeseriesPoint[]> {
   const bucket = Math.max(1000, Math.round(opts.bucketMs));
-  // Deliberately unfiltered by service — this query *is* the per-service split.
   const sql = `
     SELECT (start_ms // ${bucket}) * ${bucket} AS bucket_ms,
            service_name,
@@ -311,8 +297,6 @@ export async function recentTraces(
   },
 ): Promise<TraceSummary[]> {
   const params: (string | number)[] = [opts.sinceMs, opts.untilMs ?? Date.now()];
-  // Per trace: span count, error count, window span, and the name of the span
-  // with the smallest start (the de-facto root for display).
   const sql = `
     WITH t AS (
       SELECT trace_id,
@@ -340,12 +324,9 @@ export async function recentTraces(
 }
 
 /**
- * Recent agent generation runs, newest first.
- *
- * `span_count` is the size of the whole trace, not of the generate subtree.
- * That is the more useful number here: it says how much of the run we managed
- * to instrument, and a run that shows 3 spans instead of 40 is itself the
- * finding (a blind spot, not a fast run).
+ * `span_count` is the size of the whole trace, not of the generate subtree: it
+ * says how much of the run was instrumented, and a run that shows 3 spans
+ * instead of 40 is a blind spot, not a fast run.
  */
 export async function generations(
   conn: DuckDBConnection,
@@ -365,13 +346,13 @@ export async function generations(
     SELECT g.trace_id, g.span_id, g.name, g.start_ms, g.duration_ms, g.status_code,
            g.walkthrough_id, g.pr_id, g.model,
            g.input_tokens, g.output_tokens, g.tool_call_count,
-           g.attributes->>'trigger' AS trigger,
-           g.attributes->>'recapId' AS recap_id,
+           g.attributes->>'${SPAN_ATTR.trigger}' AS trigger,
+           g.attributes->>'${SPAN_ATTR.recapId}' AS recap_id,
            COALESCE(c.span_count, 1) AS span_count
     FROM spans g
     LEFT JOIN counts c ON c.trace_id = g.trace_id
     WHERE g.start_ms >= $1 AND g.start_ms <= $2
-      AND g.name IN ('WalkthroughJobs.generate', 'ProjectRecapJobs.generate')${service}
+      AND g.name IN ('${SPAN.walkthroughGenerate}', '${SPAN.recapGenerate}')${service}
     ORDER BY g.start_ms DESC
     LIMIT ${Math.max(1, Math.round(opts.limit))}`;
   const rows = await read(conn, sql, params);
@@ -416,20 +397,20 @@ export async function kpis(
       count(*) FILTER (WHERE status_code = 2) AS error_count,
       -- walkthrough generation: the dedicated generation span wraps the full
       -- run, so its duration is the real end-to-end generation time (the
-      -- 'WalkthroughJobs.job' span forks and returns in ~0ms — excluded here).
+      -- job span forks and returns in ~0ms — excluded here).
       quantile_cont(duration_ms, 0.5) FILTER (
-        WHERE name = 'WalkthroughJobs.generate'
+        WHERE name = '${SPAN.walkthroughGenerate}'
       ) AS wt_median,
       avg(tool_call_count) FILTER (WHERE tool_call_count IS NOT NULL) AS avg_tool_calls,
       avg(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)) FILTER (
         WHERE input_tokens IS NOT NULL OR output_tokens IS NOT NULL
       ) AS avg_tokens,
       quantile_cont(duration_ms, 0.95) FILTER (
-        WHERE name ILIKE 'github%' OR http_method IS NOT NULL
+        WHERE name ILIKE 'github%' OR (http_method IS NOT NULL AND name <> '${SPAN.httpRequest}')
       ) AS github_p95,
       -- median time-to-first-token across the generation spans that carry it
-      median(TRY_CAST(attributes->>'ttft_ms' AS DOUBLE)) FILTER (
-        WHERE attributes->>'ttft_ms' IS NOT NULL
+      median(TRY_CAST(attributes->>'${SPAN_ATTR.ttftMs}' AS DOUBLE)) FILTER (
+        WHERE attributes->>'${SPAN_ATTR.ttftMs}' IS NOT NULL
       ) AS ttft_median
     FROM spans
     WHERE start_ms >= $1 AND start_ms <= $2${svc}`;

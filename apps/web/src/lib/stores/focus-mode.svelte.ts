@@ -1,5 +1,3 @@
-// ── Focus-mode store ────────────────────────────────────────
-//
 // Tracks which panel currently owns keyboard focus and the
 // cursor/selection state for Vim-like diff navigation.
 //
@@ -21,36 +19,16 @@
 
 export type FocusPanel = "sidebar" | "diff-scroll" | "diff-line" | "diff-visual";
 
-// ── Core panel state ────────────────────────────────────────
-
 let activePanel = $state<FocusPanel>("sidebar");
 
-// ── Cursor / selection state ────────────────────────────────
-// Used by diff-line and diff-visual modes.
-// cursorLineIndex is 1-based and maps to [data-line-index] rendered row indices
-// (not [data-line] which is the actual file line number — those are distinct library attributes).
-
-/** The currently active/focused line. */
+// The cursor counts the diff's rows 1..N; `lib/pierre/diff-rows.ts` maps a
+// row to its file line and side.
 let cursorLineIndex = $state<number>(1);
-
-/**
- * Which column the cursor is on. `null` in unified mode (no column
- * distinction) or when not yet set. Mirrors the library's optional
- * `side?` field in SelectedLineRange — never pass null directly to
- * the library; omit the property instead.
- */
-let cursorSide = $state<"additions" | "deletions" | null>(null);
 
 /** Visual-mode anchor line (start of selection). null outside visual mode. */
 let anchorLineIndex = $state<number | null>(null);
 
-/**
- * Total rendered line count. Set by DiffViewerInner after each render.
- * Used to clamp cursor movement.
- */
 let totalLineCount = $state<number>(0);
-
-// ── Getters ─────────────────────────────────────────────────
 
 export function getActivePanel(): FocusPanel {
   return activePanel;
@@ -58,10 +36,6 @@ export function getActivePanel(): FocusPanel {
 
 export function getCursorLineIndex(): number {
   return cursorLineIndex;
-}
-
-export function getCursorSide(): "additions" | "deletions" | null {
-  return cursorSide;
 }
 
 export function getAnchorLineIndex(): number | null {
@@ -72,28 +46,18 @@ export function getTotalLineCount(): number {
   return totalLineCount;
 }
 
-// ── State setters ───────────────────────────────────────────
-
 export function setTotalLineCount(n: number): void {
   totalLineCount = n;
 }
 
-// ── Mode transition helpers ─────────────────────────────────
-
-/** Check if we're in any diff mode (not sidebar). */
 export function isInDiffMode(): boolean {
   return activePanel !== "sidebar";
 }
 
-/** Check if we're in a mode that tracks a line cursor. */
 export function isInLineCursorMode(): boolean {
   return activePanel === "diff-line" || activePanel === "diff-visual";
 }
 
-/**
- * Enter diff scroll mode (Space from sidebar).
- * Pixel-based scrolling — no line cursor.
- */
 export function enterScrollMode(): void {
   resetCursorState();
   activePanel = "diff-scroll";
@@ -109,62 +73,36 @@ export function enterScrollMode(): void {
   });
 }
 
-/**
- * Enter diff-line mode.
- * @param totalLines — total rendered line count, queried by DiffViewerInner
- */
 export function enterLineMode(totalLines: number): void {
   totalLineCount = totalLines;
-  // Preserve cursor position if already in a diff mode, else reset to line 1
   if (!isInLineCursorMode()) {
     cursorLineIndex = 1;
-    cursorSide = null;
   }
   anchorLineIndex = null;
   activePanel = "diff-line";
 }
 
-/**
- * Enter diff-visual mode.
- * Anchors selection at the current cursor line.
- */
 export function enterVisualMode(): void {
   anchorLineIndex = cursorLineIndex;
   activePanel = "diff-visual";
 }
 
-/**
- * Exit visual mode back to diff-line.
- * Clears selection anchor.
- */
 export function exitVisualMode(): void {
   anchorLineIndex = null;
   activePanel = "diff-line";
 }
 
-/**
- * Return to sidebar navigation mode.
- */
 export function enterSidebarMode(): void {
   resetCursorState();
   activePanel = "sidebar";
 }
 
-// ── Cursor movement (pure state, no DOM) ───────────────────
-
-/**
- * Move the cursor by `delta` lines (positive = down, negative = up).
- * Clamps to [1, totalLineCount].
- */
+/** Move the cursor by `delta` lines (positive = down). */
 export function moveCursor(delta: number): void {
   if (totalLineCount === 0) return;
   cursorLineIndex = Math.max(1, Math.min(totalLineCount, cursorLineIndex + delta));
 }
 
-/**
- * Jump cursor to a named position.
- * half-up/half-down move by 50% of total lines.
- */
 export function jumpCursor(target: "top" | "bottom" | "half-up" | "half-down"): void {
   if (totalLineCount === 0) return;
   switch (target) {
@@ -183,14 +121,7 @@ export function jumpCursor(target: "top" | "bottom" | "half-up" | "half-down"): 
   }
 }
 
-// ── Internal helpers ────────────────────────────────────────
-
-/**
- * Reset cursor/selection state to defaults.
- * Called when returning to sidebar or entering scroll mode.
- */
 function resetCursorState(): void {
   cursorLineIndex = 1;
-  cursorSide = null;
   anchorLineIndex = null;
 }

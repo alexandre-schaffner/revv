@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { Snippet } from "svelte";
+import type { WalkthroughStack } from "$lib/components/walkthrough/walkthrough-stack.svelte";
 import ChangedAboveNote from "../margin/ChangedAboveNote.svelte";
-import type { WalkthroughStack } from "./walkthrough-stack.svelte";
 
 interface Props {
   stack: WalkthroughStack;
@@ -38,7 +38,7 @@ const note = $derived(stack.notes?.issues.get(issueId));
 		width: 380px;
 	}
 
-	@container (max-width: 1335px) {
+	@container review (max-width: 1335px) {
 		.issue-rail-note {
 			position: static;
 			width: auto;

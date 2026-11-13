@@ -1,13 +1,7 @@
-// ── Web RUM (dev-only) ───────────────────────────────────────────────────────
-//
-// Real-user-monitoring spans for the SvelteKit frontend, exported to the local
-// telemetry collector. Loaded *only* in dev (see hooks.client.ts) via dynamic
-// import, so none of the OpenTelemetry browser SDK reaches the production
-// desktop bundle.
-//
-// We keep instrumentation deliberately small: a document-load span and a thin
-// fetch wrapper for API calls. The exporter's own request and the long-lived
-// SSE stream are excluded so RUM never instruments itself into a feedback loop.
+// Dev-only RUM spans for the frontend, exported to the local telemetry
+// collector. Import this only dynamically behind `import.meta.env.DEV` (see
+// hooks.client.ts) so the OpenTelemetry browser SDK stays out of the
+// production bundle.
 
 import { type Span, SpanKind, SpanStatusCode, type Tracer, trace } from "@opentelemetry/api";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
@@ -34,7 +28,6 @@ export function initRum(): void {
   instrumentFetch(tracer);
 }
 
-/** One span describing the initial document load, from navigation timing. */
 function emitDocumentLoad(tracer: Tracer): void {
   const emit = (): void => {
     const [nav] = performance.getEntriesByType("navigation") as PerformanceNavigationTiming[];
@@ -57,7 +50,6 @@ function emitDocumentLoad(tracer: Tracer): void {
   else window.addEventListener("load", () => setTimeout(emit, 0), { once: true });
 }
 
-/** Wrap window.fetch to emit a client span per request (excluding telemetry). */
 function instrumentFetch(tracer: Tracer): void {
   const original = window.fetch.bind(window);
 

@@ -1,19 +1,18 @@
-// ── Sizing answers → launch config ──────────────────────────────────────────
-//
 // Jev never names a model; it answers an abstract depth tier and effort tier,
 // and this module maps each onto something concrete for the selected agent
-// via a local table, so an external API can never emit a model id the agent
-// can't run.
+// through the agent's own catalog (each model's `reviewDepth`), so an
+// external API can never emit a model id the agent can't run.
 //
 // The two answers are routed independently, each with its own opt-in
 // (`revv:auto`), gating, and slot in the override — neither can suppress the other.
 
-import type { AcpAgentId, ThinkingEffort, ThinkingEffortSetting } from "@revv/shared";
-import { clampThinkingEffort, getAgentCapabilities, isAutoSentinel } from "@revv/shared";
-
-/** The abstract tier Jev answers. Ordered — index is the ladder position. */
-export const REVIEW_DEPTHS = ["shallow", "standard", "deep"] as const;
-export type ReviewDepth = (typeof REVIEW_DEPTHS)[number];
+import type { AcpAgentId, ReviewDepth, ThinkingEffort, ThinkingEffortSetting } from "@revv/shared";
+import {
+  clampThinkingEffort,
+  getAgentCapabilities,
+  isAutoSentinel,
+  REVIEW_DEPTHS,
+} from "@revv/shared";
 
 /**
  * What the orchestrator threads into the agent launch when it overrides.
@@ -35,20 +34,14 @@ export const DEPTH_CONFIDENCE_FLOOR = 0.6;
 export const DEPTH_MARGIN_FLOOR = 0.15;
 
 /**
- * Per-agent depth ladder, lowest tier first. Absent agent = no-op for the
- * model half (configured model stands); effort routing is unaffected.
- *
- *   • **opencode**: 75+ models fetched live (`caps.models === "dynamic"`), no static table.
- *   • **codex**: sibling GPT-6 variants, not a cost/capability ladder to order.
- *   • **cursor**: ACP adapter doesn't forward a selected model at all.
+ * The agent's catalog models that sit on the depth ladder. Empty = no-op for
+ * the model half (configured model stands); effort routing is unaffected.
+ * opencode's catalog is fetched live, so it has none.
  */
-const DEPTH_LADDERS: Partial<Record<AcpAgentId, Readonly<Record<ReviewDepth, string>>>> = {
-  "claude-code": {
-    shallow: "claude-haiku-5-5",
-    standard: "claude-sonnet-5-5",
-    deep: "claude-opus-5-5",
-  },
-};
+function ladderModels(agent: AcpAgentId) {
+  const { models } = getAgentCapabilities(agent);
+  return models === "dynamic" ? [] : models.filter((m) => m.reviewDepth !== undefined);
+}
 
 /**
  * The abstract effort tier Jev answers, mapped onto Revv's ladder. Asked as
@@ -66,23 +59,14 @@ const EFFORT_TIERS: Readonly<Record<ReasoningEffort, ThinkingEffort>> = {
   exhaustive: "max",
 };
 
-/** Position of `model` on the agent's ladder, or `null` when it isn't on it. */
 function ladderIndex(agent: AcpAgentId, model: string | null | undefined): number | null {
-  const ladder = DEPTH_LADDERS[agent];
-  if (!ladder || !model) return null;
-  // Previous-generation pins keep their tier after the catalog upgrade.
-  if (agent === "claude-code" && model === "claude-sonnet-5")
-    return REVIEW_DEPTHS.indexOf("standard");
-  if (agent === "claude-code" && model === "claude-haiku-4-5-20251001")
-    return REVIEW_DEPTHS.indexOf("shallow");
-  const found = REVIEW_DEPTHS.findIndex((depth) => ladder[depth] === model);
-  return found === -1 ? null : found;
+  const depth = ladderModels(agent).find((m) => m.value === model)?.reviewDepth;
+  return depth === undefined ? null : REVIEW_DEPTHS.indexOf(depth);
 }
 
 export interface RouteSizingInput {
   readonly agent: AcpAgentId;
   readonly depth: ReviewDepth;
-  /** Calibrated confidence in `depth`, from the choice answer. */
   readonly confidence: number;
   /** Per-label probabilities, used for the runner-up margin. */
   readonly probabilities: Readonly<Record<string, number>>;
@@ -103,18 +87,14 @@ export interface RouteSizingInput {
 }
 
 /**
- * Resolve the model half. `null` means "leave the configured model alone" —
- * returned when the agent has no depth ladder, confidence/margin is below
- * floor, or a pinned model is already at or above the routed tier.
- *
- * Biased upward against a pin, never down: the cost is asymmetric (an
- * over-powered model wastes cents, an under-powered one erodes trust), so a
- * downgrade only happens once the user has explicitly declined to pin
- * ({@link AUTO_SENTINEL}).
+ * `null` means "leave the configured model alone". Biased upward against a
+ * pin, never down: the cost is asymmetric (an over-powered model wastes cents,
+ * an under-powered one erodes trust), so a downgrade only happens once the
+ * user has explicitly declined to pin ({@link AUTO_SENTINEL}).
  */
 function routeModel(input: RouteSizingInput): string | null {
-  const ladder = DEPTH_LADDERS[input.agent];
-  if (!ladder) return null;
+  const target = ladderModels(input.agent).find((m) => m.reviewDepth === input.depth);
+  if (!target) return null;
 
   if (input.confidence < DEPTH_CONFIDENCE_FLOOR) return null;
   if (margin(input.probabilities) < DEPTH_MARGIN_FLOOR) return null;
@@ -126,11 +106,7 @@ function routeModel(input: RouteSizingInput): string | null {
     if (currentIndex === null || targetIndex <= currentIndex) return null;
   }
 
-  const model = ladder[input.depth];
-  const caps = getAgentCapabilities(input.agent);
-  // Guard against the table drifting from the registry: a delisted model must never reach the launch.
-  if (caps.models !== "dynamic" && !caps.models.some((m) => m.value === model)) return null;
-  return model;
+  return target.value;
 }
 
 /**
@@ -144,10 +120,6 @@ function routeEffort(input: RouteSizingInput): ThinkingEffort | null {
   return clampThinkingEffort(input.agent, EFFORT_TIERS[input.reasoningEffort]) ?? null;
 }
 
-/**
- * Resolve a launch override, or `null` when neither half applies. The two
- * halves are decided independently and either can be absent.
- */
 export function routeSizing(input: RouteSizingInput): GenerationLaunchOverride | null {
   const model = routeModel(input);
   const thinkingEffort = routeEffort(input);
@@ -158,7 +130,6 @@ export function routeSizing(input: RouteSizingInput): GenerationLaunchOverride |
   };
 }
 
-/** Gap between the top two probabilities; `1` when there's only one label. */
 function margin(probabilities: Readonly<Record<string, number>>): number {
   const sorted = Object.values(probabilities).sort((a, b) => b - a);
   if (sorted.length < 2) return 1;

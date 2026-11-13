@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { StackMergeRunLayer } from "@revv/shared";
-import type { GitHubStack, GitHubStackLayer } from "./map";
+import type { GitHubStack, GitHubStackLayer } from "../github/stacks";
 import {
   AUTO_MERGE_WAIT_MS,
   defaultThrough,
@@ -190,6 +190,21 @@ describe("planLayers / defaultThrough", () => {
     expect(layers[1]?.prId).toBe("pr-2");
     expect(layers[0]?.prId).toBeNull();
     expect(defaultThrough(layers)).toBe(3);
+  });
+
+  test("names why a merge can't run through each layer", () => {
+    const stack = stackOf([
+      layer(1, { status: "merged" }),
+      layer(2, { baseRef: "main", mergeStateStatus: "CLEAN" }),
+      layer(3, { reviewDecision: "review_required" }),
+      layer(4),
+    ]);
+    expect(planLayers(stack, new Map()).map((l) => l.refusal)).toEqual([
+      "Already merged",
+      null,
+      "Review required",
+      "#103 below can't merge yet",
+    ]);
   });
 
   test("null when the lowest open layer can't merge, or nothing is open", () => {

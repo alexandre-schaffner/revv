@@ -53,10 +53,10 @@ import { MultiFileDiff } from '@pierre/diffs/react';
 
 **What:** Build a floating tooltip that appears on token hover, powered by the
 existing `onTokenEnter` / `onTokenLeave` callbacks already wired in
-`DiffViewerInner.svelte` and `FileViewerInner.svelte`.
+`DiffViewerInner.svelte`.
 
 **Why:** The token hover plumbing already exists — `onTokenHover` bubbles
-`TokenHoverInfo` up to `DiffViewer.svelte` / `FileViewer.svelte` — but no UI
+`TokenHoverInfo` up to `DiffViewer.svelte` — but no UI
 consumes it (no parent passes a handler). A tooltip could show:
 - Syntax token type (keyword, string, comment, etc.)
 - AI-generated context (type inference, definition lookup)

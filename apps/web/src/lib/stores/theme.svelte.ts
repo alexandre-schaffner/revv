@@ -1,40 +1,34 @@
-import type { ThemePreference } from "@revv/shared";
 import { tick, untrack } from "svelte";
 import { crossfadeDocument } from "$lib/motion";
+import { oneOfCodec, readStored, STORAGE_KEYS, writeStored } from "$lib/stores/persisted.svelte";
 
-export type { ThemePreference };
+const THEME_PREFERENCES = ["system", "light", "dark"] as const;
+export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 
-export type DiffThemePreference = "sync" | "light" | "dark";
+/** The theme actually painted: a `system` preference resolves to one of these. */
+export type ResolvedTheme = Exclude<ThemePreference, "system">;
 
-const THEME_KEY = "revv-theme";
-const DIFF_THEME_KEY = "revv-diff-theme";
+const DIFF_THEME_PREFERENCES = ["sync", "light", "dark"] as const;
+export type DiffThemePreference = (typeof DIFF_THEME_PREFERENCES)[number];
 
-// ── State ────────────────────────────────────────────────────────────────────
+const themeCodec = oneOfCodec(THEME_PREFERENCES);
+const diffThemeCodec = oneOfCodec(DIFF_THEME_PREFERENCES);
 
-let preference = $state<ThemePreference>(readStored(THEME_KEY, "system"));
-let diffPreference = $state<DiffThemePreference>(readStored(DIFF_THEME_KEY, "sync"));
-let _resolved = $derived<"light" | "dark">(resolve(preference));
+let preference = $state<ThemePreference>(readStored(STORAGE_KEYS.theme, themeCodec, "system"));
+let diffPreference = $state<DiffThemePreference>(
+  readStored(STORAGE_KEYS.diffTheme, diffThemeCodec, "sync"),
+);
+let _resolved = $derived<ResolvedTheme>(resolve(preference));
 
-function readStored<T extends string>(key: string, fallback: T): T {
-  if (typeof window === "undefined") return fallback;
-  const v = localStorage.getItem(key);
-  return v === "light" || v === "dark" ? (v as T) : fallback;
-}
-
-function resolve(pref: ThemePreference): "light" | "dark" {
+function resolve(pref: ThemePreference): ResolvedTheme {
   if (pref === "dark") return "dark";
   if (pref === "light") return "light";
   if (typeof window === "undefined") return "light";
   return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-// ── DOM ──────────────────────────────────────────────────────────────────────
-
-/** Class held on <html> only for the instant of the swap. See `apply()`. */
 const SWAP_CLASS = "theme-switching";
 
-/** Pending handle for dropping {@link SWAP_CLASS}, so rapid toggling doesn't
- *  strand it on (each swap re-arms rather than stacking add/remove pairs). */
 let swapRelease: number | null = null;
 
 function applyAnimated(pref: ThemePreference): void {
@@ -44,22 +38,12 @@ function applyAnimated(pref: ThemePreference): void {
   });
 }
 
-/** Toggle .dark on <html> and set colorScheme. Synchronous — the browser
- *  batches both writes into a single style recalc, so there is no flash.
+/** Synchronous: the browser batches the class and colorScheme writes into a
+ *  single style recalc, so there is no flash. The swap is wrapped in
+ *  `.theme-switching`, which zeroes every transition in the document; app.css
+ *  says why.
  *
- *  The swap is wrapped in `.theme-switching`, which zeroes every transition
- *  duration and delay in the document (see app.css). Without it a theme change
- *  isn't one repaint, it's a staggered crossfade: ~450 elements on a typical
- *  route transition `color` / `background` / `border-color`, at four different
- *  token durations plus Tailwind's own 150ms `transition-colors` — while
- *  untransitioned elements flip immediately. The app arrives in five waves over
- *  220ms, which reads as parts of the UI switching before others.
- *
- *  Suppression, not a shared duration. Giving every component the same
- *  transition was tried and rejected — see the app.css block for why it is
- *  uniform on paper but not smooth in practice.
- *
- *  Note also: do NOT drive the *native* window theme from here
+ *  Do NOT drive the *native* window theme from here
  *  (`getCurrentWindow().setTheme(...)`). It looks like the missing piece — the
  *  window's own appearance governs the traffic-light overlay region and the
  *  background the compositor paints during a live resize, and Tauri leaves it
@@ -112,8 +96,6 @@ function applyDiffTheme(pref: DiffThemePreference): void {
   }
 }
 
-// ── Public API ───────────────────────────────────────────────────────────────
-
 /** Call once from root layout. Returns cleanup. Untracked — must never re-run. */
 export function initTheme(): () => void {
   untrack(() => {
@@ -136,13 +118,13 @@ export function getThemePreference(): ThemePreference {
   return preference;
 }
 
-export function getResolvedTheme(): "light" | "dark" {
+export function getResolvedTheme(): ResolvedTheme {
   return _resolved;
 }
 
 export function setThemePreference(pref: ThemePreference): void {
   preference = pref;
-  localStorage.setItem(THEME_KEY, pref);
+  writeStored(STORAGE_KEYS.theme, themeCodec, pref);
   applyAnimated(pref);
 }
 
@@ -152,6 +134,6 @@ export function getDiffThemePreference(): DiffThemePreference {
 
 export function setDiffThemePreference(pref: DiffThemePreference): void {
   diffPreference = pref;
-  localStorage.setItem(DIFF_THEME_KEY, pref);
+  writeStored(STORAGE_KEYS.diffTheme, diffThemeCodec, pref);
   applyDiffTheme(pref);
 }

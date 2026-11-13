@@ -41,7 +41,23 @@ mechanics differ, because each agent reads a different config file.
 `<account>` is a non-reversible 12-character digest of the local account id.
 Every provider uses `revv-<account>` as its MCP entry name, so connecting one
 account cannot overwrite or uninstall another account's entry. Bridge copies
-live under `~/.revv/<provider>/<account>/server/revv-mcp.ts`.
+live under `~/.revv/<provider>/<account>/server/revv-mcp.ts`, and for Claude
+Code inside its plugin, `~/.claude/skills/revv-<account>/server/revv-mcp.ts`.
+Every server start rewrites the files Revv owns for each active credential whose
+install is this server's (`ExternalIntegrations.refreshInstalls`): the bridge
+copy, the guide, and the entry's command, `REVV_API_URL` and `NO_PROXY`. A
+bridge or guide fix reaches users without a reconnect. Single files whose
+content is unchanged are left untouched; the plugin and bridge directories are
+restaged and swapped on every start.
+
+An install is this server's when it carries a credential in this server's
+database **and** its `REVV_API_URL` is this server's MCP URL (a config written
+before the bridge carried a URL counts as the server on Revv's default ports).
+A second server on a copy of the database, say a sandbox on another port, holds
+the same credential rows, so the credential alone would let it repoint the
+user's real agent configs at itself. The same rule guards removal: disconnect
+and `uninstallAccount` (forgetting an account, whose credential rows the
+cascade then deletes) leave another server's install in place.
 
 OpenCode's entry keeps opencode 1's layout (directly under `mcp`, with
 `enabled: true`, and the singular `command/` directory). opencode 2 still reads
@@ -58,8 +74,12 @@ configs get an account-scoped key that is recognized by the
 
 Single-file config updates use a same-directory staged file followed by an
 atomic rename and force mode `0600`, including when the config already exists.
-The bridge probes both stable and development loopback ports, so the config is
-not tied to the channel that wrote it.
+The bridge talks only to the server that installed it: the config carries that
+server's MCP URL in `REVV_API_URL`, and `NO_PROXY` for loopback (Bun otherwise
+sends loopback requests through `HTTP_PROXY`). Configs written before the URL was
+probe the production then the development port until a Revv that pins them
+starts; the first answer Revv gives, a refused credential included, is what the
+agent sees.
 
 ## Type sketch
 
@@ -83,7 +103,6 @@ interface ExternalResolvedContext {
   provider: ExternalAgentProvider
   integrationId: string
   accountId: string
-  userId: string
   prId: string
   prHeadSha: string | null
   scopes: readonly ExternalAgentScope[]
@@ -97,8 +116,10 @@ interface ExternalIntegrationsService {
     accountId: string
     userId: string
     provider: ExternalAgentProvider
-  }): Effect<ConnectResult, IntegrationError>
+  }): Effect<ExternalIntegrationStatus, IntegrationError>
   disconnect(accountId: string, provider: ExternalAgentProvider): Effect<void, IntegrationError>
+  uninstallAccount(accountId: string): Effect<void, IntegrationError>
+  refreshInstalls(): Effect<void>
   authenticate(token: string): Effect<ExternalAuthorizedContext, IntegrationError>
   resolve(
     token: string,
@@ -107,10 +128,12 @@ interface ExternalIntegrationsService {
 }
 ```
 
-Credentials are always issued with every scope. Migration 0430 therefore
-granted `walkthrough:generate` to credentials issued before it existed, so
-agents installed earlier can start reviews, which spend the user's AI budget,
-without reconnecting.
+Every credential holds every scope: authentication grants
+`EXTERNAL_AGENT_SCOPES` from `@revv/shared` rather than reading the row (the
+`scopes` column is still written, for older Revv versions). A new tool's scope
+therefore reaches existing installs with no backfill, so agents installed
+before `walkthrough:generate` existed can start reviews, which spend the user's
+AI budget, without reconnecting.
 
 When a new head supersedes a walkthrough, a resolved issue keeps its local
 resolution metadata only if severity, title, description, file path, and line
@@ -162,14 +185,14 @@ regardless of which provider issued it.
   external MCP tool bundle and its idempotent issue/comment handlers.
 - `apps/server/src/routes/mcp/external-agent.ts` binds authenticated project
   context to the shared tool gateway at `POST /mcp/external`.
-- `apps/server/src/services/walkthrough-request.ts` turns a
+- `apps/server/src/services/walkthrough/request.ts` turns a
   `request_walkthrough` call into a `WalkthroughJobs.startJob` pinned to the
   pushed head (`expectedHeadSha`), behind the stopped-run and run-budget
   guards below.
 - `apps/server/src/routes/integrations.ts` exposes signed-in status, connect,
   and disconnect operations to the desktop UI.
 - `walkthrough_issues` stores local resolution metadata; `external_integrations`
-  stores durable credential digests and scopes.
+  stores durable credential digests.
 
 ## Boundaries and invariants
 
@@ -223,8 +246,8 @@ regardless of which provider issued it.
 2. A remote/HTTP MCP entry per provider. Rejected: HTTP servers do not receive
    the active project directory, so PR resolution becomes manual.
 3. One bridge process per provider with provider-specific logic. Rejected:
-   agent-path parity (CLAUDE.md #13) is easiest to guarantee when there is
-   literally one bridge, one route, and one tool bundle.
+   parity across the four agents (CLAUDE.md #7) is easiest to guarantee when
+   there is literally one bridge, one route, and one tool bundle.
 4. Let the bridge mutate SQLite or GitHub directly. Rejected: it would bypass
    Revv's lifecycle, authorization, broadcast, and sync ownership.
 
@@ -233,6 +256,6 @@ regardless of which provider issued it.
 One credential model, one stdio proxy, and one authenticated Revv MCP route,
 with per-provider install mechanics isolated behind a small registry. Share
 existing walkthrough handlers, add only the missing issue-resolution and
-thread workflows, and keep the external tool list capability-filtered. This is
+thread workflows, and keep the external tool list a reviewed subset of that registry. This is
 the smallest shape that works across ordinary clones and worktrees, on four
 agents, without weakening Revv's agent invariants.

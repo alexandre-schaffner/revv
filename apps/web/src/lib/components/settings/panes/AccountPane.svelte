@@ -1,27 +1,43 @@
+<script module lang="ts">
+import User from "phosphor-svelte/lib/User";
+import { defineSettingsPane } from "../settings-panes";
+
+export const pane = defineSettingsPane({
+  id: "account",
+  title: "Account",
+  description: "The GitHub identity Revv signs in with.",
+  icon: User,
+  rows: {
+    identity: {
+      label: "Signed-in account",
+      keywords: ["github", "sign out", "logout", "email", "user"],
+    },
+    revoke: {
+      label: "Revoke access on GitHub",
+      keywords: ["authorized applications", "oauth", "token", "permissions"],
+    },
+    remove: { label: "Remove this account", keywords: ["delete", "danger", "erase", "local data"] },
+  },
+});
+</script>
+
 <script lang="ts">
 import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import Spinner from "phosphor-svelte/lib/Spinner";
-import User from "phosphor-svelte/lib/User";
 import Warning from "phosphor-svelte/lib/Warning";
 import SignInButton from "$lib/components/auth/SignInButton.svelte";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
-import { getUser, removeAccount, signOut } from "$lib/stores/auth.svelte";
+import { removeAccount, signOut } from "$lib/session/lifecycle.svelte";
+import { getUser } from "$lib/stores/auth.svelte";
 import { getGithubHost } from "$lib/stores/settings.svelte";
 import { closeSettings } from "$lib/stores/settingsModal.svelte";
 import SettingsGroup from "../primitives/SettingsGroup.svelte";
 import SettingsPane from "../primitives/SettingsPane.svelte";
 import SettingsRow from "../primitives/SettingsRow.svelte";
-import { SETTINGS_PANES } from "../settings-index";
 
 const user = $derived(getUser());
-const host = $derived(getGithubHost() ?? "github.com");
-
-// URL-keyed: failed state is only true while the current URL is the one that
-// errored. If the URL rotates (e.g. after re-login), the new URL is retried.
-let avatarFailedForUrl = $state<string | null>(null);
-const avatarFailed = $derived(
-  avatarFailedForUrl !== null && avatarFailedForUrl === (user?.image ?? null),
-);
+const host = $derived(getGithubHost());
 
 let showDeleteConfirm = $state(false);
 let deleting = $state(false);
@@ -41,24 +57,18 @@ async function handleRemoveAccount(): Promise<void> {
 }
 </script>
 
-<SettingsPane {...SETTINGS_PANES.account}>
+<SettingsPane {pane}>
 	{#if user}
 		<SettingsGroup>
-			<SettingsRow id="account-identity" label={user.name}>
+			<SettingsRow searchRow={pane.rows.identity} label={user.name}>
 				{#snippet leading()}
-					{#if user.image && !avatarFailed}
-						<img
-							src={user.image}
-							alt=""
-							class="identity-avatar"
-							referrerpolicy="no-referrer"
-							onerror={() => (avatarFailedForUrl = user?.image ?? null)}
-						/>
-					{:else}
-						<span class="identity-avatar identity-avatar--fallback" aria-hidden="true">
-							<User size={16} />
-						</span>
-					{/if}
+					<Avatar src={user.image} size={32}>
+						{#snippet fallback()}
+							<span class="identity-avatar" aria-hidden="true">
+								<User size={16} />
+							</span>
+						{/snippet}
+					</Avatar>
 				{/snippet}
 				{#snippet hint()}
 					<span class="identity-meta">
@@ -76,8 +86,7 @@ async function handleRemoveAccount(): Promise<void> {
 				{/snippet}
 			</SettingsRow>
 			<SettingsRow
-				id="account-revoke"
-				label="Revoke access on GitHub"
+				row={pane.rows.revoke}
 				hint="Signing out clears Revv's local copy of your token. To revoke Revv's access on GitHub's side, remove it from your authorized applications."
 			>
 				{#snippet control()}
@@ -97,8 +106,7 @@ async function handleRemoveAccount(): Promise<void> {
 
 		<SettingsGroup heading="Remove account" tone="danger">
 			<SettingsRow
-				id="account-remove"
-				label="Remove this account"
+				row={pane.rows.remove}
 				hint="Permanently deletes the account and all of its local data. This cannot be undone."
 			>
 				{#snippet control()}
@@ -134,7 +142,7 @@ async function handleRemoveAccount(): Promise<void> {
 	{:else}
 		<SettingsGroup>
 			<SettingsRow
-				id="account-identity"
+				searchRow={pane.rows.identity}
 				label="Not signed in"
 				hint="Sign in with GitHub to sync your repositories and pull requests."
 			>
@@ -152,10 +160,6 @@ async function handleRemoveAccount(): Promise<void> {
 		height: 32px;
 		flex-shrink: 0;
 		border-radius: 50%;
-		object-fit: cover;
-	}
-
-	.identity-avatar--fallback {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;

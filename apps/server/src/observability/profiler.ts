@@ -1,5 +1,6 @@
 import { profile } from "bun:jsc";
 import { Effect, Layer, Schedule } from "effect";
+import { serverEnv } from "../config";
 import { ProfilingError } from "../domain/errors";
 import { foldedStacks } from "./profile-format";
 
@@ -7,7 +8,7 @@ import { foldedStacks } from "./profile-format";
 // No inspector port, detached child, filesystem archive or unbounded send queue.
 export const ContinuousProfilingLive = Layer.effectDiscard(
   Effect.gen(function* () {
-    const endpoint = process.env.REVV_PYROSCOPE_ENDPOINT;
+    const endpoint = serverEnv.pyroscopeEndpoint;
     if (!endpoint) return;
     let target: URL;
     try {
@@ -22,7 +23,8 @@ export const ContinuousProfilingLive = Layer.effectDiscard(
       yield* Effect.logWarning("Continuous profiling disabled: invalid destination", error);
       return;
     }
-    const channel = process.env.REVV_CHANNEL === "dev" ? "dev" : "installed";
+    // The profiles dashboard filters on `dev` | `installed`.
+    const channel = serverEnv.channel === "dev" ? "dev" : "installed";
     const capture = Effect.tryPromise({
       try: async (signal) => {
         const from = Date.now();

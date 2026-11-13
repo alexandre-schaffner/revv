@@ -4,13 +4,8 @@ Tracked from `alexandre-schaffner/rethink-walkthrough-streaming` review ("Merge 
 
 ## Bugs (fix before GA)
 
-### B-001 — Async deregister gap leaks SSE writer on early disconnect
-- **File:** `apps/server/src/routes/events.ts:44-47`
-- **Issue:** `register(writer)` returns a Promise; `deregister` is only assigned in `.then()`. If the client disconnects before the Promise resolves, `tearDown()` runs with `deregister === null` — the writer is never removed from the `Ref<Set>`, leaking memory and causing spurious errors on subsequent `broadcastToAccount` calls.
-- **Fix:** Make registration synchronous (e.g. `registerSync` via `Ref.update` + `Effect.runSync`) so `deregister` is available before `start()` returns.
-
 ### B-002 — `Math.max(0, nextSeq-1)` clamp drops seq=0 lifecycle events
-- **File:** `apps/server/src/services/Walkthrough.ts:29-30` (getSeqAt) and line ~893 (listActiveForAccount)
+- **File:** `apps/server/src/services/walkthrough/Walkthrough.ts` (`getSeqAt`, `listActiveForUser`)
 - **Issue:** `getSeqAt` returns `Math.max(0, nextSeq-1)`. When `nextSeq=0` (fresh walkthrough), this returns 0. The client sets `lastSeenSeq[wtId] = 0` and then drops the first event with `seq=0` because `0 <= 0` is true.
 - **Fix:** Remove the `Math.max(0, ...)` clamp — return `nextSeq - 1` directly (allowing -1). Client cursor defaults to -1, so `seq=0` passes the dedup check.
 

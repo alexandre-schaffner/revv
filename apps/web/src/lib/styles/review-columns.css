@@ -1,0 +1,68 @@
+/* The walkthrough and conversation tabs (and the page title above them) lay
+   out on one grid, so a block, its annotation and the title line up across
+   every section:
+
+     col 1  left gutter   max(24px, min(50% - 458px, 100% - 1312px))
+     col 2  48px          severity-dot gutter
+     col 3  820px         content
+     col 4  40px          content ↔ rail gap
+     col 5  380px         annotation rail
+     col 6  ≥ 24px        right gutter
+
+   Percentages resolve against the `review` container (`.review-content`, the
+   main pane), so the content column re-centres whenever the sidebar or the
+   chat panel resizes the pane. `50% - 458px` centres col 3 in the pane;
+   `100% - 1312px` keeps the rail inside a 24px right gutter once the pane is
+   too narrow to centre; they cross at 1708px.
+
+   Below 1336px (24 + 48 + 820 + 40 + 380 + 24) the rail can't fit beside the
+   content: the gutters and rail collapse to zero-width tracks and rail items
+   stack under their content. Keeping six tracks lets a pane resize animate
+   through the breakpoint instead of snapping, and keeps col 3 starting at
+   72px on both sides of it. A component's own narrow-only tweaks use the
+   same query: `@container review (max-width: 1335px)`.
+
+   Placement: a direct child lands in the content column unless it says
+   otherwise with `data-col`; `data-col` also places items inside
+   `display: contents` wrappers. A nested `.review-columns` spans the parent
+   with `data-col="full"` and re-declares the same tracks. */
+
+.review-columns {
+  display: grid;
+  grid-template-columns:
+    max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
+    48px
+    minmax(0, 820px)
+    40px
+    380px
+    minmax(24px, 1fr);
+}
+
+.review-columns > :not([data-col]),
+.review-columns [data-col="content"] {
+  grid-column: 3;
+}
+
+.review-columns [data-col="gutter"] {
+  grid-column: 2;
+}
+
+.review-columns [data-col="rail"] {
+  grid-column: 5;
+  grid-row: span var(--rail-rows, 1);
+}
+
+.review-columns [data-col="full"] {
+  grid-column: 1 / -1;
+}
+
+@container review (max-width: 1335px) {
+  .review-columns {
+    grid-template-columns: 72px 0 minmax(0, 820px) 0 0 minmax(32px, 1fr);
+  }
+
+  .review-columns [data-col="rail"] {
+    grid-column: 3;
+    grid-row: auto;
+  }
+}

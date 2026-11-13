@@ -1,35 +1,15 @@
-// ── Handler: resolve_lead (Phase B onward) ──────────────────────────────────
-//
-// The agent's verdict on one first-pass lead. The lead row was recorded by
-// the orchestrator before the prompt went out; this writes only its verdict
-// columns, keyed on (walkthrough_id, lead_key), so a replay is a no-op.
-//
-// Phase precondition: the overview is set (last_completed_phase ≠ 'none').
-// Later phases are allowed on purpose — `complete_walkthrough` is where an
-// unresolved lead is first refused, and a rejection needs no Phase-B write.
+// The orchestrator records each lead row before the prompt goes out;
+// resolve_lead writes only its verdict columns (CLAUDE.md invariant 2).
 
-import type { WalkthroughLead, WalkthroughPipelinePhase } from "@revv/shared";
+import type { WalkthroughLead } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
-import type { Db } from "../../../db";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughLeads } from "../../../db/schema/walkthrough-leads";
-import { readWalkthroughLead, readWalkthroughLeads } from "../../../services/walkthrough-leads";
+import { findUnresolvedLeads, readWalkthroughLead } from "../../../services/walkthrough/leads";
 import { decodePlainText } from "../agent-text";
-import { errorResult, loadWalkthroughRow, okResult } from "./helpers";
+import { fail, ok } from "../mcp-tool-gateway";
+import { openForWrite } from "./phases";
 import type { ResolveLeadInput, WalkthroughToolHandler, WalkthroughToolResult } from "./spec";
-
-/** Leads this walkthrough's agent was handed and hasn't resolved, in prompt order. */
-export function findUnresolvedLeads(db: Db, walkthroughId: string): WalkthroughLead[] {
-  return readWalkthroughLeads(db, walkthroughId).filter((lead) => lead.verdict === null);
-}
-
-export function renderUnresolvedLeadsError(leads: readonly WalkthroughLead[]): string {
-  return `Error: ${leads.length} first-pass lead(s) have no verdict: ${leads
-    .map((lead) => `${lead.id} (${lead.filePath}:${lead.newStart})`)
-    .join(
-      ", ",
-    )}. Call resolve_lead for each — confirmed with the issue_id you raised for it, or rejected with a one-sentence reason — then call complete_walkthrough again.`;
-}
 
 export const resolveLeadHandler: WalkthroughToolHandler<ResolveLeadInput> = async (ctx, input) => {
   const reason = input.reason ? decodePlainText(input.reason).trim() : "";
@@ -40,20 +20,12 @@ export const resolveLeadHandler: WalkthroughToolHandler<ResolveLeadInput> = asyn
       result: WalkthroughToolResult;
       event?: WalkthroughLead;
     } => {
-      const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
-      if (!row) return { result: errorResult(`Walkthrough ${ctx.walkthroughId} not found.`) };
-      const phase = row.lastCompletedPhase as WalkthroughPipelinePhase;
-      if (phase === "none") {
-        return {
-          result: errorResult(
-            "Error: resolve_lead requires the overview (Phase A). Call set_overview first.",
-          ),
-        };
-      }
+      const open = openForWrite(ctx.db, ctx.walkthroughId, "resolve_lead");
+      if ("refusal" in open) return { result: open.refusal };
       const lead = readWalkthroughLead(ctx.db, ctx.walkthroughId, input.lead_id);
       if (!lead) {
         return {
-          result: errorResult(
+          result: fail(
             `Error: lead_id '${input.lead_id}' is not one of this walkthrough's first-pass leads. Use an id from the prompt's First-pass leads (e.g. \`L1\`); call get_walkthrough_state to list them.`,
           ),
         };
@@ -64,7 +36,7 @@ export const resolveLeadHandler: WalkthroughToolHandler<ResolveLeadInput> = asyn
       if (input.verdict === "confirmed") {
         if (issueId === null) {
           return {
-            result: errorResult(
+            result: fail(
               "Error: verdict='confirmed' requires issue_id — the id flag_issue returned for the issue this lead became. Flag the issue first, or resolve the lead as rejected.",
             ),
           };
@@ -84,7 +56,7 @@ export const resolveLeadHandler: WalkthroughToolHandler<ResolveLeadInput> = asyn
           // did confirm the lead, and the record says so, with no issue to link.
           if (!ctx.jev.issueRetracted(issueId)) {
             return {
-              result: errorResult(
+              result: fail(
                 `Error: issue_id '${issueId}' does not match any flagged issue for this walkthrough. Pass the id from flag_issue's result.`,
               ),
             };
@@ -92,7 +64,7 @@ export const resolveLeadHandler: WalkthroughToolHandler<ResolveLeadInput> = asyn
           withdrawn = true;
         } else if (issue.filePath !== lead.filePath) {
           return {
-            result: errorResult(
+            result: fail(
               `Error: lead ${lead.id} is in ${lead.filePath}, but issue '${issueId}' is ${issue.filePath === null ? "PR-wide" : `in ${issue.filePath}`}. Confirm a lead with the issue raised on its own file, or resolve it as rejected.`,
             ),
           };
@@ -101,7 +73,7 @@ export const resolveLeadHandler: WalkthroughToolHandler<ResolveLeadInput> = asyn
         }
       } else if (reason.length === 0) {
         return {
-          result: errorResult(
+          result: fail(
             "Error: verdict='rejected' requires reason — one sentence naming what in the code answers the lead.",
           ),
         };
@@ -127,7 +99,7 @@ export const resolveLeadHandler: WalkthroughToolHandler<ResolveLeadInput> = asyn
         left === 0 ? "Every lead has a verdict." : `${left} lead(s) still need a verdict.`;
       const resolved = readWalkthroughLead(ctx.db, ctx.walkthroughId, lead.id);
       return {
-        result: okResult(
+        result: ok(
           withdrawn
             ? `Lead ${lead.id} recorded as confirmed. The issue you raised for it was withdrawn after you flagged it, so it stays unlinked — not an error, nothing to retry. ${tail}`
             : `Lead ${lead.id} recorded as ${input.verdict}. ${tail}`,

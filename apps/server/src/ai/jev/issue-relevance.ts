@@ -1,21 +1,15 @@
-// ── Issue relevance orchestration ────────────────────────────────────────────
-//
-// `flag_issue` commits immediately. This module schedules the optional
-// relevance/severity judgment behind the agent; policy, DB reads, and writes
-// live in separate modules so each can be tested without the others.
+// The relevance/severity judgment of one concern `flag_issue` already
+// committed: the questions, the policy and the cache key. What it reads from
+// the journal, and what its verdict does there, is the caller's
+// (`services/walkthrough/issue-gate.ts`).
 
 import { isDiscardedScore, isLowSignalScore } from "@revv/shared";
 import { noul, type ScoreQuestion } from "@typesafe-ai/sdk";
 import { Effect } from "effect";
-import type { Db } from "../../db";
-import type { JevUnavailable } from "../../domain/errors";
 import { debug } from "../../logger";
-import { CacheService } from "../../services/Cache";
-import type { DbService } from "../../services/Db";
+import type { CacheService } from "../../services/Cache";
 import { JevService } from "../../services/Jev";
-import { SettingsService } from "../../services/Settings";
 import type { IssueCandidate, IssueJudgment } from "./contracts";
-import { collectIssueGateInput, type IssueGateInput } from "./issue-relevance-context";
 import {
   compositeScore,
   ISSUE_RELEVANCE_CACHE_NS,
@@ -26,8 +20,19 @@ import {
   SEVERITY_LEVELS,
   severityForLevel,
 } from "./issue-relevance-policy";
-import { optionalJev } from "./optional";
-import { buildIssueRelevanceState } from "./state";
+import { cachedJev } from "./optional";
+import { buildIssueRelevanceState, type IssueRelevanceInput } from "./state";
+
+/** What the judgment reads besides the candidate. */
+export interface IssueGateInput {
+  readonly pr: IssueRelevanceInput["pr"];
+  /** The diff hunk the concern is anchored to, if it could be resolved. */
+  readonly hunk: string | null;
+  /** The concern's lines fall outside the diff. */
+  readonly offDiff: boolean;
+  /** The walkthrough's other concerns, for the duplicate check. */
+  readonly existingIssues: IssueRelevanceInput["existingIssues"];
+}
 
 function answerNoul(value: unknown): number {
   if (value === null || typeof value !== "object" || !("noul" in value)) return 1;
@@ -99,34 +104,22 @@ function candidateKey(walkthroughId: string, issueId: string, candidate: IssueCa
   ].join("\0");
 }
 
-/** Judge one candidate, degrading to the exact pre-Jev behavior on failure. */
+/** Judge one candidate; null (the concern stands as written) when Jev has no answer. */
 export function judgeIssue(
-  db: Db,
   walkthroughId: string,
   issueId: string,
   candidate: IssueCandidate,
-): Effect.Effect<
-  IssueJudgment | null,
-  never,
-  JevService | SettingsService | CacheService | DbService
-> {
+  input: IssueGateInput,
+): Effect.Effect<IssueJudgment | null, never, JevService | CacheService> {
   return Effect.gen(function* () {
-    const settingsService = yield* SettingsService;
-    const settings = yield* settingsService.getSettings().pipe(Effect.orElseSucceed(() => null));
-    if (settings?.jev.enabled !== true) return null;
-
-    const input = yield* Effect.sync(() => collectIssueGateInput(db, walkthroughId, candidate));
-    if (input === null) return null;
-
-    const cache = yield* CacheService;
-    const raw = yield* optionalJev(
+    const raw = yield* cachedJev<RawIssueJudgment>(
       `issue relevance for ${issueId}`,
-      cache.getOrFetch<RawIssueJudgment, JevUnavailable, JevService>(
-        ISSUE_RELEVANCE_CACHE_NS,
-        candidateKey(walkthroughId, issueId, candidate),
-        () => ask(candidate, input),
-        { ttlMs: ISSUE_RELEVANCE_CACHE_TTL_MS },
-      ),
+      {
+        ns: ISSUE_RELEVANCE_CACHE_NS,
+        key: candidateKey(walkthroughId, issueId, candidate),
+        options: { ttlMs: ISSUE_RELEVANCE_CACHE_TTL_MS },
+      },
+      () => ask(candidate, input),
     );
     if (raw === null) return null;
 

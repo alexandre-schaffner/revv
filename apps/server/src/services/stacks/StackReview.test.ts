@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import type { StackLayer, StackLayerReview } from "@revv/shared";
+import { layerNeedsReview, type StackLayer, type StackLayerReview } from "@revv/shared";
 import { planStackReview } from "./StackReview";
 
 function layer(
   position: number,
-  over: Partial<Pick<StackLayer, "status" | "prId" | "headSha" | "review">> = {},
+  over: Partial<Pick<StackLayer, "status" | "prId" | "headSha" | "review" | "restack">> = {},
 ): StackLayer {
   return {
     position,
@@ -63,10 +63,39 @@ describe("planStackReview", () => {
     expect(plan.untracked).toEqual([105]);
   });
 
+  // A queued pure restack costs no agent run: the walkthrough start carries the
+  // finished review onto the new head (invariant 7), so the layer ends reviewed at its head.
+  it("remaining: queues a layer whose new head is a pure restack of its review", () => {
+    const plan = planStackReview(
+      [
+        layer(1, { review: complete("old-head-1"), restack: { kind: "restacked" } }),
+        layer(2, { review: complete("old-head-2"), restack: { kind: "layer-changed", files: [] } }),
+      ],
+      "remaining",
+    );
+    expect(plan.queue.map((l) => l.number)).toEqual([101, 102]);
+  });
+
   it("all: every open tracked layer, bottom-up", () => {
     const plan = planStackReview(stack, "all");
     expect(plan.queue.map((l) => l.number)).toEqual([102, 103, 104, 107]);
     expect(plan.watching).toEqual([]);
     expect(plan.untracked).toEqual([105]);
+  });
+});
+
+describe("layerNeedsReview", () => {
+  it("is what Review the stack queues for the remaining layers", () => {
+    const stack = [
+      layer(1, { review: complete("head-1") }),
+      layer(2, { review: complete("old-2"), restack: { kind: "restacked" } }),
+      layer(3, { review: complete("old-3") }),
+      layer(4, { review: { kind: "generating", walkthroughId: "wt-4" } }),
+      layer(5, { status: "merged", review: complete("old-5") }),
+      layer(6),
+    ];
+    const queued = planStackReview(stack, "remaining").queue.map((l) => l.number);
+    expect(stack.filter(layerNeedsReview).map((l) => l.number)).toEqual(queued);
+    expect(queued).toEqual([102, 103, 106]);
   });
 });

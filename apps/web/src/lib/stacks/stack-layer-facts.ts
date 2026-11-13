@@ -3,21 +3,24 @@ import {
   type ReviewVerdict,
   type RiskLevel,
   type StackBrief,
+  type StackEntryStatus,
   type StackLayer,
 } from "@revv/shared";
+import { VERDICT_TONE } from "$lib/conversation/verdict";
 import { plural } from "$lib/utils/plural";
+
+export const LAYER_STATUS_LABEL: Record<StackEntryStatus, string> = {
+  merged: "Merged",
+  closed: "Closed",
+  draft: "Draft",
+  ready: "Ready",
+  not_ready: "Not ready",
+};
 
 export const RISK_LABEL: Record<RiskLevel, string> = {
   low: "Low risk",
   medium: "Medium risk",
   high: "High risk",
-};
-
-export const REVIEW_VERDICT_LABEL: Record<ReviewVerdict, string> = {
-  approved: "You approved",
-  changes_requested: "You requested changes",
-  commented: "You commented",
-  dismissed: "Your review was dismissed",
 };
 
 type Tone = "subtle" | "success" | "warning" | "danger" | "accent";
@@ -31,18 +34,6 @@ export type LayerFact =
       readonly verdict: ReviewVerdict;
     }
   | { readonly kind: "text"; readonly key: string; readonly tone: Tone; readonly label: string };
-
-export function needsReview(layer: StackLayer): boolean {
-  const { review } = layer;
-  if (review.kind === "generating") return false;
-  if (review.kind !== "complete") return true;
-  if (layer.restack.kind === "restacked") return false;
-  return (
-    review.reviewedHeadSha !== null &&
-    layer.headSha !== null &&
-    review.reviewedHeadSha !== layer.headSha
-  );
-}
 
 export function readableBrief(brief: StackBrief | null): StackBrief | null {
   if (!brief) return null;
@@ -88,8 +79,7 @@ export function layerFacts(layer: StackLayer): LayerFact[] {
     facts.push({
       kind: "verdict",
       key: "verdict",
-      tone:
-        verdict === "approved" ? "success" : verdict === "changes_requested" ? "warning" : "subtle",
+      tone: VERDICT_TONE[verdict],
       verdict,
     });
   }

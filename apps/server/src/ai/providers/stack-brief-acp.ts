@@ -1,38 +1,36 @@
-import type { AcpAgentId, ThinkingEffort } from "@revv/shared";
+import { SPAN_ATTR } from "@revv/shared/telemetry";
+import type { StackBriefSnapshot } from "../../db/schema/stack-briefs";
+import type { AgentLaunch } from "../acp/agent-launch";
+import type { ActivityBeacon, TurnSettle } from "../acp/run-turn";
 import { buildStackBriefUserMessage, STACK_BRIEF_SYSTEM_PROMPT } from "../prompts/stack-brief";
-import { type McpAgentAcpResult, runMcpAgentViaAcp } from "./mcp-agent-acp";
-import type { StackBriefSnapshot, StackBriefToolContext } from "./stack-brief-tools";
-import { STACK_BRIEF_MCP_SERVER } from "./stack-brief-tools";
+import { type McpAgentRunError, runMcpAgentViaAcp } from "./mcp-agent-acp";
+import { turnMcpServer } from "./mcp-tool-gateway";
+import { STACK_BRIEF_TOOL_BUNDLE, type StackBriefToolContext } from "./stack-brief-tools";
 
 export interface RunStackBriefAcpParams {
   readonly ctx: StackBriefToolContext;
   readonly snapshot: StackBriefSnapshot;
   readonly sessionToken: string;
-  readonly acpAgentId: AcpAgentId;
-  readonly modelUsed: string;
-  readonly thinkingEffort?: ThinkingEffort | undefined;
-  readonly workingDir: string;
+  readonly launch: AgentLaunch;
   readonly abortController: AbortController;
+  readonly activity: ActivityBeacon;
   readonly calledAnyTool: () => boolean;
-  readonly isValidated: () => boolean;
+  /** Fired once `complete_stack_brief` passed during this run. */
+  readonly completion: TurnSettle;
 }
 
 export function runStackBriefAgentViaAcp(
   params: RunStackBriefAcpParams,
-): Promise<McpAgentAcpResult> {
+): Promise<McpAgentRunError> {
   return runMcpAgentViaAcp({
-    acpAgentId: params.acpAgentId,
-    modelUsed: params.modelUsed,
-    thinkingEffort: params.thinkingEffort,
-    workingDir: params.workingDir,
+    launch: params.launch,
     abortController: params.abortController,
-    route: "/mcp/stack-brief",
-    mcpServerName: `${STACK_BRIEF_MCP_SERVER}-${params.ctx.briefId}`,
-    sessionToken: params.sessionToken,
+    activity: params.activity,
+    settle: params.completion,
+    trace: { key: params.ctx.briefId, attribute: SPAN_ATTR.briefId },
+    mcp: turnMcpServer(STACK_BRIEF_TOOL_BUNDLE, params.ctx.briefId, params.sessionToken, true),
     prompt: `${STACK_BRIEF_SYSTEM_PROMPT}\n\n---\n\n${buildStackBriefUserMessage(params.snapshot)}`,
     calledAnyTool: params.calledAnyTool,
-    isValidated: params.isValidated,
-    purpose: "the stack brief",
     debugLabel: "stack-brief-acp",
   });
 }

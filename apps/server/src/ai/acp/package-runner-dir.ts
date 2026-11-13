@@ -1,5 +1,3 @@
-// ── Package-runner working directory ─────────────────────────────────────────
-//
 // Most ACP adapters are launched through a package runner (`npx -y <adapter>`,
 // or `bunx` when npm is missing). A package runner is not a neutral launcher:
 // `npm exec` loads the dependency tree of the project it runs in, so spawning
@@ -43,4 +41,13 @@ export function ensurePackageRunnerDir(dir: string = PACKAGE_RUNNER_DIR): string
     );
     return null;
   }
+}
+
+/**
+ * The working directory of an agent turn that has no project to work in: the
+ * Revv-owned runner directory, never the server's own directory, which an
+ * agent with shell and edit tools must not be handed.
+ */
+export function projectlessAgentCwd(): string {
+  return ensurePackageRunnerDir() ?? process.cwd();
 }

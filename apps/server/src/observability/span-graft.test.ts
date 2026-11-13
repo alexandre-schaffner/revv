@@ -44,8 +44,6 @@ describe("graftedSpan", () => {
   });
 
   /**
-   * The regression this file exists for.
-   *
    * `graftedSpan` reaches OTel through the global API (`trace.getTracer`),
    * because the code that calls it — MCP tool handlers, ACP session listeners —
    * has no Effect fiber to borrow a tracer from. If the tracer provider is not

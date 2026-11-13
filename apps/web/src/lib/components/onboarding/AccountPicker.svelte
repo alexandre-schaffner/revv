@@ -1,72 +1,41 @@
 <script lang="ts">
 import ArrowRight from "phosphor-svelte/lib/ArrowRight";
-import Desktop from "phosphor-svelte/lib/Desktop";
-import Moon from "phosphor-svelte/lib/Moon";
 import Spinner from "phosphor-svelte/lib/Spinner";
-import Sun from "phosphor-svelte/lib/Sun";
 import User from "phosphor-svelte/lib/User";
+import Avatar from "$lib/components/shared/Avatar.svelte";
+import ThemeIcon from "$lib/components/shared/ThemeIcon.svelte";
+import { cycleThemePreference, themePreferenceLabel } from "$lib/components/shared/theme-cycle";
 import { gsapFade, tokens } from "$lib/motion";
-import { getIsSwitching, getLocalAccounts, switchAccount } from "$lib/stores/auth.svelte";
-import {
-  getThemePreference,
-  setThemePreference,
-  type ThemePreference,
-} from "$lib/stores/theme.svelte";
+import { accountEntries } from "$lib/session/account-entries";
+import { getSwitchingTo, switchSession } from "$lib/session/lifecycle.svelte";
+import { getError, getIsSwitching, getLocalAccounts } from "$lib/stores/auth.svelte";
 
 interface Props {
-  /** Called when user chooses "Sign in with a different account" */
   onNewAccount: () => void;
 }
 
 let { onNewAccount }: Props = $props();
 
-const localAccounts = $derived(getLocalAccounts());
+const entries = $derived(accountEntries(getLocalAccounts()));
 const isSwitching = $derived(getIsSwitching());
+const switchingTo = $derived(getSwitchingTo());
+const switchError = $derived(getError());
 
-let switchingId = $state<string | null>(null);
-
-function hostLabel(host: string): string {
-  if (host === "github.com") return "GitHub";
-  return host;
-}
-
-async function handlePick(userId: string, host: string): Promise<void> {
+// On success, OnboardingGate swaps to the app shell.
+function handlePick(userId: string, host: string): void {
   if (isSwitching) return;
-  switchingId = `${userId}:${host}`;
-  try {
-    await switchAccount(userId, host);
-  } finally {
-    // Clear local state in case it fails. On success, OnboardingGate
-    // swaps to the app shell automatically.
-    switchingId = null;
-  }
-}
-
-const theme = $derived(getThemePreference());
-const cycle: Record<ThemePreference, ThemePreference> = {
-  system: "light",
-  light: "dark",
-  dark: "system",
-};
-const labels: Record<ThemePreference, string> = {
-  system: "System theme",
-  light: "Light theme",
-  dark: "Dark theme",
-};
-function cycleTheme() {
-  setThemePreference(cycle[theme]);
+  void switchSession(userId, host);
 }
 </script>
 
 <div class="picker" in:gsapFade={{ duration: tokens.slow }}>
-    <button class="theme-toggle" onclick={cycleTheme} aria-label={labels[theme]} title={labels[theme]}>
-        {#if theme === 'light'}
-            <Sun size={14} />
-        {:else if theme === 'dark'}
-            <Moon size={14} />
-        {:else}
-            <Desktop size={14} />
-        {/if}
+    <button
+        class="theme-toggle"
+        onclick={cycleThemePreference}
+        aria-label={themePreferenceLabel()}
+        title={themePreferenceLabel()}
+    >
+        <ThemeIcon size={14} />
     </button>
     <div class="picker-header">
         <h1 class="picker-title">Welcome back.</h1>
@@ -74,30 +43,23 @@ function cycleTheme() {
     </div>
 
     <div class="picker-accounts">
-        {#each localAccounts as la (la.id)}
-            {#each la.accounts as acct (`${la.id}:${acct.host}`)}
-                {@const key = `${la.id}:${acct.host}`}
-                {@const switching = switchingId === key}
+        {#each entries as entry (entry.key)}
+                {@const switching = switchingTo === entry.key}
                 <button
                     class="picker-card"
-                    onclick={() => handlePick(la.id, acct.host)}
+                    onclick={() => handlePick(entry.userId, entry.host)}
                     disabled={isSwitching}
                 >
                     <span class="picker-card-avatar">
-                        {#if acct.avatarUrl ?? la.image}
-                            <img
-                                src={acct.avatarUrl ?? la.image}
-                                alt=""
-                                class="picker-card-img"
-                                referrerpolicy="no-referrer"
-                            />
-                        {:else}
-                            <User size={18} class="picker-card-icon" />
-                        {/if}
+                        <Avatar src={entry.avatarContent} size={36}>
+                            {#snippet fallback()}
+                                <User size={18} class="picker-card-icon" />
+                            {/snippet}
+                        </Avatar>
                     </span>
                     <span class="picker-card-body">
-                        <span class="picker-card-login">{acct.githubLogin ?? la.name}</span>
-                        <span class="picker-card-host">{la.email} · {hostLabel(acct.host)}</span>
+                        <span class="picker-card-login">{entry.login}</span>
+                        <span class="picker-card-host">{entry.email} · {entry.hostLabel}</span>
                     </span>
                     <span class="picker-card-action">
                         {#if switching}
@@ -107,9 +69,12 @@ function cycleTheme() {
                         {/if}
                     </span>
                 </button>
-            {/each}
         {/each}
     </div>
+
+    {#if switchError}
+        <p class="picker-error" role="alert">{switchError}</p>
+    {/if}
 
     <div class="picker-footer">
         <button class="picker-new" onclick={onNewAccount} disabled={isSwitching}>
@@ -219,13 +184,6 @@ function cycleTheme() {
         justify-content: center;
     }
 
-    .picker-card-img {
-        width: 36px;
-        height: 36px;
-        border-radius: 50%;
-        object-fit: cover;
-    }
-
     :global(.picker-card-icon) {
         color: var(--color-text-muted);
     }
@@ -272,6 +230,14 @@ function cycleTheme() {
 
     :global(.picker-spinner) {
         color: var(--color-text-muted);
+    }
+
+    .picker-error {
+        max-width: 340px;
+        margin: 0;
+        font-size: 12px;
+        color: var(--color-danger);
+        text-align: center;
     }
 
     .picker-footer {

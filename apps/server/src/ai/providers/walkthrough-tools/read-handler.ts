@@ -1,27 +1,12 @@
-// ─── walkthrough-read-handler ────────────────────────────────────────────────
-//
-// Read-only MCP tool handler: get_walkthrough_state. The first call every
-// agent run makes, including resumes.
-
-import type {
-  RatingAxis,
-  RiskLevel,
-  WalkthroughBlock,
-  WalkthroughPipelinePhase,
-  WalkthroughState,
-} from "@revv/shared";
-import { and, asc, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { type RecapPeriod, STACK_CITATION_FORMAT } from "@revv/shared";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { projectRecaps } from "../../../db/schema/project-recaps";
 import { pullRequests } from "../../../db/schema/pull-requests";
-import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
-import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
-import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
-import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
-import { walkthroughs as walkthroughsTable } from "../../../db/schema/walkthroughs";
 import { readCurrentHeadFiles } from "../../../services/DiffCache";
-import { takeawayOf } from "../../../services/stacks/overlay";
-import { readWalkthroughLeads } from "../../../services/walkthrough-leads";
-import { errorResult, findIssuesMissingInlineComment, loadWalkthroughRow } from "./helpers";
+import { readWalkthroughState } from "../../../services/walkthrough/agent-state";
+import { decodePrCommits, loadWalkthroughRow } from "../../../services/walkthrough/content";
+import { latestFinishedReviews } from "../../../services/walkthrough/review-reads";
+import { fail } from "../mcp-tool-gateway";
 import type {
   GetCommitHistoryInput,
   GetRepoContextInput,
@@ -30,237 +15,22 @@ import type {
   WalkthroughToolHandler,
 } from "./spec";
 
-// ── Handler: get_walkthrough_state ───────────────────────────────────────────
-//
-// The first call every agent run makes, including resumes. Returns enough
-// state for the agent to figure out where to pick up: which phase is
-// complete, which diff steps exist, which axes have been rated.
+// The first call every agent run makes, including resumes (invariant 6).
 
 export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughStateInput> = async (
   ctx,
 ) => {
-  const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
-  if (!row) {
-    return errorResult(
+  const state = readWalkthroughState(ctx.db, ctx.walkthroughId);
+  if (!state) {
+    return fail(
       `Walkthrough ${ctx.walkthroughId} not found. The orchestrator should have created it before the agent ran — check WalkthroughJobs.`,
     );
   }
+  const { issuesNeedingInlineComment, leadsNeedingVerdict } = state;
 
-  const semanticRows = ctx.db
-    .select({
-      semanticStepIndex: walkthroughSemanticSteps.semanticStepIndex,
-      title: walkthroughSemanticSteps.title,
-      summary: walkthroughSemanticSteps.summary,
-    })
-    .from(walkthroughSemanticSteps)
-    .where(eq(walkthroughSemanticSteps.walkthroughId, ctx.walkthroughId))
-    .orderBy(asc(walkthroughSemanticSteps.semanticStepIndex))
-    .all();
-
-  const diffBlocks = ctx.db
-    .select({
-      semanticStepIndex: walkthroughBlocks.semanticStepIndex,
-      stepIndex: walkthroughBlocks.stepIndex,
-      type: walkthroughBlocks.type,
-    })
-    .from(walkthroughBlocks)
-    .where(
-      and(
-        eq(walkthroughBlocks.walkthroughId, ctx.walkthroughId),
-        eq(walkthroughBlocks.phase, "diff_analysis"),
-      ),
-    )
-    .all();
-
-  const ratingRows = ctx.db
-    .select({
-      axis: walkthroughRatings.axis,
-      rationale: walkthroughRatings.rationale,
-      verdict: walkthroughRatings.verdict,
-      confidence: walkthroughRatings.confidence,
-    })
-    .from(walkthroughRatings)
-    .where(eq(walkthroughRatings.walkthroughId, ctx.walkthroughId))
-    .all();
-
-  const issueRows = ctx.db
-    .select({
-      id: walkthroughIssues.id,
-      order: walkthroughIssues.order,
-      title: walkthroughIssues.title,
-      filePath: walkthroughIssues.filePath,
-      startLine: walkthroughIssues.startLine,
-      endLine: walkthroughIssues.endLine,
-    })
-    .from(walkthroughIssues)
-    .where(eq(walkthroughIssues.walkthroughId, ctx.walkthroughId))
-    .all();
-
-  const diffSteps = diffBlocks
-    .slice()
-    .sort((a, b) => a.semanticStepIndex - b.semanticStepIndex || a.stepIndex - b.stepIndex)
-    .map((b) => ({
-      semanticStepIndex: b.semanticStepIndex,
-      stepIndex: b.stepIndex,
-      blockType: b.type as WalkthroughBlock["type"],
-    }));
-
-  const stepIndicesBySection = new Map<number, number[]>();
-  for (const b of diffBlocks) {
-    const arr = stepIndicesBySection.get(b.semanticStepIndex) ?? [];
-    arr.push(b.stepIndex);
-    stepIndicesBySection.set(b.semanticStepIndex, arr);
-  }
-  const semanticSteps = semanticRows.map((s) => ({
-    semanticStepIndex: s.semanticStepIndex,
-    title: s.title,
-    summary: s.summary ?? null,
-    stepIndices: (stepIndicesBySection.get(s.semanticStepIndex) ?? [])
-      .slice()
-      .sort((a, b) => a - b),
-  }));
-
-  const issues = issueRows
-    .slice()
-    .sort((a, b) => a.order - b.order)
-    .map((r) => ({
-      id: r.id,
-      title: r.title,
-      filePath: r.filePath,
-      startLine: r.startLine,
-      endLine: r.endLine,
-    }));
-
-  // Surface unfinished comment-pairing work so resumes (and any agent that
-  // is reasoning about whether it can call `complete_walkthrough` yet)
-  // don't have to deduce it from the issues list. This is the same query
-  // the orchestrator and `complete_walkthrough` use — single source of
-  // truth (see findIssuesMissingInlineComment).
-  const issuesNeedingInlineComment = findIssuesMissingInlineComment(ctx.db, ctx.walkthroughId);
-  // Leads in prompt order with their verdicts, so a resume knows which ones
-  // it has already judged. Same query as complete_walkthrough's gate.
-  const leads = readWalkthroughLeads(ctx.db, ctx.walkthroughId).map((lead) => ({
-    id: lead.id,
-    filePath: lead.filePath,
-    newStart: lead.newStart,
-    newLines: lead.newLines,
-    smells: lead.smells.map((s) => s.smell),
-    verdict: lead.verdict,
-    issueId: lead.issueId,
-  }));
-  const leadsNeedingVerdict = leads.filter((lead) => lead.verdict === null).map((lead) => lead.id);
-  const priorReview = row.parentWalkthroughId
-    ? (() => {
-        const prior = ctx.db
-          .select()
-          .from(walkthroughsTable)
-          .where(eq(walkthroughsTable.id, row.parentWalkthroughId))
-          .get();
-        if (!prior) return null;
-        const priorSemanticSteps = ctx.db
-          .select({
-            semanticStepIndex: walkthroughSemanticSteps.semanticStepIndex,
-            title: walkthroughSemanticSteps.title,
-            summary: walkthroughSemanticSteps.summary,
-          })
-          .from(walkthroughSemanticSteps)
-          .where(eq(walkthroughSemanticSteps.walkthroughId, prior.id))
-          .orderBy(asc(walkthroughSemanticSteps.semanticStepIndex))
-          .all()
-          .map((s) => ({
-            semanticStepIndex: s.semanticStepIndex,
-            title: s.title,
-            summary: s.summary ?? null,
-          }));
-        const priorIssues = ctx.db
-          .select({
-            id: walkthroughIssues.id,
-            severity: walkthroughIssues.severity,
-            title: walkthroughIssues.title,
-            description: walkthroughIssues.description,
-            filePath: walkthroughIssues.filePath,
-            startLine: walkthroughIssues.startLine,
-            endLine: walkthroughIssues.endLine,
-            submittedAt: walkthroughIssues.submittedAt,
-            order: walkthroughIssues.order,
-          })
-          .from(walkthroughIssues)
-          .where(eq(walkthroughIssues.walkthroughId, prior.id))
-          .orderBy(asc(walkthroughIssues.order))
-          .all()
-          .map((i) => ({
-            id: i.id,
-            severity: i.severity as "info" | "warning" | "critical",
-            title: i.title,
-            description: i.description,
-            filePath: i.filePath,
-            startLine: i.startLine,
-            endLine: i.endLine,
-            submittedAt: i.submittedAt,
-          }));
-        const priorRatings = ctx.db
-          .select({
-            axis: walkthroughRatings.axis,
-            verdict: walkthroughRatings.verdict,
-            confidence: walkthroughRatings.confidence,
-            rationale: walkthroughRatings.rationale,
-            createdAt: walkthroughRatings.createdAt,
-          })
-          .from(walkthroughRatings)
-          .where(eq(walkthroughRatings.walkthroughId, prior.id))
-          .orderBy(asc(walkthroughRatings.createdAt))
-          .all()
-          .map((r) => ({
-            axis: r.axis as RatingAxis,
-            verdict: r.verdict as "pass" | "concern" | "blocker",
-            confidence: r.confidence as "low" | "medium" | "high",
-            rationale: r.rationale,
-          }));
-        return {
-          walkthroughId: prior.id,
-          prHeadSha: prior.prHeadSha,
-          summary: prior.summary,
-          riskLevel: prior.riskLevel as RiskLevel,
-          sentiment: prior.sentiment ?? null,
-          semanticSteps: priorSemanticSteps,
-          issues: priorIssues,
-          ratings: priorRatings,
-        };
-      })()
-    : null;
-
-  const state: WalkthroughState = {
-    walkthroughId: row.id,
-    prHeadSha: row.prHeadSha,
-    mode: row.mode as WalkthroughState["mode"],
-    generationMode: row.generationMode as WalkthroughState["generationMode"],
-    parentWalkthroughId: row.parentWalkthroughId ?? null,
-    baseHeadSha: row.baseHeadSha ?? null,
-    priorReview,
-    status: row.status as WalkthroughState["status"],
-    lastCompletedPhase: row.lastCompletedPhase as WalkthroughPipelinePhase,
-    summary: row.summary || null,
-    riskLevel: row.summary ? (row.riskLevel as RiskLevel) : null,
-    sentiment: row.sentiment ?? null,
-    semanticSteps,
-    diffSteps,
-    // Only axes with agent-written prose count as rated — rows seeded by the
-    // retired Jev verdict pass are empty and would otherwise look rated.
-    ratedAxes: ratingRows
-      .filter((r) => r.rationale.trim().length > 0)
-      .map((r) => r.axis as RatingAxis),
-    issues,
-    issueCount: issues.length,
-    issuesNeedingInlineComment,
-    leads,
-    leadsNeedingVerdict,
-  };
-
-  // Loud, plain-text banner when the agent has unfinished comment work.
-  // The JSON state still contains the full list, but the prefix makes it
-  // impossible for the model to skim past — especially on resume, where
-  // missing this would lead straight back to the same complete_walkthrough
-  // validation failure.
+  // Models skim past the lists inside the JSON; a plain-text prefix they
+  // can't miss keeps a resume from walking back into the same
+  // complete_walkthrough refusal.
   const stateJson = JSON.stringify(state);
   const warnings = [
     ...(issuesNeedingInlineComment.length > 0
@@ -268,7 +38,7 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
           `WARNING: ${issuesNeedingInlineComment.length} line-anchored concern(s) have no inline comment yet — call add_issue_comment for each before complete_walkthrough.`,
         ]
       : []),
-    ...(leadsNeedingVerdict.length > 0 && row.lastCompletedPhase !== "none"
+    ...(leadsNeedingVerdict.length > 0 && state.lastCompletedPhase !== "none"
       ? [
           `WARNING: ${leadsNeedingVerdict.length} first-pass lead(s) have no verdict yet (${leadsNeedingVerdict.join(", ")}) — call resolve_lead for each before complete_walkthrough.`,
         ]
@@ -281,67 +51,22 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
   };
 };
 
-// ── Handler: get_commit_history ──────────────────────────────────────────────
-//
-// Read-only. Returns the PR commit list captured at job start (orchestrator
-// writes `walkthroughs.pr_commits` as JSON inside `createPartial`).
-//
-// The agent calls this once before opening the required journey chapter at
-// `semantic_step_index: 0`. Surfacing commits via a tool — rather than the
-// user prompt — keeps the prompt token-bounded on long-running PRs (cap is
-// 300 commits ≈ 4.5K tokens otherwise paid on every run + every resume).
-//
-// Returns commits in oldest → newest order (already stored that way by the
-// orchestrator). A NULL `pr_commits` column (legacy row, or pre-migration)
-// surfaces as an empty array — the agent's single-commit edge-case path
-// then writes a one-paragraph journey chapter and moves on.
-
-interface PrCommitJson {
-  readonly sha: string;
-  readonly message: string;
-  readonly authorLogin: string | null;
-  readonly authorAvatarUrl: string | null;
-  readonly date: string | null;
-}
-
-function isPrCommitJson(v: unknown): v is PrCommitJson {
-  if (v === null || typeof v !== "object") return false;
-  const o = v as Record<string, unknown>;
-  return (
-    typeof o.sha === "string" &&
-    typeof o.message === "string" &&
-    (o.authorLogin === null || typeof o.authorLogin === "string") &&
-    (o.authorAvatarUrl === null || typeof o.authorAvatarUrl === "string") &&
-    (o.date === null || typeof o.date === "string")
-  );
-}
+// The commit list the orchestrator captured when it created the row. A tool rather than
+// the prompt, so long PRs (GitHub returns up to 250 commits) don't pay for it
+// on every run and resume. A legacy row's NULL `pr_commits` reads as an empty list.
 
 export const getCommitHistoryHandler: WalkthroughToolHandler<GetCommitHistoryInput> = async (
   ctx,
 ) => {
   const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
   if (!row) {
-    return errorResult(
+    return fail(
       `Walkthrough ${ctx.walkthroughId} not found. The orchestrator should have created it before the agent ran — check WalkthroughJobs.`,
     );
   }
 
-  let commits: PrCommitJson[] = [];
-  if (row.prCommits) {
-    try {
-      const parsed: unknown = JSON.parse(row.prCommits);
-      if (Array.isArray(parsed)) {
-        commits = parsed.filter(isPrCommitJson);
-      }
-    } catch {
-      // Corrupt JSON — surface as empty so the agent doesn't crash; the
-      // single-commit fallback path handles the rendering.
-    }
-  }
+  const commits = decodePrCommits(row.prCommits);
 
-  // Return as a structured JSON payload. The agent reads commits in
-  // oldest → newest order and writes the journey chapter from it; the
-  // narrative shape is governed by the system prompt, not this tool.
   if (row.mode === "author") {
     const payload = {
       walkthroughId: row.id,
@@ -376,20 +101,9 @@ export const getCommitHistoryHandler: WalkthroughToolHandler<GetCommitHistoryInp
   };
 };
 
-// ── Handler: get_repo_context ────────────────────────────────────────────────
-//
-// Read-only. Returns the most-recent complete project recaps for the
-// repository this walkthrough belongs to. Used by the walkthrough agent in
-// Phase A to ground its summary in recent repo context — what shipped, what
-// themes recur, what risk patterns to watch for.
-//
-// We resolve the repoId by walking walkthrough → pull_request → repository.
-// No round-trip through services — this handler runs in the tool's
-// transaction-free read path, just like get_commit_history.
-
 interface RecapForAgent {
   readonly id: string;
-  readonly period: "daily" | "weekly";
+  readonly period: RecapPeriod;
   readonly periodStart: string;
   readonly periodEnd: string;
   readonly completedAt: string | null;
@@ -404,21 +118,19 @@ export const getRepoContextHandler: WalkthroughToolHandler<GetRepoContextInput> 
 ) => {
   const walkthroughRow = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
   if (!walkthroughRow) {
-    return errorResult(
+    return fail(
       `Walkthrough ${ctx.walkthroughId} not found — cannot resolve repo for context lookup.`,
     );
   }
 
-  // walkthrough.pullRequestId → pullRequests.repositoryId
   const prRow = ctx.db
     .select({ repositoryId: pullRequests.repositoryId })
     .from(pullRequests)
     .where(eq(pullRequests.id, walkthroughRow.pullRequestId))
     .get();
   if (!prRow) {
-    // PR vanished (deleted repo, foreign-key cascade in flight). Return
-    // empty context rather than failing — the agent can still produce a
-    // walkthrough.
+    // PR vanished (deleted repo, FK cascade in flight); the agent can still
+    // review without repo context.
     return {
       content: [
         {
@@ -469,7 +181,7 @@ export const getRepoContextHandler: WalkthroughToolHandler<GetRepoContextInput> 
     }
     return {
       id: r.id,
-      period: r.period as "daily" | "weekly",
+      period: r.period as RecapPeriod,
       periodStart: r.periodStart,
       periodEnd: r.periodEnd,
       completedAt: r.completedAt ?? null,
@@ -500,7 +212,7 @@ const STACK_FILES_PER_LAYER = 60;
 export const getStackContextHandler: WalkthroughToolHandler<GetStackContextInput> = async (ctx) => {
   const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
   if (!row) {
-    return errorResult(`Walkthrough ${ctx.walkthroughId} not found — cannot resolve its stack.`);
+    return fail(`Walkthrough ${ctx.walkthroughId} not found — cannot resolve its stack.`);
   }
   const stack = row.stackContext;
   const repo = ctx.db
@@ -545,6 +257,10 @@ export const getStackContextHandler: WalkthroughToolHandler<GetStackContextInput
           )
           .all();
   const prByNumber = new Map(prRows.map((p) => [p.externalId, p]));
+  const reviews = latestFinishedReviews(
+    ctx.db,
+    prRows.map((p) => p.id),
+  );
 
   const lowerLayers = others
     .filter((l) => l.position < stack.position)
@@ -553,39 +269,16 @@ export const getStackContextHandler: WalkthroughToolHandler<GetStackContextInput
       const pr = prByNumber.get(l.number);
       const base = { position: l.position, number: l.number, status: l.status };
       if (!pr) return { ...base, title: l.title, tracked: false, review: null };
-      const reviewed = ctx.db
-        .select({ id: walkthroughsTable.id, summary: walkthroughsTable.summary })
-        .from(walkthroughsTable)
-        .where(
-          and(
-            eq(walkthroughsTable.pullRequestId, pr.id),
-            inArray(walkthroughsTable.status, ["complete", "superseded"]),
-            eq(walkthroughsTable.lastCompletedPhase, "D"),
-            isNotNull(walkthroughsTable.completedAt),
-          ),
-        )
-        .orderBy(desc(walkthroughsTable.generatedAt))
-        .get();
+      const reviewed = reviews.get(pr.id);
       if (!reviewed) return { ...base, title: pr.title, tracked: true, review: null };
-      const openIssues = ctx.db
-        .select({ title: walkthroughIssues.title, severity: walkthroughIssues.severity })
-        .from(walkthroughIssues)
-        .where(
-          and(
-            eq(walkthroughIssues.walkthroughId, reviewed.id),
-            eq(walkthroughIssues.resolutionStatus, "open"),
-          ),
-        )
-        .orderBy(asc(walkthroughIssues.order))
-        .all();
       return {
         ...base,
         title: pr.title,
         tracked: true,
         review: {
-          takeaway: takeawayOf(reviewed.summary),
-          openIssueCount: openIssues.length,
-          openIssues: openIssues.slice(0, STACK_ISSUES_PER_LAYER),
+          takeaway: reviewed.takeaway,
+          openIssueCount: reviewed.openIssues.length,
+          openIssues: reviewed.openIssues.slice(0, STACK_ISSUES_PER_LAYER),
         },
       };
     });
@@ -624,8 +317,7 @@ export const getStackContextHandler: WalkthroughToolHandler<GetStackContextInput
           stack,
           lowerLayers,
           upperLayers,
-          instructions:
-            "Your diff is this layer alone. Before flagging an absence, check the upper layers: if one plausibly adds it (its description or file list says so), it is not an issue here — mention it in a sentence if it helps the reader. Lower layers are context, already reviewed on their own; don't re-review them. Cite layers as `#N (layer k)`. An upper layer with `files: null` hasn't been fetched by Revv yet.",
+          instructions: `Your diff is this layer alone. Before flagging an absence, check the upper layers: if one plausibly adds it (its description or file list says so), it is not an issue here — mention it in a sentence if it helps the reader. Lower layers are context, already reviewed on their own; don't re-review them. Cite layers as \`${STACK_CITATION_FORMAT}\`. An upper layer with \`files: null\` hasn't been fetched by Revv yet.`,
         }),
       },
     ],

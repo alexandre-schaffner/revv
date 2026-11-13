@@ -1,25 +1,18 @@
-// ── Grafting out-of-band spans onto a live trace ─────────────────────────────
-//
-// A walkthrough generation is a four-minute span with almost nothing inside it,
-// because the work that fills those four minutes happens *outside* the fiber
-// that owns the span:
+// A walkthrough generation's span is nearly empty, because the work that fills
+// it happens outside the fiber that owns it:
 //
 //   • MCP tool handlers. The agent calls them over HTTP from its own
-//     subprocess, so OTel starts each one in a brand-new trace with no
-//     relationship to the generation that provoked it.
+//     subprocess, so OTel starts each one in a brand-new trace.
 //   • ACP session-update listeners. They fire on the connection's read loop —
 //     a plain callback, no Effect fiber, so no ambient span to nest under.
 //
 // Both know the walkthrough id. The generation fiber publishes its span context
 // under that key ("anchors" it); these helpers rebuild the context as a remote
-// parent so those spans land inside the generation trace. Without this the
-// waterfall stops at the fiber boundary and every question worth asking —
-// how much of the wall clock was inference? how much was our own DB writes? —
-// is unanswerable.
+// parent so those spans land inside the generation trace.
 //
-// Anchors are ephemeral, in-memory, and best-effort by construction: they only
-// affect where a span is *filed*, never whether work happens. A missing anchor
-// degrades to an unparented span, never an error.
+// Anchors are in-memory and best-effort: they only affect where a span is
+// filed, never whether work happens. A missing anchor degrades to an
+// unparented span, never an error.
 
 import {
   type Attributes,
@@ -31,7 +24,6 @@ import {
 } from "@opentelemetry/api";
 import { Effect } from "effect";
 
-/** The two ids needed to re-create a span context as a remote parent. */
 export interface TraceAnchor {
   readonly traceId: string;
   readonly spanId: string;
@@ -40,11 +32,8 @@ export interface TraceAnchor {
 const tracer = trace.getTracer("revv-server");
 
 /**
- * Live anchors, keyed by whatever the out-of-band producers can see — the
- * walkthrough id for generation, the recap id for recaps. Bounded by the number
- * of concurrent jobs (`MAX_CONCURRENT_JOBS`), and every publisher registers a
- * finalizer, so this map drains on every exit path including `kill -9` (process
- * death takes the map with it — nothing here is authoritative state).
+ * Keyed by whatever the out-of-band producers can see — the walkthrough id for
+ * generation, the recap id for recaps. Not authoritative state.
  */
 const anchors = new Map<string, TraceAnchor>();
 
@@ -65,13 +54,11 @@ export function publishTraceAnchor(key: string, anchor: TraceAnchor): () => void
   };
 }
 
-/** Read the anchor currently in force for `key`, if any. */
 export function currentTraceAnchor(key: string | null | undefined): TraceAnchor | null {
   if (!key) return null;
   return anchors.get(key) ?? null;
 }
 
-/** A grafted span, plus the anchor needed to nest further spans beneath it. */
 export interface GraftedSpan {
   /** This span's own context — publish it to nest children under this span. */
   readonly anchor: TraceAnchor;
@@ -143,10 +130,6 @@ function wrap(span: Span): GraftedSpan {
   };
 }
 
-/**
- * Run `fn` inside a grafted span, ending it on both paths and marking failures.
- * The sync/async-agnostic shape callers want for a one-shot operation.
- */
 export async function withGraftedSpan<T>(
   key: string | null | undefined,
   name: string,
@@ -163,8 +146,6 @@ export async function withGraftedSpan<T>(
     span.end();
   }
 }
-
-// ── Effect bridge ────────────────────────────────────────────────────────────
 
 /**
  * The current Effect span's ids, as an anchor — `null` when tracing is off or

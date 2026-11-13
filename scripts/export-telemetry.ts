@@ -1,5 +1,7 @@
 // A bounded weekly evidence bundle for an agent to inspect; prints JSON to stdout.
-const base = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://127.0.0.1:45680";
+import { COLLECTOR_PORT } from "../packages/shared/src/constants";
+
+const base = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? `http://127.0.0.1:${COLLECTOR_PORT}`;
 const windowMinutes = 7 * 24 * 60;
 const endpoints = ["kpis", "summary", "services", "generations", "errors", "slow", "traces"];
 const entries = await Promise.all(

@@ -1,67 +1,35 @@
 <script lang="ts">
-import type { RecapPeriod } from "@revv/shared";
+import { RECAP_PERIODS, type RecapPeriod } from "@revv/shared";
 import { page } from "$app/state";
-import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import PillTabs from "$lib/components/layout/PillTabs.svelte";
+import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import RecapPeriodView from "$lib/components/recaps/RecapPeriodView.svelte";
-import { getCmdHeld } from "$lib/stores/shortcuts.svelte";
+import { RECAP_PERIOD_COPY } from "$lib/recaps/copy";
 
 const repoId = $derived(page.params.repoId ?? "");
 
 let activePeriod = $state<RecapPeriod>("daily");
-const cmdHeld = $derived(getCmdHeld());
 
-const tabs = [
-  { id: "daily" as RecapPeriod, label: "Daily", shortcut: "1" },
-  { id: "weekly" as RecapPeriod, label: "Weekly", shortcut: "2" },
-];
+const tabs = RECAP_PERIODS.map((id) => ({ id, label: RECAP_PERIOD_COPY[id].label }));
 
-$effect(() => {
-  function handleKeydown(e: KeyboardEvent): void {
-    if (!e.metaKey) return;
-    if (e.key === "1") {
-      e.preventDefault();
-      e.stopPropagation();
-      activePeriod = "daily";
-    } else if (e.key === "2") {
-      e.preventDefault();
-      e.stopPropagation();
-      activePeriod = "weekly";
-    }
-  }
-  window.addEventListener("keydown", handleKeydown, { capture: true });
-  return () => window.removeEventListener("keydown", handleKeydown, { capture: true });
-});
+useShellChrome(() => ({ tabs: { snippet: periodTabs, key: repoId } }));
 </script>
 
-<AuthGuard>
-	<div class="period-page">
-		<div class="tabs-float">
-			<PillTabs
-				{tabs}
-				activeTab={activePeriod}
-				onTabChange={(tab) => (activePeriod = tab as RecapPeriod)}
-				{cmdHeld}
-			/>
-		</div>
-		<div class="page">
-			<div class="content">
-				<RecapPeriodView {repoId} period={activePeriod} />
-			</div>
-		</div>
+{#snippet periodTabs()}
+	<PillTabs
+		{tabs}
+		activeTab={activePeriod}
+		onTabChange={(tab) => (activePeriod = tab)}
+	/>
+{/snippet}
+
+<div class="page">
+	<div class="content">
+		<RecapPeriodView {repoId} period={activePeriod} />
 	</div>
-</AuthGuard>
+</div>
 
 <style>
-	/* Positioning context for RecapPeriodView's floating actions, outside
-	   the scroll container so `position: absolute; bottom: 0` pins to
-	   the viewport bottom of the island rather than the scroll content. */
-	.period-page {
-		position: relative;
-		height: 100%;
-		overflow: hidden;
-	}
-
 	.page {
 		height: 100%;
 		overflow-y: auto;

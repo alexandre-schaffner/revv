@@ -1,149 +1,66 @@
-// ── chat-edit-tool-spec ─────────────────────────────────────────────────────
-//
-// Zod input schemas + context types for the chat agent's walkthrough-edit
-// MCP tools. Mirrors `walkthrough-tool-spec.ts` (generation pipeline) but for
-// the post-completion edit path that lets the right-pane chat agent mutate
-// the latest completed walkthrough for a PR.
-//
-// See CLAUDE.md invariant #7 — these tools are the only authorized
-// post-completion mutation path for a walkthrough. They never touch `status`
-// or `lastCompletedPhase`; they stamp `lastEditedAt` / `lastEditedBy` on the
-// parent row and broadcast `walkthrough:edited` envelopes via the global SSE bus.
+// The chat-edit tools are the single path that may change a walkthrough after
+// it completed (CLAUDE.md invariant 7). They never touch `status` or
+// `lastCompletedPhase`; `runChatEdit` stamps `lastEditedAt` / `lastEditedBy`
+// and publishes the edit.
 
-import type {
-  ExternalAgentProvider,
-  ThreadEventMessage,
-  WalkthroughStreamEvent,
+import {
+  DIFF_SIDES,
+  type ExternalAgentProvider,
+  RISK_LEVELS,
+  type ThreadEventMessage,
+  type WalkthroughStreamEvent,
 } from "@revv/shared";
 import { z } from "zod";
 import type { Db } from "../../../db";
+import type { ArtifactJudge } from "../../jev/artifact-quality";
 import {
   PLAIN_TEXT_FIELD,
   PROSE_VOICE_CONTRACT,
   SENTIMENT_CONTRACT,
   SUMMARY_CONTRACT,
 } from "../../prompts/review-copy-contract";
-import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gateway";
-
-// ── Handler execution context ───────────────────────────────────────────────
+import type { McpToolResult } from "../mcp-tool-gateway";
+import {
+  blockRefSchema,
+  blockVariantFields,
+  chapterOpeningBlockSchema,
+  citationSchema,
+  confidenceSchema,
+  ratingAxisSchema,
+  severityCalibration,
+  severitySchema,
+  verdictSchema,
+} from "../walkthrough-content-schema";
 
 /**
- * Actor identifier stamped on `walkthroughs.lastEditedBy`. The value records
- * whether the edit came from in-app chat or, for every external coding agent
- * Revv integrates with, which agent authored it.
+ * Stamped on `walkthroughs.lastEditedBy`: in-app chat, or the external coding
+ * agent that authored the edit.
  */
 export type ChatEditActor = "chat:acp" | ExternalAgentProvider;
 
 export interface ChatWalkthroughEditContext {
-  /** Direct DB handle (Bun sqlite + drizzle). */
   readonly db: Db;
-  /**
-   * The PR this chat session is scoped to. Each handler resolves the
-   * target walkthrough as "latest `status='complete'` walkthrough for this
-   * PR" — lazy per call so a chat that outlives a regenerate naturally
-   * retargets the fresh walkthrough.
-   */
+  /** Edits target the PR's newest complete walkthrough, resolved per call. */
   readonly prId: string;
-  /** Authenticated chat user. Reserved for future audit/permission checks. */
-  readonly userId: string;
-  /** Source transport — stamped on `walkthroughs.lastEditedBy`. */
   readonly actor: ChatEditActor;
-  /**
-   * Event sink. Handlers call this AFTER the DB commit so subscribers never
-   * see an event without a durable row. The walkthroughId is passed at call
-   * time (handlers resolve it lazily — see {@link resolveActiveWalkthroughId})
-   * because chat sessions outlive any one walkthrough; the route wraps this
-   * to broadcast a `walkthrough:edited` envelope.
-   */
-  readonly emit: (walkthroughId: string, event: WalkthroughStreamEvent) => void;
-  /**
-   * General thread-event broadcast hook for `comment_threads` /
-   * `thread_messages` events (mirrors `WalkthroughToolContext`). Used by
-   * add_issue_comment / update_issue_comment / delete_issue_comment so any
-   * open DiffViewerInner picks up the inline-comment change.
-   */
+  /** After the commit: `lifecycle:edited`, then `events`, then a team-cache push. */
+  readonly publishEdit: (walkthroughId: string, events: readonly WalkthroughStreamEvent[]) => void;
+  /** After the commit, for edits to `comment_threads` / `thread_messages`. */
   readonly broadcastThreadEvent: (msg: ThreadEventMessage) => void;
+  /** The artifact craft bar generation holds blocks to (invariant 4). */
+  readonly judgeArtifact: ArtifactJudge;
 }
 
-export interface ChatEditToolResult extends McpToolResult {
-  // MCP SDK's tool() signature uses an open-ended response type with a
-  // string index signature. This extra field lets our narrower type unify
-  // with that shape when the SDK wraps us; it's never populated.
-  [k: string]: unknown;
-}
+export type ChatEditToolResult = McpToolResult;
 
 export type ChatEditToolHandler<TInput> = (
   ctx: ChatWalkthroughEditContext,
   input: TInput,
 ) => Promise<ChatEditToolResult>;
 
-export type ChatEditToolSpecRecord = GatewayToolSpec<
-  ChatWalkthroughEditContext,
-  ChatEditToolResult
->;
-
-// ── Shared content sub-schemas (mirror walkthrough-tool-spec.ts shapes) ─────
-
-/**
- * Atomic block content variant. Same shape used by the generation pipeline's
- * `add_diff_step` / `add_semantic_step.initial_block`. Exactly one of
- * `markdown`, `code`, `diff`, or `artifact` must be provided.
- */
-export const blockContentSchema = z
-  .object({
-    markdown: z
-      .object({ content: z.string() })
-      .nullable()
-      .optional()
-      .describe(
-        `Use for narrative/explanatory content, budget 150 WORDS. Mutually exclusive with \`code\`, \`diff\`, and \`artifact\`. ${PROSE_VOICE_CONTRACT}`,
-      ),
-    code: z
-      .object({
-        file_path: z.string(),
-        start_line: z.coerce.number().int(),
-        end_line: z.coerce.number().int(),
-        language: z.string(),
-        content: z.string(),
-        annotation: z.string().nullable(),
-        annotation_position: z.enum(["left", "right"]),
-      })
-      .nullable()
-      .optional()
-      .describe(
-        "Use for source-code excerpts. Mutually exclusive with `markdown`, `diff`, and `artifact`.",
-      ),
-    diff: z
-      .object({
-        file_path: z.string(),
-        patch: z.string(),
-        annotation: z.string().nullable(),
-        annotation_position: z.enum(["left", "right"]),
-      })
-      .nullable()
-      .optional()
-      .describe(
-        "Use for unified-diff hunks. Mutually exclusive with `markdown`, `code`, and `artifact`.",
-      ),
-    artifact: z
-      .object({
-        html: z
-          .string()
-          .describe(
-            "A complete, self-contained HTML document with inline CSS/JS. Vanilla JS only; no external network/CDN; no localStorage; no timers/randomness. Renders in a sandboxed iframe that auto-sizes. Must carry a live state readout, something the reader can vary, and a verdict — a step-reveal with no changing state is a markdown list, not an artifact. Style with the injected Revv theme variables (`var(--color-*)`, `var(--font-*)`) so it matches the app and follows light/dark — never hardcode colors or font-family; spend the accent on the current state, not on buttons. Keep it under ~320px tall: compact rows, no placeholder rows for content not yet revealed. See 'Interactive artifacts (the craft bar)' in the system prompt for the full contract.",
-          ),
-        annotation: z.string().nullable(),
-        annotation_position: z.enum(["left", "right"]),
-      })
-      .nullable()
-      .optional()
-      .describe(
-        "Use for an interactive widget when prose/code/diff fall short. Mutually exclusive with markdown, code, and diff.",
-      ),
-  })
-  .describe(
-    "REQUIRED. Exactly one of { markdown, code, diff, artifact } — the same shape add_diff_step uses.",
-  );
+const blockContentSchema = z
+  .object(blockVariantFields)
+  .describe("REQUIRED. Exactly one of { markdown, code, diff, artifact }.");
 
 /**
  * Appended to every `semantic_step_index` that targets an existing chapter.
@@ -152,27 +69,6 @@ export const blockContentSchema = z
  */
 const CHAPTER_INDEX_NOTE =
   "This is NOT the chapter number the user sees in the UI: map the user's 'chapter N' through `chapterNumber` in get_walkthrough_for_edit (the Overview is chapter 0, the walkthrough summary).";
-
-/** Composite identifier for an existing diff block (matches walkthrough-tool-spec.ts). */
-const blockRefSchema = z.object({
-  semantic_step_index: z.coerce.number().int().nonnegative(),
-  step_index: z.coerce.number().int().nonnegative(),
-});
-
-/** Rating axis enum, matched against `RATING_AXES`. */
-const ratingAxisSchema = z.enum([
-  "correctness",
-  "scope",
-  "tests",
-  "clarity",
-  "safety",
-  "consistency",
-  "api_changes",
-  "performance",
-  "description",
-]);
-
-// ── Tool input schemas ──────────────────────────────────────────────────────
 
 export const getWalkthroughForEditSchema = z.object({});
 
@@ -185,7 +81,7 @@ export const updateOverviewSchema = z.object({
       `New PR summary. ${SUMMARY_CONTRACT} ${PROSE_VOICE_CONTRACT} Omit (or send null) to leave the existing summary unchanged.`,
     ),
   risk_level: z
-    .enum(["low", "medium", "high"])
+    .enum(RISK_LEVELS)
     .nullable()
     .optional()
     .describe(
@@ -207,7 +103,7 @@ export const addSemanticStepEditSchema = z.object({
     .nullable()
     .optional()
     .describe("Optional 1–2 sentence prelude rendered under the title."),
-  initial_block: blockContentSchema,
+  initial_block: chapterOpeningBlockSchema,
 });
 
 export const updateSemanticStepSchema = z.object({
@@ -294,13 +190,11 @@ export const updateRatingSchema = z.object({
   axis: ratingAxisSchema.describe(
     "Axis to update. Must already have a rating row — use get_walkthrough_for_edit to confirm.",
   ),
-  verdict: z
-    .enum(["pass", "concern", "blocker"])
+  verdict: verdictSchema
     .nullable()
     .optional()
     .describe("New verdict. Omit/null to leave unchanged."),
-  confidence: z
-    .enum(["low", "medium", "high"])
+  confidence: confidenceSchema
     .nullable()
     .optional()
     .describe("New confidence. Omit/null to leave unchanged."),
@@ -319,14 +213,7 @@ export const updateRatingSchema = z.object({
       `New markdown details, 80 words. Omit/null to leave unchanged. ${PROSE_VOICE_CONTRACT}`,
     ),
   citations: z
-    .array(
-      z.object({
-        file_path: z.string(),
-        start_line: z.coerce.number().int(),
-        end_line: z.coerce.number().int(),
-        note: z.string().nullable(),
-      }),
-    )
+    .array(citationSchema)
     .nullable()
     .optional()
     .describe(
@@ -343,17 +230,12 @@ export const updateRatingSchema = z.object({
 
 export const deleteRatingSchema = z.object({
   axis: ratingAxisSchema.describe(
-    "Axis whose rating row should be removed. Does NOT regress lastCompletedPhase — the walkthrough's `status` stays 'complete' even with a missing axis. `get_walkthrough_for_edit` will surface `validation.passesCompletenessGate: false` until another rate-axis is added (or the axis is re-added via add_issue's sibling path is not yet implemented — for v1, deleted ratings stay deleted).",
+    "Axis whose rating row should be removed. Does NOT regress lastCompletedPhase — the walkthrough's `status` stays 'complete' with the axis missing, and `get_walkthrough_for_edit` reports `validation.passesCompletenessGate: false` from then on. Chat edits cannot re-add a deleted rating; only a regenerate does.",
   ),
 });
 
-// Mirrors the flag_issue calibration in walkthrough-tools/spec.ts so the chat
-// edit agent and the generation agent score severity identically.
-const SEVERITY_CALIBRATION =
-  "Two decisions, kept separate. (1) WHETHER TO ADD AN ISSUE — a HIGH bar: add only if ALL hold — meaningful impact (accuracy/perf/security/maintainability); discrete & actionable with a clear fix; rigor matching the surrounding codebase; introduced by the reviewed diff (not pre-existing); the author would likely fix it; rests on verifiable facts (no speculation); provably affects specific code (not theoretical); not an intentional design choice. (2) SEVERITY ONCE ADDED — a LOW bar: DEFAULT TO 'warning'; don't hedge a real finding down to 'info'. 'critical' = blocks release / causes an incident (RCE, hardcoded prod secret, auth bypass, unauthenticated privileged endpoint, data-loss path, broken migration, breaking API change without a shim, race on shared state, crash-on-unhandled-error). 'warning' (the common tier) = address before merge / next cycle (SQLi behind auth, stored XSS, sensitive-data IDOR, CSRF on state change, info disclosure, prompt injection behind auth, very-new dependency, missed edge case, missing test for new behavior, unhandled error path, off-by-one). 'info' = RARE genuine nitpick / low-impact hardening the author can defer — most reviews have zero. Security examples are illustrative per tier, not a narrowing.";
-
 export const addIssueEditSchema = z.object({
-  severity: z.enum(["info", "warning", "critical"]).describe(SEVERITY_CALIBRATION),
+  severity: severitySchema.describe(severityCalibration("add_issue")),
   title: z.string().describe(`Short title of the concern (10 words max). ${PLAIN_TEXT_FIELD}`),
   description: z
     .string()
@@ -371,11 +253,7 @@ export const addIssueEditSchema = z.object({
 
 export const updateIssueSchema = z.object({
   issue_id: z.string().describe("Existing walkthrough_issues.id."),
-  severity: z
-    .enum(["info", "warning", "critical"])
-    .describe(SEVERITY_CALIBRATION)
-    .nullable()
-    .optional(),
+  severity: severitySchema.describe(severityCalibration("add_issue")).nullable().optional(),
   title: z.string().nullable().optional().describe(`New title. ${PLAIN_TEXT_FIELD}`),
   description: z.string().nullable().optional().describe(`New description. ${PLAIN_TEXT_FIELD}`),
   block_refs: z.array(blockRefSchema).nullable().optional(),
@@ -397,7 +275,7 @@ export const addIssueCommentEditSchema = z.object({
   file_path: z.string(),
   start_line: z.coerce.number().int(),
   end_line: z.coerce.number().int(),
-  diff_side: z.enum(["old", "new"]).default("new"),
+  diff_side: z.enum(DIFF_SIDES).default("new"),
   body: z.string(),
 });
 
@@ -413,8 +291,6 @@ export const deleteIssueCommentSchema = z.object({
       "thread_messages.id of the comment to delete. If this was the only message on the thread, the thread is also removed. Rejected if the parent issue has submittedAt!=null.",
     ),
 });
-
-// ── Type exports ────────────────────────────────────────────────────────────
 
 export type GetWalkthroughForEditInput = z.infer<typeof getWalkthroughForEditSchema>;
 export type UpdateOverviewInput = z.infer<typeof updateOverviewSchema>;

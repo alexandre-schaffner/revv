@@ -1,28 +1,6 @@
-import type { StackEntryStatus } from "@revv/shared";
 import { z } from "zod";
 import type { Db } from "../../../db";
-import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gateway";
-
-interface StackBriefSnapshotLayer {
-  readonly position: number;
-  readonly number: number;
-  readonly title: string;
-  readonly headSha: string | null;
-  readonly status: StackEntryStatus;
-  readonly prId: string | null;
-  readonly additions: number;
-  readonly deletions: number;
-  readonly changedFiles: number;
-  readonly body: string | null;
-}
-
-export interface StackBriefSnapshot {
-  readonly stackNumber: number;
-  readonly baseRefName: string;
-  readonly layers: ReadonlyArray<StackBriefSnapshotLayer>;
-  readonly merged: ReadonlyArray<{ readonly number: number; readonly title: string }>;
-  readonly capturedAt: string;
-}
+import type { McpToolResult } from "../mcp-tool-gateway";
 
 export interface StackBriefToolContext {
   readonly db: Db;
@@ -32,16 +10,12 @@ export interface StackBriefToolContext {
   readonly onToolCall: (toolName: string) => void;
 }
 
-export interface StackBriefToolResult extends McpToolResult {
-  [k: string]: unknown;
-}
+export type StackBriefToolResult = McpToolResult;
 
 export type StackBriefToolHandler<TInput> = (
   ctx: StackBriefToolContext,
   input: TInput,
 ) => Promise<StackBriefToolResult>;
-
-export type StackBriefToolSpecRecord = GatewayToolSpec<StackBriefToolContext, StackBriefToolResult>;
 
 export const LAYER_LINE_MAX_CHARS = 240;
 export const ARC_MAX_CHARS = 600;

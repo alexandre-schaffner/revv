@@ -47,7 +47,7 @@ Review surface:
 
 Distribution:
 
-- **CI**: `.github/workflows/ci.yml` (lint, typecheck, build), `.github/workflows/release.yml` (macOS Tauri build — DMG). Updater signing and macOS notarization still TODO.
+- **CI**: `.github/workflows/ci.yml` (lint, typecheck, build), `.github/workflows/release.yml` and `nightly.yml` (signed macOS updater archives, which `install.sh` also installs from; no DMG, see `docs/ci-cd.md`). macOS notarization still TODO.
 
 ---
 

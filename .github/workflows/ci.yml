@@ -187,8 +187,8 @@ jobs:
         working-directory: apps/desktop
         env:
           TARGET: ${{ matrix.target }}
-        run: bunx --no-install tauri build --ci --target "$TARGET" --config '{"bundle":{"createUpdaterArtifacts":false}}' -- --locked
-      - name: Verify disk image, version, and architecture
+        run: bunx --no-install tauri build --ci --target "$TARGET" -- --locked
+      - name: Verify app version and architecture
         env:
           TARGET: ${{ matrix.target }}
         run: |

@@ -1,9 +1,11 @@
 <script lang="ts">
+import { githubHostLabel, isPublicGitHub } from "@revv/shared";
 import CaretLeft from "phosphor-svelte/lib/CaretLeft";
 import Check from "phosphor-svelte/lib/Check";
 import Copy from "phosphor-svelte/lib/Copy";
 import { onMount } from "svelte";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
+import { gsapEnter } from "$lib/motion";
 import {
   cancelSignIn,
   clearError,
@@ -12,39 +14,29 @@ import {
   getIsLoading,
   signIn,
 } from "$lib/stores/auth.svelte";
+import { copyFeedback } from "$lib/utils/copy-feedback.svelte";
 import ContinueArrow from "./ContinueArrow.svelte";
 
 interface Props {
   onBack?: () => void;
-  githubHost?: string;
+  githubHost: string;
 }
 
-let { onBack, githubHost = "github.com" }: Props = $props();
+let { onBack, githubHost }: Props = $props();
 
-const isGhe = $derived(githubHost !== "github.com");
-const hostLabel = $derived(isGhe ? githubHost : "GitHub");
+const isGhe = $derived(!isPublicGitHub(githubHost));
+const hostLabel = $derived(githubHostLabel(githubHost));
 
 const error = $derived(getError());
 const deviceFlow = $derived(getDeviceFlow());
 const isLoading = $derived(getIsLoading());
 
-let copied = $state(false);
+const clipboard = copyFeedback(2000);
 
 onMount(() => {
   cancelSignIn();
   clearError();
 });
-
-async function copyCode() {
-  if (!deviceFlow) return;
-  try {
-    await navigator.clipboard.writeText(deviceFlow.userCode);
-    copied = true;
-    setTimeout(() => (copied = false), 2000);
-  } catch {
-    // Clipboard API may be unavailable in some contexts
-  }
-}
 </script>
 
 <div class="signin">
@@ -64,11 +56,11 @@ async function copyCode() {
 			<div class="code-wrap">
 				<div class="code">
 					{#each deviceFlow.userCode as char, i (i)}
-						<span class="char" style="animation-delay: {i * 40}ms">{char}</span>
+						<span class="char" use:gsapEnter={{ y: 8, blur: 3, delay: i * 0.04 }}>{char}</span>
 					{/each}
 				</div>
-				<button class="copy-btn" onclick={copyCode} aria-label="Copy code">
-					{#if copied}
+				<button class="copy-btn" onclick={() => void clipboard.copy(deviceFlow.userCode)} aria-label="Copy code">
+					{#if clipboard.copied}
 						<Check size={13} />
 						<span>Copied</span>
 					{:else}
@@ -90,7 +82,7 @@ async function copyCode() {
 			<div class="waiting">
 				<Dotmatrix variant="square-13" size="small" />
 				<span class="waiting-text">Awaiting authorization</span>
-				<button class="cancel" onclick={cancelSignIn}>Cancel</button>
+				<button class="cancel" onclick={() => cancelSignIn()}>Cancel</button>
 			</div>
 		</div>
 	{:else}
@@ -167,7 +159,6 @@ async function copyCode() {
 		margin: 0;
 	}
 
-	/* ── Entry state ────────────────────────────────────────────── */
 	.entry {
 		display: flex;
 		flex-direction: column;
@@ -231,7 +222,6 @@ async function copyCode() {
 		cursor: not-allowed;
 	}
 
-	/* ── Device-flow state ──────────────────────────────────────── */
 	.device-flow {
 		display: flex;
 		flex-direction: column;
@@ -260,20 +250,6 @@ async function copyCode() {
 		letter-spacing: 0.04em;
 		color: var(--ob-text-heading);
 		display: inline-block;
-		animation: char-in var(--duration-ceremonial-medium) var(--ease-out-expo) backwards;
-	}
-
-	@keyframes char-in {
-		from {
-			opacity: 0;
-			transform: translateY(8px);
-			filter: blur(3px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-			filter: blur(0);
-		}
 	}
 
 	.copy-btn {
@@ -343,11 +319,5 @@ async function copyCode() {
 
 	.cancel:hover {
 		color: var(--ob-text-italic);
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.char {
-			animation: none;
-		}
 	}
 </style>

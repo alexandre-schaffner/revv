@@ -1,24 +1,30 @@
 <script lang="ts">
+import {
+  DEFAULT_GITHUB_HOST,
+  GITHUB_CLIENT_ID_HINT,
+  isLikelyGitHubClientId,
+  isPublicGitHub,
+  normalizeGithubHost,
+} from "@revv/shared";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import CaretLeft from "phosphor-svelte/lib/CaretLeft";
 import GithubLogo from "phosphor-svelte/lib/GithubLogo";
-import {
-  cancelSignIn,
-  clearToken,
-  getIsAuthenticated,
-  setForceOnboardingFlow,
-} from "$lib/stores/auth.svelte";
-import { getGithubClientId, getGithubHost, setGithubConfig } from "$lib/stores/settings.svelte";
+import { gsapEnter, tokens } from "$lib/motion";
+import { changeGithubHost } from "$lib/session/lifecycle.svelte";
+import { getGithubClientId, getGithubHost } from "$lib/stores/settings.svelte";
 import ContinueArrow from "./ContinueArrow.svelte";
+import { ACTIONS_IN, MARK_POP, OPTION_IN } from "./motion";
 
 interface Props {
   onContinue: () => void;
   onBack?: () => void;
 }
 
+const DROP_IN = { y: -4, duration: tokens.smooth } as const;
+
 let { onContinue, onBack }: Props = $props();
 
-const PUBLIC = "github.com";
+const PUBLIC = DEFAULT_GITHUB_HOST;
 // Sentinel for the radio group — the actual host comes from `customHost`.
 const CUSTOM = "custom";
 
@@ -26,63 +32,32 @@ const CUSTOM = "custom";
 // bundled client ID is github.com; anything else is a user-added GitHub
 // Enterprise instance and goes through the custom path.
 const storedHost = getGithubHost();
-const isStoredCustom = storedHost !== null && storedHost !== PUBLIC;
+const isStoredCustom = !isPublicGitHub(storedHost);
 
 let selected = $state<string>(isStoredCustom ? CUSTOM : PUBLIC);
-let customHost = $state<string>(isStoredCustom ? (storedHost ?? "") : "");
+let customHost = $state<string>(isStoredCustom ? storedHost : "");
 let customClientId = $state<string>(isStoredCustom ? getGithubClientId() : "");
 let showInstructions = $state(isStoredCustom);
 let isSaving = $state(false);
 
-/** Strip protocol, whitespace, and trailing slashes so the user can paste a URL. */
-function normalizeHost(raw: string): string {
-  return raw
-    .trim()
-    .replace(/^https?:\/\//i, "")
-    .replace(/\/+$/, "")
-    .trim();
-}
-
-const resolvedHost = $derived(selected === CUSTOM ? normalizeHost(customHost) : selected);
+const resolvedHost = $derived(selected === CUSTOM ? normalizeGithubHost(customHost) : selected);
 const resolvedClientId = $derived(selected === CUSTOM ? customClientId.trim() : "");
-const clientIdIsPlaceholder = $derived(
-  (() => {
-    const normalized = resolvedClientId.toLowerCase();
-    return (
-      normalized === "github_client_id" ||
-      normalized === "client_id" ||
-      normalized === "your_client_id" ||
-      normalized === "your-github-client-id" ||
-      normalized.includes("xxxxxxxx")
-    );
-  })(),
+const clientIdInvalid = $derived(
+  resolvedClientId.length > 0 && !isLikelyGitHubClientId(resolvedClientId),
 );
-// Example URL for the "create a GitHub App" instructions — uses the host the
-// user typed once it's present, otherwise a placeholder.
+
 const appCreateUrl = $derived(`https://${resolvedHost || "your-ghe-host.com"}/settings/apps/new`);
 const canContinue = $derived(
   selected !== CUSTOM ||
-    (resolvedHost.length > 0 && resolvedClientId.length > 0 && !clientIdIsPlaceholder),
+    (resolvedHost.length > 0 && resolvedClientId.length > 0 && !clientIdInvalid),
 );
 
 async function handleContinue() {
   if (!canContinue) return;
-
-  const previousHost = getGithubHost();
-  const hostChanged = previousHost !== null && previousHost !== resolvedHost;
-
-  if (hostChanged && getIsAuthenticated()) {
-    // Suppress the AccountPicker — we're still inside the onboarding
-    // flow and about to re-authenticate with the new host.
-    setForceOnboardingFlow();
-    cancelSignIn();
-    clearToken();
-  }
-
   isSaving = true;
   try {
     // Bundled hosts carry no client ID; clear any previously-saved custom one.
-    await setGithubConfig(resolvedHost, resolvedClientId);
+    await changeGithubHost(resolvedHost, resolvedClientId);
     onContinue();
   } finally {
     isSaving = false;
@@ -106,9 +81,11 @@ async function handleContinue() {
 	<fieldset class="options">
 		<legend class="visually-hidden">GitHub host</legend>
 
-		<label class="option" data-selected={selected === PUBLIC}>
+		<label class="option" data-selected={selected === PUBLIC} use:gsapEnter={{ ...OPTION_IN, delay: 0.08 }}>
 			<input type="radio" name="host" value={PUBLIC} bind:group={selected} />
-			<span class="option-mark" aria-hidden="true"></span>
+			<span class="option-mark" aria-hidden="true">
+				{#if selected === PUBLIC}<span class="option-dot" use:gsapEnter={MARK_POP}></span>{/if}
+			</span>
 			<span class="option-body">
 				<span class="option-row">
 					<span class="option-name">GitHub</span>
@@ -117,9 +94,11 @@ async function handleContinue() {
 			</span>
 		</label>
 
-		<label class="option" data-selected={selected === CUSTOM}>
+		<label class="option" data-selected={selected === CUSTOM} use:gsapEnter={{ ...OPTION_IN, delay: 0.16 }}>
 			<input type="radio" name="host" value={CUSTOM} bind:group={selected} />
-			<span class="option-mark" aria-hidden="true"></span>
+			<span class="option-mark" aria-hidden="true">
+				{#if selected === CUSTOM}<span class="option-dot" use:gsapEnter={MARK_POP}></span>{/if}
+			</span>
 			<span class="option-body">
 				<span class="option-row">
 					<span class="option-name">GitHub Enterprise</span>
@@ -130,7 +109,7 @@ async function handleContinue() {
 	</fieldset>
 
 	{#if selected === CUSTOM}
-		<div class="custom">
+		<div class="custom" use:gsapEnter={DROP_IN}>
 			<div class="field">
 				<label class="field-label" for="ghe-host">Enterprise host</label>
 				<input
@@ -161,8 +140,8 @@ async function handleContinue() {
 					Revv has no app registered on your instance — you create one and paste its
 					public client ID here. It's safe to store (it isn't a secret).
 				</p>
-				{#if clientIdIsPlaceholder}
-					<p class="field-error">Paste the real client ID from your GitHub App or OAuth App.</p>
+				{#if clientIdInvalid}
+					<p class="field-error">{GITHUB_CLIENT_ID_HINT}</p>
 				{/if}
 			</div>
 
@@ -188,7 +167,7 @@ async function handleContinue() {
 				</button>
 
 				{#if showInstructions}
-					<ol class="guide-steps">
+					<ol class="guide-steps" use:gsapEnter={DROP_IN}>
 						<li>
 							<span class="step-copy">
 								<span class="step-title">Open the new app page</span>
@@ -264,7 +243,7 @@ async function handleContinue() {
 		</div>
 	{/if}
 
-	<div class="actions">
+	<div class="actions" use:gsapEnter={ACTIONS_IN}>
 		<button class="primary" onclick={handleContinue} disabled={isSaving || !canContinue}>
 			<span>Continue</span>
 			<ContinueArrow />
@@ -349,26 +328,6 @@ async function handleContinue() {
 		border-bottom: 1px solid var(--ob-border);
 		cursor: pointer;
 		transition: background-color var(--duration-snap) var(--ease-out-expo);
-		animation: option-in var(--duration-ceremonial-medium) var(--ease-out-expo) backwards;
-	}
-
-	.option:nth-child(2) {
-		animation-delay: 80ms;
-	}
-
-	.option:nth-child(3) {
-		animation-delay: 160ms;
-	}
-
-	@keyframes option-in {
-		from {
-			opacity: 0;
-			transform: translateY(6px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-		}
 	}
 
 	.option:hover {
@@ -395,22 +354,11 @@ async function handleContinue() {
 		border-color: var(--ob-text-italic);
 	}
 
-	.option[data-selected='true'] .option-mark::after {
-		content: '';
+	.option-dot {
 		position: absolute;
 		inset: 3px;
 		border-radius: 50%;
 		background: var(--ob-text-italic);
-		animation: mark-pop var(--duration-slow) var(--ease-out-expo);
-	}
-
-	@keyframes mark-pop {
-		from {
-			transform: scale(0);
-		}
-		to {
-			transform: scale(1);
-		}
 	}
 
 	.option-body {
@@ -446,18 +394,6 @@ async function handleContinue() {
 	.actions {
 		display: flex;
 		justify-content: flex-end;
-		animation: actions-in var(--duration-ceremonial-medium) var(--ease-out-expo) 240ms backwards;
-	}
-
-	@keyframes actions-in {
-		from {
-			opacity: 0;
-			transform: translateY(6px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-		}
 	}
 
 	.primary {
@@ -500,24 +436,11 @@ async function handleContinue() {
 		cursor: not-allowed;
 	}
 
-	/* ── Custom GHE host ────────────────────────────────────────── */
 	.custom {
 		display: flex;
 		flex-direction: column;
 		gap: 22px;
 		margin-top: -8px;
-		animation: custom-in var(--duration-smooth) var(--ease-out-expo) backwards;
-	}
-
-	@keyframes custom-in {
-		from {
-			opacity: 0;
-			transform: translateY(-4px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-		}
 	}
 
 	.field {
@@ -665,7 +588,6 @@ async function handleContinue() {
 		font-size: 13px;
 		line-height: 1.5;
 		color: var(--ob-text-body);
-		animation: custom-in var(--duration-smooth) var(--ease-out-expo) backwards;
 		list-style: none;
 	}
 
@@ -790,19 +712,6 @@ async function handleContinue() {
 	@media (max-width: 640px) {
 		.permission-grid {
 			grid-template-columns: 1fr;
-		}
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.custom,
-		.guide-steps {
-			animation: none !important;
-		}
-
-		.option,
-		.option[data-selected='true'] .option-mark::after,
-		.actions {
-			animation: none !important;
 		}
 	}
 </style>

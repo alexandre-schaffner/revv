@@ -1,10 +1,12 @@
 import { Effect } from "effect";
 import { serverEnv } from "../../config";
-import { JEV_API_KEY_SECRET, SecretStore } from "../../services/SecretStore";
+import { SecretStore } from "../../services/SecretStore";
+
+const JEV_API_KEY_SECRET = "jev-api-key";
 
 /**
  * TypeSafe System One API key storage. Route modules can't import `SecretStore`
- * directly (Identity boundary in `scripts/check-import-boundaries.ts`); these
+ * directly (identity boundary in `scripts/check-import-boundaries.ts`); these
  * helpers are the settings routes' way in, since the key shares the keyring.
  */
 

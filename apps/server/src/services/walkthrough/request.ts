@@ -1,0 +1,186 @@
+// The orchestrator side of the external `request_walkthrough` tool: an agent
+// outside Revv pushes commits and asks for a fresh review of exactly the head
+// it pushed. That agent cannot name a walkthrough row or a lifecycle state —
+// it hands over a commit, and everything else goes through
+// `WalkthroughJobs.startJob`, pinned to that head (`expectedHeadSha`), with
+// the user's do-over semantics: a finished review at the head is replaced.
+//
+// Idempotent on the head: a completed review at that head is returned as-is,
+// and a job already generating it is joined, so a retried (or recursive) call
+// never starts a second run.
+//
+// Bounded, because the caller is a loop: a run the user stopped is never
+// restarted from here, and every head and every PR has a run budget. Both read
+// the journal, so they hold across restarts; they count every run, whoever
+// started it — a head the user already retried three times is not one an
+// agent should spend more on.
+
+import type { WalkthroughGenerationMode, WalkthroughMode } from "@revv/shared";
+import { and, desc, eq, gt } from "drizzle-orm";
+import { Effect } from "effect";
+import { walkthroughs } from "../../db/schema/walkthroughs";
+import type { DbError } from "../../domain/errors";
+import { dbTry } from "../../effects/db-try";
+import { DbService } from "../Db";
+import { walkthroughPerspective } from "./perspective";
+import type { WalkthroughService } from "./Walkthrough";
+import { type StartJobError, WalkthroughJobs } from "./WalkthroughJobs";
+
+/** Runs (of any status) at one head before `request_walkthrough` stops starting more. */
+export const MAX_RUNS_PER_HEAD = 3;
+/** Runs started on one PR within an hour before `request_walkthrough` stops starting more. */
+export const MAX_RUNS_PER_PR_PER_HOUR = 6;
+const HOUR_MS = 60 * 60 * 1000;
+
+export type WalkthroughRequestOutcome =
+  | {
+      readonly kind: "started" | "joined" | "already_complete";
+      readonly walkthroughId: string;
+      readonly headSha: string;
+      readonly mode: WalkthroughMode;
+    }
+  | WalkthroughRequestRefusal;
+
+/** Nothing was started; the agent is told why. */
+export type WalkthroughRequestRefusal =
+  /** GitHub has not seen the requested head (yet). */
+  | { readonly kind: "head_mismatch"; readonly githubHeadSha: string }
+  /** The user stopped Revv's run at this head; restarting it is theirs to do. */
+  | { readonly kind: "stopped_by_user"; readonly walkthroughId: string }
+  | {
+      readonly kind: "budget_exhausted";
+      readonly scope: "head" | "pr_hour";
+      readonly runs: number;
+    };
+
+export type WalkthroughRequestError =
+  | Exclude<StartJobError, { _tag: "HeadShaMismatchError" }>
+  | DbError;
+
+export const requestWalkthroughAtHead = (params: {
+  readonly prId: string;
+  /** Lowercase, 40 hex characters. */
+  readonly headSha: string;
+  readonly generationMode: WalkthroughGenerationMode;
+}): Effect.Effect<
+  WalkthroughRequestOutcome,
+  WalkthroughRequestError,
+  DbService | WalkthroughJobs | WalkthroughService
+> =>
+  Effect.gen(function* () {
+    const { db } = yield* DbService;
+    const jobs = yield* WalkthroughJobs;
+    const { headSha } = params;
+    // An unresolved identity is still the right answer to write under: the
+    // web falls back to the same `reviewer` while identity is unknown.
+    const mode = yield* walkthroughPerspective(params.prId);
+
+    const runsAtHead = yield* dbTry("requestWalkthroughAtHead: runs at head", () =>
+      db
+        .select({
+          id: walkthroughs.id,
+          status: walkthroughs.status,
+          endReason: walkthroughs.endReason,
+        })
+        .from(walkthroughs)
+        .where(
+          and(
+            eq(walkthroughs.pullRequestId, params.prId),
+            eq(walkthroughs.prHeadSha, headSha),
+            eq(walkthroughs.mode, mode),
+          ),
+        )
+        .orderBy(desc(walkthroughs.generatedAt))
+        .all(),
+    );
+
+    const complete = runsAtHead.find((row) => row.status === "complete");
+    if (complete) {
+      return { kind: "already_complete", walkthroughId: complete.id, headSha, mode };
+    }
+
+    const latest = runsAtHead[0];
+    if (latest?.status === "error" && latest.endReason === "cancelled") {
+      return { kind: "stopped_by_user", walkthroughId: latest.id };
+    }
+
+    // A generating row is joined by `startJob`, or, when its run died,
+    // resumed under the kernel's resume budget (invariant 9), so it is never
+    // refused for this one.
+    if (latest?.status !== "generating") {
+      if (runsAtHead.length >= MAX_RUNS_PER_HEAD) {
+        return { kind: "budget_exhausted", scope: "head", runs: runsAtHead.length };
+      }
+      const since = new Date(Date.now() - HOUR_MS).toISOString();
+      const runsThisHour = yield* dbTry(
+        "requestWalkthroughAtHead: runs this hour",
+        () =>
+          db
+            .select({ id: walkthroughs.id })
+            .from(walkthroughs)
+            .where(
+              and(
+                eq(walkthroughs.pullRequestId, params.prId),
+                eq(walkthroughs.mode, mode),
+                gt(walkthroughs.generatedAt, since),
+              ),
+            )
+            .all().length,
+      );
+      if (runsThisHour >= MAX_RUNS_PER_PR_PER_HOUR) {
+        return { kind: "budget_exhausted", scope: "pr_hour", runs: runsThisHour };
+      }
+    }
+
+    return yield* jobs
+      .startJob({
+        prId: params.prId,
+        trigger: "external_agent",
+        replace: "finished",
+        mode,
+        generationMode: params.generationMode,
+        expectedHeadSha: headSha,
+      })
+      .pipe(
+        Effect.map(
+          ({ walkthroughId, reused }): WalkthroughRequestOutcome => ({
+            kind: reused ? "joined" : "started",
+            walkthroughId,
+            headSha,
+            mode,
+          }),
+        ),
+        Effect.catchTag("HeadShaMismatchError", (error) =>
+          Effect.succeed<WalkthroughRequestOutcome>({
+            kind: "head_mismatch",
+            githubHeadSha: error.githubHeadSha,
+          }),
+        ),
+      );
+  });
+
+/**
+ * What an agent should read when a request fails. Several of these errors
+ * carry no `message`, and the runtime's fallback ("An error has occurred")
+ * tells the agent nothing about whether to retry.
+ */
+export function describeWalkthroughRequestError(error: WalkthroughRequestError): string {
+  switch (error._tag) {
+    case "GitHubRateLimitError":
+      return `GitHub rate-limited Revv until ${error.resetAt.toISOString()}. Retry after that.`;
+    case "GitHubAuthError":
+      return "Revv's GitHub sign-in is no longer valid. Ask the user to sign in again in Revv.";
+    case "GitHubNetworkError":
+      return "Revv could not reach GitHub. Retry in a minute.";
+    case "GitHubApiError":
+      return `GitHub rejected Revv's request (HTTP ${error.status}).`;
+    case "GitHubNotFoundError":
+    case "NotFoundError":
+      return `Revv could not find ${error.resource} '${error.id}'.`;
+    case "AiGenerationError":
+      return error.message ?? "Walkthrough generation could not start.";
+    case "GitHubAccessDeniedError":
+    case "DbError":
+      return error.message;
+  }
+}

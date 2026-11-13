@@ -7,18 +7,12 @@ import LinkSimple from "phosphor-svelte/lib/LinkSimple";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import User from "phosphor-svelte/lib/User";
 import WarningCircle from "phosphor-svelte/lib/WarningCircle";
-import { onDestroy, tick } from "svelte";
+import type { Attachment } from "svelte/attachments";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 import { Button } from "$lib/components/ui/button";
 import * as Dialog from "$lib/components/ui/dialog";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import { Input } from "$lib/components/ui/input";
-import { gsapFadeY, tokens } from "$lib/motion";
-import {
-  getDeviceFlow,
-  getError,
-  getIsAuthenticated,
-  getIsOnboarded,
-} from "$lib/stores/auth.svelte";
 import {
   addPrDeepLinkRepository,
   chooseAnotherPrDeepLinkAccount,
@@ -30,15 +24,25 @@ import {
   getPrDeepLinkLoadingVisible,
   getPrDeepLinkState,
   matchingAccountsFor,
-  resumePendingPrDeepLink,
   retryPrDeepLink,
-  settlePrDeepLinkAuthorization,
-} from "$lib/stores/pr-deep-link.svelte";
+} from "$lib/deep-link/pr-deep-link.svelte";
+import { gsapFadeY, tokens } from "$lib/motion";
+import {
+  getDeviceFlow,
+  getErrorFor,
+  getIsAuthenticated,
+  getIsOnboarded,
+} from "$lib/stores/auth.svelte";
+import { copyFeedback } from "$lib/utils/copy-feedback.svelte";
 
 const workflow = $derived(getPrDeepLinkState());
 const loadingVisible = $derived(getPrDeepLinkLoadingVisible());
-const deviceFlow = $derived(getDeviceFlow());
-const authError = $derived(getError());
+const deviceFlow = $derived(
+  workflow.kind === "idle" ? null : getDeviceFlow(workflow.locator.githubHost),
+);
+const authError = $derived(
+  workflow.kind === "idle" ? null : getErrorFor(workflow.locator.githubHost),
+);
 const waitingForOnboarding = $derived(
   workflow.kind === "resolving" && getIsAuthenticated() && !getIsOnboarded(),
 );
@@ -54,13 +58,8 @@ const matchingAccounts = $derived(
 let clientId = $state("");
 let clientIdError = $state<string | null>(null);
 let clientIdLocator = "";
-let copiedCode = $state(false);
 let accountButtons: HTMLButtonElement[] = [];
-let copiedCodeTimer: ReturnType<typeof setTimeout> | null = null;
-
-onDestroy(() => {
-  if (copiedCodeTimer) clearTimeout(copiedCodeTimer);
-});
+const clipboard = copyFeedback(1400);
 
 $effect(() => {
   const current = workflow;
@@ -73,29 +72,14 @@ $effect(() => {
   }
 });
 
-$effect(() => {
-  const shouldResume = !getIsAuthenticated() || getIsOnboarded();
-  if (shouldResume && workflow.kind === "resolving") resumePendingPrDeepLink();
-});
-
-$effect(() => {
-  if (
-    workflow.kind === "connect-account" &&
-    workflow.phase === "device-code" &&
-    deviceFlow === null
-  ) {
-    void settlePrDeepLinkAuthorization(authError);
-  }
-});
-
-$effect(() => {
-  if (!open || workflow.kind === "resolving") return;
-  void tick().then(() => {
-    requestAnimationFrame(() => {
-      document.querySelector<HTMLElement>("[data-pr-deep-link-autofocus]")?.focus();
-    });
-  });
-});
+/** Focus the element once the dialog has settled its own initial focus. */
+function autofocus(enabled: boolean): Attachment<HTMLElement> | null {
+  if (!enabled) return null;
+  return (node) => {
+    const frame = requestAnimationFrame(() => node.focus());
+    return () => cancelAnimationFrame(frame);
+  };
+}
 
 function locatorLabel(): string {
   if (workflow.kind === "idle") return "";
@@ -116,21 +100,6 @@ function handleAccountKeydown(event: KeyboardEvent, index: number): void {
 
 async function handleConnect(): Promise<void> {
   clientIdError = await connectPrDeepLinkAccount(clientId);
-}
-
-async function copyDeviceCode(): Promise<void> {
-  if (!deviceFlow) return;
-  try {
-    await navigator.clipboard.writeText(deviceFlow.userCode);
-    copiedCode = true;
-    if (copiedCodeTimer) clearTimeout(copiedCodeTimer);
-    copiedCodeTimer = setTimeout(() => {
-      copiedCode = false;
-      copiedCodeTimer = null;
-    }, 1400);
-  } catch {
-    copiedCode = false;
-  }
 }
 </script>
 
@@ -210,25 +179,23 @@ async function copyDeviceCode(): Promise<void> {
             </div>
           {:else if workflow.kind === "choose-account"}
             <div class="account-list" aria-label="Accounts">
-              {#each workflow.accounts as account, index (`${account.userId}:${account.host}`)}
+              {#each workflow.accounts as account, index (account.key)}
                 <button
                   bind:this={accountButtons[index]}
                   class="account-row"
-                  data-pr-deep-link-autofocus={index === 0 ? "" : undefined}
+                  {@attach autofocus(index === 0)}
                   onclick={() => void choosePrDeepLinkAccount(account)}
                   onkeydown={(event) => handleAccountKeydown(event, index)}
-                  aria-label={`${account.login}, ${account.email}, ${account.host}`}
+                  aria-label={`${account.login}, ${account.email}, ${account.hostLabel}`}
                 >
                   <span class="account-avatar">
-                    {#if account.avatarUrl}
-                      <img src={account.avatarUrl} alt="" referrerpolicy="no-referrer" />
-                    {:else}
-                      <User size={15} />
-                    {/if}
+                    <Avatar src={account.avatarContent} size={24}>
+                      {#snippet fallback()}<User size={15} />{/snippet}
+                    </Avatar>
                   </span>
                   <span class="account-copy">
                     <span class="account-login">{account.login}</span>
-                    <span class="account-meta">{account.email} · {account.host}</span>
+                    <span class="account-meta">{account.email} · {account.hostLabel}</span>
                   </span>
                 </button>
               {/each}
@@ -246,9 +213,9 @@ async function copyDeviceCode(): Promise<void> {
             {:else if workflow.phase === "device-code" && deviceFlow}
               <div class="device-code-panel">
                 <code>{deviceFlow.userCode}</code>
-                <Button variant="outline" size="sm" onclick={copyDeviceCode}>
-                  {#if copiedCode}<Check data-icon="inline-start" />{:else}<Copy data-icon="inline-start" />{/if}
-                  {copiedCode ? "Copied" : "Copy code"}
+                <Button variant="outline" size="sm" onclick={() => void clipboard.copy(deviceFlow.userCode)}>
+                  {#if clipboard.copied}<Check data-icon="inline-start" />{:else}<Copy data-icon="inline-start" />{/if}
+                  {clipboard.copied ? "Copied" : "Copy code"}
                 </Button>
                 <div class="status-row" aria-live="polite">
                   <Dotmatrix variant="square-13" size="small" />
@@ -260,7 +227,7 @@ async function copyDeviceCode(): Promise<void> {
                 <label class="client-id-field">
                   <span>GitHub App client ID</span>
                   <Input
-                    data-pr-deep-link-autofocus
+                    {@attach autofocus(true)}
                     type="text"
                     bind:value={clientId}
                     aria-invalid={clientIdError ? "true" : undefined}
@@ -292,13 +259,13 @@ async function copyDeviceCode(): Promise<void> {
                 <Button variant="outline" onclick={dismissPrDeepLink}>Cancel</Button>
                 {#if workflow.phase === "entry"}
                   <Button
-                    data-pr-deep-link-autofocus={!deepLinkNeedsClientId(workflow.locator) ? "" : undefined}
+                    {@attach autofocus(!deepLinkNeedsClientId(workflow.locator))}
                     onclick={() => void handleConnect()}
                   >Connect account</Button>
                 {/if}
               {:else if workflow.kind === "confirm-repository"}
                 <Button variant="outline" onclick={dismissPrDeepLink}>Cancel</Button>
-                <Button data-pr-deep-link-autofocus onclick={() => void addPrDeepLinkRepository()}>
+                <Button {@attach autofocus(true)} onclick={() => void addPrDeepLinkRepository()}>
                   Add repository
                 </Button>
               {:else if workflow.kind === "error"}
@@ -307,11 +274,11 @@ async function copyDeviceCode(): Promise<void> {
                 {/if}
                 <Button
                   variant={workflow.reason === "network" ? "outline" : "default"}
-                  data-pr-deep-link-autofocus={workflow.reason !== "network" ? "" : undefined}
+                  {@attach autofocus(workflow.reason !== "network")}
                   onclick={dismissPrDeepLink}
                 >Dismiss</Button>
                 {#if workflow.reason === "network"}
-                  <Button data-pr-deep-link-autofocus onclick={retryPrDeepLink}>Try again</Button>
+                  <Button {@attach autofocus(true)} onclick={retryPrDeepLink}>Try again</Button>
                 {/if}
               {/if}
             </Dialog.Footer>
@@ -410,15 +377,13 @@ async function copyDeviceCode(): Promise<void> {
     outline: none;
   }
 
-  .account-avatar,
-  .account-avatar img {
+  .account-avatar {
     align-items: center;
     border-radius: 999px;
     display: flex;
     flex-shrink: 0;
     height: 24px;
     justify-content: center;
-    object-fit: cover;
     width: 24px;
   }
 

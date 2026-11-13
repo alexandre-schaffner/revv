@@ -5,13 +5,10 @@ import {
   artifactThemingWarning,
   type BlockVariantInput,
   blockContentError,
-  buildBlock,
   normalizeDiffPatch,
+  prepareBlock,
 } from "./walkthrough-blocks";
 
-// A valid unified-diff hunk header must carry `@@ -a,b +c,d @@` ranges. The
-// regex models do not always produce — they emit a bare `@@` — which parses
-// into zero hunks and renders a blank panel. normalizeDiffPatch repairs that.
 const VALID_HEADER = /^@@ -\d+,\d+ \+\d+,\d+ @@/m;
 
 function artifact(html: string): BlockVariantInput {
@@ -19,7 +16,6 @@ function artifact(html: string): BlockVariantInput {
     artifact: {
       html,
       annotation: null,
-      annotation_position: "right",
     },
   };
 }
@@ -213,7 +209,6 @@ describe("blockContentError", () => {
           language: "ts",
           content: "const a = 1;",
           annotation: DIAGRAM.replace("KIND", "migration"),
-          annotation_position: "right",
         },
       }),
     ).toContain("code block annotation");
@@ -222,14 +217,12 @@ describe("blockContentError", () => {
 
 describe("normalizeDiffPatch", () => {
   it("synthesizes a header for a bare `@@` hunk (the blank-panel bug)", () => {
-    // The exact shape seen in PR 1105: bare `@@`, one removal, three additions.
     const patch = ["@@", "-const a = old();", "+// note", "+// note 2", "+const a = new();"].join(
       "\n",
     );
     const out = normalizeDiffPatch(patch);
     expect(out).toMatch(VALID_HEADER);
     expect(out).toContain("@@ -1,1 +1,3 @@");
-    // Body is preserved verbatim.
     expect(out).toContain("-const a = old();");
     expect(out).toContain("+const a = new();");
   });
@@ -256,20 +249,35 @@ describe("normalizeDiffPatch", () => {
   it("repairs only malformed headers in a multi-hunk patch", () => {
     const patch = ["@@ -1,1 +1,1 @@", "-a", "+b", "@@", "-c", "+d"].join("\n");
     const out = normalizeDiffPatch(patch);
-    expect(out).toContain("@@ -1,1 +1,1 @@"); // valid one kept
+    expect(out).toContain("@@ -1,1 +1,1 @@");
     expect(out).toContain("@@ -1,1 +1,1 @@\n-a\n+b\n@@ -1,1 +1,1 @@\n-c\n+d");
   });
 
-  it("is applied when buildBlock constructs a diff block", () => {
-    const block = buildBlock("b1", 0, 0, {
-      diff: {
-        file_path: "a.ts",
-        patch: ["@@", "-x", "+y"].join("\n"),
-        annotation: null,
-        annotation_position: "left",
-      },
-    });
-    expect(block?.type).toBe("diff");
-    if (block?.type === "diff") expect(block.patch).toMatch(VALID_HEADER);
+  it("is applied when prepareBlock builds a diff block", () => {
+    const prepared = prepareBlock(
+      { diff: { file_path: "a.ts", patch: ["@@", "-x", "+y"].join("\n"), annotation: null } },
+      "count",
+    );
+    if (!("block" in prepared) || prepared.block.type !== "diff") {
+      throw new Error("expected a diff block");
+    }
+    expect(prepared.block.patch).toMatch(VALID_HEADER);
+  });
+});
+
+describe("prepareBlock", () => {
+  it("refuses zero or two variants with the tool's own wording", () => {
+    expect(prepareBlock({}, "pick one")).toEqual({ error: "pick one" });
+    expect(
+      prepareBlock(
+        { markdown: { content: "a" }, artifact: { html: "<p/>", annotation: null } },
+        "pick one",
+      ),
+    ).toEqual({ error: "pick one" });
+  });
+
+  it("checks the content once the count passes", () => {
+    const prepared = prepareBlock({ markdown: { content: "  " } }, "pick one");
+    expect("error" in prepared && prepared.error).toContain("non-empty content");
   });
 });

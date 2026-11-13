@@ -14,9 +14,14 @@ no service-account JSON to copy around.
 
 ## Architecture in one paragraph
 
-The cache key is content-addressable on `<owner>/<repo>/<headSha>.json.gz`. The
+The cache key is content-addressable on `<owner>/<repo>/<headSha>.json.gz` for a
+github.com repo, the key every Revv version has used, so older and newer clients
+keep sharing reviews. A GitHub Enterprise repo's key names its host:
+`<githubHost>/<owner>/<repo>/<headSha>.json.gz`, one segment more, so it never
+meets a github.com repo with the same owner/name, and it never reads the
+host-less key. The
 local server gzips a `WalkthroughSnapshotV2` (see
-`packages/shared/src/cache.ts`) and uploads it to the bucket on every
+`apps/server/src/services/walkthrough/cache-format.ts`) and uploads it to the bucket on every
 successful generation — but only after an eligibility check (the local user
 must currently hold `write` on the repo) and, unless signing is `off`, after
 SSHSIG-signing the payload with the user's GitHub SSH key. Before kicking off
@@ -116,7 +121,7 @@ target repo**, proven cryptographically.
    repo. Read-only contributors still get cache *hits*; they simply never push.
 2. **Sign** (when `mode != 'off'`) — the server signs the canonical message
    `revv-cache:v1\n<repoFullName>\n<headSha>\n<contentSha256>` (see
-   `cacheSigningMessage` in `packages/shared/src/cache.ts`) with SSHSIG via
+   `cacheSigningMessage` in `apps/server/src/services/walkthrough/cache-format.ts`) with SSHSIG via
    `ssh-keygen -Y sign`, namespace `revv-cache@<host>`. The signing key is the
    user's local SSH private key — auto-detected by matching `~/.ssh/id_*`
    against the keys the user has published at `https://<host>/<login>.keys`, or
@@ -133,6 +138,9 @@ entry must clear, in order:
 1. `schemaVersion` matches `CACHE_SCHEMA_VERSION`.
 2. `contentSha256` matches a fresh hash of the gzipped body (catches silent
    corruption).
+   A `signerHost` other than the repository's GitHub host is a miss in every
+   mode, `off` included: the pusher signs as the account that owns the repo, so
+   such an entry reviews another host's repository with the same owner/name.
 3. Signature, `signerHost`, and `signerLogin` are all present (else the blob is
    "unsigned" — see modes below).
 4. `signerHost` is in the local `cache.signing.trustedSignerHosts` allow-list.
@@ -275,7 +283,8 @@ produce equivalent state.
 ### How to inspect the bucket
 
 ```bash
-gcloud storage ls gs://my-team-revv-cache/owner/repo/
+gcloud storage ls gs://my-team-revv-cache/owner/repo/            # github.com
+gcloud storage ls gs://my-team-revv-cache/ghe.example.com/owner/repo/  # Enterprise
 gcloud storage cat gs://my-team-revv-cache/owner/repo/abc1234.json.gz \
   | gunzip | jq '.schemaVersion, .modelUsed, .generatedBy.githubLogin'
 ```
@@ -283,7 +292,7 @@ gcloud storage cat gs://my-team-revv-cache/owner/repo/abc1234.json.gz \
 ## Schema evolution
 
 The snapshot envelope is versioned via `CACHE_SCHEMA_VERSION` in
-`packages/shared/src/cache.ts`. To make a breaking change:
+`apps/server/src/services/walkthrough/cache-format.ts`. To make a breaking change:
 
 1. Add a new `WalkthroughSnapshotV<N>` type alongside the existing one.
 2. Bump `CACHE_SCHEMA_VERSION` to `<N>`.

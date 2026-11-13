@@ -1,5 +1,3 @@
-// ── PR conversation service ─────────────────────────────────────────────────
-//
 // Serves the Conversation tab. GitHub is the source of truth: every read goes
 // to GitHub, and the last good answer is kept in the kv cache so the tab
 // paints instantly on reload and keeps something on screen when GitHub can't
@@ -23,32 +21,14 @@ import type {
   ReviewerOptions,
 } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
-import {
-  type DbError,
-  type GitHubError,
-  GitHubNetworkError,
-  GitHubNotFoundError,
-  GitHubRateLimitError,
-} from "../domain/errors";
+import { type DbError, type GitHubError, isGitHubUnreachable } from "../domain/errors";
 import { logError } from "../logger";
 import { withGitHubOrigin } from "../observability/github-ledger/origin";
-import { Broadcaster } from "./Broadcaster";
 import { CacheService } from "./Cache";
-import {
-  fetchCheckDetails,
-  fetchCiRollup,
-  fetchCodeowners,
-  fetchConversation,
-  listRepoLabels,
-  type RepoRef,
-  searchAssignableUsers,
-  searchOrgTeams,
-} from "./conversation/github";
-import { runWrite } from "./conversation/writes";
-import type { DbService } from "./Db";
-import type { GitHubEtagCache } from "./GitHubEtagCache";
+import { AvatarCache } from "./github/avatars";
+import { GitHubGateway } from "./github/gateway";
 import { type PrContextBasic, type PrContextError, PrContextService } from "./PrContext";
-import { RemoteUserService } from "./RemoteUser";
+import { Realtime } from "./Realtime";
 
 const CACHE_NS = "pr-conversation";
 /**
@@ -63,90 +43,54 @@ const CODEOWNERS_NS = "pr-codeowners";
 const CODEOWNERS_TTL_MS = 10 * 60 * 1000;
 
 type ConversationError = GitHubError | PrContextError | DbError;
-type Deps = DbService | GitHubEtagCache;
 
 export class PrConversationService extends Context.Service<
   PrConversationService,
   {
     /** The last cached conversation, or null. Never touches GitHub. */
-    readonly cached: (
-      prId: string,
-      userId: string,
-      accountId: string,
-    ) => Effect.Effect<PrConversation | null, ConversationError, Deps>;
+    readonly cached: (prId: string) => Effect.Effect<PrConversation | null, ConversationError>;
     /**
      * A fresh conversation from GitHub. Falls back to the cached snapshot
      * (`stale: true`) when GitHub is unreachable or rate-limited.
      */
-    readonly load: (
-      prId: string,
-      userId: string,
-      accountId: string,
-    ) => Effect.Effect<PrConversationResponse, ConversationError, Deps>;
+    readonly load: (prId: string) => Effect.Effect<PrConversationResponse, ConversationError>;
     /** The head commit's CI rollup only; cheap enough to poll. */
     readonly checks: (
       prId: string,
-      userId: string,
-      accountId: string,
     ) => Effect.Effect<
       { readonly rollup: CiRollup | null; readonly access: CiAccess },
-      ConversationError,
-      Deps
+      ConversationError
     >;
     readonly checkDetails: (
       prId: string,
-      userId: string,
-      accountId: string,
       checkRunId: number,
-    ) => Effect.Effect<CheckDetails, ConversationError, Deps>;
+    ) => Effect.Effect<CheckDetails, ConversationError>;
     /**
      * Apply a write on GitHub, then answer the refreshed conversation (null
      * when the re-read failed; the write still landed).
      */
     readonly write: (
       prId: string,
-      userId: string,
-      accountId: string,
       write: ConversationWrite,
-    ) => Effect.Effect<ConversationWriteResult, ConversationError, Deps>;
+    ) => Effect.Effect<ConversationWriteResult, ConversationError>;
     /**
      * A write made outside `write` (a review submitted to GitHub) changed the
      * conversation: re-read it and announce `pr:conversation-updated`. The
      * conversation is null when the re-read failed; the write still stands,
      * so this never fails.
      */
-    readonly afterWrite: (
-      ctx: PrContextBasic,
-      accountId: string,
-    ) => Effect.Effect<ConversationWriteResult, never, Deps>;
-    readonly labelOptions: (
-      prId: string,
-      userId: string,
-      accountId: string,
-    ) => Effect.Effect<PrLabel[], ConversationError, Deps>;
+    readonly afterWrite: (ctx: PrContextBasic) => Effect.Effect<ConversationWriteResult, never>;
+    readonly labelOptions: (prId: string) => Effect.Effect<PrLabel[], ConversationError>;
     readonly assigneeOptions: (
       prId: string,
-      userId: string,
-      accountId: string,
       query: string,
-    ) => Effect.Effect<ActorOption[], ConversationError, Deps>;
+    ) => Effect.Effect<ActorOption[], ConversationError>;
     readonly reviewerOptions: (
       prId: string,
-      userId: string,
-      accountId: string,
       query: string,
-    ) => Effect.Effect<ReviewerOptions, ConversationError, Deps>;
+    ) => Effect.Effect<ReviewerOptions, ConversationError>;
   }
 >()("PrConversationService") {}
-
-function repoRef(ctx: PrContextBasic): Effect.Effect<RepoRef, GitHubNotFoundError> {
-  const [owner, repo, ...rest] = ctx.repo.fullName.split("/");
-  return owner && repo && rest.length === 0
-    ? Effect.succeed({ owner, repo })
-    : Effect.fail(new GitHubNotFoundError({ resource: "repo", id: ctx.repo.fullName }));
-}
-
-// ── Avatars ─────────────────────────────────────────────────────────────────
 
 function loginsOf(conversation: PrConversation): Set<string> {
   const logins = new Set<string>([conversation.author.login]);
@@ -158,55 +102,51 @@ function loginsOf(conversation: PrConversation): Set<string> {
   return logins;
 }
 
-/** GitHub couldn't be reached; the cached snapshot is the honest answer. */
-function isUnreachable(e: ConversationError): boolean {
-  return e instanceof GitHubNetworkError || e instanceof GitHubRateLimitError;
-}
-
 export const PrConversationServiceLive = Layer.effect(
   PrConversationService,
   Effect.gen(function* () {
     const prContext = yield* PrContextService;
+    const github = yield* GitHubGateway;
     const cache = yield* CacheService;
-    const remoteUsers = yield* RemoteUserService;
-    const broadcaster = yield* Broadcaster;
-
-    const resolveAvatars = (logins: Iterable<string>) => remoteUsers.getAvatarContents([...logins]);
+    const avatars = yield* AvatarCache;
+    const realtime = yield* Realtime;
 
     /**
      * Cache avatars the conversation shows but `remote_users` lacks. Runs
      * detached: the first paint uses initials, the next read has the image.
      */
-    const warmAvatars = (urls: Map<string, string>, known: ReadonlyMap<string, string>) =>
+    const warmAvatars = (
+      host: string,
+      urls: Map<string, string>,
+      known: ReadonlyMap<string, string>,
+    ) =>
       Effect.forEach(
         [...urls].filter(([login]) => !known.has(login)),
-        ([login, avatarUrl]) =>
-          remoteUsers.upsert({ provider: "github", providerUserId: "", login, avatarUrl }),
+        ([login, avatarUrl]) => avatars.ensure(host, login, avatarUrl),
         { concurrency: 4, discard: true },
       ).pipe(withGitHubOrigin("conversation:avatars"), Effect.forkDetach, Effect.asVoid);
 
-    const codeownersFor = (ctx: PrContextBasic, ref: RepoRef) =>
+    const codeownersFor = (ctx: PrContextBasic) =>
       cache.getOrFetch(
         CODEOWNERS_NS,
         `${ctx.repo.fullName}:${ctx.pr.targetBranch}`,
-        () => fetchCodeowners(ref, ctx.pr.targetBranch, ctx.token, ctx.apiBase),
+        () => github.conversation.codeowners(ctx.client, ctx.repo.fullName, ctx.pr.targetBranch),
         { ttlMs: CODEOWNERS_TTL_MS },
       );
 
     /** Fill in the avatars `remote_users` holds for everyone the conversation names. */
-    const withAvatars = (conversation: PrConversation) =>
-      Effect.map(resolveAvatars(loginsOf(conversation)), (known) => ({
+    const withAvatars = (host: string, conversation: PrConversation) =>
+      Effect.map(avatars.contents(host, loginsOf(conversation)), (known) => ({
         conversation: { ...conversation, avatars: Object.fromEntries(known) },
         known,
       }));
 
     const fetchFresh = (ctx: PrContextBasic, prId: string) =>
       Effect.gen(function* () {
-        const ref = yield* repoRef(ctx);
         const [{ conversation: mapped, avatarUrls }, codeowners] = yield* Effect.all(
           [
-            fetchConversation(ref, ctx.pr.externalId, prId, ctx.token, ctx.apiBase),
-            codeownersFor(ctx, ref),
+            github.conversation.fetch(ctx.client, ctx.repo.fullName, ctx.pr.externalId, prId),
+            codeownersFor(ctx),
           ],
           { concurrency: 2 },
         );
@@ -214,31 +154,31 @@ export const PrConversationServiceLive = Layer.effect(
         // fills them in from there.
         const snapshot: PrConversation = { ...mapped, codeowners, avatars: {} };
         yield* cache.set(CACHE_NS, prId, snapshot, { ttlMs: CACHE_TTL_MS });
-        const { conversation, known } = yield* withAvatars(snapshot);
-        yield* warmAvatars(avatarUrls, known);
+        const { conversation, known } = yield* withAvatars(ctx.repo.githubHost, snapshot);
+        yield* warmAvatars(ctx.repo.githubHost, avatarUrls, known);
         return conversation;
       });
 
-    const readCached = (prId: string) =>
+    const readCached = (prId: string, host: string) =>
       Effect.gen(function* () {
         const snapshot = yield* cache.get<PrConversation>(CACHE_NS, prId);
         if (!snapshot) return null;
-        return (yield* withAvatars(snapshot)).conversation;
+        return (yield* withAvatars(host, snapshot)).conversation;
       });
 
-    const cached = (prId: string, userId: string, accountId: string) =>
+    const cached = (prId: string) =>
       Effect.gen(function* () {
-        yield* prContext.resolveBasic(prId, userId, accountId);
-        return yield* readCached(prId);
+        const { repo } = yield* prContext.readPr(prId);
+        return yield* readCached(prId, repo.githubHost);
       });
 
-    const load = (prId: string, userId: string, accountId: string) =>
+    const load = (prId: string) =>
       Effect.gen(function* () {
-        const ctx = yield* prContext.resolveBasic(prId, userId, accountId);
+        const ctx = yield* prContext.forPr(prId);
         return yield* fetchFresh(ctx, prId).pipe(
           Effect.map((conversation): PrConversationResponse => ({ conversation, stale: false })),
-          Effect.catchIf(isUnreachable, (err) =>
-            Effect.flatMap(readCached(prId), (snapshot) =>
+          Effect.catchIf(isGitHubUnreachable, (err) =>
+            Effect.flatMap(readCached(prId, ctx.repo.githubHost), (snapshot) =>
               snapshot
                 ? Effect.succeed<PrConversationResponse>({ conversation: snapshot, stale: true })
                 : Effect.fail(err),
@@ -247,14 +187,13 @@ export const PrConversationServiceLive = Layer.effect(
         );
       });
 
-    const checks = (prId: string, userId: string, accountId: string) =>
+    const checks = (prId: string) =>
       Effect.gen(function* () {
-        const ctx = yield* prContext.resolveBasic(prId, userId, accountId);
-        const answer = yield* fetchCiRollup(
-          yield* repoRef(ctx),
+        const ctx = yield* prContext.forPr(prId);
+        const answer = yield* github.conversation.ciRollup(
+          ctx.client,
+          ctx.repo.fullName,
           ctx.pr.externalId,
-          ctx.token,
-          ctx.apiBase,
         );
         // Keep the snapshot's CI in step so a reload doesn't flash old checks.
         const snapshot = yield* cache.get<PrConversation>(CACHE_NS, prId);
@@ -269,17 +208,16 @@ export const PrConversationServiceLive = Layer.effect(
         return answer;
       });
 
-    const checkDetails = (prId: string, userId: string, accountId: string, checkRunId: number) =>
+    const checkDetails = (prId: string, checkRunId: number) =>
       Effect.gen(function* () {
-        const ctx = yield* prContext.resolveBasic(prId, userId, accountId);
+        const ctx = yield* prContext.forPr(prId);
         const key = `${ctx.repo.fullName}:${checkRunId}`;
         const hit = yield* cache.get<CheckDetails>(DETAILS_NS, key);
         if (hit?.completed) return hit;
-        const details = yield* fetchCheckDetails(
-          yield* repoRef(ctx),
+        const details = yield* github.conversation.checkDetails(
+          ctx.client,
+          ctx.repo.fullName,
           checkRunId,
-          ctx.token,
-          ctx.apiBase,
         );
         // A finished run's output never changes; a running one will.
         if (details.completed) {
@@ -288,7 +226,7 @@ export const PrConversationServiceLive = Layer.effect(
         return details;
       });
 
-    const afterWrite = (ctx: PrContextBasic, accountId: string) =>
+    const afterWrite = (ctx: PrContextBasic) =>
       Effect.gen(function* () {
         const prId = ctx.pr.id;
         // GitHub took the write; failing to re-read it (rate limit, network)
@@ -302,36 +240,39 @@ export const PrConversationServiceLive = Layer.effect(
             }),
           ),
         );
-        yield* broadcaster.broadcastToAccount(accountId, {
+        yield* realtime.toAccount(ctx.accountId, {
           type: "pr:conversation-updated",
           data: { prId, fetchedAt: conversation?.fetchedAt ?? null },
         });
         return { conversation } satisfies ConversationWriteResult;
       });
 
-    const write = (prId: string, userId: string, accountId: string, w: ConversationWrite) =>
+    const write = (prId: string, w: ConversationWrite) =>
       Effect.gen(function* () {
-        const ctx = yield* prContext.resolveBasic(prId, userId, accountId);
-        yield* runWrite(yield* repoRef(ctx), ctx.pr.externalId, w, ctx.token, ctx.apiBase);
-        return yield* afterWrite(ctx, accountId);
+        const ctx = yield* prContext.forPr(prId);
+        yield* github.conversation.write(ctx.client, ctx.repo.fullName, ctx.pr.externalId, w);
+        return yield* afterWrite(ctx);
       });
 
-    const labelOptions = (prId: string, userId: string, accountId: string) =>
+    const labelOptions = (prId: string) =>
       Effect.gen(function* () {
-        const ctx = yield* prContext.resolveBasic(prId, userId, accountId);
-        return yield* listRepoLabels(yield* repoRef(ctx), ctx.token, ctx.apiBase);
+        const ctx = yield* prContext.forPr(prId);
+        return yield* github.conversation.labels(ctx.client, ctx.repo.fullName);
       });
 
     const searchUsers = (ctx: PrContextBasic, query: string) =>
       Effect.gen(function* () {
-        const users = yield* searchAssignableUsers(
-          yield* repoRef(ctx),
+        const users = yield* github.conversation.assignableUsers(
+          ctx.client,
+          ctx.repo.fullName,
           query,
-          ctx.token,
-          ctx.apiBase,
         );
-        const known = yield* resolveAvatars(users.map((u) => u.login));
+        const known = yield* avatars.contents(
+          ctx.repo.githubHost,
+          users.map((u) => u.login),
+        );
         yield* warmAvatars(
+          ctx.repo.githubHost,
           new Map(users.flatMap((u) => (u.avatarUrl ? [[u.login, u.avatarUrl] as const] : []))),
           known,
         );
@@ -344,17 +285,17 @@ export const PrConversationServiceLive = Layer.effect(
         );
       });
 
-    const assigneeOptions = (prId: string, userId: string, accountId: string, query: string) =>
-      Effect.flatMap(prContext.resolveBasic(prId, userId, accountId), (ctx) =>
-        searchUsers(ctx, query),
-      );
+    const assigneeOptions = (prId: string, query: string) =>
+      Effect.flatMap(prContext.forPr(prId), (ctx) => searchUsers(ctx, query));
 
-    const reviewerOptions = (prId: string, userId: string, accountId: string, query: string) =>
+    const reviewerOptions = (prId: string, query: string) =>
       Effect.gen(function* () {
-        const ctx = yield* prContext.resolveBasic(prId, userId, accountId);
-        const ref = yield* repoRef(ctx);
+        const ctx = yield* prContext.forPr(prId);
         const [users, teams] = yield* Effect.all(
-          [searchUsers(ctx, query), searchOrgTeams(ref, query, ctx.token, ctx.apiBase)],
+          [
+            searchUsers(ctx, query),
+            github.conversation.orgTeams(ctx.client, ctx.repo.fullName, query),
+          ],
           { concurrency: 2 },
         );
         // GitHub refuses a review request to the PR's author.

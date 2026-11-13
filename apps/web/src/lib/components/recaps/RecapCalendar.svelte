@@ -8,34 +8,35 @@ import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import { untrack } from "svelte";
 import { goto } from "$app/navigation";
 import { gsapFade, gsapPress } from "$lib/motion";
-import { fetchRecapsForMonth, getMonthRecapsLoading } from "$lib/stores/recaps.svelte";
+import { RECAP_PERIOD_COPY } from "$lib/recaps/copy";
 import {
   addUtcDays,
   dayKeyToUtcDate,
-  formatSlot,
-  isCurrentPeriod,
+  formatRecapRange,
   mondayKeyOf,
   monthGrid,
   monthKeyOf,
-  recapSlotKey,
+  recapSlotIndex,
   shiftMonth,
   slotKeyFor,
+  slotSpan,
   utcDateKey,
   utcDayKey,
   windowPath,
-} from "./period-window";
+} from "$lib/recaps/period-window";
+import { fetchRecapsForMonth, getMonthRecapsLoading } from "$lib/recaps/store.svelte";
+import { now } from "$lib/utils/clock.svelte";
 import RecapButton from "./RecapButton.svelte";
 
 /**
- * Month calendar over a repo's recaps. Every cell — filled or empty — is a
- * generation target, which is the point: the old flat archive list could only
- * show what already existed, so gaps in history were invisible and unfillable.
+ * Month calendar over a repo's recaps. Every cell, filled or empty, is a
+ * generation target, so gaps in history are visible and fillable.
  *
  * Everything here is UTC, always. A user at UTC+13 sees local 4 June while UTC
  * is still 3 June; if the today-ring followed local time they'd click what
  * looks like yesterday, hit the idempotent past-window path, and watch nothing
  * happen. Hence the `· UTC` marker in the footer, matching the eyebrow on the
- * recap hero above.
+ * recap hero.
  */
 interface Props {
   repoId: string;
@@ -53,26 +54,10 @@ interface Props {
 
 let { repoId, period, recaps, activeRecapId = null, initialDayKey, onLeave }: Props = $props();
 
-/** Pre-Step-2b rows carry this message for a window that simply held nothing. */
-const LEGACY_EMPTY_WINDOW_MESSAGE = "No archived or open PRs found for this window";
-
-// ── Clock ───────────────────────────────────────────────────────────────────
-
-// A page left open across UTC midnight must re-paint the today ring, so the
-// current day key is state on a slow tick rather than a one-shot constant.
-let nowKey = $state(utcDateKey(new Date()));
-
-$effect(() => {
-  const id = setInterval(() => {
-    const next = utcDateKey(new Date());
-    if (next !== nowKey) nowKey = next;
-  }, 60_000);
-  return () => clearInterval(id);
-});
+// A page left open across UTC midnight must re-paint the today ring.
+const nowKey = $derived(utcDateKey(new Date(now(60_000))));
 
 const currentMonth = $derived(monthKeyOf(nowKey));
-
-// ── View state ──────────────────────────────────────────────────────────────
 
 const activeRecap = $derived(recaps.find((r) => r.id === activeRecapId) ?? null);
 
@@ -112,14 +97,11 @@ const grid = $derived(monthGrid(viewMonth));
 
 /**
  * `monthGrid` always returns six rows so the fetch range is a constant 42
- * days. Rendering all six paints a whole week of the *next* month whenever
- * five rows already cover this one — in weekly mode that row looks like a
- * selectable week that has nothing to do with the month in the label. Only
- * the last row can be fully outside (the first always holds the 1st), so
- * dropping it is the whole fix. The grid then stands 5 or 6 rows tall by
- * month; reserving the taller height would trade a visible 47px of dead space
- * in most months against a shift that only ever follows a deliberate click on
- * the month arrows, with nothing but the footer below it to move.
+ * days. Only the last row can fall wholly in the next month (the first always
+ * holds the 1st), and painted it reads, in weekly mode, as a selectable week
+ * unrelated to the month in the label, so it is dropped. The grid then stands
+ * 5 or 6 rows tall by month: the shift only follows a click on the month
+ * arrows, which beats 47px of dead space in most months.
  */
 const weeks = $derived(
   grid.weeks.filter(
@@ -131,39 +113,15 @@ const weekdayLabels = $derived(
   (grid.weeks[0] ?? []).map((k) => WEEKDAY_FMT.format(dayKeyToUtcDate(k))),
 );
 
-// ── Slot index ──────────────────────────────────────────────────────────────
+// Daily *and* weekly rows at once, so toggling the period triggers no refetch.
+const slotIndex = $derived(recapSlotIndex(recaps));
 
-/**
- * `slotKey → recap`, holding daily *and* weekly rows at once so toggling the
- * period costs nothing and triggers no refetch. Superseded rows are skipped —
- * the server excludes them but the merged store cache keeps them around — and
- * when two rows share a slot the newest generation wins.
- */
-const slotIndex = $derived.by(() => {
-  const map = new Map<string, ProjectRecapSummary>();
-  for (const r of recaps) {
-    if (r.status === "superseded") continue;
-    const key = recapSlotKey(r);
-    const existing = map.get(key);
-    if (!existing || r.generatedAt > existing.generatedAt) map.set(key, r);
-  }
-  return map;
-});
+type SlotKind = "complete" | "generating" | "error" | "empty";
 
-type SlotKind = "complete" | "generating" | "error" | "quiet" | "empty";
-
-function recapKind(r: ProjectRecapSummary | undefined, dayKey: string): SlotKind {
+function recapKind(r: ProjectRecapSummary | undefined): SlotKind {
   if (!r) return "empty";
   if (r.status === "generating") return "generating";
-  if (r.status === "error") {
-    // Shim for rows written before quiet historical windows completed
-    // normally. They're failures on paper only; painting them destructive
-    // would light up every quiet weekend in the archive.
-    const quiet =
-      r.errorMessage === LEGACY_EMPTY_WINDOW_MESSAGE &&
-      !isCurrentPeriod(period, dayKey, dayKeyToUtcDate(nowKey));
-    return quiet ? "quiet" : "error";
-  }
+  if (r.status === "error" || r.status === "stopped") return "error";
   return "complete";
 }
 
@@ -201,7 +159,7 @@ const canGoNext = $derived(viewMonth < currentMonth);
 
 function cellLabel(dayKey: string): string {
   const r = recapAt(dayKey);
-  const kind = recapKind(r, dayKey);
+  const kind = recapKind(r);
   const state =
     kind === "complete"
       ? "complete"
@@ -209,15 +167,11 @@ function cellLabel(dayKey: string): string {
         ? "generating"
         : kind === "error"
           ? "failed"
-          : kind === "quiet"
-            ? "no activity"
-            : slotIsFuture(dayKey)
-              ? "in the future"
-              : "not generated";
-  return `${formatSlot(period, dayKey)} — ${period} recap, ${state}`;
+          : slotIsFuture(dayKey)
+            ? "in the future"
+            : "not generated";
+  return `${formatRecapRange(slotSpan(period, dayKey))} — ${period} recap, ${state}`;
 }
-
-// ── Month prefetch ──────────────────────────────────────────────────────────
 
 // One fetch for the month on screen, one warming the month before it: users
 // page backwards through history, and forwards is capped at today.
@@ -239,8 +193,6 @@ $effect(() => {
 // month whose fetch failed.
 const monthPending = $derived(getMonthRecapsLoading(repoId, viewMonth));
 
-// ── Navigation ──────────────────────────────────────────────────────────────
-
 function goToMonth(monthKey: string): void {
   if (monthKey > currentMonth) return;
   viewMonth = monthKey;
@@ -257,12 +209,8 @@ function jumpToToday(): void {
 }
 
 /**
- * Every cell in the grid is a link, filled or not.
- *
- * A filled slot goes to its recap. An empty one goes to that window's own
- * page, which says so and offers to generate it — the calendar itself no
- * longer generates anything, so there is no select-then-confirm step and no
- * state in here beyond which month you are looking at.
+ * Every cell is a link: a filled slot to its recap, an empty one to that
+ * window's own page, which offers to generate it.
  */
 function onCellClick(dayKey: string): void {
   if (slotIsFuture(dayKey)) return;
@@ -335,8 +283,6 @@ function onGridKeydown(e: KeyboardEvent): void {
   e.preventDefault();
 }
 
-// Only keyboard navigation moves the DOM focus ring; a pointer click leaves it
-// where it was.
 $effect(() => {
   const key = focusedDayKey;
   if (!shouldStealFocus) return;
@@ -367,7 +313,7 @@ $effect(() => {
 						class="calendar-grid"
 						class:calendar-grid--weekly={period === "weekly"}
 						role="grid"
-						aria-label="{period === 'daily' ? 'Daily' : 'Weekly'} recap calendar, {monthLabel} UTC"
+						aria-label="{RECAP_PERIOD_COPY[period].label} recap calendar, {monthLabel} UTC"
 						onkeydown={onGridKeydown}
 					>
 						<thead>
@@ -384,7 +330,7 @@ $effect(() => {
 								<tr
 									class="week-row"
 									class:week-row--active={weekActive}
-									aria-label={period === "weekly" ? `Week of ${formatSlot("daily", mondayKey)}` : undefined}
+									aria-label={period === "weekly" ? `Week of ${formatRecapRange(slotSpan("daily", mondayKey))}` : undefined}
 									onpointerenter={() => {
 										if (period === "weekly" && !slotIsFuture(mondayKey)) hoverWeekKey = mondayKey;
 									}}
@@ -394,7 +340,7 @@ $effect(() => {
 								>
 									{#each week as dayKey (dayKey)}
 										{@const recap = recapAt(dayKey)}
-										{@const kind = recapKind(recap, dayKey)}
+										{@const kind = recapKind(recap)}
 										{@const future = slotIsFuture(dayKey)}
 										{@const isActive = recap !== undefined && recap.id === activeRecapId}
 										<td role="gridcell" class="cell-wrap" aria-current={isActive ? "page" : undefined}>
@@ -408,7 +354,6 @@ $effect(() => {
 												class:cell--complete={kind === "complete"}
 												class:cell--generating={kind === "generating"}
 												class:cell--error={kind === "error"}
-												class:cell--quiet={kind === "quiet"}
 												class:cell--active={isActive}
 												class:cell--week-start={period === "weekly" && dayKey === mondayKey}
 												class:cell--week-end={period === "weekly" && dayKey === addUtcDays(mondayKey, 6)}
@@ -416,7 +361,7 @@ $effect(() => {
 												aria-disabled={future}
 												aria-current={isToday(dayKey) ? "date" : undefined}
 												aria-label={cellLabel(dayKey)}
-												title={kind === "error" ? (recap?.errorMessage ?? undefined) : undefined}
+												title={recap?.status === "stopped" ? "Stopped" : kind === "error" ? (recap?.errorMessage ?? undefined) : undefined}
 												onclick={() => onCellClick(dayKey)}
 												use:gsapPress
 											>
@@ -426,8 +371,6 @@ $effect(() => {
 														<Spinner size={10} class="motion-essential-spin" aria-hidden="true" />
 													{:else if kind === "error"}
 														<WarningCircle size={10} aria-hidden="true" />
-													{:else if kind === "quiet"}
-														<span class="mark-dash"></span>
 													{:else if kind === "complete"}
 														<span class="mark-dot"></span>
 													{:else if monthPending}
@@ -445,9 +388,6 @@ $effect(() => {
 			{/key}
 	</div>
 
-	<!-- The selection strip. Below the grid rather than beside it: as a right
-	     rail it pushed the calendar off the page's centre axis, and it spent
-	     most of its life holding one sentence in a 250px column. -->
 	<p class="calendar-footer">
 		<CalendarDots size={12} aria-hidden="true" />
 		<span>Every window starts and ends at 00:00 UTC.</span>
@@ -456,8 +396,6 @@ $effect(() => {
 </section>
 
 <style>
-	/* No section chrome — no rule, no page margins. This lives inside a
-	   popover now, which draws its own surface. */
 	.recap-calendar {
 		container-type: inline-size;
 		container-name: recap-archive;
@@ -470,9 +408,6 @@ $effect(() => {
 		width: 100%;
 	}
 
-	/* Month stepper left, Today right. The popover trigger already says
-	   "Archive", so the section heading that used to sit here was a third copy
-	   of the same word within 200px. */
 	.calendar-toolbar {
 		display: flex;
 		align-items: center;
@@ -508,11 +443,10 @@ $effect(() => {
 		table-layout: fixed;
 	}
 
-	/* Weekly mode closes the horizontal gap so a selected or hovered week reads
-	   as one continuous band rather than seven separate targets — which is what
-	   the user is actually picking. Cells keep their 1px side borders (painted
-	   transparent), so backgrounds stay flush and only the band's outer edge
-	   shows a rule. */
+	/* Weekly mode closes the horizontal gap so a week reads as one continuous
+	   band, which is what the user is picking. Cells keep transparent 1px side
+	   borders, so backgrounds stay flush and only the band's outer edge shows
+	   a rule. */
 	.calendar-grid--weekly {
 		border-spacing: 0 0.1875rem;
 	}
@@ -573,26 +507,19 @@ $effect(() => {
 		z-index: 1;
 	}
 
-	/* A real table (rather than CSS-grid divs) specifically so weekly mode has
-	   a row element to hang the whole-week highlight on. The fill follows the
-	   *slot*, not the day: in the current week, Thu–Sun are future days inside
-	   a week that is very much selectable, and excluding them left the hover
-	   band stopping halfway across the row. `onpointerenter` is what keeps a
-	   wholly-future week from lighting up. */
+	/* A real table, so weekly mode has a row element to hang the whole-week
+	   highlight on. The fill follows the *slot*, not the day: in the current
+	   week, later days are future days inside a selectable week.
+	   `onpointerenter` keeps a wholly future week from lighting up. */
 	.week-row--active .cell {
 		background: var(--color-bg-tertiary);
 	}
 
-	/* Days from the neighbouring month, and slots that haven't happened yet,
-	   drop their fill instead of dimming: an opacity-faded filled cell still
-	   reads as a block of content, which is what made the bottom third of the
-	   grid look like rows of unlabelled boxes.
-
-	   In weekly mode an out-of-month day keeps its fill — the row is one
-	   target, and blanking the 31st of the previous month punched a hole in
-	   the left end of an otherwise continuous week band. `.cell--future` is
-	   slot-scoped (`slotIsFuture`), so in weekly mode it blanks whole future
-	   weeks and never a few days inside the current one. */
+	/* Out-of-month days and slots that haven't happened drop their fill
+	   rather than dimming: a faded filled cell still reads as content. In
+	   weekly mode an out-of-month day keeps its fill, since the row is one
+	   target; `.cell--future` is slot-scoped (`slotIsFuture`), so it blanks
+	   whole future weeks and never days inside the current one. */
 	.cell--outside,
 	.cell--future {
 		color: var(--color-text-muted);
@@ -611,18 +538,14 @@ $effect(() => {
 		background: transparent;
 	}
 
-	/* Today is a marked date, not a selection: it gets the accent on the
-	   numeral. The accent *border* is reserved for "this is the slot you
-	   picked", which previously rendered identically and made the two
-	   impossible to tell apart. */
+	/* Today is a marked date, not a selection: the accent goes on the
+	   numeral. The accent border is reserved for the recap on screen. */
 	.cell--today .cell-num {
 		color: var(--color-accent);
 		font-weight: 600;
 	}
 
-	/* "You are here". With selection gone the accent ring is free to mark the
-	   recap actually on screen, which is the only cell state a navigator needs
-	   beyond what each slot holds. */
+	/* "You are here": the recap actually on screen. */
 	.cell--active {
 		background: var(--color-bg-tertiary);
 		border-color: var(--color-accent);
@@ -679,9 +602,8 @@ $effect(() => {
 		color: var(--color-text-primary);
 	}
 
-	/* Absolutely positioned so an empty slot doesn't reserve a blank strip
-	   under its numeral — every cell in an ungenerated month was rendering as
-	   a number pushed off-centre above 8px of nothing. */
+	/* Absolute, so an empty slot doesn't reserve a blank strip under its
+	   numeral. */
 	.cell-mark {
 		position: absolute;
 		bottom: 0.4375rem;
@@ -701,12 +623,6 @@ $effect(() => {
 		background: var(--color-accent);
 	}
 
-	.mark-dash {
-		width: 0.4375rem;
-		height: 1px;
-		background: var(--color-text-muted);
-	}
-
 	.mark-skeleton {
 		width: 0.3125rem;
 		height: 0.3125rem;
@@ -718,8 +634,6 @@ $effect(() => {
 		color: var(--color-danger);
 	}
 
-	/* Last child of the section so it always closes the block, whatever the
-	   strip above it is showing. */
 	.calendar-footer {
 		display: flex;
 		align-items: center;

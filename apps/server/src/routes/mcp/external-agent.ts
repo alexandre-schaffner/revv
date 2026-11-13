@@ -1,31 +1,25 @@
-import {
-  EXTERNAL_AGENT_PROVIDER_NAMES,
-  type ThreadEventMessage,
-  type WalkthroughStreamEvent,
-} from "@revv/shared";
+import { EXTERNAL_AGENT_PROVIDER_NAMES } from "@revv/shared";
 import { Effect } from "effect";
+import { artifactJudge } from "../../ai/jev/artifact-quality";
 import {
   EXTERNAL_REVIEW_TOOL_BUNDLE,
   type ExternalReviewToolContext,
   hasExternalToolScope,
 } from "../../ai/providers/external-review-tools";
-import { externalIntegrationHttpStatus } from "../../domain/errors";
-import { logError } from "../../logger";
+import { httpErrorOf } from "../../domain/errors";
 import { AppRuntime } from "../../runtime";
-import { fireAndForgetThreadEventBroadcast } from "../../services/broadcast-thread-event";
 import { DbService } from "../../services/Db";
 import {
   type ExternalAuthorizedContext,
   ExternalIntegrations,
   type ExternalProjectIdentity,
 } from "../../services/ExternalIntegrations";
-import { RemoteWalkthroughCache } from "../../services/RemoteWalkthroughCache";
 import { SyncService } from "../../services/Sync";
-import { WalkthroughJobs } from "../../services/WalkthroughJobs";
 import {
   describeWalkthroughRequestError,
   requestWalkthroughAtHead,
-} from "../../services/walkthrough-request";
+} from "../../services/walkthrough/request";
+import { fireAndForgetThreadEventBroadcast, fireAndForgetWalkthroughEdit } from "./publish";
 import { bindHttp, type ContextResolution, extractBearer } from "./utils";
 
 const LOG_SCOPE = "mcp-external";
@@ -62,54 +56,13 @@ async function resolveContext(
     ),
   );
   if (!resolution.ok) {
-    const status = externalIntegrationHttpStatus(resolution.error);
-    return { ok: false, status, message: resolution.error.message };
+    const { status, message } = httpErrorOf(resolution.error);
+    return { ok: false, status, message };
   }
   const resolved = resolution.value;
   const db = await AppRuntime.runPromise(
     Effect.flatMap(DbService, (service) => Effect.succeed(service.db)),
   );
-
-  const emit = (walkthroughId: string, event: WalkthroughStreamEvent): void => {
-    void AppRuntime.runPromise(
-      Effect.flatMap(WalkthroughJobs, (jobs) =>
-        Effect.gen(function* () {
-          yield* jobs.emitEvent(walkthroughId, {
-            type: "lifecycle:edited",
-            data: { walkthroughId, editedAt: new Date().toISOString() },
-          });
-          yield* jobs.emitEvent(walkthroughId, event);
-        }),
-      ),
-    ).catch((error) => {
-      logError(
-        LOG_SCOPE,
-        "walkthrough:event emit failed:",
-        error instanceof Error ? error.message : String(error),
-      );
-    });
-    void AppRuntime.runPromise(
-      Effect.flatMap(RemoteWalkthroughCache, (cache) =>
-        cache.push(walkthroughId).pipe(Effect.catch(() => Effect.void)),
-      ),
-    ).catch((error) => {
-      logError(
-        LOG_SCOPE,
-        "remote cache push after edit failed:",
-        error instanceof Error ? error.message : String(error),
-      );
-    });
-  };
-
-  const broadcastThreadEvent = (message: ThreadEventMessage): void => {
-    fireAndForgetThreadEventBroadcast(
-      LOG_SCOPE,
-      resolved.prId,
-      resolved.userId,
-      message,
-      resolved.accountId,
-    );
-  };
 
   return {
     ok: true,
@@ -117,26 +70,23 @@ async function resolveContext(
       db,
       prId: resolved.prId,
       prHeadSha: resolved.prHeadSha,
-      userId: resolved.userId,
       actor: resolved.provider,
       provider: resolved.provider,
       providerName: EXTERNAL_AGENT_PROVIDER_NAMES[resolved.provider],
       integrationId: resolved.integrationId,
-      emit,
-      broadcastThreadEvent,
+      publishEdit: fireAndForgetWalkthroughEdit,
+      broadcastThreadEvent: (message) => fireAndForgetThreadEventBroadcast(resolved.prId, message),
+      judgeArtifact: artifactJudge((judgment) => AppRuntime.runPromise(judgment), LOG_SCOPE),
       pushReply: (messageId) =>
         AppRuntime.runPromise(Effect.flatMap(SyncService, (sync) => sync.pushReply(messageId))),
-      pushThreadStatus: (threadId) =>
+      pushStatus: (threadId) =>
         AppRuntime.runPromise(
-          Effect.flatMap(SyncService, (sync) =>
-            sync.pushThreadStatus(threadId).pipe(Effect.asVoid),
-          ),
+          Effect.flatMap(SyncService, (sync) => sync.pushStatus(threadId).pipe(Effect.asVoid)),
         ),
       requestWalkthrough: ({ headSha, generationMode }) =>
         AppRuntime.runPromise(
           requestWalkthroughAtHead({
             prId: resolved.prId,
-            userId: resolved.userId,
             headSha,
             generationMode,
           }).pipe(Effect.mapError((error) => new Error(describeWalkthroughRequestError(error)))),
@@ -158,28 +108,21 @@ async function resolveConnection(request: Request) {
     ),
   );
   if (!resolution.ok) {
-    return {
-      ok: false as const,
-      status: externalIntegrationHttpStatus(resolution.error),
-      message: resolution.error.message,
-    };
+    const { status, message } = httpErrorOf(resolution.error);
+    return { ok: false as const, status, message };
   }
   return { ok: true as const, meta: resolution.value };
 }
 
 export const mcpExternalAgentRoute = bindHttp({
-  path: "/external",
   logScope: LOG_SCOPE,
   bundle: EXTERNAL_REVIEW_TOOL_BUNDLE,
   resolveContext,
   resolveConnection,
-  serverVersion: "1.0.0",
-  specsForList: (specs, resolved) =>
-    specs.filter((spec) => hasExternalToolScope(spec.name, resolved.scopes)),
-  rejectToolCall: (name, resolved) =>
-    hasExternalToolScope(name, resolved.scopes)
+  refuse: (spec, resolved) =>
+    hasExternalToolScope(spec.name, resolved.scopes)
       ? null
-      : `tools/call: '${name}' is not authorized for this integration.`,
+      : `tools/call: '${spec.name}' is not authorized for this integration.`,
   servedMessage: (requests, ctx) =>
     `served ${requests.length} request(s), prId=${ctx.prId}, actor=${ctx.actor}`,
 });

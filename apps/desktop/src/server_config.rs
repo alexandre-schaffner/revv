@@ -45,7 +45,8 @@ impl ServerConfig {
 	}
 }
 
-/// Load the installer's environment overrides, migrating the pre-0.32.3 LaunchAgent once.
+/// Load the installer's environment overrides, migrating the pre-0.32.3 LaunchAgent once
+/// (legacy-upgrade: launchAgent, see apps/server/src/upgrades.ts).
 pub fn load_installed(home: &Path) -> io::Result<ServerConfig> {
 	let path = home.join("Library/Application Support/Revv/desktop-server.json");
 	let legacy_path = home.join("Library/LaunchAgents/com.revv.server.plist");

@@ -1,11 +1,23 @@
 import { goto } from "$app/navigation";
+import type { Command, KeyBinding } from "./command-keys";
+import { dispatchBareKey, dispatchCommandKey, registerCommands } from "./commands.svelte";
 import { copySelectedPrLink } from "./pr-link.svelte";
-import { REVIEW_TABS, setActiveTab } from "./review.svelte";
-import { toggleSettings } from "./settingsModal.svelte";
-import { setRightPanelOpen, toggleRightPanel, toggleSidebar } from "./sidebar.svelte";
-import { getStackView, moveInStack } from "./stack-nav.svelte";
+import { getSelectedPrId } from "./route.svelte";
+import { openSettings, toggleSettings } from "./settingsModal.svelte";
+import { openAddRepoDialog, toggleRightPanel, toggleSidebar } from "./sidebar.svelte";
+import {
+  getStackView,
+  mergeOpenStack,
+  moveInStack,
+  openNextUnreviewedLayer,
+  reviewRemainingLayers,
+} from "./stack-nav.svelte";
+import { setDiffThemePreference, setThemePreference } from "./theme.svelte";
 
 export type PaletteMode = "search" | "command";
+
+/** "Next layer up the stack"; the stack hand-off card prints it. */
+export const STACK_NEXT_KEYS: KeyBinding = { code: "ArrowUp", alt: true };
 
 let cmdHeld = $state(false);
 export function getCmdHeld(): boolean {
@@ -14,8 +26,6 @@ export function getCmdHeld(): boolean {
 
 let paletteOpen = $state(false);
 let paletteMode = $state<PaletteMode>("search");
-
-// ── Palette state ────────────────────────────────────────
 
 export function getPaletteOpen(): boolean {
   return paletteOpen;
@@ -29,163 +39,204 @@ export function setPaletteMode(mode: PaletteMode): void {
   paletteMode = mode;
 }
 
-function openPalette(mode: PaletteMode): void {
-  paletteMode = mode;
-  paletteOpen = true;
-}
-
 export function closePalette(): void {
   paletteOpen = false;
 }
 
-// ── Global keydown listener ──────────────────────────────
+function togglePalette(mode: PaletteMode): void {
+  if (paletteOpen && paletteMode === mode) {
+    closePalette();
+    return;
+  }
+  paletteMode = mode;
+  paletteOpen = true;
+}
+
+const onPr = (): boolean => getSelectedPrId() !== null;
+const inStack = (): boolean => getStackView() !== null;
+
+/**
+ * On a PR, step *back* over its history entry so the shortcut matches the
+ * mouse/trackpad back gesture instead of stranding the PR in forward history.
+ * SvelteKit stamps `sveltekit:index` on every entry it owns; 0 means nothing
+ * is behind us (deep-linked straight in), so go home instead.
+ */
+function closeView(): void {
+  const state = window.history.state as { "sveltekit:index"?: number } | null;
+  if (onPr() && (state?.["sveltekit:index"] ?? 0) > 0) window.history.back();
+  else void goto("/");
+}
+
+const APP_COMMANDS: readonly Command[] = [
+  {
+    id: "palette:search",
+    label: "Search Pull Requests",
+    keys: { key: "p" },
+    hidden: true,
+    run: () => togglePalette("search"),
+  },
+  {
+    id: "palette:commands",
+    label: "Command Palette",
+    keys: { key: "p", shift: true },
+    hidden: true,
+    run: () => togglePalette("command"),
+  },
+  {
+    id: "view:close",
+    label: "Close Pull Request",
+    keys: { key: "w" },
+    hidden: true,
+    run: closeView,
+  },
+  {
+    id: "theme:light",
+    label: "Theme: Light",
+    category: "Theme",
+    keywords: ["appearance", "light mode"],
+    run: () => setThemePreference("light"),
+  },
+  {
+    id: "theme:dark",
+    label: "Theme: Dark",
+    category: "Theme",
+    keywords: ["appearance", "dark mode"],
+    run: () => setThemePreference("dark"),
+  },
+  {
+    id: "theme:system",
+    label: "Theme: System",
+    category: "Theme",
+    keywords: ["appearance", "auto", "os"],
+    run: () => setThemePreference("system"),
+  },
+  {
+    id: "diff-theme:sync",
+    label: "Diff Theme: Sync with App",
+    category: "Diff Theme",
+    keywords: ["diff", "code", "syntax", "match", "follow"],
+    run: () => setDiffThemePreference("sync"),
+  },
+  {
+    id: "diff-theme:light",
+    label: "Diff Theme: Light",
+    category: "Diff Theme",
+    keywords: ["diff", "code", "syntax", "light mode"],
+    run: () => setDiffThemePreference("light"),
+  },
+  {
+    id: "diff-theme:dark",
+    label: "Diff Theme: Dark",
+    category: "Diff Theme",
+    keywords: ["diff", "code", "syntax", "dark mode"],
+    run: () => setDiffThemePreference("dark"),
+  },
+  {
+    id: "sidebar:toggle",
+    label: "Toggle Sidebar",
+    category: "Sidebar",
+    keys: { key: "b" },
+    keywords: ["left", "panel", "hide", "show"],
+    run: () => toggleSidebar(),
+  },
+  {
+    id: "panel:toggle",
+    label: "Toggle Context Panel",
+    category: "Panel",
+    keys: { code: "KeyB", alt: true },
+    keywords: ["right", "panel", "hide", "show", "context"],
+    when: onPr,
+    run: () => toggleRightPanel(),
+  },
+  {
+    id: "pr:copy-link",
+    label: "Copy PR Link",
+    category: "Pull Request",
+    keys: { code: "KeyC", shift: true },
+    keywords: ["share", "deep link", "url", "clipboard"],
+    notInTextFields: true,
+    run: () => void copySelectedPrLink(),
+  },
+  {
+    id: "repo:add",
+    label: "Add Repository",
+    category: "Repository",
+    keywords: ["repo", "new", "track", "github", "import"],
+    run: () => openAddRepoDialog(),
+  },
+  {
+    id: "settings:open",
+    label: "Open Settings",
+    category: "Settings",
+    keys: { key: "," },
+    keywords: ["preferences", "configure", "options"],
+    run: () => toggleSettings(),
+  },
+  {
+    id: "settings:ai",
+    label: "Settings: AI agent",
+    category: "Settings",
+    keywords: ["agent", "provider", "model", "claude", "codex", "opencode", "cursor"],
+    run: () => openSettings("ai"),
+  },
+  {
+    id: "settings:repositories",
+    label: "Settings: Repositories",
+    category: "Settings",
+    keywords: ["repos", "tracked", "remove"],
+    run: () => openSettings("repositories"),
+  },
+  {
+    id: "stack:next",
+    label: "Stack: Next Layer",
+    category: "Stack",
+    keys: STACK_NEXT_KEYS,
+    keywords: ["up", "above", "layer", "stacked"],
+    when: inStack,
+    notInTextFields: true,
+    ignoreRepeat: true,
+    run: () => moveInStack("up"),
+  },
+  {
+    id: "stack:previous",
+    label: "Stack: Previous Layer",
+    category: "Stack",
+    keys: { code: "ArrowDown", alt: true },
+    keywords: ["down", "below", "layer", "stacked"],
+    when: inStack,
+    notInTextFields: true,
+    ignoreRepeat: true,
+    run: () => moveInStack("down"),
+  },
+  {
+    id: "stack:next-unreviewed",
+    label: "Stack: Next Unreviewed Layer",
+    category: "Stack",
+    keywords: ["review", "walkthrough", "remaining", "todo"],
+    when: inStack,
+    run: () => openNextUnreviewedLayer(),
+  },
+  {
+    id: "stack:review-all",
+    label: "Stack: Review Whole Stack",
+    category: "Stack",
+    keywords: ["walkthrough", "generate", "remaining", "queue"],
+    when: inStack,
+    run: () => void reviewRemainingLayers(),
+  },
+  {
+    id: "stack:merge",
+    label: "Stack: Merge Stack…",
+    category: "Stack",
+    keywords: ["merge", "land", "ship"],
+    when: inStack,
+    run: () => mergeOpenStack(),
+  },
+];
 
 function handleKeydown(e: KeyboardEvent): void {
   if (e.metaKey && !cmdHeld) cmdHeld = true;
-  // Only handle meta-key combos globally (these should work even in inputs)
-  if (!e.metaKey) return;
-
-  // Cmd+Shift+P → command palette
-  if (e.shiftKey && e.key.toLowerCase() === "p") {
-    e.preventDefault();
-    e.stopPropagation();
-    if (paletteOpen && paletteMode === "command") {
-      closePalette();
-    } else {
-      openPalette("command");
-    }
-    return;
-  }
-
-  // Cmd+P → PR search
-  if (!e.shiftKey && e.key.toLowerCase() === "p") {
-    e.preventDefault();
-    e.stopPropagation();
-    if (paletteOpen && paletteMode === "search") {
-      closePalette();
-    } else {
-      openPalette("search");
-    }
-    return;
-  }
-
-  // Cmd+Shift+C → copy the selected PR's `revv://` deep link.
-  //
-  // Match on `e.code`: Shift rewrites the produced character on some layouts,
-  // and `copySelectedPrLink` is a no-op when nothing is selected, so this
-  // needs no page guard.
-  if (e.shiftKey && !e.altKey && e.code === "KeyC") {
-    const target = e.target;
-    if (
-      target instanceof HTMLElement &&
-      (target.isContentEditable || target.closest("input, textarea, select") !== null)
-    ) {
-      return;
-    }
-    e.preventDefault();
-    e.stopPropagation();
-    void copySelectedPrLink();
-    return;
-  }
-
-  // Cmd+W → close the current PR view.
-  //
-  // When we're on a PR, we prefer `history.back()` over `goto('/')`
-  // so the navigation is symmetric with the mouse/trackpad back gesture:
-  // we step *back* over the PR entry instead of pushing a new homepage
-  // entry on top of it. Without this, Cmd+W leaves the PR stranded in
-  // the forward-history — reachable only by the mouse back button, never
-  // by a keyboard shortcut.
-  //
-  // Falls back to `goto('/')` when there is no prior entry — e.g. the
-  // app was deep-linked straight into `/review/[prId]`. SvelteKit stamps
-  // a monotonically-increasing `sveltekit:index` on every history entry
-  // it owns; index 0 means "first entry in this session, nothing behind".
-  if (!e.shiftKey && e.key.toLowerCase() === "w") {
-    e.preventDefault();
-    e.stopPropagation();
-    const onPrPage = window.location.pathname.startsWith("/review/");
-    const state = window.history.state as { "sveltekit:index"?: number } | null;
-    const index = state?.["sveltekit:index"] ?? 0;
-    if (onPrPage && index > 0) {
-      window.history.back();
-    } else {
-      goto("/");
-    }
-    return;
-  }
-
-  // Cmd+Option+B → toggle right panel (chat) — only when actively reviewing a PR.
-  //
-  // Match on `e.code` (the physical key), not `e.key`: on macOS, holding Option
-  // rewrites the produced character — Option+B yields "∫", so `e.key` is never
-  // "b" here. `e.code` stays "KeyB" regardless of modifiers.
-  if (!e.shiftKey && e.altKey && e.code === "KeyB") {
-    const onPrPage = window.location.pathname.startsWith("/review/");
-    if (!onPrPage) return;
-    e.preventDefault();
-    e.stopPropagation();
-    toggleRightPanel();
-    return;
-  }
-
-  if (!e.shiftKey && e.altKey && (e.code === "ArrowUp" || e.code === "ArrowDown")) {
-    if (!window.location.pathname.startsWith("/review/") || !getStackView()) return;
-    const target = e.target;
-    if (
-      target instanceof HTMLElement &&
-      (target.isContentEditable || target.closest("input, textarea, select") !== null)
-    ) {
-      return;
-    }
-    e.preventDefault();
-    e.stopPropagation();
-    if (!e.repeat) moveInStack(e.code === "ArrowUp" ? "up" : "down");
-    return;
-  }
-
-  // Cmd+L → focus the chat composer — only when actively reviewing a PR.
-  // Opens the right panel first if it's collapsed, then focuses the textarea
-  // once it has rendered (rAF defers past the panel's mount).
-  if (!e.shiftKey && !e.altKey && e.key.toLowerCase() === "l") {
-    const onPrPage = window.location.pathname.startsWith("/review/");
-    if (!onPrPage) return;
-    e.preventDefault();
-    e.stopPropagation();
-    setRightPanelOpen(true);
-    requestAnimationFrame(() => {
-      const textarea = document.querySelector<HTMLTextAreaElement>(
-        '[data-slot="prompt-input-textarea"]',
-      );
-      textarea?.focus();
-    });
-    return;
-  }
-
-  // Cmd+B → toggle sidebar
-  if (!e.shiftKey && !e.altKey && e.key.toLowerCase() === "b") {
-    e.preventDefault();
-    e.stopPropagation();
-    toggleSidebar();
-    return;
-  }
-
-  // Cmd+1/2/3 → the review tabs, in the order the tab bar shows them.
-  const tab = /^[1-9]$/.test(e.key) ? REVIEW_TABS[Number(e.key) - 1] : undefined;
-  if (tab) {
-    e.preventDefault();
-    e.stopPropagation();
-    setActiveTab(tab);
-    return;
-  }
-
-  // Cmd+, → toggle settings
-  if (!e.shiftKey && e.key === ",") {
-    e.preventDefault();
-    e.stopPropagation();
-    toggleSettings();
-    return;
-  }
+  dispatchCommandKey(e);
 }
 
 function handleKeyup(e: KeyboardEvent): void {
@@ -196,13 +247,18 @@ function handleBlur(): void {
   cmdHeld = false;
 }
 
-/** Attach global keyboard listener. Returns cleanup function. */
 export function initShortcuts(): () => void {
+  const unregister = registerCommands(APP_COMMANDS);
+  // Capture phase, so ⌘ combos work even while an input has focus.
   window.addEventListener("keydown", handleKeydown, { capture: true });
+  // Bubble phase, so the focused widget handles a bare key first.
+  window.addEventListener("keydown", dispatchBareKey);
   window.addEventListener("keyup", handleKeyup, { capture: true });
   window.addEventListener("blur", handleBlur);
   return () => {
+    unregister();
     window.removeEventListener("keydown", handleKeydown, { capture: true });
+    window.removeEventListener("keydown", dispatchBareKey);
     window.removeEventListener("keyup", handleKeyup, { capture: true });
     window.removeEventListener("blur", handleBlur);
   };

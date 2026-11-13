@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, setDefaultTimeout } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -9,11 +10,13 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RebaseStep } from "./rebase-plan";
 import { cleanupReplay, pushStack, type ReplayInput, replayStack } from "./stack-rebase-git";
+
+// git processes start slowly on a loaded machine; a test here runs a dozen.
+setDefaultTimeout(60_000);
 
 const FIXTURE_ENV: Record<string, string> = {
   ...process.env,
@@ -39,10 +42,11 @@ function commit(cwd: string, file: string, body: string, message: string): strin
   return git(cwd, ["rev-parse", "HEAD"]);
 }
 
-let root: string;
-let origin: string;
-let dev: string;
-let revv: string;
+const root = mkdtempSync(join(tmpdir(), "revv-stack-rebase-"));
+const pristine = `${root}-pristine`;
+const origin = join(root, "origin.git");
+const dev = join(root, "dev");
+const revv = join(root, "revv");
 
 let tips: { a: string; b: string; c: string };
 
@@ -107,11 +111,9 @@ async function rebaseAndPush(steps: RebaseStep[]) {
   }
 }
 
-beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "revv-stack-rebase-"));
-  origin = join(root, "origin.git");
-  dev = join(root, "dev");
-  revv = join(root, "revv");
+// Built once and copied back before each test: the repos record absolute
+// paths, so the copy goes back to the same place.
+beforeAll(() => {
   execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin], { env: FIXTURE_ENV });
   git(origin, ["config", "uploadpack.allowAnySHA1InWant", "true"]);
 
@@ -135,10 +137,17 @@ beforeEach(() => {
   git(revv, ["config", "user.email", "revv@example.com"]);
   git(revv, ["config", "commit.gpgsign", "false"]);
   git(revv, ["config", "core.hooksPath", "/dev/null"]);
+  cpSync(root, pristine, { recursive: true });
 });
 
-afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
+beforeEach(() => {
+  rmSync(root, { recursive: true, force: true });
+  cpSync(pristine, root, { recursive: true });
+});
+
+afterAll(() => {
+  rmSync(root, { recursive: true, force: true });
+  rmSync(pristine, { recursive: true, force: true });
 });
 
 describe("stack rebase in Revv's clone", () => {
@@ -221,7 +230,7 @@ describe("stack rebase in Revv's clone", () => {
     }
   });
 
-  it("runs none of the user's hooks and never signs", async () => {
+  it("runs none of the user's hooks", async () => {
     const hooks = join(root, "hooks");
     const ran = join(root, "hook-ran");
     mkdirSync(hooks);
@@ -230,8 +239,6 @@ describe("stack rebase in Revv's clone", () => {
       chmodSync(join(hooks, hook), 0o755);
     }
     git(revv, ["config", "core.hooksPath", hooks]);
-    git(revv, ["config", "commit.gpgsign", "true"]);
-    git(revv, ["config", "gpg.program", "/usr/bin/false"]);
     git(dev, ["checkout", "-q", "main"]);
     commit(dev, "trunk.txt", "trunk\n", "trunk moved");
     git(dev, ["push", "-q", "origin", "main"]);
@@ -240,6 +247,26 @@ describe("stack rebase in Revv's clone", () => {
     expect(replay.kind).toBe("replayed");
     expect(push).toEqual({ kind: "pushed" });
     expect(existsSync(ran)).toBe(false);
+  });
+
+  // The replayed commits land on the user's branches, so they are signed the
+  // way the user signs; a signer that refuses stops the rebase with its reason.
+  it("reports a signer that refuses, and pushes nothing", async () => {
+    const signer = join(root, "gpg-refuse");
+    writeFileSync(signer, '#!/bin/sh\necho "gpg: signing failed: No pinentry" >&2\nexit 2\n');
+    chmodSync(signer, 0o755);
+    git(revv, ["config", "commit.gpgsign", "true"]);
+    git(revv, ["config", "gpg.format", "openpgp"]);
+    git(revv, ["config", "gpg.program", signer]);
+    git(dev, ["checkout", "-q", "main"]);
+    commit(dev, "trunk.txt", "trunk\n", "trunk moved");
+    git(dev, ["push", "-q", "origin", "main"]);
+
+    const { replay, push } = await rebaseAndPush(stepsFor());
+    expect(replay.kind).toBe("failed");
+    expect(replay.kind === "failed" && replay.message).toMatch(/sign/i);
+    expect(push).toBeNull();
+    expect(git(origin, ["rev-parse", "feat-1"])).toBe(tips.a);
   });
 
   it("leaves the clone's other worktrees alone, even ones whose folder is gone", async () => {

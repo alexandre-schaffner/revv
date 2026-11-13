@@ -1,19 +1,12 @@
 <script lang="ts">
+import type { Snippet } from "svelte";
 import { page } from "$app/state";
 import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
 import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
 import StackMergeSheet from "$lib/components/stack/StackMergeSheet.svelte";
-import { RAIL_WIDTH } from "$lib/constants";
 import { gsap, gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import { takeNavigationIntent } from "$lib/stores/navigation-intent.svelte";
-import { getSelectedPr } from "$lib/stores/prs.svelte";
-import {
-  getActiveTab,
-  getIsPullingCommit,
-  getLoadedHeadSha,
-  pullLatestCommit,
-  setActiveTab,
-} from "$lib/stores/review.svelte";
+import { getSelectedPr } from "$lib/stores/route.svelte";
 import { closeSettings, getSettingsOpen } from "$lib/stores/settingsModal.svelte";
 import { closePalette, getPaletteMode, getPaletteOpen } from "$lib/stores/shortcuts.svelte";
 import {
@@ -22,6 +15,7 @@ import {
   getRightPanelWidth,
   getSidebarCollapsed,
   getSidebarWidth,
+  RAIL_WIDTH,
   RIGHT_PANEL_WIDTH_MAX,
   RIGHT_PANEL_WIDTH_MIN,
   resetRightPanelWidth,
@@ -34,18 +28,20 @@ import {
   toggleRightPanel,
   toggleSidebar,
 } from "$lib/stores/sidebar.svelte";
-import { getPrWalkthroughStatus } from "$lib/stores/walkthrough.svelte";
 import BottomBar from "./BottomBar.svelte";
 import CommandPalette from "./CommandPalette.svelte";
-import FloatingTabs from "./FloatingTabs.svelte";
 import ProjectRail from "./ProjectRail.svelte";
-import ReviewActionBar from "./ReviewActionBar.svelte";
-import RightPanel from "./RightPanel.svelte";
 import Sidebar from "./Sidebar.svelte";
+import { provideShellChrome } from "./shell-chrome.svelte";
 import TopBar from "./TopBar.svelte";
-import WalkthroughActionBar from "./WalkthroughActionBar.svelte";
 
-let { children } = $props();
+interface Props {
+  children: Snippet;
+  /** The right-hand panel's content (the chat). */
+  rightPanel: Snippet;
+}
+
+let { children, rightPanel }: Props = $props();
 
 const sidebarCollapsed = $derived(getSidebarCollapsed());
 const rightPanelOpen = $derived(getRightPanelOpen());
@@ -58,41 +54,7 @@ const rightPanelWidth = $derived(getRightPanelWidth());
 const chatStacked = $derived(getChatStacked());
 const chatOverlay = $derived(rightPanelOpen && chatStacked);
 const pr = $derived(getSelectedPr());
-const walkthroughStatus = $derived(pr ? getPrWalkthroughStatus(pr.id) : "idle");
-const activeTab = $derived(getActiveTab());
-const isSettingsRoute = $derived(page.url.pathname.startsWith("/settings"));
-const isReviewRoute = $derived(page.url.pathname.startsWith("/review/"));
-const showFloatingActions = $derived(
-  !!pr && isReviewRoute && !isSettingsRoute && activeTab === "walkthrough",
-);
-const showReviewBar = $derived(
-  !!pr && isReviewRoute && !isSettingsRoute && activeTab === "conversation",
-);
-
-// New-commit-available signal: the PR's current headSha differs from the
-// SHA the diff was loaded against. `getLoadedHeadSha` returns null until the
-// first successful fetch, suppressing the signal on fresh visits.
-//
-// Scoped to the diff and the Pull button only — says nothing about whether
-// the walkthrough is outdated. Conflating the two marked freshly-generated
-// walkthroughs stale once new commits landed but the diff hadn't refetched.
-// Walkthrough staleness comes from the server (`/current`'s `stale`,
-// `lifecycle:superseded`, review-rounds `hasNewCommits`).
-//
-// Closed and merged PRs are excluded: their head is final, so there is
-// nothing to pull. Without this a merged PR whose archived row carries a
-// newer SHA than the loaded diff shows a Pull button that can never be
-// satisfied — the walkthrough stamps "Merged" instead.
-const hasNewCommit = $derived.by(() => {
-  if (!pr?.headSha || pr.status !== "open") return false;
-  const loaded = getLoadedHeadSha(pr.id);
-  return loaded !== null && loaded !== pr.headSha;
-});
-const isPulling = $derived(pr ? getIsPullingCommit(pr.id) : false);
-
-function onPullCommit(): void {
-  if (pr) void pullLatestCommit(pr.id);
-}
+const chrome = provideShellChrome();
 
 const PAGE_TRAVEL_PX = 14;
 
@@ -105,31 +67,23 @@ function pageEnter(node: Element) {
   });
 }
 
-// Drag state — not reactive $state, just local mutable refs
 let isDragging = $state(false);
 let dragStartX = 0;
 let dragStartWidth = 0;
 
-// Right-pane drag state — separate from sidebar so a drag on one handle
-// can't be confused with the other and the resize-suppression class
-// applies independently.
 let isResizingRight = $state(false);
 let rightDragStartX = 0;
 let rightDragStartWidth = 0;
 
-// Close the chat panel when navigating away from a PR page
 $effect(() => {
   if (!pr && rightPanelOpen) {
     setRightPanelOpen(false);
   }
 });
 
-// Right panel appears/disappears instantly, same as the sidebar — snap the
-// panel's translateX (off-screen ↔ 0) and the main-area vignette on every
-// toggle, no tween. The vignette softens the main pane's clipped right edge
-// while the chat panel covers it. The closed-state transform also lives in
-// CSS (`.rightpanel-area`) so an open-on-reload panel paints correctly before
-// this effect attaches.
+// The right panel snaps open and closed like the sidebar, never tweened (see
+// `.app-shell`). The vignette softens the main pane's clipped right edge while
+// the panel covers it.
 let panelEl = $state<HTMLElement | null>(null);
 let mainEl = $state<HTMLElement | null>(null);
 
@@ -138,27 +92,18 @@ $effect(() => {
   const width = rightPanelWidth;
   const stacked = chatStacked;
   if (!panelEl || !mainEl) return;
-  // gsap.set (not panelEl.style.transform): it writes the same
-  // `transform: translate3d(...)` format as the CSS fallback on
-  // `.rightpanel-area`, so the inline write and the static rule agree on
-  // units and there's no first-paint flash. Don't "simplify" to a plain
-  // style write — that risks format drift against the CSS fallback.
+  // gsap.set, not a style write: it emits the same `translate3d(...)` format as
+  // the CSS fallback on `.rightpanel-area`, so the two agree and the first
+  // paint doesn't flash.
   gsap.set(panelEl, { x: open ? 0 : width });
-  // No vignette when stacked — the panel covers the main pane outright, so
-  // there's no clipped edge to soften.
   mainEl.style.setProperty("--vignette-opacity", open && !stacked ? "0.65" : "0");
 });
 
-// `--right-panel-width` is set on the panel element (see the `style:` directive
-// below), NOT here on the shell. Both panes still resize concurrently and reflow
-// live — the grid `rightpanel` track below uses `rightPanelWidth` directly — but
-// the panel-width custom property is *inherited*, so writing it on `.app-shell`
-// every drag frame invalidated style recalc for the whole descendant tree
-// (~100ms/frame). Scoped to the panel, only the panel subtree recalcs (~3x
-// faster overall) with no change to behaviour.
-// A stacked chat claims no grid track — it overlays the main pane, which keeps
-// its full width (and, more to the point, its layout: the resize-observing
-// @pierre diff underneath never reflows on toggle).
+// `--right-panel-width` is set on the panel element, not the shell: it's
+// inherited, so writing it on `.app-shell` every drag frame recalculated style
+// for the whole tree (~100ms/frame). A stacked chat claims no grid track: it
+// overlays the main pane, whose resize-observing Pierre diff then never
+// reflows on toggle.
 const gridStyle = $derived(
   `grid-template-columns: ${RAIL_WIDTH}px ${sidebarCollapsed ? 0 : sidebarWidth}px 1fr ${rightPanelOpen && !chatStacked ? rightPanelWidth : 0}px; --sidebar-width: ${sidebarWidth}px`,
 );
@@ -250,6 +195,7 @@ function onRightHandleDblClick(): void {
 
 	<header class="topbar-area" data-tauri-drag-region>
 		<TopBar
+			subtitle={chrome.current.subtitle ?? null}
 			{rightPanelOpen}
 			onTogglePanel={toggleRightPanel}
 			{sidebarCollapsed}
@@ -260,39 +206,24 @@ function onRightHandleDblClick(): void {
 	<!-- `inert` while the chat is stacked over it: the main pane is covered, so
 		 it shouldn't answer clicks, focus, or Tab. -->
 	<main class="main-area" bind:this={mainEl} inert={chatOverlay}>
-		{#if pr && isReviewRoute && !isSettingsRoute}
+		{#if chrome.current.tabs}
 			<div class="tabs-float">
-				<FloatingTabs
-					{activeTab}
-					onTabChange={setActiveTab}
-					{walkthroughStatus}
-					{hasNewCommit}
-					{isPulling}
-					{onPullCommit}
-				/>
+				{@render chrome.current.tabs.snippet(chrome.current.tabs.key)}
 			</div>
 		{/if}
 		<div class="main-content">
-			<!--
-				Keyed inner wrapper: re-mounts on every navigation so a Svelte
-				transition fires cleanly without touching the persistent
-				.main-content (which would briefly hide every fixed chrome child
-				underneath). Tagged data-page-root so page-transitions.ts can find
-				it for Flip morphs; the default crossfade is the transition below.
-			-->
+			<!-- Re-mounts on every navigation so the page transition fires. -->
 			{#key page.url.pathname}
-				<div class="page-slot" data-page-root in:pageEnter>
+				<div class="page-slot" in:pageEnter>
 					{@render children()}
 				</div>
 			{/key}
 		</div>
 
-		{#if showFloatingActions && pr}
-			<WalkthroughActionBar prId={pr.id} />
-		{/if}
-
-		{#if showReviewBar}
-			<ReviewActionBar />
+		{#if chrome.current.actions}
+			<div class="actions-float">
+				{@render chrome.current.actions()}
+			</div>
 		{/if}
 	</main>
 
@@ -301,7 +232,7 @@ function onRightHandleDblClick(): void {
 	</aside>
 
 	<footer class="bottombar-area">
-		<BottomBar />
+		<BottomBar status={chrome.current.status} />
 	</footer>
 
 	<div class="rightpanel-slot">
@@ -327,11 +258,7 @@ function onRightHandleDblClick(): void {
 					ondblclick={onRightHandleDblClick}
 				></div>
 			{/if}
-			<RightPanel
-				onClose={toggleRightPanel}
-				stacked={chatStacked}
-				prId={page.params['prId'] ?? ''}
-			/>
+			{@render rightPanel()}
 		</aside>
 	</div>
 </div>
@@ -362,28 +289,20 @@ function onRightHandleDblClick(): void {
 		height: 100vh;
 		width: 100vw;
 		overflow: hidden;
-		/* Positioning context for the absolutely-positioned right pane. */
 		position: relative;
 		background-color: var(--color-bg-secondary);
 		/* No transition on grid-template-columns: tweening the track relayouts
-		   the resize-observing @pierre diff in the main pane on every frame,
-		   tanking the toggle to single-digit fps. Both panes toggle instantly —
-		   the sidebar via the grid track, the right panel via the snapped
-		   translateX in the right-panel $effect above. */
+		   the resize-observing Pierre diff every frame, dropping the toggle to
+		   single-digit fps. */
 	}
 
-	/* ── Rail (always-visible project switcher) ── */
 	.rail-area {
 		grid-area: rail;
 		position: relative;
 		overflow: hidden;
-		/* Match the chrome gap on the rail's right (which comes from main's
-		   margin) so the rail's icons read as visually centered between
-		   viewport edge and main pane when the sidebar is collapsed. */
 		padding-left: var(--spacing-island);
 	}
 
-	/* ── Sidebar area ── */
 	.sidebar-area {
 		grid-area: sidebar;
 		position: relative;
@@ -391,7 +310,6 @@ function onRightHandleDblClick(): void {
 		contain: layout paint;
 	}
 
-	/* ── Resize handle ── */
 	.resize-handle {
 		position: absolute;
 		right: -2px;
@@ -403,8 +321,6 @@ function onRightHandleDblClick(): void {
 		background: transparent;
 	}
 
-	/* Visible only on hover/active — transparent at rest so the handle
-	   doesn't print a hairline into the chrome gap. */
 	.resize-handle::after {
 		content: '';
 		position: absolute;
@@ -425,7 +341,6 @@ function onRightHandleDblClick(): void {
 		background: var(--color-border-focus, var(--color-accent));
 	}
 
-	/* ── Top bar ── */
 	.topbar-area {
 		grid-area: topbar;
 		position: relative;
@@ -443,7 +358,6 @@ function onRightHandleDblClick(): void {
 		padding-top: 22px;
 	}
 
-	/* ── Main area ── */
 	.main-area {
 		grid-area: main;
 		position: relative;
@@ -456,18 +370,12 @@ function onRightHandleDblClick(): void {
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-island);
 		margin: var(--spacing-island);
-		/* Layered shadow: tight contact + soft ambient.
-		   Inset top highlight catches light off the warm canvas. */
 		box-shadow:
 			inset 0 1px 0 0 color-mix(in srgb, white 60%, transparent),
 			0 1px 2px -1px color-mix(in srgb, black 6%, transparent),
 			0 8px 24px -12px color-mix(in srgb, black 10%, transparent);
 	}
 
-	/* Right-edge vignette that appears when the panel opens, softening the
-	   hard clip as the main area loses width to the panel. Opacity is set
-	   directly (`--vignette-opacity`) by the right-panel $effect above —
-	   instant, no tween, in lockstep with the panel's snapped translateX. */
 	.main-area::after {
 		content: '';
 		position: absolute;
@@ -488,6 +396,46 @@ function onRightHandleDblClick(): void {
 		display: flex;
 	}
 
+	/* pointer-events:none lets clicks through the padding around the pills. */
+	.tabs-float {
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		display: flex;
+		justify-content: center;
+		padding: 10px 0 8px;
+		z-index: 10;
+		pointer-events: none;
+	}
+
+	:where(.tabs-float) :global(*) {
+		pointer-events: auto;
+	}
+
+	.actions-float {
+		position: absolute;
+		bottom: 0;
+		left: 0;
+		right: 0;
+		display: flex;
+		justify-content: center;
+		padding: 8px 0 10px;
+		z-index: 10;
+		pointer-events: none;
+	}
+
+	:where(.actions-float) :global(*) {
+		pointer-events: auto;
+	}
+
+	/* The row every page's actions render in. */
+	.actions-float :global(.actions-row) {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--spacing-island);
+	}
+
 	.page-slot {
 		flex: 1;
 		min-height: 0;
@@ -503,14 +451,6 @@ function onRightHandleDblClick(): void {
 			0 8px 24px -12px color-mix(in srgb, black 50%, transparent);
 	}
 
-	/* ── Userbar (bottom-left chrome strip holding the user menu) ──
-	   Spans the rail + sidebar columns in row 3, sharing the row with the
-	   bottombar to its right. Together they form one continuous chrome band
-	   across the bottom of the viewport — same bg, same height, no divider.
-	   Separation from the scrolling PR list (and the rail's avatar column)
-	   above is handled by an in-pane fade overlay at the bottom of each
-	   column (.sidebar-fade, .rail-fade) so content dissolves into the
-	   chrome instead of hitting a hard edge. */
 	.userbar-area {
 		grid-area: userbar;
 		background: var(--color-bg-secondary);
@@ -529,13 +469,9 @@ function onRightHandleDblClick(): void {
 		padding-bottom: var(--spacing-island);
 	}
 
-	/* ── Right pane (chat) ──
-	   `.rightpanel-slot` is the grid cell whose width snaps 0 ↔
-	   rightPanelWidth; that drives the main column's shrink/grow.
-	   `.rightpanel-area` is absolutely-positioned inside it at a stable
-	   width so its contents never reflow when the track changes. The panel's
-	   translateX (off-screen ↔ 0) is snapped via `gsap.set` in the
-	   right-panel $effect above — instant, matching the grid track. */
+	/* `.rightpanel-slot` is the grid cell whose width snaps 0 ↔
+	   rightPanelWidth; `.rightpanel-area` sits absolute inside it at a stable
+	   width so its contents never reflow when the track changes. */
 	.rightpanel-slot {
 		grid-area: rightpanel;
 		position: relative;
@@ -551,17 +487,12 @@ function onRightHandleDblClick(): void {
 		background: var(--color-bg-primary);
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-island);
-		/* Mirrors .main-area's island elevation so both panes float
-		   identically inside the chrome. */
 		box-shadow:
 			inset 0 1px 0 0 color-mix(in srgb, white 60%, transparent),
 			0 1px 2px -1px color-mix(in srgb, black 6%, transparent),
 			0 8px 24px -12px color-mix(in srgb, black 10%, transparent);
-		/* First-paint transform for the closed state. The right-panel $effect
-		   above takes over once it first runs, writing the transform inline
-		   (which beats this rule on specificity). Keeping the static CSS means
-		   an open-on-reload panel renders at its correct resting position
-		   without a one-frame flash before JS attaches. */
+		/* The closed state for first paint, so an open-on-reload panel doesn't
+		   flash before the $effect writes the transform inline. */
 		transform: translateX(var(--right-panel-width));
 	}
 
@@ -569,15 +500,11 @@ function onRightHandleDblClick(): void {
 		transform: translateX(0);
 	}
 
-	/* ── Stacked presentation ──
-	   Too narrow for two panes, so the chat takes the main pane's place
-	   instead of stealing width from it. Viewport-positioned onto exactly
-	   `.main-area`'s box (same row heights, same chrome offsets, same island
-	   margin) so the swap reads as the pane being replaced, not as a floating
-	   overlay. Only ever applied while open — a closed panel stays absolute
-	   inside its zero-width grid slot, where `.app-shell`'s `overflow: hidden`
-	   clips its off-screen resting position. z-index clears the main pane's
-	   floating chrome (tabs / action bars, z-index 10). */
+	/* Stacked: too narrow for two panes, so the chat takes the main pane's
+	   place, viewport-positioned onto exactly `.main-area`'s box so the swap
+	   reads as the pane being replaced. Only while open: a closed panel stays
+	   in its zero-width slot, clipped by `.app-shell`'s `overflow: hidden`.
+	   The z-index clears the main pane's floating chrome (z-index 10). */
 	.rightpanel-area.rightpanel-area--overlay {
 		position: fixed;
 		top: calc(var(--topbar-row-height) + var(--spacing-island));
@@ -595,10 +522,6 @@ function onRightHandleDblClick(): void {
 			0 8px 24px -12px color-mix(in srgb, black 50%, transparent);
 	}
 
-	/* Left-edge resize handle — mirrors `.resize-handle` on the sidebar but
-	   anchored to the panel's *left* edge (toward the main pane). 5px hit
-	   area, 1px visible line, expands to 3px on hover/active using the
-	   accent border color. */
 	.right-resize-handle {
 		position: absolute;
 		left: -2px;

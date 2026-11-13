@@ -1,67 +1,19 @@
-import type {
-  CloneStatus,
-  MergeEligibility,
-  MergeMethod,
-  PullRequest,
-  Repository,
-  Team,
-  ThreadSummary,
-} from "@revv/shared";
-import { type ReviewMode, reviewModeFor } from "@revv/shared";
-import { toast } from "svelte-sonner";
-import { goto } from "$app/navigation";
-import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
-import { reasonFor } from "$lib/prs/tagged-prs";
-import { getCurrentUserLogin, hasAttemptedIdentityLoad } from "$lib/stores/auth.svelte";
+// The account's pull requests: the open list, the closed/merged archive,
+// pins, and the owner-only PR mutations.
 
-import { setBatchSummaries } from "$lib/stores/sync.svelte";
-import { clearOwnerHueCache, preloadOwnerHues } from "$lib/utils/avatarPalette";
-import { fuzzyScore } from "$lib/utils/fuzzy";
+import type { MergeMethod, PrsUpdatedEnvelope, PullRequest } from "@revv/shared";
+import { toast } from "svelte-sonner";
+import { api } from "$lib/api/client";
+import { call } from "$lib/api/errors";
+import { thrownMessage } from "$lib/api/wire";
+import { reasonFor } from "$lib/prs/tagged-prs";
+import { getCurrentUserLogin, isIdentityLoaded, isShownHost } from "$lib/stores/auth.svelte";
 
 let pullRequests = $state<PullRequest[]>([]);
-let repositories = $state<Repository[]>([]);
-let availableRepos = $state<Repository[]>([]);
-let availableReposLoading = $state(false);
-let availableReposFetchFailed = $state(false);
-// Open-PR count for each browsable repo, keyed by `owner/name`. Populated
-// asynchronously after `fetchAvailableRepos` returns — the dialog renders
-// the list immediately and fills in the hint subtext when this map updates.
-let availablePrCounts = $state<Record<string, number>>({});
-// Flag flipped once the PR-count fetch has resolved (success or failure) at
-// least once. Lets the UI treat missing entries as "No open PRs" rather
-// than holding a blank hint indefinitely when a repo errors out server-side.
-let availablePrCountsLoaded = $state(false);
-// The server's effective managed-clone base (`REVV_CLONE_DIR`). Fetched once
-// from the server so the add-repo flow never hardcodes a default that could
-// diverge from an operator's override. Null until fetched (or if the fetch
-// failed) — callers then omit `basePath` and let the server apply its own.
-let defaultCloneBaseDir = $state<string | null>(null);
-let selectedPrId = $state<string | null>(null);
-// URL-driven: set by the +layout effect that reads /repo/[repoId] (or
-// derives from the active PR's repositoryId). Mirrors the selectedPrId
-// pattern — no localStorage, the URL is canonical so deep-links and
-// browser back/forward behave naturally.
-let selectedRepoId = $state<string | null>(null);
-let searchQuery = $state("");
-let selectedAuthorLogins = $state<Set<string>>(new Set());
-// GitHub teams per org login (lowercased key), used by the creator filter to
-// offer "select everyone on team X" shortcuts. Populated lazily the first
-// time the filter popover opens for a repo owned by that org. Absence of a
-// key means "not fetched yet"; an empty array means "fetched, none visible"
-// (org has no teams, or the token lacks `read:org`).
-let teamsByOrg = $state<Map<string, Team[]>>(new Map());
-let teamsLoadingByOrg = $state<Map<string, boolean>>(new Map());
-let teamsFailedByOrg = $state<Map<string, boolean>>(new Map());
-let isLoading = $state(false);
 // Set once `fetchPrs` has settled (success or failure). Lets callers tell
 // "this PR isn't in the list yet" from "this PR isn't in the list at all"
 // without waiting forever on a row that will never arrive.
 let prsFetchAttempted = $state(false);
-// Same contract as `prsFetchAttempted`, for the repo list. The `/` feed needs
-// it to tell "no repos synced yet" (show the onboarding hero) from "repos
-// haven't landed yet" (show nothing), which are the same empty array.
-let reposFetchAttempted = $state(false);
 let archivedPrs = $state<PullRequest[]>([]);
 // PRs resolved one at a time by a `revv://` link, kept apart from the list
 // reads so a list replacement can't drop them. A stale `fetchPrs()` (the window
@@ -70,161 +22,14 @@ let archivedPrs = $state<PullRequest[]>([]);
 // is showing, leaving it on "Loading…" for good. The lists stay authoritative:
 // a row there always wins over the copy held here.
 let linkedPrs = $state<Map<string, PullRequest>>(new Map());
-// Cursor for the next page of archived PRs. Null = exhausted or never
-// fetched. Updated by `fetchArchivedPrs` (replaces the list, sets cursor
-// from the first page) and `fetchMoreArchived` (appends, advances cursor).
+// Cursor for the next page of archived PRs. Null = exhausted or never fetched.
 let archivedNextCursor = $state<string | null>(null);
-// True while a `fetchMoreArchived` request is in flight, so the sidebar
-// can disable the "show more" affordance and show a spinner.
 let archivedLoadingMore = $state(false);
-// Set of PR ids pinned by the current user. Fetched once at login and
-// kept in sync via local optimistic updates.
+/** The authors the archive is filtered to server-side; empty = everyone. */
+let archiveAuthors: ReadonlySet<string> = new Set();
 let pinnedPrIds = $state<Set<string>>(new Set());
 
-interface RepoDeleteSnapshot {
-  readonly repositories: Repository[];
-  readonly pullRequests: PullRequest[];
-  readonly archivedPrs: PullRequest[];
-  readonly pinnedPrIds: Set<string>;
-}
-
-// Sidebar PR search uses the same fuzzy scorer as the Cmd+P palette so a
-// search like "auth jw" can match "Add JWT auth middleware" and a search like
-// "feat/login" can match a branch even when it doesn't appear in the title.
-// Fields scored: title, source branch, `#externalId`, author login, and the
-// owner/name of the repo the PR lives in. The PR's best per-field score wins.
-//
-// Result ordering: when there's an active query we sort by score (descending)
-// so the strongest matches surface first within each repo group; with no
-// query we preserve the server-provided order.
-const authorFilteredPrs = $derived.by((): PullRequest[] => {
-  if (selectedAuthorLogins.size === 0) return pullRequests;
-  return pullRequests.filter((pr) => selectedAuthorLogins.has(pr.authorLogin));
-});
-
-const filteredPrs = $derived.by((): PullRequest[] => {
-  const q = searchQuery.trim();
-  if (q === "") return authorFilteredPrs;
-
-  const repoMap = new Map(repositories.map((r) => [r.id, r]));
-
-  return authorFilteredPrs
-    .map((pr) => {
-      const repoName = repoMap.get(pr.repositoryId)?.fullName ?? "";
-      const score = Math.max(
-        fuzzyScore(q, pr.title),
-        fuzzyScore(q, pr.sourceBranch),
-        fuzzyScore(q, `#${pr.externalId}`),
-        fuzzyScore(q, pr.authorLogin),
-        fuzzyScore(q, repoName),
-      );
-      return { pr, score };
-    })
-    .filter((r) => r.score >= 0)
-    .sort((a, b) => b.score - a.score)
-    .map((r) => r.pr);
-});
-
-const groupedByRepo = $derived(Map.groupBy(filteredPrs, (pr) => pr.repositoryId));
-
-const needsYourReview = $derived(
-  (() => {
-    const login = getCurrentUserLogin();
-    if (!login) return [] as PullRequest[];
-    return filteredPrs.filter((pr) => pr.requestedReviewers.includes(login));
-  })(),
-);
-
-const needsYourReviewByRepo = $derived(Map.groupBy(needsYourReview, (pr) => pr.repositoryId));
-
 const archivedByRepo = $derived(Map.groupBy(archivedPrs, (pr) => pr.repositoryId));
-
-const selectedPr = $derived(selectedPrId ? getPrById(selectedPrId) : null);
-
-const selectedRepo = $derived(
-  selectedRepoId ? (repositories.find((r) => r.id === selectedRepoId) ?? null) : null,
-);
-
-export interface PrAuthorFilterOption {
-  readonly login: string;
-  readonly count: number;
-  readonly avatarContent: string | null;
-}
-
-type AuthorAccumulator = Map<string, { count: number; avatarContent: string | null }>;
-
-function tallyAuthor(counts: AuthorAccumulator, pr: PullRequest): void {
-  const existing = counts.get(pr.authorLogin);
-  if (existing) {
-    existing.count += 1;
-    existing.avatarContent ??= pr.authorAvatarContent;
-  } else {
-    counts.set(pr.authorLogin, { count: 1, avatarContent: pr.authorAvatarContent });
-  }
-}
-
-function toSortedOptions(counts: AuthorAccumulator): PrAuthorFilterOption[] {
-  return [...counts.entries()]
-    .map(([login, value]) => ({ login, ...value }))
-    .sort((a, b) => b.count - a.count || a.login.localeCompare(b.login));
-}
-
-// Author options precomputed per repo. Rebuilt only when the open-PR list
-// changes (i.e. on a sync / `prs:updated`), never when the filter popover
-// opens — so clicking the filter is an O(1) lookup of an already-built,
-// reference-stable array, even on repos with hundreds of contributors.
-const authorOptionsByRepo = $derived.by((): Map<string, PrAuthorFilterOption[]> => {
-  const byRepo = new Map<string, AuthorAccumulator>();
-  for (const pr of pullRequests) {
-    let counts = byRepo.get(pr.repositoryId);
-    if (!counts) {
-      counts = new Map();
-      byRepo.set(pr.repositoryId, counts);
-    }
-    tallyAuthor(counts, pr);
-  }
-  const result = new Map<string, PrAuthorFilterOption[]>();
-  for (const [repoId, counts] of byRepo) result.set(repoId, toSortedOptions(counts));
-  return result;
-});
-
-const allAuthorOptions = $derived.by((): PrAuthorFilterOption[] => {
-  const counts: AuthorAccumulator = new Map();
-  for (const pr of pullRequests) tallyAuthor(counts, pr);
-  return toSortedOptions(counts);
-});
-
-/**
- * Author options for the raw open-PR list. This intentionally ignores search
- * and the current author filter so the user can recover from an over-narrow
- * view without clearing other controls first. Reads from the precomputed
- * per-repo cache above, so it does no work when the popover opens.
- */
-export function getAuthorFilterOptions(repoId?: string): PrAuthorFilterOption[] {
-  if (!repoId) return allAuthorOptions;
-  return authorOptionsByRepo.get(repoId) ?? [];
-}
-
-export function getSelectedAuthorLogins(): Set<string> {
-  return selectedAuthorLogins;
-}
-
-export function hasActivePrListFilter(): boolean {
-  return searchQuery.trim() !== "" || selectedAuthorLogins.size > 0;
-}
-
-/**
- * Open PRs for one repo with pinned PRs sorted to the very top, then
- * needs-your-review PRs, then the rest.
- */
-export function getOpenPrsByRepoOrdered(repoId: string): PullRequest[] {
-  const all = groupedByRepo.get(repoId) ?? [];
-  const pinned = all.filter((p) => pinnedPrIds.has(p.id));
-  const review = (needsYourReviewByRepo.get(repoId) ?? []).filter((p) => !pinnedPrIds.has(p.id));
-  const skipIds = new Set([...pinned.map((p) => p.id), ...review.map((p) => p.id)]);
-  const rest = all.filter((p) => !skipIds.has(p.id));
-  return [...pinned, ...review, ...rest];
-}
 
 export function getOpenPrCountByRepo(repoId: string): number {
   return pullRequests.filter((pr) => pr.repositoryId === repoId).length;
@@ -238,16 +43,10 @@ export function getArchivedByRepo(): Map<string, PullRequest[]> {
   return archivedByRepo;
 }
 
-export function getSelectedPr(): PullRequest | null {
-  return selectedPr;
-}
-
 /**
- * Look a PR up by id across *both* lists. Open PRs live in `pullRequests`
- * and closed/merged ones move to `archivedPrs`, so any caller that searches
- * only the open list silently stops finding a PR the moment it merges —
- * which is how the review page ended up unable to restamp the pulled head
- * SHA for a merged PR.
+ * Searches the open list, the archive and deep-linked PRs. A PR moves to the
+ * archive the moment it merges, so a lookup in the open list alone silently
+ * stops finding it.
  */
 export function getPrById(prId: string): PullRequest | null {
   return (
@@ -256,44 +55,6 @@ export function getPrById(prId: string): PullRequest | null {
     linkedPrs.get(prId) ??
     null
   );
-}
-
-/**
- * The review lens for a PR, derived purely from identity: `"author"` when the
- * signed-in user is the PR author, otherwise `"reviewer"`. This is the single
- * source of truth for the review session — there is no manual override. It is
- * also the default walkthrough perspective, which the user can change per
- * generation (`getSelectedMode` in the walkthrough store).
- */
-export function getReviewModeForPr(prId: string): ReviewMode {
-  const pr = getPrById(prId);
-  // Shared with the server's `resolveReviewModeForPr` — see `reviewModeFor`.
-  // Sessions are keyed on `(pullRequestId, mode)`, so the two must never
-  // disagree, including on login casing.
-  return reviewModeFor(pr?.authorLogin, getCurrentUserLogin());
-}
-
-/**
- * Whether {@link getReviewModeForPr} can give a real answer yet.
- *
- * The lens needs two async inputs — the PR row (for `authorLogin`) and the
- * signed-in user's GitHub login. Missing either, `getReviewModeForPr` quietly
- * reports `"reviewer"`, which is indistinguishable from a genuine reviewer
- * verdict. On a cold start that provisional answer is wrong for every PR the
- * user authored, and any caller that *fetches* on it pays for the request
- * twice — once against the wrong lens, once again when the real mode lands.
- * For a 3 000-file PR that is two ~12 MB `/files` responses per app launch.
- *
- * Callers that only render the mode can keep reading it directly; callers that
- * issue requests should wait for this.
- */
-export function isReviewModeResolved(prId: string): boolean {
-  if (!hasAttemptedIdentityLoad()) return false;
-  if (getPrById(prId)) return true;
-  // The row may never arrive — a deep link can point at a PR outside the
-  // synced set. Once the list fetch has settled, "reviewer" is the real
-  // answer rather than a placeholder, so callers must not keep waiting.
-  return prsFetchAttempted;
 }
 
 /**
@@ -325,15 +86,16 @@ export function getTaggedPrs(repoId: string): PullRequest[] {
  * "nothing needs your attention" on every cold start.
  */
 export function getTaggedPrsResolved(): boolean {
-  return hasAttemptedIdentityLoad() && prsFetchAttempted;
+  return isIdentityLoaded() && prsFetchAttempted;
 }
 
 /**
- * Apply the full open-PR state from a `prs:updated` SSE event.
- * The server sends the canonical DB list for the active account, so replacing
- * avoids stale closed/reopened rows and preserves server ordering.
+ * Apply the full open-PR state from a `prs:updated` SSE event: the canonical
+ * DB list of one account, so replacing the shown host's avoids stale
+ * closed/reopened rows and preserves server ordering.
  */
-export function replacePullRequests(incoming: PullRequest[]): void {
+export function onPrsUpdated({ host, prs: incoming }: PrsUpdatedEnvelope["data"]): void {
+  if (!isShownHost(host)) return;
   pullRequests = incoming;
   if (incoming.length === 0 || archivedPrs.length === 0) return;
 
@@ -357,156 +119,101 @@ export function upsertPullRequest(pullRequest: PullRequest): void {
   }
 }
 
-let repositoryLoadSeq = 0;
+/**
+ * Drop a repository's PRs and pins (it is being removed). The returned
+ * function puts back exactly what this removed, keeping anything a
+ * `prs:updated` brought meanwhile.
+ */
+export function removeRepoPrsLocally(repoId: string): () => void {
+  const open = pullRequests.filter((pr) => pr.repositoryId === repoId);
+  const archived = archivedPrs.filter((pr) => pr.repositoryId === repoId);
+  const removedIds = new Set([...open, ...archived].map((pr) => pr.id));
+  const pins = [...pinnedPrIds].filter((id) => removedIds.has(id));
 
-export async function setRepositories(repos: Repository[]): Promise<void> {
-  const seq = ++repositoryLoadSeq;
-  await preloadOwnerHues(repos);
-  if (seq === repositoryLoadSeq) repositories = repos;
-}
+  pullRequests = pullRequests.filter((pr) => pr.repositoryId !== repoId);
+  archivedPrs = archivedPrs.filter((pr) => pr.repositoryId !== repoId);
+  if (pins.length > 0) pinnedPrIds = new Set([...pinnedPrIds].filter((id) => !removedIds.has(id)));
 
-function snapshotRepoState(): RepoDeleteSnapshot {
-  return {
-    repositories,
-    pullRequests,
-    archivedPrs,
-    pinnedPrIds,
+  return () => {
+    const openIds = new Set(pullRequests.map((pr) => pr.id));
+    pullRequests = [...pullRequests, ...open.filter((pr) => !openIds.has(pr.id))];
+    const archivedIds = new Set(archivedPrs.map((pr) => pr.id));
+    archivedPrs = [...archivedPrs, ...archived.filter((pr) => !archivedIds.has(pr.id))];
+    if (pins.length > 0) pinnedPrIds = new Set([...pinnedPrIds, ...pins]);
   };
 }
 
-function restoreRepoState(snapshot: RepoDeleteSnapshot): void {
-  repositories = snapshot.repositories;
-  void preloadOwnerHues(repositories);
-  pullRequests = snapshot.pullRequests;
-  archivedPrs = snapshot.archivedPrs;
-  pinnedPrIds = snapshot.pinnedPrIds;
-}
-
-function removeRepoLocally(repoId: string): void {
-  const removedPrIds = new Set(
-    [...pullRequests, ...archivedPrs].filter((pr) => pr.repositoryId === repoId).map((pr) => pr.id),
-  );
-
-  repositories = repositories.filter((repo) => repo.id !== repoId);
-  pullRequests = pullRequests.filter((pr) => pr.repositoryId !== repoId);
-  archivedPrs = archivedPrs.filter((pr) => pr.repositoryId !== repoId);
-
-  if (removedPrIds.size > 0) {
-    pinnedPrIds = new Set([...pinnedPrIds].filter((prId) => !removedPrIds.has(prId)));
-  }
-}
-
-export function updateRepoCloneStatus(repoId: string, status: CloneStatus, error?: string): void {
-  repositories = repositories.map((r) =>
-    r.id === repoId ? { ...r, cloneStatus: status, cloneError: error ?? r.cloneError } : r,
-  );
-}
-
-const THREAD_SUMMARIES_BATCH = 200;
-
-export async function fetchThreadSummaries(prIds: string[]): Promise<void> {
-  for (let i = 0; i < prIds.length; i += THREAD_SUMMARIES_BATCH) {
-    try {
-      const { data, error } = await api.api.prs["thread-summaries"].post({
-        prIds: prIds.slice(i, i + THREAD_SUMMARIES_BATCH),
-      });
-      if (error || !data || !("summaries" in data)) continue;
-      setBatchSummaries(data.summaries as { prId: string; summary: ThreadSummary }[]);
-    } catch {
-      // best-effort
-    }
-  }
+/**
+ * Re-read the list and pins (DB-only, cheap): after a reconnect, updates
+ * broadcast meanwhile reached no one; after a return to the window, the
+ * server's poll fiber may have slept through a suspend.
+ */
+export function rereadLists(): void {
+  void Promise.all([fetchPrs(), fetchPinnedPrs()]);
 }
 
 export async function fetchPrs(): Promise<void> {
-  isLoading = true;
   try {
-    const { data } = await api.api.prs.get();
-    if (data) {
-      pullRequests = data as PullRequest[];
-      // Fire-and-forget: load thread summaries for all open PRs
-      const openIds = (data as PullRequest[]).filter((p) => p.status === "open").map((p) => p.id);
-      void fetchThreadSummaries(openIds);
-      void fetchArchivedPrs();
-    }
+    pullRequests = await call(api.api.prs.get(), "Failed to load pull requests");
+    void fetchArchivedPrs();
   } catch {
-    // error handled by wsStore or caller
+    // The next reconnect or focus reads the list again.
   } finally {
-    isLoading = false;
     prsFetchAttempted = true;
   }
 }
 
-/**
- * Serialize the active creator/team filter into the `authors` query param the
- * archived endpoint expects (comma-separated logins). Returns `undefined` when
- * no filter is active so the server applies no author restriction. Keeps
- * `selectedAuthorLogins` the single source of truth for both the open and
- * closed lists.
- */
-function archivedAuthorsParam(): string | undefined {
-  if (selectedAuthorLogins.size === 0) return undefined;
-  return [...selectedAuthorLogins].join(",");
+function archivedAuthorsQuery(): { authors?: string } {
+  return archiveAuthors.size === 0 ? {} : { authors: [...archiveAuthors].join(",") };
 }
 
-// Guards against out-of-order archived reloads: rapid filter toggles can fire
-// overlapping `fetchArchivedPrs` calls, and only the latest one's result should
-// win. Each call captures the token; a stale response is discarded.
+// A paged feed, not a per-key fetch: a filter reload discards pages still in
+// flight for the old filter.
 let archivedFetchToken = 0;
 
-export async function fetchArchivedPrs(): Promise<void> {
+async function fetchArchivedPrs(): Promise<void> {
   const token = ++archivedFetchToken;
   try {
-    const authors = archivedAuthorsParam();
-    const { data } = await api.api.prs.archived.get({
-      query: authors === undefined ? {} : { authors },
-    });
-    if (token !== archivedFetchToken) return; // superseded by a newer reload
-    if (data) {
-      const page = data as { prs: PullRequest[]; nextCursor: string | null };
-      archivedPrs = page.prs;
-      archivedNextCursor = page.nextCursor;
-    }
+    const data = await call(
+      api.api.prs.archived.get({ query: archivedAuthorsQuery() }),
+      "Failed to load the archive",
+    );
+    if (token !== archivedFetchToken) return;
+    archivedPrs = [...data.prs];
+    archivedNextCursor = data.nextCursor;
   } catch {
-    // best-effort
+    // The archive is a convenience; the next list read retries.
   }
 }
 
-/**
- * Fetch the next page of archived PRs using the cursor returned from the
- * prior request. Appends to `archivedPrs` rather than replacing — used by
- * the sidebar's "show more" affordance. No-op if there's no cursor
- * (already exhausted) or a fetch is already in flight.
- */
+/** Filter the archive to these authors (empty = everyone), server-side, and reload it. */
+export function setArchiveAuthors(authors: ReadonlySet<string>): void {
+  archiveAuthors = new Set(authors);
+  void fetchArchivedPrs();
+}
+
 export async function fetchMoreArchived(): Promise<void> {
   if (archivedNextCursor === null) return;
   if (archivedLoadingMore) return;
   archivedLoadingMore = true;
-  // Capture the current filter generation (do not bump it — this is a
-  // continuation of the same feed, not a new reload). If a `fetchArchivedPrs`
-  // filter reload lands mid-flight, discard this page: appending it would mix
-  // stale-filter rows in and clobber the new cursor.
+  // A continuation of the same feed, not a reload: a filter reload landing
+  // mid-flight discards this page rather than mixing stale-filter rows in.
   const token = archivedFetchToken;
   try {
-    const authors = archivedAuthorsParam();
-    const { data } = await api.api.prs.archived.get({
-      query:
-        authors === undefined
-          ? { cursor: archivedNextCursor }
-          : { cursor: archivedNextCursor, authors },
-    });
-    if (token !== archivedFetchToken) return; // superseded by a filter reload
-    if (data) {
-      const page = data as { prs: PullRequest[]; nextCursor: string | null };
-      // Deduplicate against existing rows in case a `pr:archived` patch
-      // landed between request and response.
-      const existingIds = new Set(archivedPrs.map((p) => p.id));
-      const fresh = page.prs.filter((p) => !existingIds.has(p.id));
-      archivedPrs = [...archivedPrs, ...fresh];
-      archivedNextCursor = page.nextCursor;
-    }
+    const data = await call(
+      api.api.prs.archived.get({
+        query: { ...archivedAuthorsQuery(), cursor: archivedNextCursor },
+      }),
+      "Failed to load the archive",
+    );
+    if (token !== archivedFetchToken) return;
+    // A `pr:archived` patch may have landed between request and response.
+    const existingIds = new Set(archivedPrs.map((p) => p.id));
+    const fresh = data.prs.filter((p) => !existingIds.has(p.id));
+    archivedPrs = [...archivedPrs, ...fresh];
+    archivedNextCursor = data.nextCursor;
   } catch {
-    // best-effort — leave cursor in place so the user can retry
+    // The cursor stays, so the user can retry.
   } finally {
     archivedLoadingMore = false;
   }
@@ -526,12 +233,9 @@ export function isPrPinned(prId: string): boolean {
 
 export async function fetchPinnedPrs(): Promise<void> {
   try {
-    const { data } = await api.api.prs.pinned.get();
-    if (Array.isArray(data)) {
-      pinnedPrIds = new Set(data as string[]);
-    }
+    pinnedPrIds = new Set(await call(api.api.prs.pinned.get(), "Failed to load pins"));
   } catch {
-    // best-effort
+    // The next reconnect or focus reads the pins again.
   }
 }
 
@@ -539,9 +243,8 @@ export async function pinPr(prId: string): Promise<void> {
   if (pinnedPrIds.has(prId)) return;
   pinnedPrIds = new Set(pinnedPrIds).add(prId);
   try {
-    await api.api.prs.pinned.post({ prId });
+    await call(api.api.prs.pinned.post({ prId }), "Failed to pin");
   } catch {
-    // Rollback on failure
     const next = new Set(pinnedPrIds);
     next.delete(prId);
     pinnedPrIds = next;
@@ -554,19 +257,15 @@ export async function unpinPr(prId: string): Promise<void> {
   next.delete(prId);
   pinnedPrIds = next;
   try {
-    await api.api.prs.pinned({ prId }).delete();
+    await call(api.api.prs.pinned({ prId }).delete(), "Failed to unpin");
   } catch {
-    // Rollback on failure
     pinnedPrIds = new Set(pinnedPrIds).add(prId);
   }
 }
 
 /**
- * Patch in-memory state in response to a `pr:archived` SSE envelope.
- * Removes the PR from the open list, prepends it to the archive (newest
- * first), updates its status/closedAt fields if present. Best-effort: if
- * the PR isn't known locally, this is a no-op and the next `prs:updated`
- * shotgun will reconcile.
+ * Move a PR from the open list into the archive (`pr:archived`). A PR not
+ * known locally waits for the next `prs:updated` reconcile.
  */
 export function onPrArchived(data: {
   prId: string;
@@ -574,7 +273,6 @@ export function onPrArchived(data: {
   status: "closed" | "merged";
   closedAt: string;
 }): void {
-  // Already archived? Update in place and don't re-prepend.
   const archIdx = archivedPrs.findIndex((p) => p.id === data.prId);
   if (archIdx >= 0) {
     const existing = archivedPrs[archIdx];
@@ -587,226 +285,23 @@ export function onPrArchived(data: {
     pullRequests = pullRequests.filter((p) => p.id !== data.prId);
     return;
   }
-  // Move from open list into archive.
   const openIdx = pullRequests.findIndex((p) => p.id === data.prId);
   if (openIdx >= 0) {
     const existing = pullRequests[openIdx];
     if (!existing) return;
     const archived = { ...existing, status: data.status, closedAt: data.closedAt };
     pullRequests = [...pullRequests.slice(0, openIdx), ...pullRequests.slice(openIdx + 1)];
-    // Respect the active creator/team filter: the archived list is a
-    // server-filtered view, so a newly-closed PR whose author is filtered out
-    // must not pop into it. It's already gone from the open list above.
-    if (selectedAuthorLogins.size === 0 || selectedAuthorLogins.has(archived.authorLogin)) {
+    // The archive is filtered server-side by author, so a newly closed PR by
+    // an author outside the filter must not pop into it.
+    if (archiveAuthors.size === 0 || archiveAuthors.has(archived.authorLogin)) {
       archivedPrs = [archived, ...archivedPrs];
     }
   }
-  // PR not known locally — wait for the `prs:updated` reconcile.
-}
-
-export async function fetchRepos(): Promise<void> {
-  try {
-    const { data } = await api.api.repos.get();
-    if (data) await setRepositories(data as Repository[]);
-  } catch {
-    // error handled by caller
-  } finally {
-    reposFetchAttempted = true;
-  }
-}
-
-export async function syncPrs(): Promise<void> {
-  isLoading = true;
-  try {
-    await api.api.prs.sync.post();
-  } catch {
-    // errors arrive via SSE
-  } finally {
-    isLoading = false;
-  }
-}
-
-export function setSelectedPrId(id: string | null): void {
-  selectedPrId = id;
-}
-
-export async function selectPr(id: string): Promise<void> {
-  selectedPrId = id;
-  if (typeof window !== "undefined" && window.location.pathname === `/review/${id}`) return;
-  await goto(`/review/${id}`);
-}
-
-export function setSearchQuery(q: string): void {
-  searchQuery = q;
-}
-
-export function toggleAuthorFilter(login: string): void {
-  const next = new Set(selectedAuthorLogins);
-  if (next.has(login)) next.delete(login);
-  else next.add(login);
-  selectedAuthorLogins = next;
-  void fetchArchivedPrs();
 }
 
 /**
- * Add or remove a batch of author logins from the filter in one update.
- * Used by the team shortcuts: selecting a team adds all its members,
- * deselecting removes them. Reuses the same `selectedAuthorLogins` set the
- * per-creator toggles drive, so the downstream filter logic is unchanged.
- */
-export function setAuthorFilters(logins: readonly string[], selected: boolean): void {
-  if (logins.length === 0) return;
-  const next = new Set(selectedAuthorLogins);
-  for (const login of logins) {
-    if (selected) next.add(login);
-    else next.delete(login);
-  }
-  selectedAuthorLogins = next;
-  void fetchArchivedPrs();
-}
-
-export function clearAuthorFilters(): void {
-  if (selectedAuthorLogins.size === 0) return;
-  selectedAuthorLogins = new Set();
-  void fetchArchivedPrs();
-}
-
-export function getTeamsForOrg(owner: string): Team[] {
-  return teamsByOrg.get(owner.toLowerCase()) ?? [];
-}
-
-export function getTeamsFetchStateForOrg(owner: string): "idle" | "loading" | "loaded" | "error" {
-  const key = owner.toLowerCase();
-  if (teamsLoadingByOrg.get(key)) return "loading";
-  if (teamsFailedByOrg.get(key)) return "error";
-  if (teamsByOrg.has(key)) return "loaded";
-  return "idle";
-}
-
-/**
- * Lazily fetch an org's teams (and members) the first time they're needed.
- * Idempotent: no-ops once a result is cached or a request is already in
- * flight. Best-effort — failures leave the entry uncached so a later popover
- * open can retry instead of pinning a transient error as "no teams".
- */
-export async function fetchTeamsForOrg(
-  owner: string,
-  options?: { force?: boolean },
-): Promise<void> {
-  const key = owner.toLowerCase();
-  if (!options?.force && (teamsByOrg.has(key) || teamsLoadingByOrg.get(key))) return;
-  if (options?.force) {
-    const nextTeams = new Map(teamsByOrg);
-    nextTeams.delete(key);
-    teamsByOrg = nextTeams;
-  }
-  teamsLoadingByOrg = new Map(teamsLoadingByOrg).set(key, true);
-  teamsFailedByOrg = new Map(teamsFailedByOrg).set(key, false);
-  try {
-    const { data, error } = await api.api.github.teams({ org: owner }).get();
-    if (error) {
-      teamsFailedByOrg = new Map(teamsFailedByOrg).set(key, true);
-      return;
-    }
-    // Cache successful results — including an empty list — so reopening the
-    // popover never re-hits the network when GitHub answered cleanly.
-    teamsByOrg = new Map(teamsByOrg).set(key, (data as { teams: Team[] } | null)?.teams ?? []);
-  } catch {
-    // Leave the entry uncached. The popover remains usable with creator rows,
-    // and a later open can retry without requiring account reset/re-login.
-    teamsFailedByOrg = new Map(teamsFailedByOrg).set(key, true);
-  } finally {
-    teamsLoadingByOrg = new Map(teamsLoadingByOrg).set(key, false);
-  }
-}
-
-export type AddRepoBody =
-  | { readonly fullName: string; readonly mode?: "clone"; readonly basePath?: string }
-  | { readonly fullName: string; readonly mode: "link"; readonly clonePath: string };
-
-/** A bare `owner/name` string is sugar for `{ fullName, mode: "clone" }`. */
-export type AddRepoInput = string | AddRepoBody;
-
-function toAddRepoBody(input: AddRepoInput): AddRepoBody {
-  if (typeof input === "string") return { fullName: input };
-  return input;
-}
-
-/**
- * A rejected add, carrying the server's diagnosis: why GitHub couldn't see
- * the repo and, when known, the page that grants access.
- */
-export class AddRepoError extends Error {
-  constructor(
-    message: string,
-    readonly detail: string | null,
-    readonly action: { readonly label: string; readonly url: string } | null,
-  ) {
-    super(message);
-    this.name = "AddRepoError";
-  }
-}
-
-export async function addRepo(input: AddRepoInput): Promise<void> {
-  const { error } = await api.api.repos.post(toAddRepoBody(input));
-  if (error) {
-    const value = error.value as
-      | {
-          error?: string;
-          message?: string;
-          detail?: string;
-          action?: { label: string; url: string };
-        }
-      | undefined;
-    const msg = value?.error ?? value?.message ?? `Failed to add repository (HTTP ${error.status})`;
-    throw new AddRepoError(msg, value?.detail ?? null, value?.action ?? null);
-  }
-  await fetchRepos();
-  // Trigger a sync so PRs for the new repo are fetched immediately.
-  // The server-side POST handler forks a background sync, but that fiber
-  // may complete after the response returns.  An explicit sync here uses
-  // the awaited POST /api/prs/sync endpoint, which guarantees the sync
-  // finishes and broadcasts prs:updated over the SSE stream before
-  // returning.  fetchPrs() is a safety net in case the SSE message is
-  // missed.
-  await syncPrs();
-  await fetchPrs();
-}
-
-export async function deleteRepo(id: string): Promise<void> {
-  const snapshot = snapshotRepoState();
-  const repo = repositories.find((r) => r.id === id);
-  const toastOptions = repo ? { description: repo.fullName } : undefined;
-  const toastId = toast.loading("Removing repository...", toastOptions);
-
-  removeRepoLocally(id);
-
-  try {
-    const { error } = await api.api.repos({ id }).delete();
-    if (error) {
-      const value = error.value as { error?: string; message?: string } | undefined;
-      throw new Error(
-        value?.error ?? value?.message ?? `Failed to remove repository (HTTP ${error.status})`,
-      );
-    }
-  } catch (e) {
-    toast.dismiss(toastId);
-    restoreRepoState(snapshot);
-    toast.error(e instanceof Error ? e.message : "Failed to remove repository");
-    throw e;
-  }
-
-  toast.dismiss(toastId);
-  toast.success("Repository removed", toastOptions);
-  void Promise.all([fetchRepos(), fetchPrs()]);
-}
-
-/**
- * Owner-only PR mutations. Optimistic with entity-scoped rollback per
- * conventions §4.6: flip the affected fields locally before awaiting the
- * server, restore them on throw. The successful round-trip's `prs:updated`
- * broadcast reconciles the canonical list as the source of truth — our
- * optimistic write is only for the in-flight window.
+ * Owner-only PR mutations are optimistic (conventions §4.6); the successful
+ * round-trip's `prs:updated` broadcast reconciles the canonical list.
  */
 function flipPrDraftLocally(prId: string, isDraft: boolean): void {
   pullRequests = pullRequests.map((p) => (p.id === prId ? { ...p, isDraft } : p));
@@ -820,11 +315,10 @@ export async function convertPrToDraft(prId: string): Promise<void> {
   flipPrDraftLocally(prId, true);
 
   try {
-    const { error } = await api.api.prs({ id: prId })["convert-to-draft"].post();
-    if (error) throw new Error(`HTTP ${error.status}`);
+    await call(api.api.prs({ id: prId })["convert-to-draft"].post(), "Failed to convert to draft");
   } catch (e) {
     flipPrDraftLocally(prId, prevIsDraft);
-    toast.error(e instanceof Error ? e.message : "Failed to convert to draft");
+    toast.error(thrownMessage(e));
     throw e;
   }
 }
@@ -837,26 +331,21 @@ export async function markPrReadyForReview(prId: string): Promise<void> {
   flipPrDraftLocally(prId, false);
 
   try {
-    const { error } = await api.api.prs({ id: prId })["ready-for-review"].post();
-    if (error) throw new Error(`HTTP ${error.status}`);
+    await call(
+      api.api.prs({ id: prId })["ready-for-review"].post(),
+      "Failed to mark ready for review",
+    );
   } catch (e) {
     flipPrDraftLocally(prId, prevIsDraft);
-    toast.error(e instanceof Error ? e.message : "Failed to mark ready for review");
+    toast.error(thrownMessage(e));
     throw e;
   }
 }
 
 /**
- * Restore a PR back into the open list from the caller's pre-close snapshot.
- * Used by the `closePr` / `mergePr` rollback path — the reverse of
- * `onPrArchived`'s forward move.
- *
- * Restores from the passed snapshot rather than looking the PR up in
- * `archivedPrs`, because the forward move may have skipped adding it there:
- * when an author filter is active, `onPrArchived` filters out non-matching
- * PRs, so a lookup would find nothing and the PR would be lost from both
- * lists. Idempotent — no-ops the open-list insert if a concurrent
- * `prs:updated` reconcile already restored it.
+ * Put a PR back into the open list from the caller's pre-close copy — the
+ * reverse of `onPrArchived`. From the copy, not the archive: with an author
+ * filter active the forward move may not have added it there.
  */
 function restorePrFromArchive(snapshot: PullRequest): void {
   archivedPrs = archivedPrs.filter((p) => p.id !== snapshot.id);
@@ -867,18 +356,15 @@ function restorePrFromArchive(snapshot: PullRequest): void {
 export async function closePr(prId: string): Promise<void> {
   const pr = pullRequests.find((p) => p.id === prId);
   if (!pr) {
-    // PR not known locally — fall back to pessimistic. SSE reconciles.
-    const { error } = await api.api.prs({ id: prId }).close.post();
-    if (error) {
-      toast.error(`Failed to close PR (HTTP ${error.status})`);
-      throw new Error(`HTTP ${error.status}`);
+    // Not known locally: no optimistic move; SSE reconciles.
+    try {
+      await call(api.api.prs({ id: prId }).close.post(), "Failed to close PR");
+    } catch (e) {
+      toast.error(thrownMessage(e));
+      throw e;
     }
     return;
   }
-
-  // Snapshot the pre-close PR for rollback. `onPrArchived` never mutates this
-  // object (it builds a new one), so it stays a faithful `status:"open"` copy.
-  const snapshot = pr;
 
   onPrArchived({
     prId,
@@ -888,42 +374,29 @@ export async function closePr(prId: string): Promise<void> {
   });
 
   try {
-    const { error } = await api.api.prs({ id: prId }).close.post();
-    if (error) throw new Error(`HTTP ${error.status}`);
+    await call(api.api.prs({ id: prId }).close.post(), "Failed to close PR");
   } catch (e) {
-    restorePrFromArchive(snapshot);
-    toast.error(e instanceof Error ? e.message : "Failed to close PR");
+    restorePrFromArchive(pr);
+    toast.error(thrownMessage(e));
     throw e;
   }
 }
 
-export async function getMergeEligibility(prId: string): Promise<MergeEligibility | null> {
-  try {
-    const { data, error } = await api.api.prs({ id: prId })["merge-eligibility"].get();
-    if (error || !data) return null;
-    return data as MergeEligibility;
-  } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to check merge eligibility");
-    return null;
-  }
-}
+const MERGE_FAILED = "Failed to merge pull request";
 
 export async function mergePr(prId: string, mergeMethod: MergeMethod): Promise<void> {
   const pr = pullRequests.find((p) => p.id === prId);
   if (!pr) {
-    // PR not known locally — fall back to pessimistic. SSE reconciles.
-    const { error } = await api.api.prs({ id: prId }).merge.post({ mergeMethod });
-    if (error) {
-      const msg = apiErrorMessage(error, "Failed to merge pull request");
-      toast.error(msg);
-      throw new Error(msg);
+    // Not known locally: no optimistic move; SSE reconciles.
+    try {
+      await call(api.api.prs({ id: prId }).merge.post({ mergeMethod }), MERGE_FAILED);
+    } catch (e) {
+      toast.error(thrownMessage(e));
+      throw e;
     }
     toast.success("Pull request merged successfully");
     return;
   }
-
-  // Snapshot the pre-merge PR for rollback (see closePr for why this is safe).
-  const snapshot = pr;
 
   onPrArchived({
     prId,
@@ -933,29 +406,11 @@ export async function mergePr(prId: string, mergeMethod: MergeMethod): Promise<v
   });
 
   try {
-    const { error } = await api.api.prs({ id: prId }).merge.post({ mergeMethod });
-    if (error) throw new Error(apiErrorMessage(error, "Failed to merge pull request"));
+    await call(api.api.prs({ id: prId }).merge.post({ mergeMethod }), MERGE_FAILED);
     toast.success("Pull request merged successfully");
   } catch (e) {
-    restorePrFromArchive(snapshot);
-    toast.error(e instanceof Error ? e.message : "Failed to merge pull request");
-    throw e;
-  }
-}
-
-export async function retryClone(id: string): Promise<void> {
-  // Optimistic flip so the spinner appears immediately. The server's
-  // background fiber will broadcast 'cloning' then 'ready'/'error' via the
-  // `repos:clone-status` SSE message, which `events.svelte.ts` routes through
-  // `updateRepoCloneStatus`. If the POST itself fails, we surface the error
-  // state here so the indicator stays actionable.
-  updateRepoCloneStatus(id, "pending", "");
-  try {
-    await api.api.repos({ id })["retry-clone"].post();
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Failed to retry clone";
-    updateRepoCloneStatus(id, "error", msg);
-    toast.error(msg);
+    restorePrFromArchive(pr);
+    toast.error(thrownMessage(e));
     throw e;
   }
 }
@@ -964,147 +419,14 @@ export function getPullRequests(): PullRequest[] {
   return pullRequests;
 }
 
-export function getRepositories(): Repository[] {
-  return repositories;
-}
-
-/** Whether {@link getRepositories} is answering from real data yet. */
-export function getReposFetchAttempted(): boolean {
-  return reposFetchAttempted;
-}
-
-export function getRepoOwner(repoId: string): string | null {
-  return repositories.find((r) => r.id === repoId)?.owner ?? null;
-}
-
-export function getSelectedPrId(): string | null {
-  return selectedPrId;
-}
-
-export function getSelectedRepoId(): string | null {
-  return selectedRepoId;
-}
-
-export function getSelectedRepo(): Repository | null {
-  return selectedRepo;
-}
-
-export function setSelectedRepoId(id: string | null): void {
-  selectedRepoId = id;
-}
-
-export function getIsLoading(): boolean {
-  return isLoading;
-}
-
-export async function fetchAvailableRepos(force = false): Promise<void> {
-  availableReposLoading = true;
-  if (force) availableReposFetchFailed = false;
-  try {
-    const { data, error } = await api.api.github.repos.get({
-      query: { force: force ? "true" : undefined },
-    });
-    if (error) {
-      availableReposFetchFailed = true;
-      return;
-    }
-    if (data) {
-      const repos = data as Repository[];
-      await preloadOwnerHues(repos);
-      availableRepos = repos;
-      availableReposFetchFailed = false;
-      // Fire-and-forget — the row hint renders as the counts arrive.
-      void fetchAvailablePrCounts(availableRepos.map((r) => r.fullName));
-    }
-  } catch {
-    availableReposFetchFailed = true;
-  } finally {
-    availableReposLoading = false;
-  }
-}
-
-async function fetchAvailablePrCounts(fullNames: string[]): Promise<void> {
-  if (fullNames.length === 0) {
-    availablePrCountsLoaded = true;
-    return;
-  }
-  try {
-    const { data, error } = await api.api.github["pr-counts"].post({ fullNames });
-    if (error || !data) return;
-    availablePrCounts = {
-      ...availablePrCounts,
-      ...(data as { counts: Record<string, number> }).counts,
-    };
-  } catch {
-    // Silent — hint is best-effort, list still works without counts.
-  } finally {
-    availablePrCountsLoaded = true;
-  }
-}
-
-/**
- * Fetch the server's default clone base directory once and cache it. Idempotent
- * — subsequent calls no-op once a value is cached. Best-effort: on failure the
- * value stays null and the add-repo form omits `basePath`, deferring to the
- * server's own default.
- */
-export async function fetchDefaultCloneBaseDir(): Promise<void> {
-  if (defaultCloneBaseDir !== null) return;
-  try {
-    const { data, error } = await api.api.repos["clone-base-dir"].get();
-    if (error || !data) return;
-    defaultCloneBaseDir = (data as { path: string }).path;
-  } catch {
-    // Best-effort — see the field doc.
-  }
-}
-
-export function getDefaultCloneBaseDir(): string | null {
-  return defaultCloneBaseDir;
-}
-
-export function getAvailableRepos(): Repository[] {
-  return availableRepos;
-}
-
-export function getAvailableReposLoading(): boolean {
-  return availableReposLoading;
-}
-
-export function getAvailableReposFetchFailed(): boolean {
-  return availableReposFetchFailed;
-}
-
-export function getAvailablePrCount(fullName: string): number | undefined {
-  return availablePrCounts[fullName];
-}
-
-export function getAvailablePrCountsLoaded(): boolean {
-  return availablePrCountsLoaded;
-}
-
 export function reset(): void {
-  repositoryLoadSeq++;
-  clearOwnerHueCache();
   pullRequests = [];
-  repositories = [];
-  availableRepos = [];
-  availableReposLoading = false;
-  availableReposFetchFailed = false;
-  availablePrCounts = {};
-  availablePrCountsLoaded = false;
-  selectedPrId = null;
-  selectedRepoId = null;
-  searchQuery = "";
-  selectedAuthorLogins = new Set();
-  teamsByOrg = new Map();
-  teamsLoadingByOrg = new Map();
-  teamsFailedByOrg = new Map();
-  isLoading = false;
-  reposFetchAttempted = false;
+  prsFetchAttempted = false;
   archivedPrs = [];
   linkedPrs = new Map();
   archivedNextCursor = null;
   archivedLoadingMore = false;
+  archiveAuthors = new Set();
+  archivedFetchToken++;
   pinnedPrIds = new Set();
 }

@@ -9,53 +9,81 @@ default sort.
 | Domain | Open | Severity mix |
 |---|---|---|
 | Server (Effect) | 0 | — |
-| Web stores | 1 | low |
-| UI / motion | 14 | all fixed |
-| **Total** | **1** | |
+| Server (layout) | 1 | low |
+| Web stores | 0 | — |
+| UI / motion | 1 | low |
+| **Total** | **2** | |
 
 ---
 
 ## Open
 
-<a id="s-005"></a>
-### S-005 — `deleteRepo` uses list-snapshot rollback instead of entity-scoped
+<a id="s-006"></a>
+### S-006 — Feature files still flat beside (or instead of) a `services/<feature>/` folder
 
-**Rule violated:** [§4.6 — Client-initiated mutations are optimistic with entity-scoped rollback](./conventions.md#stores-optimistic).
+**Rule violated:** [§2.7 — A multi-file feature owns a folder](./conventions.md#services-layout).
 
-**Where:** `apps/web/src/lib/stores/prs.svelte.ts:455-487` (`deleteRepo`), with helpers
-`snapshotRepoState` (`:188-196`) and `restoreRepoState` (`:198-205`).
+**Where** (`apps/server/src/services/`):
 
-**Why it's a violation.** On error, `restoreRepoState` reassigns `repositories`,
-`pullRequests`, `archivedPrs`, `taggedPrsByRepo`, and `pinnedPrIds` to the pre-mutation
-snapshot. Any `prs:updated` / `repos:updated` / `pr:archived` broadcast that landed during
-the in-flight POST is silently dropped — including entirely unrelated entities the server
-added or removed for reasons that have nothing to do with this delete.
+- external integrations: `ExternalIntegrations.ts`
+- jobs: `job-mutex.ts`, `session-token-store.ts`
+- recaps: `job-subscribers.ts` (only `recaps/ProjectRecapJobs.ts` uses it)
+- base conflicts: `conflict-resolve-run.ts`
+- team cache: `cache-eligibility.ts`, beside `cache-signing/` and `blob/` (`Cache.ts` is the
+  generic kv cache every feature reads through, not a team-cache file)
+- no folder yet:
+  - poll: `PollScheduler.ts`, `poll-{gate,maintenance,notifications,open-prs,state}.ts`,
+    `pr-diff-stats.ts` (only `poll-open-prs.ts` uses it), `poll-test-support.ts` (the poll
+    tests' fixtures)
+  - PR mirror: `PrMirror.ts`, `pr-head-move.ts`, `pr-head-moves.ts` (which only the mirror and its listeners use)
+  - review: `Review.ts`, `review-submit.ts`, `review-mode.ts`, `github-review-comment.ts`, `Sync.ts`, `diff-anchors.ts`
+  - onboarding: `Onboarding.ts`, `AgentLogin.ts`, `EventJobRegistry.ts` (which only those two use)
+  - realtime: `Realtime.ts`, `Broadcaster.ts` (its transport; only `Realtime.ts` and the
+    `/api/events` route use it)
 
-**Fix shape.** Capture the *removed* state, not the *prior* state: which repo row was
-removed, which open PR ids and archived PR ids were removed, which pinned ids were removed.
-On rollback, re-insert each. Concurrent broadcasts that touched other entities survive
-untouched.
+Not violations, listed so the inventory of flat files is complete: one-file services, which
+§2.7 keeps flat. `AppLayer.ts`, `Ai.ts`, `Cache.ts`, `Db.ts`, `DbMaintenance.ts`,
+`DiffCache.ts`, `Jev.ts`, `merge-eligibility.ts`, `patch-truncate.ts`, `pinned-prs.ts`,
+`pr-deep-link.ts`, `pr-file-prerender.ts`, `PrContext.ts`, `PrConversation.ts`,
+`PullRequest.ts`, `repo-access.ts`, `RepoActivity.ts`, `Repository.ts`, `SecretStore.ts`,
+`Settings.ts`.
 
-**Severity:** Low — the failure mode is "concurrent unrelated broadcast lost during a
-rollback that itself is rare." Not actively biting in production. Tracked because
-`deleteRepo` is the canonical anti-pattern §4.6 was added to prevent and leaving it as-is
-implicitly endorses the shape.
+**Fix shape.** Moves plus import rewrites, one feature per PR, with the feature roots in
+`scripts/check-import-boundaries.ts` following. Mechanical, but it touches every importer, so
+it lands when nothing else is in flight in that feature.
 
-**Sizing:** ~30 lines. One PR. Worth pairing with any other touch to the repo-delete flow.
+**Severity:** Low.
+
+<a id="m-030"></a>
+### M-030 — `weight="bold"` on an 18px dialog-title glyph
+
+**Rule violated:** [§5.3 — Iconography](./conventions.md#motion-icon-only) (`bold` is for
+glyphs at 15px or less, or an outline mark in a set of `fill` marks).
+
+**Where:** `apps/web/src/lib/components/stack/StackMergeSheet.svelte` — the `GitMerge size={18}`
+in the sheet's title.
+
+**Fix shape.** `regular`, or a size the rule covers. A visible change; check it against the
+other dialog titles first.
+
+**Severity:** Low.
 
 ---
 
 ## Closed
 
-- E-001 — Replaced all 4 `Effect.runPromise` escape hatches in OpencodeSupervisor: exit observation via `Effect.forkDaemon(observeExit(running))`, idle timer via `Effect.fork(Effect.sleep(...).pipe(Effect.andThen(stopIfIdle)))`, pre-warm via `Effect.forkDaemon`; changed `idleTimer` state from `setTimeout` handle to `Fiber.RuntimeFiber`
+- E-001 — Replaced all 4 `Effect.runPromise` escape hatches in OpencodeSupervisor (since deleted with the opencode daemon transport; agents run over ACP)
 - E-002 — Refactored `WalkthroughJobs.ts` main loop from async/await with `Effect.runPromise` to pure `Effect.gen` with recursive `consumeGenerator` and `runWithAutoContinuation`; refactored `ChatChangesPush.ts` `resolveConflictsAndPush` from callback-shaped `runWithDeps` to `Queue.unbounded<ResolvePushFrame>` with `Effect.forkDaemon` producer and `ReadableStream` boundary. Both files pass `make typecheck` and `biome check`.
-- E-003 — Added `OpencodeNotSelectedError` / `OpencodeUnhealthyError` to `domain/errors.ts`; migrated two `AiGenerationError` misuses in `OpencodeSupervisor.ts`
+- E-003 — Added `OpencodeNotSelectedError` / `OpencodeUnhealthyError` for two `AiGenerationError` misuses in `OpencodeSupervisor.ts` (all three since deleted with the opencode daemon transport)
 - E-004 — Wrapped all 7 raw Drizzle calls in Cache.ts with `Effect.try({ try, catch })`; added `DbError` to `domain/errors.ts`; updated service interface error channels from `never` to `DbError`
-- E-005 — Wrapped all raw Drizzle calls in Cache.ts (7 sites, E-004), Review.ts (12 sites), and PullRequest.ts (2 sites) using `tryDb` helper (which maps to `ReviewError` for backward compat); added `DbError` to `domain/errors.ts` for future use
+- E-006 — DB-backed services (`Repository`, `PullRequest`, `Review`, `Walkthrough`, `WalkthroughSnapshotImporter`, `ProjectRecap`, `Cache`) capture `DbService` when their Layer is built; `effects/with-db.ts`, `tryDb` and the hand-written `provideService(DbService, …)` bridges are gone
+- E-005 — Wrapped all raw Drizzle calls in Cache.ts (7 sites, E-004), Review.ts (12 sites), and PullRequest.ts (2 sites) using the `dbTry` helper (failing with `DbError`); `Repository.ts` followed in round 2 (its `addRepo` no longer turns DB faults into `ValidationError`)
+- E-007 — `CacheService.getOrFetch` single-flights through `effects/keyed-single-flight.ts` (its `detach` option forks the fetch with `Effect.forkDetach`; joiners await its `Deferred`), no `Effect.runPromiseWith`
 - S-001 — Migrated `review.svelte.ts` per-PR view state from plain `Map` + `$state` mirrors to single reactive `$state` store (`store = $state({ entries: Map, activePrId })`); derived `getActiveTab`/`getActiveFilePath` from the active entry; all mutations follow reactive-Map idiom
 - S-002 — Audited chat.svelte.ts: all 42 Map/Set mutation sites consistently follow the reactive-Map idiom (§4.3); unifying to a single mutation surface is future refactoring, not a convention violation
 - S-003 — Created `RequestState<T>` tagged union in `stores/_types.ts`; migrated `review.svelte.ts` repo file state from enum + error string to `RequestState<RepoFileData>`; updated `ReviewLayout.svelte` consumer
-- S-004 — Renamed all `*FromWs` store handlers to `on<EventName>` in `review.svelte.ts`, `chat.svelte.ts`, and updated call sites in `ws.svelte.ts`
+- S-005 — `deleteRepo` (now in `repos.svelte.ts`) restores only the repo, PRs and pins it removed; the review store's thread mutations roll back only the entity they touched
+- S-004 — Renamed all `*FromWs` store handlers to `on<EventName>` in `review.svelte.ts`, `chat.svelte.ts`, and updated call sites in `ws.svelte.ts` (now `events.svelte.ts`)
 - M-001 — IssueCard: `0.55s cubic-bezier(...)` → `var(--duration-ceremonial-medium) var(--ease-standard)`
 - M-002 — GuidedWalkthrough: all 7 literal animation declarations migrated to canonical tokens
 - M-003 — WalkthroughSection: `block-slide-up 0.65s cubic-bezier(...)` → `var(--duration-ceremonial-medium) var(--ease-standard)`
@@ -84,3 +112,5 @@ implicitly endorses the shape.
 - M-026 — app.css: `ease-out` → `var(--ease-out-expo)`; `1.5s ease-in-out` → `var(--duration-pulse) var(--ease-soft)`; `300ms cubic-bezier(...)` → `var(--duration-ceremonial-quick) var(--ease-soft)`
 - M-027 — dotmatrix-loader: `cubic-bezier(0.42, 0, 0.58, 1)` → `var(--ease-soft)`; `ease-in-out` (×3) → `var(--ease-soft)`; `180ms cubic-bezier(...)` → `var(--duration-quick) var(--ease-soft)`
 - M-028 — Added `--duration-pulse: 1400ms` to app.css `@theme` block
+- M-029 — Hand-rolled component `@keyframes` gone: walkthrough blocks, issue cards, stepper and spec-panel rows enter through `enterOnce` (w-walkthrough); the tool-activity group entrance is `in:gsapFadeY`, the push-pill pulse a GSAP tween, and RightPanel's duplicate `motion-essential-spin` was dropped (w-chat); ReviewTabs' status dot already pulsed through GSAP. The component keyframes left (`cell-pulse`, `footer-bounce`, `clone-pulse`, `grain-drift`) are on the surviving list in `motion/README.md`
+- M-031 — Onboarding (`OnboardingShell`, `OnboardingFlow`, every `Step*`) entrances moved from component `@keyframes` to `gsapEnter`; `ProjectRail`'s folder unfold to `bitsAnim` + `collapsibleOpen/Close`; `Dotmatrix` and recaps' `scrollToTheme` read `prefersReducedMotion()` instead of their own `matchMedia`; `RepoAvatarButton`'s `clone-pulse` uses `--duration-pulse` and is on the surviving list

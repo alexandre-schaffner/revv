@@ -1,27 +1,30 @@
 <script lang="ts">
-import { type CommentThread, canUserModifyComment, type ThreadMessage } from "@revv/shared";
+import {
+  type CommentThread,
+  canUserModifyComment,
+  isThreadResolved,
+  type ThreadMessage,
+} from "@revv/shared";
 import ArrowElbowDownLeft from "phosphor-svelte/lib/ArrowElbowDownLeft";
-import CaretUp from "phosphor-svelte/lib/CaretUp";
-import CheckSquare from "phosphor-svelte/lib/CheckSquare";
 import Clock from "phosphor-svelte/lib/Clock";
 import PaperPlaneTilt from "phosphor-svelte/lib/PaperPlaneTilt";
 import type { Attachment } from "svelte/attachments";
-import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
+import Markdown from "$lib/components/markdown/Markdown.svelte";
+import { viewerLoginOnPr } from "$lib/prs/viewer";
+import { canDiscardThread } from "$lib/review/threads";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
-import { renderMarkdown } from "$lib/utils/markdown";
 import AnnotationCommentInput from "./AnnotationCommentInput.svelte";
 import MessageAvatar from "./MessageAvatar.svelte";
 
 interface Props {
+  prId: string;
   thread: CommentThread;
-  messages: ThreadMessage[];
+  messages: readonly ThreadMessage[];
   onReply?: () => void;
   onResolve?: () => void;
   onReopen?: () => void;
   onDiscard?: () => void;
   onDiscardReply?: (messageId: string) => void;
-  onCollapse?: (() => void) | undefined;
-  onApplySuggestion?: (suggestion: string) => void;
   onEditMessage?: (messageId: string, body: string) => void;
   onPush?: (() => void | Promise<void>) | undefined;
   isReplying?: boolean;
@@ -31,6 +34,7 @@ interface Props {
 }
 
 let {
+  prId,
   thread,
   messages,
   onReply,
@@ -38,8 +42,6 @@ let {
   onReopen,
   onDiscard,
   onDiscardReply,
-  onCollapse,
-  onApplySuggestion,
   onEditMessage,
   onPush,
   isReplying = false,
@@ -48,25 +50,18 @@ let {
   isPending = false,
 }: Props = $props();
 
-const isResolved = $derived(thread.status === "resolved" || thread.status === "wont_fix");
-const currentUserLogin = $derived(getCurrentUserLogin());
-const firstMessage = $derived(messages[0] ?? null);
-const canDiscardThread = $derived(
-  isPending && firstMessage !== null && canUserModifyComment(firstMessage, currentUserLogin),
-);
-const canPushThread = $derived(canDiscardThread && onPush !== undefined);
+const isResolved = $derived(isThreadResolved(thread.status));
+const viewerLogin = $derived(viewerLoginOnPr(prId));
+const canDiscard = $derived(canDiscardThread(thread, messages, viewerLogin));
+const canPushThread = $derived(canDiscard && onPush !== undefined);
 
 function canModifyMessage(message: ThreadMessage): boolean {
-  return canUserModifyComment(message, currentUserLogin);
+  return canUserModifyComment(message, viewerLogin);
 }
 
-// ── Pending (unsynced) reply detection ────────────────────────────────────
-// A reply is "pending" once submitted but before the sync loop has pushed it
-// to GitHub (externalId still null). While the thread itself is pending
-// (`isPending`), every message is trivially unsynced and the thread-level
-// Discard handles removal, so we only care about non-first messages on a
-// synced thread. The most recent such message is the one a Discard click
-// should reach for (LIFO — undo the last thing the user did).
+// A reply is pending until the sync loop pushes it to GitHub (externalId still
+// null). On a pending thread the thread-level Discard covers every message;
+// on a synced one, Discard takes back the latest pending reply.
 const pendingReply = $derived.by((): ThreadMessage | null => {
   if (isPending) return null;
   for (let i = messages.length - 1; i > 0; i--) {
@@ -75,8 +70,6 @@ const pendingReply = $derived.by((): ThreadMessage | null => {
   }
   return null;
 });
-
-// ── Inline edit state ─────────────────────────────────────────────────────
 
 let editingMessageId = $state<string | null>(null);
 let editBody = $state("");
@@ -169,40 +162,26 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 						</div>
 					</div>
 				{:else}
-					<div
-						class="msg-body msg-body--editable prose prose-sm prose-dense"
+					<Markdown
+						class="msg-body msg-body--editable"
+						source={msg.body}
+						trust="external"
+						density="dense"
 						role="button"
-						tabindex="0"
+						tabindex={0}
 						title="Click to edit"
 						onclick={() => startEdit(msg)}
 						onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') startEdit(msg); }}
-					>{@html renderMarkdown(msg.body)}</div>
+					/>
 				{/if}
 			{:else}
-				<div class="msg-body prose prose-sm prose-dense">{@html renderMarkdown(msg.body)}</div>
-			{/if}
-
-			{#if msg.codeSuggestion}				<div class="suggestion-block">
-					<div class="suggestion-label">
-						<CheckSquare size={11} />
-						Code suggestion
-					</div>
-					<pre class="suggestion-code">{msg.codeSuggestion}</pre>
-					{#if !isResolved && onApplySuggestion && msg.codeSuggestion}
-						{@const suggestion = msg.codeSuggestion}
-						<button class="apply-btn" onclick={() => onApplySuggestion?.(suggestion)}>
-							Apply suggestion
-						</button>
-					{/if}
-				</div>
+				<Markdown class="msg-body" source={msg.body} trust="external" density="dense" />
 			{/if}
 		</div>
 	{/each}
 
 	{#if isReplying && !isResolved}
 		<AnnotationCommentInput
-			filePath=""
-			lineNo={0}
 			onSubmit={(body) => onReplySubmit?.(body)}
 			onDismiss={() => onReplyDismiss?.()}
 		/>
@@ -229,7 +208,7 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 				{isReplying ? 'Cancel' : 'Add reply...'}
 			</button>
 		{/if}
-		{#if canDiscardThread && onDiscard}
+		{#if canDiscard && onDiscard}
 			<button
 				class="footer-link footer-link--danger"
 				onclick={onDiscard}
@@ -247,15 +226,6 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 				class:footer-link--muted={isResolved}
 				onclick={isResolved ? onReopen : onResolve}
 			>{isResolved ? 'Reopen' : 'Resolve'}</button>
-		{/if}
-		{#if onCollapse}
-			<button
-				class="footer-collapse"
-				onclick={onCollapse}
-				aria-label="Collapse thread"
-			>
-				<CaretUp size={13} />
-			</button>
 		{/if}
 	</div>
 </div>
@@ -304,62 +274,14 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 		margin-left: auto;
 	}
 
-	/* Density + body tone come from `prose prose-sm prose-dense`; this only
-	   keeps long unbroken tokens from overflowing the thread column. */
-	.msg-body {
+	.message :global(.msg-body) {
 		word-break: break-word;
 	}
 
-	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
-	   prose layer (see app.css); `.msg-body` only owns its base text density. */
 
-	.suggestion-block {
-		margin-top: 8px;
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 5px;
-		overflow: hidden;
-	}
 
-	.suggestion-label {
-		display: flex;
-		align-items: center;
-		gap: 5px;
-		padding: 5px 9px;
-		font-size: 11px;
-		color: var(--color-text-muted);
-		background: var(--color-diff-bg);
-		border-bottom: 1px solid var(--color-border-subtle);
-	}
 
-	.suggestion-code {
-		margin: 0;
-		padding: 8px 12px;
-		font-family: var(--font-mono);
-		font-size: 11px;
-		line-height: 1.6;
-		color: var(--color-text-secondary);
-		background: var(--color-diff-bg);
-		overflow-x: auto;
-		white-space: pre;
-	}
 
-	.apply-btn {
-		display: block;
-		width: 100%;
-		padding: 5px 9px;
-		font-size: 11px;
-		color: var(--color-success);
-		background: color-mix(in srgb, var(--color-success) 8%, transparent);
-		border: none;
-		border-top: 1px solid color-mix(in srgb, var(--color-success) 12%, transparent);
-		cursor: pointer;
-		text-align: left;
-		transition: background-color var(--duration-instant) var(--ease-soft);
-	}
-
-	.apply-btn:hover {
-		background: color-mix(in srgb, var(--color-success) 14%, transparent);
-	}
 
 	.thread-footer {
 		display: flex;
@@ -413,27 +335,6 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 		color: var(--color-text-muted);
 	}
 
-	.footer-collapse {
-		margin-left: auto;
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		padding: 2px;
-		background: transparent;
-		border: none;
-		border-radius: 4px;
-		cursor: pointer;
-		color: var(--color-text-muted);
-		transition:
-			background-color var(--duration-snap) var(--ease-soft),
-			color var(--duration-snap) var(--ease-soft);
-	}
-
-	.footer-collapse:hover {
-		background: var(--color-bg-tertiary);
-		color: var(--color-text-secondary);
-	}
-
 	.msg-pending-badge {
 		display: inline-flex;
 		align-items: center;
@@ -447,18 +348,18 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 		opacity: 0.85;
 	}
 
-	.message--pending .msg-body {
+	.message--pending :global(.msg-body) {
 		opacity: 0.85;
 	}
 
-	.msg-body--editable {
+	.message :global(.msg-body--editable) {
 		cursor: text;
 		border-radius: 3px;
 		margin: -2px -4px;
 		padding: 2px 4px;
 		transition: background-color var(--duration-instant) var(--ease-soft);
 	}
-	.msg-body--editable:hover {
+	.message :global(.msg-body--editable:hover) {
 		background: color-mix(
 			in srgb,
 			var(--color-bg-tertiary) 55%,

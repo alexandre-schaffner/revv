@@ -1,5 +1,3 @@
-// ── BaseConflictsService ───────────────────────────────────────────────────
-//
 // The Conversation tab's "conflicts with the base branch" card. `check` asks
 // git which files conflict (`git merge-tree` over freshly fetched tips; GitHub
 // only says *whether*). `resolve` brings the PR up to date with its base the
@@ -12,63 +10,54 @@
 // atomic, and a run killed mid-way leaves only the scratch worktree, which the
 // next run clears before it starts.
 
-import { join } from "node:path";
-import {
-  ACP_AGENT_IDS,
-  type BaseConflictFrame,
-  type BaseConflictStrategy,
-  type BaseConflictsCheck,
-} from "@revv/shared";
-import { Context, Effect, Layer, Queue } from "effect";
+import type { BaseConflictFrame, BaseConflictsCheck } from "@revv/shared";
+import { Context, Effect, Exit, Layer, Scope } from "effect";
 import type { ResolveConflictsTask } from "../../ai/prompts/chat";
-import { serverEnv } from "../../config";
 import {
   AiNotConfiguredError,
   BaseConflictsRejectedError,
   type BaseConflictsRejection,
+  type DbError,
 } from "../../domain/errors";
 import { keyedSingleFlight } from "../../effects/keyed-single-flight";
 import { logError } from "../../logger";
 import { AiService } from "../Ai";
-import { pumpAgentFrames, queueToStream } from "../agent-frame-pump";
-import { Broadcaster } from "../Broadcaster";
-import { ChatSessionService } from "../ChatSession";
-import { worktreeHolderPath } from "../clone-policy";
-import type { DbService } from "../Db";
-import type { GitHubEtagCache } from "../GitHubEtagCache";
-import { assertNotFlagLike, isAncestor, lsRemoteHead, proposedCommitCount } from "../GitOps";
+import { RepoCloneService } from "../clone/RepoClone";
+import { createResolveRuns, type PushedOf } from "../conflict-resolve-run";
+import { BranchPushLock, type PushTarget } from "../git/branch-push-lock";
+import { assertNotFlagLike, gitTry, isAncestor } from "../git/ops";
+import { lsRemoteHead } from "../git/push";
+import { clearScratch, describeFiles, prepareScratch } from "../git/scratch";
 import { type PrContextBasic, type PrContextError, PrContextService } from "../PrContext";
-import { PrPushLockService } from "../PrPushLock";
-import { PullRequestService } from "../PullRequest";
-import { makePrHeadRefresh } from "../pr-head-refresh";
+import { PrMirror } from "../PrMirror";
 import { SettingsService } from "../Settings";
+import { PrWorkspace } from "../workspace/PrWorkspace";
 import {
   checkTips,
-  clearScratch,
   deleteTipRefs,
   fetchTips,
   type OperationInput,
-  prepareScratch,
   pushResult,
   type SyncRepo,
   startOperation,
   verifyResolution,
 } from "./git";
 
-/** A check this fresh, for the same PR head, is served from memory. */
 const CHECK_FRESH_MS = 30_000;
 
-export type BaseConflictsError = BaseConflictsRejectedError | AiNotConfiguredError | PrContextError;
+export type BaseConflictsError =
+  | BaseConflictsRejectedError
+  | AiNotConfiguredError
+  | PrContextError
+  | DbError;
 
 export class BaseConflictsService extends Context.Service<
   BaseConflictsService,
   {
     readonly check: (params: {
       readonly prId: string;
-      readonly userId: string;
-      readonly accountId: string;
       readonly force?: boolean;
-    }) => Effect.Effect<BaseConflictsCheck, BaseConflictsError, DbService>;
+    }) => Effect.Effect<BaseConflictsCheck, BaseConflictsError>;
     /**
      * Start bringing the PR up to date with its base, as long as its branch is
      * still at `expectedHeadSha`. Refusals fail before anything runs; once the
@@ -76,14 +65,10 @@ export class BaseConflictsService extends Context.Service<
      */
     readonly resolve: (params: {
       readonly prId: string;
-      readonly userId: string;
-      readonly accountId: string;
       readonly expectedHeadSha: string;
-    }) => Effect.Effect<
-      ReadableStream<BaseConflictFrame>,
-      BaseConflictsError,
-      DbService | GitHubEtagCache | SettingsService
-    >;
+    }) => Effect.Effect<ReadableStream<BaseConflictFrame>, BaseConflictsError>;
+    /** Stop the PR's run while its agent works; whether there was one to stop. */
+    readonly stop: (prId: string) => Effect.Effect<boolean>;
   }
 >()("BaseConflictsService") {}
 
@@ -91,19 +76,11 @@ const rejected = (reason: BaseConflictsRejection, message: string) =>
   Effect.fail(new BaseConflictsRejectedError({ reason, message }));
 
 const gitStep = <A>(what: string, run: () => Promise<A>) =>
-  Effect.tryPromise({
-    try: run,
-    catch: (cause) =>
-      new BaseConflictsRejectedError({
-        reason: "failed",
-        message: `${what}: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
-  });
-
-function describeFiles(files: readonly string[]): string {
-  const shown = files.slice(0, 3).join(", ");
-  return files.length > 3 ? `${shown} and ${files.length - 3} more` : shown;
-}
+  gitTry(run, what).pipe(
+    Effect.mapError(
+      (err) => new BaseConflictsRejectedError({ reason: "failed", message: err.message }),
+    ),
+  );
 
 export const BaseConflictsServiceLive = Layer.effect(
   BaseConflictsService,
@@ -111,52 +88,41 @@ export const BaseConflictsServiceLive = Layer.effect(
     const prCtx = yield* PrContextService;
     const settings = yield* SettingsService;
     const ai = yield* AiService;
-    const pushLock = yield* PrPushLockService;
-    const chatSessions = yield* ChatSessionService;
-    const headRefresh = makePrHeadRefresh({
-      prService: yield* PullRequestService,
-      prCtx,
-      broadcaster: yield* Broadcaster,
-    });
+    const pushLock = yield* BranchPushLock;
+    const workspace = yield* PrWorkspace;
+    const mirror = yield* PrMirror;
+    const repoClone = yield* RepoCloneService;
 
     const checks = new Map<
       string,
       { readonly prHeadSha: string | null; readonly at: number; readonly check: BaseConflictsCheck }
     >();
-    const checkOnce = keyedSingleFlight<string, BaseConflictsCheck, never>();
+    const checkOnce = keyedSingleFlight<string, BaseConflictsCheck, DbError>();
+    const resolveRuns = createResolveRuns<PushedOf<BaseConflictFrame>>();
 
-    const syncRepoOf = (ctx: PrContextBasic): SyncRepo | null => {
-      const { pr, repo, token } = ctx;
-      if (repo.cloneStatus !== "ready" || !repo.clonePath) return null;
-      const host = repo.githubHost || serverEnv.githubHost;
-      return {
-        clonePath: repo.clonePath,
-        remoteUrl: `https://x-access-token:${token}@${host}/${repo.fullName}.git`,
-        prNumber: pr.externalId,
-        baseBranch: pr.targetBranch,
-      };
+    const placeOf = (ctx: PrContextBasic) =>
+      repoClone.scratchPlace(ctx.repo, ctx.client.token, (layout) =>
+        layout.scratch.baseSync(ctx.repo.id, ctx.pr.externalId),
+      );
+
+    const syncRepoOf = (ctx: PrContextBasic, refs: SyncRepo["refs"]): SyncRepo | null => {
+      const place = placeOf(ctx);
+      return place
+        ? {
+            clonePath: place.clonePath,
+            remoteUrl: place.remoteUrl,
+            prNumber: ctx.pr.externalId,
+            baseBranch: ctx.pr.targetBranch,
+            refs,
+          }
+        : null;
     };
 
-    /**
-     * Agent commits waiting in the PR's chat worktree. The worktree is one
-     * per PR whichever agent made the session, so the first session found
-     * answers for all of them.
-     */
-    const unpushedAgentCommits = (prId: string) =>
-      Effect.gen(function* () {
-        const configured = yield* settings.resolveChatAgentId();
-        for (const agent of [configured, ...ACP_AGENT_IDS.filter((id) => id !== configured)]) {
-          const found = yield* chatSessions.findLatestForPrWithBase(prId, agent);
-          if (!found) continue;
-          const { row, baseSha } = found;
-          const count = yield* Effect.promise(() =>
-            proposedCommitCount(row.worktreePath, `${baseSha}..${row.branchName}`).catch(() => "0"),
-          );
-          const n = Number.parseInt(count.trim(), 10);
-          return Number.isFinite(n) ? n : 0;
-        }
-        return 0;
-      });
+    const pushTarget = (ctx: PrContextBasic): PushTarget => ({
+      repoId: ctx.repo.id,
+      branch: ctx.pr.sourceBranch,
+    });
+    const isResolving = (ctx: PrContextBasic) => pushLock.holder(pushTarget(ctx)) === "base-sync";
 
     const unavailable = (
       ctx: PrContextBasic,
@@ -171,15 +137,22 @@ export const BaseConflictsServiceLive = Layer.effect(
       behindBy: null,
       touchesWorkflows: false,
       unpushedAgentCommits: unpushed,
-      resolving: pushLock.holder(ctx.pr.id) === "base-sync",
+      resolving: isResolving(ctx),
       reason,
       checkedAt: new Date().toISOString(),
     });
 
-    const computeCheck = (ctx: PrContextBasic): Effect.Effect<BaseConflictsCheck> =>
+    const computeCheck = (ctx: PrContextBasic): Effect.Effect<BaseConflictsCheck, DbError> =>
       Effect.gen(function* () {
-        const unpushed = yield* unpushedAgentCommits(ctx.pr.id);
-        const repo = syncRepoOf(ctx);
+        const unpushed = yield* workspace.unpushedCount(ctx).pipe(
+          Effect.catchTag("GitOperationError", (err) =>
+            Effect.sync(() => {
+              logError("base-conflicts", `counting agent commits (pr=${ctx.pr.id}):`, err.message);
+              return 0;
+            }),
+          ),
+        );
+        const repo = syncRepoOf(ctx, "base-conflicts");
         if (!repo) {
           return unavailable(ctx, `Revv's copy of ${ctx.repo.fullName} isn't ready yet`, unpushed);
         }
@@ -207,16 +180,16 @@ export const BaseConflictsServiceLive = Layer.effect(
           behindBy: result.behindBy,
           touchesWorkflows: result.touchesWorkflows,
           unpushedAgentCommits: unpushed,
-          resolving: pushLock.holder(ctx.pr.id) === "base-sync",
+          resolving: isResolving(ctx),
           checkedAt: new Date().toISOString(),
         } satisfies BaseConflictsCheck;
       });
 
     const check: Context.Service.Shape<typeof BaseConflictsService>["check"] = (params) =>
       Effect.gen(function* () {
-        const ctx = yield* prCtx.resolveBasic(params.prId, params.userId, params.accountId);
+        const ctx = yield* prCtx.forPr(params.prId);
         const cached = checks.get(ctx.pr.id);
-        const resolving = pushLock.holder(ctx.pr.id) === "base-sync";
+        const resolving = isResolving(ctx);
         // A running sync owns the fetched refs; answer from memory meanwhile.
         if (
           cached &&
@@ -240,18 +213,17 @@ export const BaseConflictsServiceLive = Layer.effect(
         );
       });
 
-    /** Everything up to the paused (or clean) operation, failing as a refusal. */
     const prepare = (
-      params: Parameters<Context.Service.Shape<typeof BaseConflictsService>["resolve"]>[0],
+      ctx: PrContextBasic,
+      expectedHeadSha: string,
       scratch: { path: string | null; repo: SyncRepo | null },
     ) =>
       Effect.gen(function* () {
-        const ctx = yield* prCtx.resolveBasic(params.prId, params.userId, params.accountId);
         const { pr } = ctx;
         if (pr.status !== "open") {
           return yield* rejected("invalid", `#${pr.externalId} is ${pr.status}`);
         }
-        const repo = syncRepoOf(ctx);
+        const repo = syncRepoOf(ctx, "base-sync");
         if (!repo) {
           return yield* rejected(
             "unavailable",
@@ -268,9 +240,7 @@ export const BaseConflictsServiceLive = Layer.effect(
           catch: () =>
             new BaseConflictsRejectedError({ reason: "invalid", message: "Unusable branch name" }),
         });
-        const strategy: BaseConflictStrategy =
-          (yield* settings.getSettings().pipe(Effect.orElseSucceed(() => null)))
-            ?.baseConflictStrategy ?? "merge";
+        const { baseConflictStrategy: strategy } = yield* settings.getSettings();
 
         const remoteHead = yield* gitStep("Couldn't read the PR's branch", () =>
           lsRemoteHead(repo.clonePath, repo.remoteUrl, pr.sourceBranch),
@@ -281,11 +251,13 @@ export const BaseConflictsServiceLive = Layer.effect(
             `${pr.sourceBranch} isn't a branch of ${ctx.repo.fullName}; Revv can't push to a fork`,
           );
         }
-        if (remoteHead !== params.expectedHeadSha) {
+        if (remoteHead !== expectedHeadSha) {
           return yield* rejected("stale", "This PR got new commits since you looked — try again");
         }
         if (strategy === "rebase") {
-          const unpushed = yield* unpushedAgentCommits(pr.id);
+          const unpushed = yield* workspace
+            .unpushedCount(ctx)
+            .pipe(Effect.catchTag("GitOperationError", (err) => rejected("failed", err.message)));
           if (unpushed > 0) {
             return yield* rejected(
               "invalid",
@@ -312,16 +284,22 @@ export const BaseConflictsServiceLive = Layer.effect(
           );
         }
 
-        const [owner = "", name = ""] = ctx.repo.fullName.split("/");
-        scratch.path = join(worktreeHolderPath(owner, name), `base-sync-pr-${pr.externalId}`);
+        const scratchPath = placeOf(ctx)?.scratchPath;
+        if (!scratchPath) {
+          return yield* rejected(
+            "unavailable",
+            `Revv's copy of ${ctx.repo.fullName} isn't ready yet`,
+          );
+        }
+        scratch.path = scratchPath;
         const prepared = yield* gitStep("Couldn't prepare a worktree", () =>
-          prepareScratch(repo.clonePath, scratch.path ?? "", tips.headTip),
+          prepareScratch(repo.clonePath, scratchPath, tips.headTip),
         );
         if (prepared.kind === "failed") return yield* rejected("failed", prepared.message);
 
         const op: OperationInput = {
           strategy,
-          scratchPath: scratch.path,
+          scratchPath,
           tips,
           baseBranch: pr.targetBranch,
           sourceBranch: pr.sourceBranch,
@@ -333,13 +311,8 @@ export const BaseConflictsServiceLive = Layer.effect(
 
     const resolve: Context.Service.Shape<typeof BaseConflictsService>["resolve"] = (params) =>
       Effect.gen(function* () {
-        yield* pushLock
-          .acquire(params.prId, "base-sync")
-          .pipe(
-            Effect.catchTag("ConcurrentPushError", () =>
-              rejected("busy", "Another push to this PR is already running"),
-            ),
-          );
+        // The run outlives this request: the stream it returns closes the scope.
+        const scope = yield* Scope.make();
         const scratch: { path: string | null; repo: SyncRepo | null } = { path: null, repo: null };
         const cleanup = Effect.promise(async () => {
           if (scratch.repo && scratch.path)
@@ -348,108 +321,106 @@ export const BaseConflictsServiceLive = Layer.effect(
         }).pipe(
           Effect.ensuring(
             Effect.sync(() => checks.delete(params.prId)).pipe(
-              Effect.andThen(pushLock.release(params.prId)),
+              Effect.andThen(Scope.close(scope, Exit.void)),
             ),
           ),
         );
 
-        const { ctx, repo, op, remoteHead, started } = yield* prepare(params, scratch).pipe(
-          Effect.tapError(() => cleanup),
-        );
+        const { ctx, repo, op, remoteHead, started } = yield* Effect.gen(function* () {
+          const ctx = yield* prCtx.forPr(params.prId);
+          yield* pushLock.hold([pushTarget(ctx)], "base-sync").pipe(
+            Scope.provide(scope),
+            Effect.catchTag("ConcurrentPushError", () =>
+              rejected("busy", "Another push to this PR is already running"),
+            ),
+          );
+          return yield* prepare(ctx, params.expectedHeadSha, scratch);
+        }).pipe(Effect.onError(() => cleanup));
         const { pr } = ctx;
-        const queue = yield* Queue.unbounded<BaseConflictFrame>();
-        const offer = (frame: BaseConflictFrame) => Queue.offer(queue, frame);
         const task: ResolveConflictsTask =
           op.strategy === "merge"
             ? { kind: "base-merge", baseBranch: op.baseBranch, sourceBranch: op.sourceBranch }
             : { kind: "base-rebase", baseBranch: op.baseBranch, sourceBranch: op.sourceBranch };
         const conflictFiles = started.kind === "conflict" ? started.files : [];
+        const result = (frame: Extract<BaseConflictFrame, { kind: "result" }>) => frame;
+        const abort = new AbortController();
 
-        const run = Effect.gen(function* () {
-          yield* offer({
-            kind: "status",
-            message:
-              op.strategy === "merge"
-                ? `Merging ${op.baseBranch} into ${op.sourceBranch}…`
-                : `Rebasing ${op.sourceBranch} onto ${op.baseBranch}…`,
-          });
-          if (started.kind === "conflict") {
-            yield* offer({ kind: "conflict-files", files: conflictFiles });
-            yield* offer({
+        return yield* resolveRuns.start(params.prId, {
+          opening: [
+            {
               kind: "status",
-              message: `Asking the agent to resolve ${describeFiles(conflictFiles)}…`,
-            });
-            const agentStream = yield* ai.resolveMergeConflict({
-              cwd: op.scratchPath,
-              task,
-              conflictFiles,
-              prId: pr.id,
-              userId: params.userId,
-            });
-            yield* pumpAgentFrames(agentStream, offer);
-          }
+              message:
+                op.strategy === "merge"
+                  ? `Merging ${op.baseBranch} into ${op.sourceBranch}…`
+                  : `Rebasing ${op.sourceBranch} onto ${op.baseBranch}…`,
+            },
+            ...(started.kind === "conflict"
+              ? [
+                  { kind: "conflict-files" as const, files: conflictFiles },
+                  {
+                    kind: "status" as const,
+                    message: `Asking the agent to resolve ${describeFiles(conflictFiles)}…`,
+                  },
+                ]
+              : []),
+          ],
+          abort,
+          agent:
+            started.kind === "conflict"
+              ? ai.resolveMergeConflict({
+                  cwd: op.scratchPath,
+                  task,
+                  conflictFiles,
+                  abortController: abort,
+                })
+              : null,
+          finish: (offer) =>
+            Effect.gen(function* () {
+              const verified = yield* gitStep("Couldn't check the result", () =>
+                verifyResolution({ ...op, conflictFiles }),
+              );
+              if (verified.kind === "failed") {
+                return result({ kind: "result", status: "failed", message: verified.message });
+              }
 
-          const verified = yield* gitStep("Couldn't check the result", () =>
-            verifyResolution({ ...op, conflictFiles }),
-          );
-          if (verified.kind === "failed") {
-            return yield* offer({ kind: "result", status: "failed", message: verified.message });
-          }
+              yield* offer({ kind: "status", message: `Pushing to ${op.sourceBranch}…` });
+              const pushed = yield* gitStep("git push failed", () =>
+                pushResult(
+                  op.scratchPath,
+                  repo.remoteUrl,
+                  op.sourceBranch,
+                  remoteHead,
+                  verified.head,
+                ),
+              );
+              switch (pushed.kind) {
+                case "moved":
+                  return result({
+                    kind: "result",
+                    status: "remote-changed",
+                    branch: op.sourceBranch,
+                  });
+                case "auth":
+                case "rejected":
+                  logError("base-conflicts", `push failed (pr=${pr.id}): ${pushed.message}`);
+                  return result({ kind: "result", status: "failed", message: pushed.message });
+                case "pushed":
+                  break;
+              }
 
-          yield* offer({ kind: "status", message: `Pushing to ${op.sourceBranch}…` });
-          const pushed = yield* gitStep("git push failed", () =>
-            pushResult(op.scratchPath, repo.remoteUrl, op.sourceBranch, remoteHead, verified.head),
-          );
-          switch (pushed.kind) {
-            case "moved":
-              return yield* offer({
+              yield* mirror.recordPushes(ctx, [{ prNumber: pr.externalId, newTip: verified.head }]);
+              return result({
                 kind: "result",
-                status: "remote-changed",
+                status: "pushed",
+                newSha: verified.head,
                 branch: op.sourceBranch,
+                strategy: op.strategy,
               });
-            case "auth":
-            case "rejected":
-              logError("base-conflicts", `push failed (pr=${pr.id}): ${pushed.message}`);
-              return yield* offer({ kind: "result", status: "failed", message: pushed.message });
-            case "pushed":
-              break;
-          }
-
-          yield* headRefresh
-            .recordPushedHead({
-              prId: pr.id,
-              repoFullName: ctx.repo.fullName,
-              prExternalId: pr.externalId,
-              token: ctx.token,
-              newTip: verified.head,
-            })
-            .pipe(Effect.catch(() => Effect.void));
-          yield* headRefresh.broadcastPrsUpdated(pr.id).pipe(Effect.catch(() => Effect.void));
-          yield* offer({
-            kind: "result",
-            status: "pushed",
-            newSha: verified.head,
-            branch: op.sourceBranch,
-            strategy: op.strategy,
-          });
+            }),
+          cleanup,
         });
-
-        yield* Effect.forkDetach(
-          run.pipe(
-            Effect.catch((err) =>
-              offer({
-                kind: "result",
-                status: "failed",
-                message: err instanceof Error ? err.message : String(err),
-              }),
-            ),
-            Effect.ensuring(cleanup.pipe(Effect.ensuring(Queue.shutdown(queue)))),
-          ),
-        );
-
-        return queueToStream(queue);
       });
 
-    return { check, resolve };
+    return { check, resolve, stop: resolveRuns.stop };
   }),
 );

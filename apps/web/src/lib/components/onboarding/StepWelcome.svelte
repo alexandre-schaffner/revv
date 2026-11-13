@@ -1,4 +1,5 @@
 <script lang="ts">
+import { gsapEnter, tokens } from "$lib/motion";
 import ContinueArrow from "./ContinueArrow.svelte";
 
 interface Props {
@@ -14,7 +15,7 @@ let { onContinue }: Props = $props();
 		that sync back to GitHub — built around the way reviewers actually think.
 	</p>
 
-	<div class="actions">
+	<div class="actions" use:gsapEnter={{ y: 6, duration: tokens.ceremonialSlow, delay: 0.4 }}>
 		<button class="primary" onclick={onContinue}>
 			<span>Begin</span>
 			<ContinueArrow />
@@ -44,18 +45,6 @@ let { onContinue }: Props = $props();
 		display: flex;
 		align-items: center;
 		gap: 18px;
-		animation: actions-in var(--duration-ceremonial-slow) var(--ease-out-expo) 400ms backwards;
-	}
-
-	@keyframes actions-in {
-		from {
-			opacity: 0;
-			transform: translateY(6px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-		}
 	}
 
 	.primary {
@@ -103,11 +92,5 @@ let { onContinue }: Props = $props();
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
 		color: var(--ob-text-muted);
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.actions {
-			animation: none;
-		}
 	}
 </style>

@@ -1,3 +1,5 @@
+import type { DiffSide } from "./review";
+
 export const PIERRE_DIFF_PRELOAD_LANGS = [
   "typescript",
   "javascript",
@@ -66,4 +68,18 @@ export function buildGitPatchHeader(file: GitPatchHeaderFile): string {
     `--- ${file.isNew ? "/dev/null" : `a/${oldPath}`}`,
     `+++ ${file.isDeleted ? "/dev/null" : `b/${file.path}`}`,
   ].join("\n");
+}
+
+/**
+ * Where a comment thread sits in a Pierre diff. The server's SSR and the web
+ * viewer must place it identically, or the hydrated annotation slots mismatch.
+ */
+export function threadAnnotationPosition(thread: {
+  readonly diffSide: DiffSide;
+  readonly startLine: number;
+}): { side: "deletions" | "additions"; lineNumber: number } {
+  return {
+    side: thread.diffSide === "old" ? "deletions" : "additions",
+    lineNumber: thread.startLine,
+  };
 }

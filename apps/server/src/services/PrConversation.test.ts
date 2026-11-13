@@ -2,20 +2,20 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { Effect, Layer } from "effect";
 import { createDb } from "../db/index";
 import { account, pullRequests, repositories, user } from "../db/schema";
-import { NotFoundError } from "../domain/errors";
 import { Broadcaster, BroadcasterLive } from "./Broadcaster";
 import { CacheServiceLive } from "./Cache";
 import { DbService } from "./Db";
 import { DiffCacheServiceLive } from "./DiffCache";
-import { GitHubGatewayLive } from "./GitHub";
-import { type GitHubEtagCache, GitHubEtagCacheLive } from "./GitHubEtagCache";
+import { GitHubAccountsLive } from "./github/accounts";
+import { AvatarCacheLive } from "./github/avatars";
+import { type GitHubEtagCache, GitHubEtagCacheLive } from "./github/etag-cache";
+import { GitHubGatewayLive } from "./github/gateway";
 import { PrContextService, PrContextServiceLive } from "./PrContext";
 import { PrConversationService, PrConversationServiceLive } from "./PrConversation";
 import { PullRequestServiceLive } from "./PullRequest";
-import { RemoteUserServiceLive } from "./RemoteUser";
+import { RealtimeLive } from "./Realtime";
 import { RepositoryServiceLive } from "./Repository";
 import { SecretStore } from "./SecretStore";
-import { TokenProviderLive } from "./TokenProvider";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -80,20 +80,27 @@ function fixture() {
     deleteSecret: () => Effect.void,
   });
   const dbLayer = Layer.succeed(DbService, { db });
+  const realtime = RealtimeLive.pipe(Layer.provideMerge(BroadcasterLive), Layer.provide(dbLayer));
+  const avatars = AvatarCacheLive.pipe(Layer.provide(dbLayer));
+  const accounts = GitHubAccountsLive.pipe(
+    Layer.provide(Layer.mergeAll(dbLayer, secrets, realtime, avatars)),
+  );
+  const gateway = GitHubGatewayLive.pipe(
+    Layer.provide(Layer.mergeAll(GitHubEtagCacheLive.pipe(Layer.provide(dbLayer)), accounts)),
+  );
   const base = Layer.mergeAll(
     dbLayer,
     secrets,
-    BroadcasterLive,
+    realtime,
+    accounts,
+    gateway,
     CacheServiceLive,
-    GitHubGatewayLive,
     PullRequestServiceLive,
     RepositoryServiceLive,
-    DiffCacheServiceLive,
-    RemoteUserServiceLive.pipe(Layer.provide(dbLayer)),
+    DiffCacheServiceLive.pipe(Layer.provide(Layer.mergeAll(dbLayer, gateway, realtime))),
+    avatars,
   );
-  const context = PrContextServiceLive.pipe(
-    Layer.provide(Layer.merge(base, TokenProviderLive.pipe(Layer.provide(base)))),
-  );
+  const context = PrContextServiceLive.pipe(Layer.provide(base));
   const layer = PrConversationServiceLive.pipe(Layer.provideMerge(Layer.merge(base, context)));
   const run = <A, E>(
     effect: Effect.Effect<
@@ -106,61 +113,19 @@ function fixture() {
       effect.pipe(
         Effect.provide(layer),
         Effect.provide(dbLayer),
-        Effect.provide(GitHubEtagCacheLive),
+        Effect.provide(GitHubEtagCacheLive.pipe(Layer.provide(dbLayer))),
       ),
     );
   return { db, tokenReads, run };
 }
 
-describe("conversation account isolation", () => {
-  it("rejects every read and write for another account before accessing credentials or GitHub", async () => {
-    const { db, tokenReads, run } = fixture();
-    let githubCalls = 0;
-    globalThis.fetch = Object.assign(
-      async () => {
-        githubCalls++;
-        throw new Error("Unexpected GitHub call");
-      },
-      { preconnect: realFetch.preconnect },
-    );
-    try {
-      const results = await run(
-        Effect.gen(function* () {
-          const s = yield* PrConversationService;
-          return yield* Effect.all([
-            s.cached("b-pr", "a", "a-account").pipe(Effect.result),
-            s.load("b-pr", "a", "a-account").pipe(Effect.result),
-            s.checks("b-pr", "a", "a-account").pipe(Effect.result),
-            s.checkDetails("b-pr", "a", "a-account", 123).pipe(Effect.result),
-            s.labelOptions("b-pr", "a", "a-account").pipe(Effect.result),
-            s.assigneeOptions("b-pr", "a", "a-account", "").pipe(Effect.result),
-            s.reviewerOptions("b-pr", "a", "a-account", "").pipe(Effect.result),
-            s
-              .write("b-pr", "a", "a-account", { kind: "post_comment", body: "unauthorized" })
-              .pipe(Effect.result),
-          ]);
-        }),
-      );
-      expect(results).toHaveLength(8);
-      for (const result of results) {
-        expect(result._tag).toBe("Failure");
-        if (result._tag === "Failure") expect(result.failure).toBeInstanceOf(NotFoundError);
-      }
-      expect(tokenReads).toEqual([]);
-      expect(githubCalls).toBe(0);
-    } finally {
-      db.$client.close();
-    }
-  });
-
-  it("still allows the owning account to read its snapshot", async () => {
+describe("PrConversationService", () => {
+  it("reads the snapshot without the owning account's token", async () => {
     const { db, tokenReads, run } = fixture();
     try {
-      const snapshot = await run(
-        Effect.flatMap(PrConversationService, (s) => s.cached("b-pr", "b", "b-account")),
-      );
+      const snapshot = await run(Effect.flatMap(PrConversationService, (s) => s.cached("b-pr")));
       expect(snapshot).toBeNull();
-      expect(tokenReads).toEqual(["b-account"]);
+      expect(tokenReads).toEqual([]);
     } finally {
       db.$client.close();
     }
@@ -186,13 +151,13 @@ describe("conversation account isolation", () => {
       await run(
         Effect.gen(function* () {
           const s = yield* PrConversationService;
-          const running = yield* s.checkDetails("b-pr", "b", "b-account", 123);
+          const running = yield* s.checkDetails("b-pr", 123);
           expect(running.completed).toBe(false);
           completed = true;
-          const final = yield* s.checkDetails("b-pr", "b", "b-account", 123);
+          const final = yield* s.checkDetails("b-pr", 123);
           expect(final.completed).toBe(true);
           expect(final.summary).toBe("Final output");
-          yield* s.checkDetails("b-pr", "b", "b-account", 123);
+          yield* s.checkDetails("b-pr", 123);
           expect(checkReads).toBe(2);
         }),
       );
@@ -201,7 +166,7 @@ describe("conversation account isolation", () => {
     }
   });
 
-  it("announces a write made elsewhere to its account even when GitHub can't be re-read", async () => {
+  it("announces a write made elsewhere to its account's user even when GitHub can't be re-read", async () => {
     const { db, run } = fixture();
     globalThis.fetch = Object.assign(
       async () => {
@@ -219,14 +184,10 @@ describe("conversation account isolation", () => {
       const result = await run(
         Effect.gen(function* () {
           const broadcaster = yield* Broadcaster;
-          yield* broadcaster.register("b-account", writer(owner));
-          yield* broadcaster.register("a-account", writer(other));
-          const ctx = yield* Effect.flatMap(PrContextService, (c) =>
-            c.resolveBasic("b-pr", "b", "b-account"),
-          );
-          return yield* Effect.flatMap(PrConversationService, (s) =>
-            s.afterWrite(ctx, "b-account"),
-          );
+          yield* broadcaster.register("b", writer(owner));
+          yield* broadcaster.register("a", writer(other));
+          const ctx = yield* Effect.flatMap(PrContextService, (c) => c.forPr("b-pr"));
+          return yield* Effect.flatMap(PrConversationService, (s) => s.afterWrite(ctx));
         }),
       );
       expect(result).toEqual({ conversation: null });

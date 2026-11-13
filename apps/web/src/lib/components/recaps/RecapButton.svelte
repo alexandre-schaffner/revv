@@ -4,16 +4,8 @@ import type { HTMLButtonAttributes } from "svelte/elements";
 import { gsapPress } from "$lib/motion";
 
 /**
- * The one button shape on the recap surface.
- *
- * Before this existed the archive alone shipped three: a 28px bordered icon
- * square for the month arrows, a 28px bordered pill for "Today", and a 30px
- * filled chip for the panel actions — all hand-rolled, all slightly different.
- * Every in-flow recap button now comes from here, so the header pager, the
- * archive toolbar and the selection strip are visibly the same control.
- *
- * `GlassPill` remains the separate, deliberate vocabulary for *floating*
- * chrome (the bottom action bar). Chrome that hovers over content and chrome
+ * Every in-flow recap button comes from here. `GlassPill` is the separate
+ * vocabulary for *floating* chrome: chrome that hovers over content and chrome
  * that sits in it should not look identical.
  */
 interface Props extends HTMLButtonAttributes {

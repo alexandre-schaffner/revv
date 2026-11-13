@@ -31,7 +31,6 @@ pub struct ServerCommand {
 }
 
 impl ServerCommand {
-	/// The server beside the app executable in `executable_dir`.
 	pub fn bundled(executable_dir: &Path, config: &ServerConfig, home: &Path) -> io::Result<Self> {
 		let program = executable_dir.join(BUNDLED_SERVER);
 		if !program.is_file() {

@@ -61,18 +61,9 @@ The 2026-05-20 security audit uncovered 2 critical vulnerabilities, 7 high-sever
 - [ ] Invalid paths return a tagged `CloneError` before `Bun.spawn` is invoked.
 - [ ] `make typecheck` and `biome check` pass.
 
-### US-005: Reject unresolved-account SSE connections (or keep them provably inert)
+### US-005: Reject unresolved-account SSE connections — resolved
 
-**Description:** As an operator, I want SSE connections that can't be scoped to an account handled safely, so that they neither consume resources nor receive another account's data.
-
-**Context:** `apps/server/src/routes/events.ts` already rejects a missing or invalid token with `401` before registering any writer. The remaining edge is a *valid* session whose account can't be resolved: today it opens an observer-only connection with `accountId = "unresolved"` that receives no scoped broadcasts. Because SSE is server→client only — there is no inbound command channel; sync is triggered solely via REST `POST /api/prs/sync` — an observer connection cannot trigger work, so the original "expensive sync operations" threat no longer applies. This is now low severity.
-
-**Acceptance Criteria:**
-
-- [ ] Decide the policy for an authenticated-but-unresolvable account: either return `401` / close the stream, or keep the inert `"unresolved"` observer connection and document why it's safe (no scoped data, no inbound commands).
-- [ ] If closing: `events.ts` returns `401` when `Identity.resolveAccount` throws, and the client stops retrying with the same token.
-- [ ] Missing/invalid token continues to return `401` before `Broadcaster.register`.
-- [ ] `make typecheck` passes.
+The stream is now one per signed-in local user and carries every account of that user (`routes/events.ts`, `Broadcaster.register(userId)`); it no longer resolves an account, so there is no `"unresolved"` registration left to police. A missing or invalid token still answers `401` before any writer is registered.
 
 ### US-006: Sanitize error responses in `handleAppError`
 

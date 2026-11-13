@@ -38,13 +38,7 @@ The artifact is inline prose furniture, not a dashboard.
 
 The host injects Revv's theme variables and a base stylesheet onto the artifact's root and **re-applies them on light/dark toggle**. **Style exclusively with these variables — never hardcode hex colors, `rgb()`/`hsl()`/`oklch()` literals, or font families.** A hardcoded color is the single most common artifact defect: it won't flip in dark mode.
 
-- **Surfaces:** `--color-bg-primary`, `--color-bg-secondary`, `--color-bg-tertiary`, `--color-bg-elevated`
-- **Lines:** `--color-border`, `--color-border-subtle`
-- **Text:** `--color-text-primary`, `--color-text-secondary`, `--color-text-muted`
-- **Accent (the one accent):** `--color-accent`, `--color-accent-hover`, `--color-accent-muted`
-- **Status:** `--color-success`, `--color-warning`, `--color-danger`
-- **Type:** `--font-sans`, `--font-mono`
-- **Geometry:** `--radius-card`, `--radius-island`, `--spacing-island-half`, `--spacing-island`, `--spacing-inset`, `--spacing-island-2x`
+{{ARTIFACT_THEME_TOKENS}}
 
 **Design language:** calm and restrained. **No** gradients, glassmorphism, neon, purple "AI" styling, decorative shadows, or emoji. `data-theme` (`"light"`/`"dark"`) is on `<html>` if you genuinely need a theme-conditional branch, but prefer variables that already flip. The baseline neutralizes motion under `prefers-reduced-motion` — don't fight it; keep any transition ≤150ms and confined to color/opacity.
 

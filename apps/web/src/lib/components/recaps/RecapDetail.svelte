@@ -1,20 +1,21 @@
 <script lang="ts">
-import type { ProjectRecap, RecapPeriod, RecapPrEntry, RecapThemeSummary } from "@revv/shared";
+import type { ProjectRecap, RecapPeriod, RecapStreamPhase } from "@revv/shared";
 import ArrowLeft from "phosphor-svelte/lib/ArrowLeft";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import type { Snippet } from "svelte";
-import { ThoughtsReveal } from "$lib/components/ai/thoughts";
+import ThoughtsReveal from "$lib/components/agent-activity/ThoughtsReveal.svelte";
 import { Button } from "$lib/components/ui/button";
 import { heroMorph } from "$lib/motion";
-import type { RecapStreamEntry } from "$lib/stores/recap-stream.svelte";
-import { createStreamingBlockRenderer } from "$lib/utils/markdown";
+import { RECAP_PERIOD_COPY } from "$lib/recaps/copy";
+import type { RecapStreamEntry } from "$lib/recaps/stream.svelte";
 import DotMatrixLoader from "./DotMatrixLoader.svelte";
 import RecapBody from "./RecapBody.svelte";
 import RecapHeroBig from "./RecapHeroBig.svelte";
 import RecapSidebar from "./RecapSidebar.svelte";
 
 interface Props {
+  /** The row, with anything a running generation has streamed merged in. */
   recap: ProjectRecap | null;
   loading: boolean;
   period?: RecapPeriod | undefined;
@@ -34,76 +35,35 @@ let {
 }: Props = $props();
 
 let thoughtsOpen = $state(false);
-const renderThoughtBlocks = createStreamingBlockRenderer();
 
 const effectivePeriod = $derived<RecapPeriod>(period ?? recap?.period ?? "daily");
 
-// Stream entries win on conflict so the latest add_pr_entry shows immediately.
-const mergedEntries = $derived.by<RecapPrEntry[]>(() => {
-  const map = new Map<string, RecapPrEntry>();
-  if (recap) {
-    for (const e of recap.entries) map.set(e.prId, e);
-  }
-  if (stream) {
-    for (const [prId, entry] of stream.entries) map.set(prId, entry);
-  }
-  return Array.from(map.values()).sort((a, b) => a.position - b.position);
-});
-
-// Same merge strategy for theme summaries — stream wins on conflict so a
-// fresh set_theme_summary appears immediately even before the DB roundtrip.
-const mergedThemeSummaries = $derived.by<RecapThemeSummary[]>(() => {
-  const map = new Map<string, RecapThemeSummary>();
-  if (recap) {
-    for (const s of recap.themeSummaries) map.set(s.theme, s);
-  }
-  if (stream) {
-    for (const [theme, summary] of stream.themeSummaries) map.set(theme, summary);
-  }
-  return Array.from(map.values());
-});
-
-const effectiveLede = $derived(stream?.lede || recap?.lede || "");
-
-const liveRecap = $derived<ProjectRecap | null>(
-  recap
-    ? {
-        ...recap,
-        lede: effectiveLede,
-        entries: mergedEntries,
-        themeSummaries: mergedThemeSummaries,
-      }
-    : null,
-);
+const entryCount = $derived(recap?.entries.length ?? 0);
 
 const isGenerating = $derived(recap?.status === "generating");
 const isComplete = $derived(recap?.status === "complete");
 const isError = $derived(recap?.status === "error");
+const isStopped = $derived(recap?.status === "stopped");
 const isSuperseded = $derived(recap?.status === "superseded");
 
-const hasAnyContent = $derived(effectiveLede.length > 0 || mergedEntries.length > 0);
+const hasAnyContent = $derived((recap?.lede.length ?? 0) > 0 || entryCount > 0);
 
-const isEmptyComplete = $derived(
-  !!recap && recap.status === "complete" && mergedEntries.length === 0,
-);
+const isEmptyComplete = $derived(!!recap && recap.status === "complete" && entryCount === 0);
+
+const PHASE_LABEL: Record<RecapStreamPhase, string> = {
+  analyzing: "Analyzing pull requests…",
+  writing_lede: "Writing the lede…",
+  categorizing: "Categorizing pull requests…",
+  finalizing: "Finalizing recap…",
+  connecting: "Connecting…",
+  other: "Generating recap…",
+};
 
 const phaseLabel = $derived(
-  stream ? stream.phaseMessage || phaseMessage(stream.phase) : "Starting recap…",
+  stream ? stream.phaseMessage || PHASE_LABEL[stream.phase] : "Starting recap…",
 );
 const thoughtText = $derived(stream?.thoughts ?? "");
 const hasThoughtText = $derived(thoughtText.trim().length > 0);
-const thoughtBlocks = $derived.by(() => renderThoughtBlocks(thoughtText));
-
-function phaseMessage(phase: string): string {
-  const labels: Record<string, string> = {
-    analyzing: "Analyzing pull requests…",
-    writing_lede: "Writing the lede…",
-    categorizing: "Categorizing pull requests…",
-    finalizing: "Finalizing recap…",
-    connecting: "Connecting…",
-  };
-  return labels[phase] ?? "Generating recap…";
-}
 
 const COMPLETED_AT_FMT = new Intl.DateTimeFormat("en-GB", {
   day: "2-digit",
@@ -153,19 +113,19 @@ function formatCompletedAt(iso: string): string {
 
     <div class="grid">
       <RecapSidebar
-        recap={liveRecap}
+        recap={recap}
         period={effectivePeriod}
         skeleton={isGenerating && !hasAnyContent}
       />
-      <RecapHeroBig recap={liveRecap} period={effectivePeriod} {archive} />
-      {#if isGenerating && hasAnyContent && liveRecap}
+      <RecapHeroBig recap={recap} period={effectivePeriod} {archive} />
+      {#if isGenerating && hasAnyContent}
         <div class="body-col">
-          <RecapBody recap={liveRecap} />
+          <RecapBody recap={recap} />
           <div class="generating-footer">
             {#if hasThoughtText}
               <ThoughtsReveal
                 bind:open={thoughtsOpen}
-                blocks={thoughtBlocks}
+                thoughts={thoughtText}
                 triggerClass="phase-trigger"
                 ariaLabel="{phaseLabel}. Toggle streamed thoughts"
               >
@@ -180,24 +140,20 @@ function formatCompletedAt(iso: string): string {
         </div>
       {:else if !isGenerating}
         <div class="body-col">
-        {#if isError}
+        {#if isStopped}
           <div class="error-card">
             <WarningCircle size={16} weight="fill" aria-hidden="true" />
             <div>
-              <p class="error-title">
-                {recap.errorMessage === "Cancelled by user"
-                  ? "Generation stopped."
-                  : "Generation failed."}
-              </p>
-              <p class="error-hint">
-                {#if recap.errorMessage && recap.errorMessage !== "Cancelled by user"}
-                  {recap.errorMessage}
-                {:else if recap.errorMessage === "Cancelled by user"}
-                  Click "Resume" to keep going, or "Regenerate" to start fresh.
-                {:else}
-                  Click "Retry" to try again.
-                {/if}
-              </p>
+              <p class="error-title">Generation stopped.</p>
+              <p class="error-hint">Click "Regenerate" to start again.</p>
+            </div>
+          </div>
+        {:else if isError}
+          <div class="error-card">
+            <WarningCircle size={16} weight="fill" aria-hidden="true" />
+            <div>
+              <p class="error-title">Generation failed.</p>
+              <p class="error-hint">{recap.errorMessage ?? 'Click "Regenerate" to try again.'}</p>
             </div>
           </div>
         {:else if isSuperseded}
@@ -206,10 +162,10 @@ function formatCompletedAt(iso: string): string {
           </div>
         {:else if isEmptyComplete}
           <div class="empty-card">
-            <p class="empty-title">No PRs merged on this {effectivePeriod === "daily" ? "day" : "week"}.</p>
+            <p class="empty-title">No PRs merged on this {RECAP_PERIOD_COPY[effectivePeriod].unit}.</p>
           </div>
-        {:else if isComplete && liveRecap}
-          <RecapBody recap={liveRecap} />
+        {:else if isComplete}
+          <RecapBody recap={recap} />
         {:else}
           <div class="body-callout">
             <Spinner size={16} class="motion-essential-spin" aria-hidden="true" />
@@ -222,7 +178,7 @@ function formatCompletedAt(iso: string): string {
             {#if recap.modelUsed}
               Generated by {recap.modelUsed} ·
             {/if}
-            {mergedEntries.length} entr{mergedEntries.length === 1 ? "y" : "ies"} ·
+            {entryCount} entr{entryCount === 1 ? "y" : "ies"} ·
             completed {formatCompletedAt(recap.completedAt)}
           </footer>
         {/if}
@@ -236,7 +192,7 @@ function formatCompletedAt(iso: string): string {
         {#if hasThoughtText}
           <ThoughtsReveal
             bind:open={thoughtsOpen}
-            blocks={thoughtBlocks}
+            thoughts={thoughtText}
             triggerClass="thoughts-trigger"
             ariaLabel="Toggle streamed thoughts"
           />
@@ -252,13 +208,6 @@ function formatCompletedAt(iso: string): string {
    is `viewport − rail − sidebar − island`, and the sidebar is a user-dragged
    180→480px slider. A @media query cannot see any of that.
 
-   `container-type` must stay HERE and not move up to `.page` / `.content` /
-   `.period-view`. It implies `contain: layout`, which makes the element a
-   containing block for `position: fixed` descendants — and RecapPeriodView's
-   `.actions-float` is a fixed element positioned in viewport coordinates by
-   `getActionsFloatStyle()`. It is a sibling of `.recap-page`, so it escapes;
-   one level up and the Generate bar would jump by the pane's left offset.
-
    `width: 100%` is load-bearing too: a size container reports zero intrinsic
    inline size, so without it the grid collapses. */
 .recap-page {
@@ -267,9 +216,7 @@ function formatCompletedAt(iso: string): string {
   gap: 1rem;
   width: 100%;
   margin: 0 auto;
-  /* 4.5rem at the foot clears the floating action bar. The archive section
-     that used to sit below this and carry that clearance is now a popover at
-     the top, so the recap's own last line is what has to stay legible. */
+  /* 4.5rem at the foot clears the floating action bar. */
   padding: 1.5rem 2rem 4.5rem;
   container-type: inline-size;
   container-name: recap;
@@ -292,8 +239,7 @@ function formatCompletedAt(iso: string): string {
 }
 
 /* The rail is a wide-pane affordance. Hidden by default because its content
-   is a duplicate of `.hero-big` — stacking it, as the old max-width:960px
-   block did, renders the header twice. */
+   duplicates `.hero-big`; stacking it would render the header twice. */
 :global(.recap-page .grid > .side) {
   grid-column: 1;
   grid-row: 1 / span 2;
@@ -412,11 +358,7 @@ function formatCompletedAt(iso: string): string {
   align-items: center;
   gap: 0.75rem;
   padding: 6rem 1rem 2rem;
-  /* Match the body column's reading width so the streamed thoughts read
-     as a column under the loader instead of spanning edge-to-edge. The
-     dotmatrix loader and phase caption stay centered via align-items;
-     the Collapsible + its content fill this width so the markdown
-     paragraph wraps at a comfortable measure. */
+  /* The streamed thoughts wrap at the body column's reading measure. */
   max-width: var(--recap-measure);
   width: 100%;
   margin: 0 auto;
@@ -484,8 +426,6 @@ function formatCompletedAt(iso: string): string {
   overflow: hidden;
 }
 
-/* No rule above it. This is the last line on the page now and it needs no
-   ceiling; mono + muted already sets it apart from the body. */
 .footer {
   padding-top: 0.25rem;
   font-size: 0.7rem;

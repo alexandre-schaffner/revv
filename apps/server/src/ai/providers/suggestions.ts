@@ -1,79 +1,51 @@
-// ── suggestions ────────────────────────────────────────────────────────────
+// PR-aware chat starter prompts for the right-panel empty state: a `promptOnce`
+// turn, deliberately outside the chat pipeline. No MCP servers are attached,
+// and the session id is never surfaced, persisted, or resumed into, so these
+// throwaway turns can't appear in any history the user can resume. (The ACP
+// agent may still spool a session file to its own store; that orphan is
+// unreachable from Revv.)
 //
-// One-shot, no-tools provider for PR-aware chat starter prompts (rendered in
-// the right-panel empty-state). Runs over the same ACP transport as chat /
-// walkthrough / recap (see ai/acp/presets.ts) — the single transport that
-// replaced the bespoke claude / opencode / codex drivers — but deliberately
-// bypasses the chat pipeline:
-//
-//   • No MCP tools — the agent gets a fresh ACP session with NO MCP servers
-//     attached, so it has only its built-in tools (which the prompt tells it
-//     not to use). It just reads the inlined PR metadata and writes back JSON.
-//   • Ephemeral — the session id is never surfaced, persisted, or resumed into,
-//     so these throwaway turns can't appear in any history the user can resume.
-//     (The ACP agent may still spool a session file to its own store; that
-//     orphan is unreachable from Revv — an accepted change vs. the SDK path's
-//     `persistSession:false`.)
-//   • Single turn, capped output — we issue one prompt, collect the agent's
-//     text deltas, and parse the first JSON object out of them.
-//
-// On any failure (agent missing, model error, JSON parse failure, timeout) we
-// return {@link FALLBACK_PROMPTS} so the UI always renders three sensible
-// defaults instead of going blank. This is the same array the right panel
-// historically hardcoded — keeping it server-side means the client doesn't
-// need to know about the fallback policy.
+// On any failure we return {@link CHAT_SUGGESTION_FALLBACKS} so the UI always
+// renders sensible defaults instead of going blank.
 
-import type { AcpAgentId, ThinkingEffort } from "@revv/shared";
+import { CHAT_SUGGESTION_COUNT, CHAT_SUGGESTION_FALLBACKS, type IssueSeverity } from "@revv/shared";
+import { Effect } from "effect";
 import { debug, logError } from "../../logger";
-import { promptOnce } from "./prompt-once";
-
-export const FALLBACK_PROMPTS: readonly string[] = [
-  "What's the riskiest change here?",
-  "Summarize the security implications",
-  "Suggest a test plan",
-];
+import { DiffCacheService } from "../../services/DiffCache";
+import { PullRequestService } from "../../services/PullRequest";
+import { WalkthroughService } from "../../services/walkthrough/Walkthrough";
+import { type AgentLaunch, resolveAgentLaunch } from "../acp/agent-launch";
+import { promptOnce } from "../acp/run-turn";
 
 const SUGGESTIONS_TIMEOUT_MS = 30_000;
 const MAX_PROMPT_LENGTH = 80;
 const MAX_FILES_LISTED = 30;
 
-/**
- * Subset of the completed walkthrough we feed into the suggestions prompt.
- * Optional — when the PR has no completed walkthrough yet, we fall back to
- * PR metadata only. When present, the model can ground prompts in what the
- * review agent already noticed (the riskiest file, a specific issue, a
- * sentiment) instead of generic "review the change" phrasing.
- */
-export interface SuggestionsWalkthroughContext {
+interface SuggestionsWalkthroughContext {
   readonly summary: string;
   readonly riskLevel: string;
   readonly sentiment: string | null;
   readonly issues: ReadonlyArray<{
-    readonly severity: string;
+    readonly severity: IssueSeverity;
     readonly title: string;
     readonly description: string;
     readonly filePath: string | null;
   }>;
 }
 
-export interface GenerateSuggestionsInput {
+interface GenerateSuggestionsInput {
   readonly prTitle: string;
   readonly prBody: string | null;
   readonly changedFiles: ReadonlyArray<string>;
   readonly additions: number;
   readonly deletions: number;
   readonly walkthrough: SuggestionsWalkthroughContext | null;
-  /** Resolved ACP registry agent id that produces the suggestions. */
-  readonly acpAgentId: AcpAgentId;
-  /** Working directory the ACP connection is pooled under (server cwd is fine — no tools run). */
-  readonly cwd: string;
-  readonly model: string;
-  readonly thinkingEffort?: ThinkingEffort | undefined;
+  readonly launch: AgentLaunch;
 }
 
 const SYSTEM_PROMPT = `You are helping a code reviewer skim a pull request. \
 Given the PR metadata and (when present) the AI walkthrough below, generate \
-exactly 3 short prompts the reviewer would find most useful to ask an AI \
+exactly ${CHAT_SUGGESTION_COUNT} short prompts the reviewer would find most useful to ask an AI \
 assistant about THIS specific PR.
 
 Rules:
@@ -94,11 +66,6 @@ function buildUserMessage(input: GenerateSuggestionsInput): string {
       ? `\n…and ${input.changedFiles.length - MAX_FILES_LISTED} more`
       : "";
 
-  // Walkthrough context (when present) is the highest-signal input — the
-  // review agent has already digested the diff and called out a risk
-  // level, an overall sentiment, and zero or more issues. Including this
-  // up front lets the suggestions model anchor its prompts to what the
-  // reviewer would actually want to dig into.
   let walkthroughSection: string | null = null;
   if (input.walkthrough) {
     const w = input.walkthrough;
@@ -137,16 +104,13 @@ function buildUserMessage(input: GenerateSuggestionsInput): string {
 }
 
 /**
- * Extract three short, sanitized prompts from raw model output. Accepts both
- * the strict JSON shape we ask for and a few permissive fallbacks (raw JSON
- * embedded in prose, bullet lists) so a model that prepends "Here you go:"
- * doesn't blow the whole feature up.
+ * Permissive on purpose: models wrap the JSON in fences or prose ("Here you
+ * go:") or answer with a bullet list.
  */
 function parsePrompts(raw: string): string[] | null {
   const text = raw.trim();
   if (text.length === 0) return null;
 
-  // 1. Strict JSON, possibly wrapped in ```json fences.
   const stripped = text
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/\s*```\s*$/i, "")
@@ -162,7 +126,6 @@ function parsePrompts(raw: string): string[] | null {
     /* fall through to permissive parsing */
   }
 
-  // 2. Find the first {…} that contains "prompts".
   const objMatch = text.match(/\{[\s\S]*?"prompts"[\s\S]*?\]\s*\}/);
   if (objMatch) {
     try {
@@ -176,13 +139,12 @@ function parsePrompts(raw: string): string[] | null {
     }
   }
 
-  // 3. Bullet / numbered list fallback (e.g. "- prompt one\n- prompt two").
   const bulletLines = text
     .split("\n")
     .map((l) => l.replace(/^[\s-*0-9.)]+/, "").trim())
     .filter((l) => l.length > 0 && l.length <= 200);
-  if (bulletLines.length >= 3) {
-    const cleaned = sanitizePrompts(bulletLines.slice(0, 3));
+  if (bulletLines.length >= CHAT_SUGGESTION_COUNT) {
+    const cleaned = sanitizePrompts(bulletLines.slice(0, CHAT_SUGGESTION_COUNT));
     if (cleaned.length > 0) return cleaned;
   }
 
@@ -198,67 +160,125 @@ function sanitizePrompts(values: unknown[]): string[] {
     const capped =
       trimmed.length > MAX_PROMPT_LENGTH ? `${trimmed.slice(0, MAX_PROMPT_LENGTH - 1)}…` : trimmed;
     out.push(capped);
-    if (out.length === 3) break;
+    if (out.length === CHAT_SUGGESTION_COUNT) break;
   }
   return out;
 }
 
-async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      reject(new Error(`${label} timed out after ${ms}ms`));
-    }, ms);
-  });
-  try {
-    return await Promise.race([promise, timeout]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-// ── ACP one-shot ─────────────────────────────────────────────────────────────
-
-async function generateViaAcp(input: GenerateSuggestionsInput): Promise<string[]> {
-  const collected = await promptOnce({
-    cwd: input.cwd,
-    agent: input.acpAgentId,
-    model: input.model,
-    effort: input.thinkingEffort,
-    timeoutMs: SUGGESTIONS_TIMEOUT_MS,
+/** The agent's prompts, or null when it gave none (logged). */
+async function generateSuggestions(input: GenerateSuggestionsInput): Promise<string[] | null> {
+  const answer = await promptOnce({
+    label: "suggestions-acp",
+    launch: input.launch,
+    ceilingMs: SUGGESTIONS_TIMEOUT_MS,
     text: `${SYSTEM_PROMPT}\n\n---\n\n${buildUserMessage(input)}`,
-    debugLabel: "suggestions-acp",
   });
-  const parsed = parsePrompts(collected);
+  const parsed = answer.kind === "answered" ? parsePrompts(answer.text) : null;
   if (!parsed) {
-    throw new Error(`acp agent returned unparseable output (len=${collected.length})`);
+    logError(
+      "suggestions",
+      "falling back to defaults:",
+      answer.kind === "answered"
+        ? `acp agent returned unparseable output (len=${answer.text.length})`
+        : answer.error,
+    );
+    return null;
   }
+  debug(
+    "suggestions",
+    `generated ${parsed.length} prompts via ${input.launch.agent}/${input.launch.model}`,
+  );
   return parsed;
 }
 
-// ── Public entry point ───────────────────────────────────────────────────────
+// Keyed on every input of the prompt (the PR's head, the walkthrough and diff
+// it was built from, the agent and model), so any of them changing means a
+// fresh model call; entries expire lazily on read. Only the agent's own
+// prompts are kept: the fallbacks after a failure are not, so the next ask
+// tries again. A reconstructible cache (invariant 1): it only saves
+// re-spending tokens when the user reopens a PR within one server session.
 
-export async function generateSuggestions(input: GenerateSuggestionsInput): Promise<string[]> {
-  try {
-    const result = await withTimeout(
-      generateViaAcp(input),
-      SUGGESTIONS_TIMEOUT_MS,
-      `suggestions:${input.acpAgentId}`,
-    );
-    debug(
-      "suggestions",
-      `generated ${result.length} prompts via ${input.acpAgentId}/${input.model}`,
-    );
-    return result;
-  } catch (err) {
-    // Any failure path — CLI missing, model error, JSON parse fail,
-    // timeout, daemon refuse — collapses to the static fallback. The
-    // UI never sees an empty list.
-    logError(
-      "suggestions",
-      `falling back to defaults:`,
-      err instanceof Error ? err.message : String(err),
-    );
-    return [...FALLBACK_PROMPTS];
+interface SuggestionsCacheEntry {
+  readonly suggestions: string[];
+  readonly expiresAt: number;
+}
+
+const SUGGESTIONS_CACHE_TTL_MS = 60 * 60 * 1000;
+const SUGGESTIONS_CACHE_MAX_ENTRIES = 256;
+const suggestionsCache = new Map<string, SuggestionsCacheEntry>();
+
+function readSuggestionsCache(key: string): string[] | null {
+  const entry = suggestionsCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt < Date.now()) {
+    suggestionsCache.delete(key);
+    return null;
   }
+  return entry.suggestions;
+}
+
+function writeSuggestionsCache(key: string, suggestions: string[]): void {
+  if (suggestionsCache.size >= SUGGESTIONS_CACHE_MAX_ENTRIES) {
+    const oldest = suggestionsCache.keys().next().value;
+    if (oldest !== undefined) suggestionsCache.delete(oldest);
+  }
+  suggestionsCache.set(key, {
+    suggestions,
+    expiresAt: Date.now() + SUGGESTIONS_CACHE_TTL_MS,
+  });
+}
+
+/**
+ * Starter prompts for a PR, from its metadata, its cached diff (never fetched
+ * here) and its complete walkthrough for the current head when there is one.
+ */
+export function suggestionsForPr(prId: string) {
+  return Effect.gen(function* () {
+    const launch = yield* resolveAgentLaunch("suggestions");
+    if (!launch) return [...CHAT_SUGGESTION_FALLBACKS];
+
+    const pr = yield* (yield* PullRequestService).getPr(prId);
+    const walkthrough = pr.headSha
+      ? yield* (yield* WalkthroughService).getCached(prId, pr.headSha)
+      : null;
+    const cachedFiles = yield* (yield* DiffCacheService).getCachedFiles(prId);
+    const key = [
+      prId,
+      pr.headSha ?? "no-head",
+      walkthrough?.id ?? "no-walkthrough",
+      cachedFiles === null ? "no-diff" : "diff",
+      launch.agent,
+      launch.model,
+    ].join(":");
+    const cached = readSuggestionsCache(key);
+    if (cached !== null) return cached;
+
+    const suggestions = yield* Effect.promise(() =>
+      generateSuggestions({
+        prTitle: pr.title,
+        prBody: pr.body,
+        changedFiles: (cachedFiles ?? []).map((f) => f.path),
+        additions: pr.additions,
+        deletions: pr.deletions,
+        walkthrough: walkthrough
+          ? {
+              summary: walkthrough.summary,
+              riskLevel: walkthrough.riskLevel,
+              sentiment: walkthrough.sentiment ?? null,
+              issues: walkthrough.issues.map((i) => ({
+                severity: i.severity,
+                title: i.title,
+                description: i.description,
+                filePath: i.filePath ?? null,
+              })),
+            }
+          : null,
+        launch,
+      }),
+    );
+
+    if (suggestions === null) return [...CHAT_SUGGESTION_FALLBACKS];
+    writeSuggestionsCache(key, suggestions);
+    return suggestions;
+  });
 }

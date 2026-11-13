@@ -1,12 +1,6 @@
-// ── DuckDB schema ────────────────────────────────────────────────────────────
-//
-// One wide `spans` table. The OTLP-native fields live alongside a handful of
-// extracted "hot columns" lifted out of `attributes` so the KPI rollups don't
-// pay a JSON-extraction cost on every aggregate. `attributes` keeps the full
-// bag for the detail views and anything we didn't promote to a column.
-//
-// Idempotency is the primary key (trace_id, span_id): a replayed OTLP batch
-// (retry, reconnect) is a no-op via INSERT ... ON CONFLICT DO NOTHING.
+// Hot columns are lifted out of `attributes` so KPI rollups skip JSON extraction;
+// `attributes` keeps the full bag. The (trace_id, span_id) key makes a retried
+// OTLP batch a no-op.
 
 export const CREATE_SPANS_TABLE = `
 CREATE TABLE IF NOT EXISTS spans (
@@ -35,14 +29,12 @@ CREATE TABLE IF NOT EXISTS spans (
 );
 `;
 
-// Secondary indexes for the two axes every query slices on: time window and
-// operation name. DuckDB keeps these as ART indexes; cheap at our row counts.
 export const CREATE_INDEXES = [
   `CREATE INDEX IF NOT EXISTS spans_start_ms ON spans (start_ms);`,
   `CREATE INDEX IF NOT EXISTS spans_name ON spans (name);`,
 ];
 
-/** Ordered column list — keep in lockstep with the INSERT in ingest.ts. */
+/** Order is the bind order of `insertSpans` in ingest.ts. */
 export const SPAN_COLUMNS = [
   "trace_id",
   "span_id",

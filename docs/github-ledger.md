@@ -18,8 +18,8 @@ bun run github:audit --json               # the raw report
 
 The file is `apps/server/github-ledger.dev.jsonl` (rotated at 50 MB to
 `.jsonl.1`). A running server hands out the calls still in its in-memory ring,
-unanalyzed, at `GET /api/_debug/github?since=2m&origin=api` (`REVV_DEBUG=1` or
-a dev build), and `POST /api/_debug/github/clear` empties that ring.
+unanalyzed, at `GET /api/_debug/github?since=2m&origin=api` (`REVV_DEBUG=1`, which
+`make dev` sets), and `POST /api/_debug/github/clear` empties that ring.
 
 To profile a single page load: `--since 30s --origin api --timeline` right
 after opening it shows each GitHub call as a bar on one time axis, labelled by
@@ -67,7 +67,7 @@ clients"; GraphQL costs vary per query, so its deltas can't be.
   woken by another fiber resumes in the waker's ALS context. `AppRuntime`
   copies the caller's ALS origin into the Context once, at entry. A loop names
   its own runs with `withGitHubOrigin("poll:...")`. `githubTryPromise` (used
-  for every GitHub call in `github-rest.ts` and `GitHub.ts`) hands the fiber's
+  for every GitHub call in `services/github/transport.ts`) hands the fiber's
   origin to the promise; with none, the call is `unattributed`.
 - `analyze.ts` is pure: records in, report out.
 

@@ -1,3 +1,4 @@
+import type { IssueSeverity } from "@revv/shared";
 import { integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { walkthroughs } from "./walkthroughs";
 
@@ -7,7 +8,7 @@ export const walkthroughIssues = sqliteTable("walkthrough_issues", {
     .notNull()
     .references(() => walkthroughs.id, { onDelete: "cascade" }),
   order: integer("order").notNull(),
-  severity: text("severity").notNull(), // 'info' | 'warning' | 'critical'
+  severity: text("severity").$type<IssueSeverity>().notNull(),
   title: text("title").notNull(),
   description: text("description").notNull(),
   filePath: text("file_path"),
@@ -19,13 +20,11 @@ export const walkthroughIssues = sqliteTable("walkthrough_issues", {
   // via the Request Changes flow. Null = not yet sent. Used to persist the
   // "already submitted" treatment (grayed-out, unselectable) across sessions.
   submittedAt: text("submitted_at"),
-  // ── Orchestrator advisory scoring (Jev) ───────────────────────────────
   // Local judgments, excluded from `exportWalkthroughSnapshot` and the transport-stable cache payload.
   /** Composite signal score in [0,1]. Null = never scored. */
   advisoryScore: real("advisory_score"),
   /** ISO 8601 timestamp of the scoring pass that wrote `advisoryScore`. */
   advisoryScoredAt: text("advisory_scored_at"),
-  // ── External-agent resolution ─────────────────────────────────────────
   /** Local implementation state. Submitted GitHub issues stay immutable. */
   resolutionStatus: text("resolution_status").notNull().default("open"),
   resolutionExplanation: text("resolution_explanation"),

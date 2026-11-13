@@ -6,25 +6,30 @@ import type {
   Repository,
 } from "@revv/shared";
 import { Effect } from "effect";
+import { keyedSingleFlight } from "../effects/keyed-single-flight";
 import { logError } from "../logger";
+import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { CacheService } from "./Cache";
-import { GitHubGateway } from "./GitHub";
-import type {
-  CodeFrequencyWeek,
-  CommitActivityWeek,
-  PrSearchPage,
-  RepoStat,
-} from "./github-repo-stats";
-import { apiBaseForHost } from "./github-rest";
+import { GitHubGateway } from "./github/gateway";
+import type { CodeFrequencyWeek, CommitActivityWeek, PrSearchPage, RepoStat } from "./github/repos";
+import type { GitHubClient } from "./github/transport";
+import { Realtime } from "./Realtime";
 
 const REPO_ACTIVITY_NS = "repo-activity";
 const REPO_ACTIVITY_TTL_MS = 6 * 60 * 60 * 1000;
 /**
  * Code frequency can sit on 202 for minutes after commit activity is ready.
- * The heatmap ships without it, cached only this long so churn fills in on a
- * later visit.
+ * The heatmap ships without it, cached only this long so a later visit asks
+ * again if settling ran out first.
  */
 const PARTIAL_ACTIVITY_TTL_MS = 2 * 60 * 1000;
+
+/**
+ * GitHub answers `/stats/*` with 202 while it computes them and says nothing
+ * when they're ready, so the server asks again on this schedule (~2 min), then
+ * announces the outcome either way.
+ */
+const SETTLE_DELAYS_MS = [2_000, 4_000, 8_000, 15_000, 30_000, 60_000];
 
 const REPO_PR_FLOW_NS = "repo-pr-flow";
 const REPO_PR_FLOW_TTL_MS = 30 * 60 * 1000;
@@ -80,35 +85,76 @@ function padToYear(weeks: RepoActivityWeek[], now: Date): RepoActivityWeek[] {
   }));
 }
 
-const getRepoActivity = (repo: Repository, token: string) =>
+const activityKey = (repo: Repository) => `${repo.githubHost}:${repo.fullName}`;
+
+const askActivity = (repo: Repository, client: GitHubClient) =>
   Effect.gen(function* () {
     const cache = yield* CacheService;
     const github = yield* GitHubGateway;
-    const key = `${repo.githubHost}:${repo.fullName}`;
-
-    const cached = yield* cache.get<RepoActivity>(REPO_ACTIVITY_NS, key);
-    if (cached) return cached;
-
-    const apiBase = apiBaseForHost(repo.githubHost);
     const [commits, churn] = yield* Effect.all(
       [
-        github.repos.commitActivity(repo.fullName, token, apiBase),
-        github.repos.codeFrequency(repo.fullName, token, apiBase),
+        github.repos.commitActivity(client, repo.fullName),
+        github.repos.codeFrequency(client, repo.fullName),
       ],
       { concurrency: 2 },
     );
     if (commits.kind === "computing") {
-      return { status: "computing" } satisfies RepoActivity;
+      return { activity: { status: "computing" } as RepoActivity, settled: false };
     }
-
     const activity = buildRepoActivity(
       commits.kind === "ready" ? commits.data : [],
       churn,
       new Date(),
     );
-    yield* cache.set(REPO_ACTIVITY_NS, key, activity, {
-      ttlMs: churn.kind === "computing" ? PARTIAL_ACTIVITY_TTL_MS : REPO_ACTIVITY_TTL_MS,
+    const settled = churn.kind !== "computing";
+    yield* cache.set(REPO_ACTIVITY_NS, activityKey(repo), activity, {
+      ttlMs: settled ? REPO_ACTIVITY_TTL_MS : PARTIAL_ACTIVITY_TTL_MS,
     });
+    return { activity, settled };
+  });
+
+const settleOnce = keyedSingleFlight<string, void, never>();
+
+/**
+ * Keep asking until GitHub has computed both statistics or the schedule runs
+ * out, then tell the repo's clients (`repo-activity:settled`). One run per
+ * repo at a time; it outlives the request that started it.
+ */
+const settleActivity = (repo: Repository, client: GitHubClient) =>
+  settleOnce(
+    activityKey(repo),
+    Effect.gen(function* () {
+      const realtime = yield* Realtime;
+      let ready = false;
+      for (const delay of SETTLE_DELAYS_MS) {
+        yield* Effect.sleep(delay);
+        const answer = yield* askActivity(repo, client).pipe(
+          Effect.catch((e) =>
+            Effect.sync(() => {
+              logError("RepoActivity", `settling activity for ${repo.fullName} failed:`, e);
+              return null;
+            }),
+          ),
+        );
+        if (answer === null) break;
+        ready = answer.activity.status === "ready";
+        if (answer.settled) break;
+      }
+      yield* realtime.toRepo(repo.id, {
+        type: "repo-activity:settled",
+        data: { repoId: repo.id, ready },
+      });
+    }).pipe(withGitHubOrigin("repo-activity:settle")),
+  );
+
+const getRepoActivity = (repo: Repository, client: GitHubClient) =>
+  Effect.gen(function* () {
+    const cache = yield* CacheService;
+    const cached = yield* cache.get<RepoActivity>(REPO_ACTIVITY_NS, activityKey(repo));
+    if (cached) return cached;
+
+    const { activity, settled } = yield* askActivity(repo, client);
+    if (!settled) yield* Effect.forkDetach(settleActivity(repo, client));
     return activity;
   });
 
@@ -158,7 +204,7 @@ export function buildPrFlow(
   };
 }
 
-const getRepoPrFlow = (repo: Repository, token: string) =>
+const getRepoPrFlow = (repo: Repository, client: GitHubClient) =>
   Effect.gen(function* () {
     const cache = yield* CacheService;
     const github = yield* GitHubGateway;
@@ -166,11 +212,10 @@ const getRepoPrFlow = (repo: Repository, token: string) =>
     const cached = yield* cache.get<RepoPrFlow>(REPO_PR_FLOW_NS, key);
     if (cached) return cached;
 
-    const apiBase = apiBaseForHost(repo.githubHost);
     const now = Date.now();
     const day = (n: number) => isoDay(now - n * DAY_MS);
     const search = (qualifiers: string) =>
-      github.repos.searchPullRequests(repo.fullName, qualifiers, token, apiBase);
+      github.repos.searchPullRequests(client, repo.fullName, qualifiers);
     const count = (qualifiers: string) => Effect.map(search(qualifiers), (page) => page.total);
 
     const [merged, opened] = yield* Effect.all(
@@ -210,12 +255,12 @@ const getRepoPrFlow = (repo: Repository, token: string) =>
     return flow;
   });
 
-export const getRepoActivityResponse = (repo: Repository, token: string) =>
+export const getRepoActivityResponse = (repo: Repository, client: GitHubClient) =>
   Effect.gen(function* () {
     const [commits, flow] = yield* Effect.all(
       [
-        getRepoActivity(repo, token),
-        getRepoPrFlow(repo, token).pipe(
+        getRepoActivity(repo, client),
+        getRepoPrFlow(repo, client).pipe(
           Effect.catch((e) =>
             Effect.sync(() => {
               logError("RepoActivity", `PR flow unavailable for ${repo.fullName}:`, e);

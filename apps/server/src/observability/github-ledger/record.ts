@@ -136,7 +136,7 @@ function headerOf(init: RequestInit | undefined, name: string): string | null {
 
 const shortHash = (s: string) => Bun.hash(s).toString(36);
 
-const PLUMBING = /github-ledger|github-rest\.ts|node:|native|\(unknown\)|<anonymous>/;
+const PLUMBING = /github-ledger|github\/transport\.ts|node:|native|\(unknown\)|<anonymous>/;
 
 function callSite(): string | null {
   const stack = new Error().stack?.split("\n").slice(2) ?? [];

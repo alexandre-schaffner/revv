@@ -1,7 +1,6 @@
 import { classifyLayerMergeState, type StackMergeRunLayer } from "@revv/shared";
 import { logError } from "../../logger";
-import type { GitHubStack, GitHubStackLayer } from "./map";
-import type { StepDecision } from "./merge-plan";
+import type { GitHubStack, GitHubStackLayer } from "../github/stacks";
 
 /**
  * Native-stack behaviour Revv acts on without having watched GitHub do it
@@ -45,12 +44,4 @@ export function membershipAfterRetarget(
 ): Contradiction | null {
   const kept = reread?.number === stack.number && reread.layers.some((l) => l.number === number);
   return kept ? null : { behaviour: "base-change-keeps-membership", number };
-}
-
-export function contradiction(
-  behaviour: UnverifiedStackBehaviour,
-  number: number,
-  message: string,
-): Extract<StepDecision, { kind: "fail" }> {
-  return { kind: "fail", number, message, contradicts: behaviour };
 }

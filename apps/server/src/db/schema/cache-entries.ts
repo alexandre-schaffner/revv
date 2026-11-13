@@ -1,27 +1,9 @@
 import { index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 /**
- * Consolidated durable cache — the SQLite backend behind the unified
- * {@link CacheLayer} abstraction.
- *
- * Replaces a growing fleet of per-concern tables (`kv_cache`,
- * `github_etag_cache`, and — eventually — `file_content_cache`) with a
- * single row schema that every freshness policy can use:
- *
- * - `ns`/`key` — the canonical namespace + opaque keyed string.
- * - `value_json` — JSON-serialized payload.
- * - `etag` / `last_modified` — HTTP conditional-request headers captured
- *   from upstream; used by {@link EtagPolicy}.
- * - `tag_json` — opaque metadata the policy threads through
- *   (e.g. `headSha` for SHA-keyed entries, query hash for GraphQL).
- * - `fetched_at` — when this row was last refreshed (even for 304s).
- * - `expires_at` — nullable; TTL policies set a future ISO-8601 timestamp,
- *   SHA/immutable/watermark policies leave null.
- * - `approx_bytes` — pre-computed size for namespace-level quota checks
- *   without a `LENGTH(value_json)` scan.
- *
- * Pre-existing tables (`kv_cache`, etc.) continue to work in parallel
- * until M7, when a backfill migration unifies them in here and drops them.
+ * Retired: nothing reads or writes this table. It stays in users' databases
+ * (no drop migration) and stays declared here because the migration snapshot
+ * still lists it, so `drizzle-kit generate` would otherwise emit a DROP TABLE.
  */
 export const cacheEntries = sqliteTable(
   "cache_entries",

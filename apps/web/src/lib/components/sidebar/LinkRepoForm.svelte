@@ -1,91 +1,35 @@
 <script lang="ts">
-import type { Repository } from "@revv/shared";
 import CheckCircle from "phosphor-svelte/lib/CheckCircle";
 import FolderOpen from "phosphor-svelte/lib/FolderOpen";
 import LinkSimple from "phosphor-svelte/lib/LinkSimple";
 import Plus from "phosphor-svelte/lib/Plus";
 import Spinner from "phosphor-svelte/lib/Spinner";
-import { toast } from "svelte-sonner";
-import { api } from "$lib/api/client";
-import { toastAddRepoError } from "$lib/components/shared/add-repo-toast";
-import CloneStatusIndicator from "$lib/components/shared/CloneStatusIndicator.svelte";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { gsapFadeY, tokens } from "$lib/motion";
-import { addRepo, getRepositories, retryClone } from "$lib/stores/prs.svelte";
+import { getTrackedRepo, LocalClone } from "$lib/repos/add-repo.svelte";
+import { toastAddRepoError } from "$lib/repos/add-repo-toast";
+import { addRepo, retryClone } from "$lib/stores/repos.svelte";
+import CloneStatusIndicator from "./CloneStatusIndicator.svelte";
 import RepoDialogHeader from "./RepoDialogHeader.svelte";
 import RepoField from "./RepoField.svelte";
 
 let { onClose }: { onClose?: () => void } = $props();
 
-let clonePath = $state("");
-// Resolved by the server (`inspect-local`) from the clone's `origin` remote —
-// never typed by the user. The remote is the single source of truth for the
-// GitHub identity, so a local checkout can't be linked to the wrong repo.
-let fullName = $state<string | null>(null);
-let inspecting = $state(false);
+const clone = new LocalClone();
 let adding = $state(false);
-let remotes = $state<{ name: string; url: string }[]>([]);
-let isGitRepo = $state<boolean | null>(null);
 let linkedFullName = $state<string | null>(null);
 
-let tracked = $derived(new Set(getRepositories().map((repo) => repo.fullName.toLowerCase())));
-let isAlreadyTracked = $derived(fullName !== null && tracked.has(fullName.toLowerCase()));
-let canSubmit = $derived(
-  clonePath.trim() !== "" &&
-    fullName !== null &&
-    !isAlreadyTracked &&
-    isGitRepo === true &&
-    !adding,
-);
+let canSubmit = $derived(clone.linkableName !== null && !adding);
 
-// Once linked, surface the freshly-tracked repo from the store so its
-// clone-status (and any SSE updates) render inline, mirroring the clone path.
-let linkedRepo = $derived<Repository | null>(
-  linkedFullName ? (getRepositories().find((r) => r.fullName === linkedFullName) ?? null) : null,
-);
-
-async function inspectPath(path: string): Promise<void> {
-  if (!path.trim()) return;
-  inspecting = true;
-  try {
-    const { data, error } = await api.api.repos["inspect-local"].post({ path });
-    if (error) {
-      const value = error.value as { error?: string; message?: string } | undefined;
-      throw new Error(value?.error ?? value?.message ?? "Failed to inspect local repository");
-    }
-    if (!data || "error" in data) {
-      throw new Error("Failed to inspect local repository");
-    }
-    isGitRepo = data.isGitRepo;
-    remotes = [...data.remotes];
-    fullName = data.proposedFullName;
-    if (!data.isGitRepo) toast.error("Choose a folder that contains a git repository");
-  } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to inspect local repository");
-  } finally {
-    inspecting = false;
-  }
-}
-
-async function browse(): Promise<void> {
-  if (inspecting) return;
-  try {
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const selected = await open({ directory: true });
-    if (typeof selected !== "string") return;
-    clonePath = selected;
-    await inspectPath(selected);
-  } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to open folder picker");
-  }
-}
+let linkedRepo = $derived(linkedFullName ? (getTrackedRepo(linkedFullName) ?? null) : null);
 
 async function submit(): Promise<void> {
-  if (!canSubmit || fullName === null) return;
+  const fullName = clone.linkableName;
+  if (adding || fullName === null) return;
   adding = true;
   try {
-    await addRepo({ fullName, mode: "link", clonePath: clonePath.trim() });
+    await addRepo({ fullName, mode: "link", clonePath: clone.path.trim() });
     linkedFullName = fullName;
   } catch (e) {
     toastAddRepoError(e, "Failed to link repository");
@@ -96,17 +40,14 @@ async function submit(): Promise<void> {
 
 function linkAnother(): void {
   linkedFullName = null;
-  clonePath = "";
-  fullName = null;
-  remotes = [];
-  isGitRepo = null;
+  clone.clear();
 }
 
 function onPathKeydown(e: KeyboardEvent): void {
   if (e.key === "Escape") onClose?.();
   else if (e.key === "Enter") {
     if (canSubmit) void submit();
-    else void inspectPath(clonePath);
+    else void clone.inspect();
   }
 }
 </script>
@@ -126,7 +67,7 @@ function onPathKeydown(e: KeyboardEvent): void {
 				/>
 				<div class="linked-body">
 					<span class="linked-name">{linkedRepo.fullName}</span>
-					<span class="linked-path">{linkedRepo.clonePath ?? clonePath}</span>
+					<span class="linked-path">{linkedRepo.clonePath ?? clone.path}</span>
 				</div>
 				<div class="linked-status">
 					{#if linkedRepo.cloneStatus !== 'ready'}
@@ -156,10 +97,10 @@ function onPathKeydown(e: KeyboardEvent): void {
 
 		<div class="path-row">
 			<RepoField
-				placeholder="/Users/alex/code/project"
+				placeholder="/Users/you/code/project"
 				aria-label="Local clone path"
-				bind:value={clonePath}
-				onblur={() => void inspectPath(clonePath)}
+				bind:value={clone.path}
+				onblur={() => void clone.inspect()}
 				onkeydown={onPathKeydown}
 				autofocusOnMount
 				autocomplete="off"
@@ -171,10 +112,10 @@ function onPathKeydown(e: KeyboardEvent): void {
 				variant="outline"
 				size="sm"
 				class="affordance-btn h-8 rounded-[var(--radius-card)]"
-				onclick={() => void browse()}
-				disabled={inspecting}
+				onclick={() => void clone.browse()}
+				disabled={clone.inspecting}
 			>
-				{#if inspecting}
+				{#if clone.inspecting}
 					<Spinner size={13} class="motion-essential-spin" />
 				{:else}
 					<FolderOpen size={13} />
@@ -183,28 +124,19 @@ function onPathKeydown(e: KeyboardEvent): void {
 			</Button>
 		</div>
 
-		{#if isGitRepo === false}
+		{#if clone.status.kind === "not-git"}
 			<p class="hint hint--danger">The selected folder is not a git repository.</p>
-		{:else if isAlreadyTracked && !adding}
+		{:else if clone.status.kind === "tracked" && !adding}
 			<p class="hint hint--danger">This repository is already tracked.</p>
-		{:else if isGitRepo === true && fullName !== null}
+		{:else if clone.status.kind === "recognized" || clone.status.kind === "tracked"}
 			<p class="hint hint--ok">
 				<CheckCircle size={12} />
-				<span>Recognized as <code>{fullName}</code>.</span>
+				<span>Recognized as <code>{clone.status.fullName}</code>.</span>
 			</p>
-		{:else if isGitRepo === true}
+		{:else if clone.status.kind === "foreign-origin"}
 			<p class="hint hint--danger">
 				This clone's <code>origin</code> remote doesn't point at a repository on this GitHub host.
 			</p>
-		{:else if remotes.length > 0}
-			<div class="remote-list">
-				{#each remotes.slice(0, 3) as remote (`${remote.name}-${remote.url}`)}
-					<div class="remote-row">
-						<span>{remote.name}</span>
-						<code>{remote.url}</code>
-					</div>
-				{/each}
-			</div>
 		{:else}
 			<p class="hint">Choose a local checkout — its GitHub repository is detected automatically.</p>
 		{/if}
@@ -239,7 +171,6 @@ function onPathKeydown(e: KeyboardEvent): void {
 		flex-shrink: 0;
 	}
 
-	/* ── Hints ──────────────────────────────────────────── */
 	.hint {
 		display: flex;
 		align-items: center;
@@ -271,30 +202,6 @@ function onPathKeydown(e: KeyboardEvent): void {
 		color: var(--color-success);
 	}
 
-	.remote-list {
-		display: flex;
-		flex-direction: column;
-		gap: 5px;
-		margin-top: 10px;
-	}
-
-	.remote-row {
-		display: grid;
-		grid-template-columns: 58px minmax(0, 1fr);
-		gap: 8px;
-		align-items: center;
-		color: var(--color-text-muted);
-		font-size: 11px;
-	}
-
-	.remote-row code {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		color: var(--color-text-secondary);
-	}
-
-	/* ── Success view ───────────────────────────────────── */
 	.linked-card {
 		display: flex;
 		align-items: center;
@@ -351,7 +258,6 @@ function onPathKeydown(e: KeyboardEvent): void {
 		font-size: 10.5px;
 	}
 
-	/* ── Footer ─────────────────────────────────────────── */
 	.footer {
 		display: flex;
 		justify-content: flex-end;

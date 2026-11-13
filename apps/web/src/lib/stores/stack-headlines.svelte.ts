@@ -1,32 +1,50 @@
 import type { StackHeadline } from "@revv/shared";
 import { api } from "$lib/api/client";
-import { singleFlight } from "./single-flight";
+import { call } from "$lib/api/errors";
+import { createResource } from "./resource";
 
-let byRepo = $state(new Map<string, ReadonlyMap<number, StackHeadline>>());
-
-async function fetchHeadlines(repositoryId: string): Promise<void> {
-  try {
-    const { data, error } = await api.api.repos({ id: repositoryId })["stack-headlines"].get();
-    if (error || !data || !("headlines" in data)) return;
+/** Per repository, by stack number. A failed read shows no headlines and is asked again next open. */
+const headlines = createResource<void, ReadonlyMap<number, StackHeadline>>({
+  freshForMs: Number.POSITIVE_INFINITY,
+  keepDataOnError: true,
+  fetch: async (repositoryId) => {
+    const data = await call(
+      api.api.repos({ id: repositoryId })["stack-headlines"].get(),
+      "Couldn't load stack headlines",
+    );
     const map = new Map<number, StackHeadline>();
     for (const [number, headline] of Object.entries(data.headlines)) {
       map.set(Number(number), headline);
     }
-    byRepo.set(repositoryId, map);
-    byRepo = new Map(byRepo);
-  } catch {}
-}
-
-const reads = singleFlight<void>((repositoryId) => fetchHeadlines(repositoryId));
+    return { status: "ok", data: map };
+  },
+});
 
 export function ensureStackHeadlines(repositoryId: string): void {
-  if (!byRepo.has(repositoryId)) void reads.run(repositoryId);
+  void headlines.load(repositoryId, undefined);
 }
 
 export function getStackHeadline(repositoryId: string, stackNumber: number): StackHeadline | null {
-  return byRepo.get(repositoryId)?.get(stackNumber) ?? null;
+  return headlines.data(repositoryId)?.get(stackNumber) ?? null;
 }
 
-export function onStackHeadlineSignal(data: { repositoryId: string }): void {
-  if (byRepo.has(data.repositoryId)) void reads.runFromNow(data.repositoryId);
+function refreshLoaded(repositoryId: string): void {
+  if (headlines.data(repositoryId) !== null) void headlines.refresh(repositoryId, undefined);
+}
+
+export function onStackUpdated(data: { repositoryId: string }): void {
+  refreshLoaded(data.repositoryId);
+}
+
+export function onStackBriefStatusChanged(data: { repositoryId: string }): void {
+  refreshLoaded(data.repositoryId);
+}
+
+/** Changes announced while the stream was down reached no one. */
+export function onEventsReconnected(): void {
+  headlines.refreshAll();
+}
+
+export function reset(): void {
+  headlines.reset();
 }

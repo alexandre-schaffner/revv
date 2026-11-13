@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { EXTERNAL_AGENT_PROVIDERS, type ExternalAgentProvider } from "@revv/shared";
 import {
   type BridgeInstallInput,
@@ -38,7 +38,6 @@ function temporaryHome(): string {
   return directory;
 }
 
-/** Minimal stand-in for the repository's `integrations/` directory. */
 function assets(root: string): string {
   const directory = join(root, "integrations");
   mkdirSync(join(directory, "external-mcp-bridge"), { recursive: true });
@@ -61,13 +60,17 @@ function input(root: string, token: string): BridgeInstallInput {
     runtimeExecutable: "/test/bun",
     token,
     integrationsDirectory: assets(root),
+    apiUrl: "http://127.0.0.1:45678/mcp/external",
   };
 }
 
-/** Text of a location, reading the Claude plugin's `.mcp.json` for a directory. */
-function credentialText(location: string): string {
-  const file = statSync(location).isDirectory() ? join(location, ".mcp.json") : location;
-  return readFileSync(file, "utf8");
+/** Every file under `home`, concatenated: what the agent configs now say. */
+function writtenUnder(home: string): string {
+  return [...new Bun.Glob("**/*").scanSync({ cwd: home, dot: true })]
+    .map((file) => join(home, file))
+    .filter((file) => statSync(file).isFile())
+    .map((file) => readFileSync(file, "utf8"))
+    .join("\n");
 }
 
 afterEach(() => {
@@ -88,9 +91,33 @@ describe.each([...EXTERNAL_AGENT_PROVIDERS])("%s install", (provider: ExternalAg
     integrationInstaller.install(input(home, "second-token"));
 
     expect(integrationInstaller.installed()).toBe(true);
-    const written = integrationInstaller.locations.map(credentialText).join("\n");
-    expect(written).toContain("second-token");
-    expect(written).not.toContain("first-token");
+    expect(integrationInstaller.installedBinding()).toEqual({
+      token: "second-token",
+      apiUrl: "http://127.0.0.1:45678/mcp/external",
+    });
+    expect(writtenUnder(home)).not.toContain("first-token");
+  });
+
+  it("a re-install with its own credential brings the bridge, guide and server URL up to date", () => {
+    const home = temporaryHome();
+    const target = installer(provider, home);
+    const given = input(home, "token");
+    target.install({ ...given, apiUrl: "http://127.0.0.1:1/mcp/external" });
+    const copies = [
+      ...new Bun.Glob("**/server/revv-mcp.ts").scanSync({ cwd: home, dot: true }),
+    ].map((file) => join(home, file));
+    expect(copies).toHaveLength(1);
+    const copy = copies[0] ?? "";
+    writeFileSync(copy, "// an older bridge\n");
+
+    const binding = target.installedBinding();
+    expect(binding).toEqual({ token: "token", apiUrl: "http://127.0.0.1:1/mcp/external" });
+    target.install({ ...given, token: binding?.token ?? "" });
+
+    expect(readFileSync(copy, "utf8")).toBe("#!/usr/bin/env bun\n");
+    const written = writtenUnder(home);
+    expect(written).toContain(given.apiUrl);
+    expect(written).not.toContain("http://127.0.0.1:1/");
   });
 
   it("removes everything it owns on disconnect", () => {
@@ -110,6 +137,20 @@ describe.each([...EXTERNAL_AGENT_PROVIDERS])("%s install", (provider: ExternalAg
     expect(() => {
       integrationInstaller.uninstall();
     }).not.toThrow();
+  });
+});
+
+describe("activation", () => {
+  it("names the slash command the installed prompt or command file registers", () => {
+    const command = `revv-address-feedback-${ACCOUNT_KEY}`;
+    for (const provider of ["codex", "opencode"] as const) {
+      const home = temporaryHome();
+      const target = installer(provider, home);
+      target.install(input(home, "token"));
+      expect(target.activation).toContain(`/${command}.`);
+      const registered = [...new Bun.Glob(`**/${command}.md`).scanSync({ cwd: home, dot: true })];
+      expect(registered.map((file) => basename(file))).toEqual([`${command}.md`]);
+    }
   });
 });
 
@@ -194,7 +235,13 @@ describe("install safety", () => {
     const entry = cursor.mcpServers[`revv-${ACCOUNT_KEY}`];
     expect(entry?.command).toBe("/test/bun");
     expect(entry?.args[0]).toBe("run");
-    expect(entry?.env).toEqual({ REVV_INTEGRATION_TOKEN: "token", BUN_BE_BUN: "1" });
+    expect(entry?.env).toEqual({
+      REVV_INTEGRATION_TOKEN: "token",
+      REVV_API_URL: "http://127.0.0.1:45678/mcp/external",
+      NO_PROXY: "127.0.0.1,localhost",
+      no_proxy: "127.0.0.1,localhost",
+      BUN_BE_BUN: "1",
+    });
     expect(readFileSync(codexPaths(ACCOUNT_KEY, home).configFile, "utf8")).toContain(
       'BUN_BE_BUN = "1"',
     );

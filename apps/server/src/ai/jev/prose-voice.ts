@@ -1,4 +1,3 @@
-// ── Prose-voice advisory ─────────────────────────────────────────────────────
 // `PROSE_VOICE_CONTRACT` and the banned-opener list are the most-repeated,
 // least-enforced instructions in the walkthrough prompt; voice is a judgment,
 // not something a word budget can check.
@@ -15,7 +14,6 @@
 import { noul } from "@typesafe-ai/sdk";
 import { Effect } from "effect";
 import { JevService } from "../../services/Jev";
-import { SettingsService } from "../../services/Settings";
 import { optionalJev } from "./optional";
 
 export const PROSE_VOICE_TIMEOUT_MS = 12_000;
@@ -51,11 +49,8 @@ const FAULT_ADVICE: Record<keyof typeof FAULTS, string> = {
 export function judgeProse(
   markdown: string,
   chapterTitle: string,
-): Effect.Effect<readonly string[] | null, never, JevService | SettingsService> {
+): Effect.Effect<readonly string[] | null, never, JevService> {
   return Effect.gen(function* () {
-    const settingsSvc = yield* SettingsService;
-    const settings = yield* settingsSvc.getSettings().pipe(Effect.orElseSucceed(() => null));
-    if (settings?.jev.enabled !== true) return null;
     // Too short to have a voice — a one-line block is all point, by construction.
     if (markdown.trim().length < 200) return [];
 
@@ -91,38 +86,36 @@ export function judgeProse(
   });
 }
 
-// ── Per-walkthrough advisory mailbox ─────────────────────────────────────────
 // A judgment landing between two tool calls has nowhere to go, so it waits here
-// and rides out on the next `add_diff_step` result. Ephemeral and lossy: losing
-// an advisory costs a sentence of feedback, so it has no business in SQLite.
+// and rides out on the next `add_diff_step` result. One per walkthrough run,
+// dropped with it: losing an advisory costs a sentence of feedback, so it has
+// no business in SQLite.
 
-const mailbox = new Map<string, string[]>();
-const sampled = new Map<string, number>();
-
-/** Whether this walkthrough still owes a sample. Claims the slot if so. */
-export function claimProseSample(walkthroughId: string): boolean {
-  const taken = sampled.get(walkthroughId) ?? 0;
-  if (taken >= PROSE_SAMPLE_SIZE) return false;
-  sampled.set(walkthroughId, taken + 1);
-  return true;
+export interface ProseMailbox {
+  /** Whether this run still owes a sample. Claims the slot if so. */
+  readonly claimSample: () => boolean;
+  readonly post: (advice: readonly string[]) => void;
+  /** Drains the mailbox as agent-facing text, or `null` if empty. Drains rather than peeks: repeating the same advice on every block would read as nagging and train the agent to skim result text. */
+  readonly take: () => string | null;
 }
 
-export function postProseAdvice(walkthroughId: string, advice: readonly string[]): void {
-  if (advice.length === 0) return;
-  const box = mailbox.get(walkthroughId) ?? [];
-  for (const line of advice) if (!box.includes(line)) box.push(line);
-  mailbox.set(walkthroughId, box);
-}
-
-/** Drains the mailbox as agent-facing text, or `null` if empty. Drains rather than peeks: repeating the same advice on every block would read as nagging and train the agent to skim result text. */
-export function takeProseAdvice(walkthroughId: string): string | null {
-  const box = mailbox.get(walkthroughId);
-  if (!box || box.length === 0) return null;
-  mailbox.delete(walkthroughId);
-  return `\n\nVOICE CHECK on an earlier block — ${box.join("; ")}. Don't rewrite what's already written; apply it from here on.`;
-}
-
-export function forgetProse(walkthroughId: string): void {
-  mailbox.delete(walkthroughId);
-  sampled.delete(walkthroughId);
+export function makeProseMailbox(): ProseMailbox {
+  let box: string[] = [];
+  let sampled = 0;
+  return {
+    claimSample: () => {
+      if (sampled >= PROSE_SAMPLE_SIZE) return false;
+      sampled += 1;
+      return true;
+    },
+    post: (advice) => {
+      for (const line of advice) if (!box.includes(line)) box.push(line);
+    },
+    take: () => {
+      if (box.length === 0) return null;
+      const lines = box;
+      box = [];
+      return `\n\nVOICE CHECK on an earlier block — ${lines.join("; ")}. Don't rewrite what's already written; apply it from here on.`;
+    },
+  };
 }

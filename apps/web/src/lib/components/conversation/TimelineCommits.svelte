@@ -1,14 +1,16 @@
 <script lang="ts">
 import type { TimelineCommit } from "@revv/shared";
-import CaretRight from "phosphor-svelte/lib/CaretRight";
+import { rollupBucket } from "@revv/shared";
 import GitCommit from "phosphor-svelte/lib/GitCommit";
 import SealCheck from "phosphor-svelte/lib/SealCheck";
 import { SvelteSet } from "svelte/reactivity";
 import Avatar from "$lib/components/shared/Avatar.svelte";
+import DisclosureCaret from "$lib/components/shared/DisclosureCaret.svelte";
+import RelativeTime from "$lib/components/shared/RelativeTime.svelte";
 import { gsapSlide } from "$lib/motion";
-import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { openExternal } from "$lib/utils/open-external";
-import CiGlyph, { bucketOfRollup } from "./CiGlyph.svelte";
+import CiGlyph from "./CiGlyph.svelte";
+import TimelineRow from "./TimelineRow.svelte";
 
 interface Props {
   commits: readonly TimelineCommit[];
@@ -16,7 +18,7 @@ interface Props {
 
 let { commits }: Props = $props();
 
-/** Commits whose full message is open. Local UI state, per mount. */
+/** Commits whose full message is open. */
 const open = new SvelteSet<string>();
 
 const authors = $derived([...new Set(commits.map((c) => c.author.login))]);
@@ -28,95 +30,64 @@ function toggle(sha: string): void {
 }
 </script>
 
-<li class="commits">
-	<div class="commits-head">
-		<span class="commits-icon" aria-hidden="true"><GitCommit size={14} weight="bold" /></span>
-		<p class="commits-text">
-			{#if first}
-				<Avatar handle={first.author.login} avatarContent={first.author.avatarContent} size={16} />
-			{/if}
-			<strong>{authors.length === 1 ? authors[0] : `${authors.length} people`}</strong>
-			added {commits.length === 1 ? 'a commit' : `${commits.length} commits`}
-			{#if first}
-				<time datetime={first.createdAt} title={new Date(first.createdAt).toLocaleString()}>
-					{formatRelativeTime(first.createdAt)}
-				</time>
-			{/if}
-		</p>
-	</div>
-
-	<ul class="commit-list">
-		{#each commits as commit (commit.id)}
-			{@const bucket = bucketOfRollup(commit.ci)}
-			{@const expandable = commit.messageBody.trim().length > 0}
-			<li class="commit">
-				<div class="commit-row">
-					<span class="commit-ci">
-						{#if bucket}<CiGlyph {bucket} size={14} />{/if}
-					</span>
-					{#if expandable}
+<TimelineRow>
+	{#snippet glyph()}<GitCommit size={14} weight="bold" />{/snippet}
+	<p class="commits-text">
+		{#if first}
+			<Avatar name={first.author.login} src={first.author.avatarContent} size={16} />
+		{/if}
+		<strong>{authors.length === 1 ? authors[0] : `${authors.length} people`}</strong>
+		added {commits.length === 1 ? 'a commit' : `${commits.length} commits`}
+		{#if first}<RelativeTime iso={first.createdAt} muted />{/if}
+	</p>
+	{#snippet body()}
+		<ul class="commit-list">
+			{#each commits as commit (commit.id)}
+				{@const bucket = rollupBucket(commit.ci)}
+				{@const expandable = commit.messageBody.trim().length > 0}
+				<li class="commit">
+					<div class="commit-row">
+						<span class="commit-ci">
+							{#if bucket}<CiGlyph {bucket} size={14} />{/if}
+						</span>
+						{#if expandable}
+							<button
+								type="button"
+								class="commit-headline commit-headline--button"
+								aria-expanded={open.has(commit.sha)}
+								onclick={() => toggle(commit.sha)}
+							>
+								<span class="commit-caret"><DisclosureCaret open={open.has(commit.sha)} /></span>
+								<span class="commit-title">{commit.headline}</span>
+							</button>
+						{:else}
+							<span class="commit-headline"><span class="commit-title">{commit.headline}</span></span>
+						{/if}
+						{#if commit.verified}
+							<span class="commit-verified" title="Signature verified by GitHub">
+								<SealCheck size={13} weight="fill" />
+								Verified
+							</span>
+						{/if}
 						<button
 							type="button"
-							class="commit-headline commit-headline--button"
-							aria-expanded={open.has(commit.sha)}
-							onclick={() => toggle(commit.sha)}
+							class="commit-sha"
+							title="Open on GitHub"
+							onclick={() => void openExternal(commit.url)}
 						>
-							<span class="commit-caret" class:commit-caret--open={open.has(commit.sha)}>
-								<CaretRight size={10} weight="bold" />
-							</span>
-							<span class="commit-title">{commit.headline}</span>
+							{commit.sha.slice(0, 7)}
 						</button>
-					{:else}
-						<span class="commit-headline"><span class="commit-title">{commit.headline}</span></span>
+					</div>
+					{#if open.has(commit.sha)}
+						<pre class="commit-body" transition:gsapSlide>{commit.messageBody}</pre>
 					{/if}
-					{#if commit.verified}
-						<span class="commit-verified" title="Signature verified by GitHub">
-							<SealCheck size={13} weight="fill" />
-							Verified
-						</span>
-					{/if}
-					<button
-						type="button"
-						class="commit-sha"
-						title="Open on GitHub"
-						onclick={() => void openExternal(commit.url)}
-					>
-						{commit.sha.slice(0, 7)}
-					</button>
-				</div>
-				{#if open.has(commit.sha)}
-					<pre class="commit-body" transition:gsapSlide>{commit.messageBody}</pre>
-				{/if}
-			</li>
-		{/each}
-	</ul>
-</li>
+				</li>
+			{/each}
+		</ul>
+	{/snippet}
+</TimelineRow>
 
 <style>
-	.commits {
-		padding: 5px 0;
-	}
-
-	.commits-head {
-		display: flex;
-		align-items: flex-start;
-		gap: 10px;
-	}
-
-	.commits-icon {
-		position: relative;
-		z-index: 1;
-		display: grid;
-		place-items: center;
-		flex-shrink: 0;
-		width: 24px;
-		height: 24px;
-		border-radius: 50%;
-		background: var(--color-bg-secondary);
-		box-shadow: 0 0 0 3px var(--color-bg-primary);
-		color: var(--color-text-secondary);
-	}
-
 	.commits-text {
 		display: flex;
 		align-items: center;
@@ -133,12 +104,8 @@ function toggle(sha: string): void {
 		color: var(--color-text-primary);
 	}
 
-	.commits-text time {
-		color: var(--color-text-muted);
-	}
-
 	.commit-list {
-		margin: 4px 0 0 34px;
+		margin: 4px 0 0;
 		padding: 0;
 		list-style: none;
 	}
@@ -189,11 +156,6 @@ function toggle(sha: string): void {
 	.commit-caret {
 		display: inline-flex;
 		color: var(--color-text-muted);
-		transition: rotate var(--duration-snap) var(--ease-soft);
-	}
-
-	.commit-caret--open {
-		rotate: 90deg;
 	}
 
 	.commit-verified {

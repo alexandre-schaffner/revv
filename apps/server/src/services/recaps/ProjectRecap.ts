@@ -1,0 +1,594 @@
+// Only `ProjectRecapJobs` calls `finish` (invariants 2 and 11). Agents reach
+// the DB only via the recap MCP tool surface.
+
+import type {
+  ProjectRecap,
+  ProjectRecapStatus,
+  ProjectRecapSummary,
+  RecapPeriod,
+  RecapPrEntry,
+  RecapSummaryStats,
+  RecapThemeSummary,
+} from "@revv/shared";
+import {
+  EMPTY_RECAP_STATS,
+  MAX_RECAP_PAGE_LIMIT,
+  RECAP_EMPTY_WINDOW_LEDE,
+  recapSummaryOf,
+} from "@revv/shared";
+import { and, asc, desc, eq, gte, isNull, lt } from "drizzle-orm";
+import { Context, Effect, Layer } from "effect";
+import { projectRecaps, recapPrEntries, recapThemeSummaries } from "../../db/schema/index";
+import type { RecapSourceBundle } from "../../db/schema/project-recaps";
+import { avatarOfRepoLogin } from "../../db/schema/remote-users";
+import { type DbError, RecapNotFoundError } from "../../domain/errors";
+import { dbTry } from "../../effects/db-try";
+import { DbService } from "../Db";
+
+function parseStats(json: string): RecapSummaryStats {
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (parsed === null || typeof parsed !== "object") return EMPTY_RECAP_STATS;
+    const o = parsed as Partial<RecapSummaryStats>;
+    const breakdown =
+      o.riskBreakdown && typeof o.riskBreakdown === "object"
+        ? {
+            low: typeof o.riskBreakdown.low === "number" ? o.riskBreakdown.low : 0,
+            medium: typeof o.riskBreakdown.medium === "number" ? o.riskBreakdown.medium : 0,
+            high: typeof o.riskBreakdown.high === "number" ? o.riskBreakdown.high : 0,
+          }
+        : EMPTY_RECAP_STATS.riskBreakdown;
+    return {
+      prCount: typeof o.prCount === "number" ? o.prCount : 0,
+      mergedCount: typeof o.mergedCount === "number" ? o.mergedCount : 0,
+      closedCount: typeof o.closedCount === "number" ? o.closedCount : 0,
+      authorCount: typeof o.authorCount === "number" ? o.authorCount : 0,
+      riskBreakdown: breakdown,
+      walkthroughsMissingCount:
+        typeof o.walkthroughsMissingCount === "number" ? o.walkthroughsMissingCount : 0,
+    };
+  } catch {
+    return EMPTY_RECAP_STATS;
+  }
+}
+
+function parseStringArray(json: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((v): v is string => typeof v === "string");
+  } catch {
+    return [];
+  }
+}
+
+function rowToRecap(
+  row: typeof projectRecaps.$inferSelect,
+  entries: ReadonlyArray<RecapPrEntry> = [],
+  themeSummaries: ReadonlyArray<RecapThemeSummary> = [],
+): ProjectRecap {
+  let totalLinesAdded = 0;
+  let totalLinesRemoved = 0;
+  for (const entry of entries) {
+    totalLinesAdded += entry.linesAdded;
+    totalLinesRemoved += entry.linesRemoved;
+  }
+  return {
+    id: row.id,
+    repositoryId: row.repositoryId,
+    period: row.period as RecapPeriod,
+    periodStart: row.periodStart,
+    periodEnd: row.periodEnd,
+    lede: row.lede,
+    totalLinesAdded,
+    totalLinesRemoved,
+    entries,
+    themeSummaries,
+    status: row.status as ProjectRecapStatus,
+    supersededBy: row.supersededBy ?? null,
+    generatedAt: row.generatedAt,
+    completedAt: row.completedAt ?? null,
+    modelUsed: row.modelUsed ?? null,
+    sourcePrIds: parseStringArray(row.sourcePrIds),
+    sourceWalkthroughIds: parseStringArray(row.sourceWalkthroughIds),
+    summaryStats: parseStats(row.summaryStats),
+    errorMessage: row.errorMessage ?? null,
+  };
+}
+
+function themeSummaryRowToSummary(row: typeof recapThemeSummaries.$inferSelect): RecapThemeSummary {
+  return {
+    id: row.id,
+    recapId: row.recapId,
+    theme: row.theme,
+    summary: row.summary,
+  };
+}
+
+function entryRowToEntry(
+  row: typeof recapPrEntries.$inferSelect,
+  avatar: string | null = null,
+): RecapPrEntry {
+  return {
+    id: row.id,
+    recapId: row.recapId,
+    prId: row.prId,
+    position: row.position,
+    theme: row.theme,
+    verb: row.verb,
+    prTitle: row.prTitle,
+    prExternalId: row.prExternalId,
+    prAuthorLogin: row.prAuthorLogin,
+    prAuthorAvatar: avatar,
+    description: row.description,
+    linesAdded: row.linesAdded,
+    linesRemoved: row.linesRemoved,
+    prState: row.prState,
+  };
+}
+
+function rowToSummary(row: typeof projectRecaps.$inferSelect): ProjectRecapSummary {
+  return recapSummaryOf(rowToRecap(row));
+}
+
+export interface CreatePartialRecapParams {
+  readonly repositoryId: string;
+  readonly period: RecapPeriod;
+  readonly periodStart: string;
+  readonly periodEnd: string;
+}
+
+export interface ListForRepoParams {
+  readonly period?: RecapPeriod;
+  /** Cursor: the generatedAt of the last row from the previous page. */
+  readonly cursor?: string;
+  readonly limit?: number;
+  /** Include superseded rows. Default false: UI shows the current row only. */
+  readonly includeSuperseded?: boolean;
+  /**
+   * Inclusive lower bound on **`periodStart`** — the window the recap covers.
+   * A different axis from `cursor`, which bounds `generatedAt` (when the recap
+   * was written). The calendar asks "which recaps cover this month"; paging
+   * asks "what came before this row". Mixing them up yields plausible-looking
+   * but wrong pages.
+   */
+  readonly from?: string;
+  /** Exclusive upper bound on `periodStart`, matching the table's own
+   *  `[periodStart, periodEnd)` half-open convention. */
+  readonly to?: string;
+}
+
+export interface ListForRepoResult {
+  readonly recaps: ReadonlyArray<ProjectRecapSummary>;
+  readonly nextCursor: string | null;
+}
+
+export const DEFAULT_RECAP_PAGE_LIMIT = 30;
+
+export class ProjectRecapService extends Context.Service<
+  ProjectRecapService,
+  {
+    /**
+     * There's no DB-level unique on (repo, period, periodStart): older
+     * installs hold superseded rows beside the current one. The
+     * orchestrator's per-window mutex keeps one live row per period.
+     */
+    readonly createPartial: (
+      params: CreatePartialRecapParams,
+    ) => Effect.Effect<ProjectRecap, DbError>;
+
+    readonly getById: (id: string) => Effect.Effect<ProjectRecap, RecapNotFoundError | DbError>;
+
+    /** The period's current (non-superseded) recap, whatever its status. */
+    readonly findActiveForPeriod: (
+      repoId: string,
+      period: RecapPeriod,
+      periodStart: string,
+    ) => Effect.Effect<ProjectRecap | null, DbError>;
+
+    readonly listForRepo: (
+      repoId: string,
+      params: ListForRepoParams,
+    ) => Effect.Effect<ListForRepoResult, DbError>;
+
+    /** Most-recent complete recaps for a repo, newest first, at most `limit`. */
+    readonly getLatestForRepo: (
+      repoId: string,
+      params: { period?: RecapPeriod; limit?: number },
+    ) => Effect.Effect<ReadonlyArray<ProjectRecap>, DbError>;
+
+    /**
+     * The orchestrator's terminal transition, from `generating` only
+     * (invariant #11). Stamps `completedAt` on `complete`. False when the row
+     * had already left `generating`.
+     */
+    readonly finish: (
+      recapId: string,
+      status: "complete" | "error" | "stopped",
+      options?: { modelUsed?: string; errorMessage?: string },
+    ) => Effect.Effect<boolean, DbError>;
+
+    /** Record the window's source bundle once the first run has assembled it. */
+    readonly saveSourceBundle: (
+      recapId: string,
+      bundle: RecapSourceBundle,
+    ) => Effect.Effect<void, DbError>;
+
+    /** The source bundle an earlier run of this recap assembled, if any. */
+    readonly getSourceBundle: (recapId: string) => Effect.Effect<RecapSourceBundle | null, DbError>;
+
+    /**
+     * Fill in a recap for a historical window that held no activity at all.
+     * Writes the fixed {@link RECAP_EMPTY_WINDOW_LEDE} and zeroed stats; the
+     * caller then transitions status to `'complete'`.
+     *
+     * Not an exception to invariant #2 ("agent content writes go through MCP
+     * only"): no agent runs on this path, so there is no MCP session to route
+     * through. The orchestrator short-circuits precisely to avoid spending
+     * tokens on an empty window.
+     */
+    readonly markEmptyWindow: (recapId: string) => Effect.Effect<void, DbError>;
+
+    /** Reruns happen in place: a window holds at most one active recap. */
+    readonly resetForRerun: (
+      recapId: string,
+      newBoundaries?: { readonly periodStart?: string; readonly periodEnd?: string },
+    ) => Effect.Effect<void, RecapNotFoundError | DbError>;
+
+    /** For boot-time resume. */
+    readonly listGenerating: () => Effect.Effect<
+      ReadonlyArray<{
+        readonly id: string;
+        readonly repositoryId: string;
+        readonly period: RecapPeriod;
+        readonly periodStart: string;
+        readonly periodEnd: string;
+        readonly resumeAttempts: number;
+      }>,
+      DbError
+    >;
+
+    readonly incrementResumeAttempts: (recapId: string) => Effect.Effect<number, DbError>;
+
+    /** The row's status and the window it belongs to, or null when it is gone. */
+    readonly readWindow: (recapId: string) => Effect.Effect<RecapWindowRow | null, DbError>;
+  }
+>()("ProjectRecapService") {}
+
+export interface RecapWindowRow {
+  readonly status: ProjectRecapStatus;
+  readonly repositoryId: string;
+  readonly period: RecapPeriod;
+  readonly periodStart: string;
+}
+
+export const ProjectRecapServiceLive = Layer.effect(
+  ProjectRecapService,
+  Effect.gen(function* () {
+    const { db } = yield* DbService;
+    return ProjectRecapService.of({
+      createPartial: (params) =>
+        Effect.gen(function* () {
+          const id = crypto.randomUUID();
+          const generatedAt = new Date().toISOString();
+
+          const inserted = yield* dbTry("createPartial", () => {
+            const values: typeof projectRecaps.$inferInsert = {
+              id,
+              repositoryId: params.repositoryId,
+              period: params.period,
+              periodStart: params.periodStart,
+              periodEnd: params.periodEnd,
+              status: "generating",
+              generatedAt,
+              tokenUsage: "{}",
+              sourcePrIds: "[]",
+              sourceWalkthroughIds: "[]",
+              summaryStats: "{}",
+              resumeAttempts: 0,
+            };
+            db.insert(projectRecaps).values(values).run();
+            const row = db.select().from(projectRecaps).where(eq(projectRecaps.id, id)).get();
+            if (!row) {
+              throw new Error(`Failed to read back inserted recap ${id}`);
+            }
+            return rowToRecap(row);
+          });
+
+          return inserted;
+        }),
+
+      getById: (id) =>
+        Effect.gen(function* () {
+          const row = yield* dbTry("getById", () =>
+            db.select().from(projectRecaps).where(eq(projectRecaps.id, id)).get(),
+          );
+          if (!row) {
+            return yield* Effect.fail(new RecapNotFoundError({ recapId: id }));
+          }
+          const entryRows = yield* dbTry("getById entries", () =>
+            db
+              .select({
+                entry: recapPrEntries,
+                avatarContent: avatarOfRepoLogin(recapPrEntries.prAuthorLogin, row.repositoryId),
+              })
+              .from(recapPrEntries)
+              .where(eq(recapPrEntries.recapId, id))
+              .orderBy(asc(recapPrEntries.position))
+              .all(),
+          );
+          const themeSummaryRows = yield* dbTry("getById theme summaries", () =>
+            db.select().from(recapThemeSummaries).where(eq(recapThemeSummaries.recapId, id)).all(),
+          );
+          return rowToRecap(
+            row,
+            entryRows.map((r) => entryRowToEntry(r.entry, r.avatarContent)),
+            themeSummaryRows.map(themeSummaryRowToSummary),
+          );
+        }),
+
+      findActiveForPeriod: (repoId, period, periodStart) =>
+        Effect.gen(function* () {
+          return yield* dbTry("findActiveForPeriod", () => {
+            const row = db
+              .select()
+              .from(projectRecaps)
+              .where(
+                and(
+                  eq(projectRecaps.repositoryId, repoId),
+                  eq(projectRecaps.period, period),
+                  eq(projectRecaps.periodStart, periodStart),
+                  // Active = anything that hasn't been superseded. Even an
+                  // `error` row counts as active here — the scheduler should
+                  // not silently retry it on the next tick, since
+                  // `resumePending` handles bounded retries.
+                ),
+              )
+              .orderBy(desc(projectRecaps.generatedAt))
+              .all();
+            // Prefer rows whose `supersededBy` is null. There can be many
+            // historical rows if the user regenerated repeatedly; only one
+            // is the "current" one.
+            const current = row.find((r) => r.supersededBy === null);
+            return current ? rowToRecap(current) : null;
+          });
+        }),
+
+      listForRepo: (repoId, params) =>
+        Effect.gen(function* () {
+          const limit = Math.min(
+            Math.max(1, params.limit ?? DEFAULT_RECAP_PAGE_LIMIT),
+            MAX_RECAP_PAGE_LIMIT,
+          );
+
+          return yield* dbTry("listForRepo", () => {
+            const conditions = [eq(projectRecaps.repositoryId, repoId)];
+            if (params.period !== undefined) {
+              conditions.push(eq(projectRecaps.period, params.period));
+            }
+            if (params.cursor !== undefined) {
+              conditions.push(lt(projectRecaps.generatedAt, params.cursor));
+            }
+            // String comparison is valid here because `period_start` is always
+            // stored as a normalised ISO UTC instant (`…T00:00:00.000Z`), so
+            // lexicographic order *is* chronological order. Load-bearing: swap
+            // in a local-offset or non-padded format and these predicates go
+            // quietly wrong. The `(repository_id, period, period_start)` index
+            // covers them.
+            if (params.from !== undefined) {
+              conditions.push(gte(projectRecaps.periodStart, params.from));
+            }
+            if (params.to !== undefined) {
+              conditions.push(lt(projectRecaps.periodStart, params.to));
+            }
+            if (!params.includeSuperseded) {
+              conditions.push(isNull(projectRecaps.supersededBy));
+            }
+
+            const rows = db
+              .select()
+              .from(projectRecaps)
+              .where(and(...conditions))
+              .orderBy(desc(projectRecaps.generatedAt))
+              .limit(limit + 1)
+              .all();
+
+            const hasMore = rows.length > limit;
+            const trimmed = hasMore ? rows.slice(0, limit) : rows;
+            const lastRow = trimmed[trimmed.length - 1];
+            const nextCursor = hasMore && lastRow ? lastRow.generatedAt : null;
+            return {
+              recaps: trimmed.map(rowToSummary),
+              nextCursor,
+            };
+          });
+        }),
+
+      getLatestForRepo: (repoId, params) =>
+        Effect.gen(function* () {
+          const limit = Math.min(Math.max(1, params.limit ?? 3), 10);
+          return yield* dbTry("getLatestForRepo", () => {
+            const conditions = [
+              eq(projectRecaps.repositoryId, repoId),
+              eq(projectRecaps.status, "complete"),
+            ];
+            if (params.period !== undefined) {
+              conditions.push(eq(projectRecaps.period, params.period));
+            }
+            const rows = db
+              .select()
+              .from(projectRecaps)
+              .where(and(...conditions))
+              .orderBy(desc(projectRecaps.completedAt))
+              .limit(limit)
+              .all();
+            // `.map(rowToRecap)` would pass the index as the optional `entries` arg.
+            return rows.map((r) => rowToRecap(r));
+          });
+        }),
+
+      finish: (recapId, status, options) =>
+        Effect.gen(function* () {
+          const moved = yield* dbTry("finish", () =>
+            db
+              .update(projectRecaps)
+              .set({
+                status,
+                completedAt: status === "complete" ? new Date().toISOString() : null,
+                ...(options?.modelUsed !== undefined ? { modelUsed: options.modelUsed } : {}),
+                errorMessage: options?.errorMessage ?? null,
+              })
+              .where(and(eq(projectRecaps.id, recapId), eq(projectRecaps.status, "generating")))
+              .returning({ id: projectRecaps.id })
+              .all(),
+          );
+          return moved.length > 0;
+        }),
+
+      saveSourceBundle: (recapId, bundle) =>
+        Effect.gen(function* () {
+          yield* dbTry("saveSourceBundle", () =>
+            db
+              .update(projectRecaps)
+              .set({ sourceBundle: bundle })
+              .where(eq(projectRecaps.id, recapId))
+              .run(),
+          );
+        }),
+
+      getSourceBundle: (recapId) =>
+        Effect.gen(function* () {
+          const row = yield* dbTry("getSourceBundle", () =>
+            db
+              .select({ sourceBundle: projectRecaps.sourceBundle })
+              .from(projectRecaps)
+              .where(eq(projectRecaps.id, recapId))
+              .get(),
+          );
+          return row?.sourceBundle ?? null;
+        }),
+
+      markEmptyWindow: (recapId) =>
+        Effect.gen(function* () {
+          yield* dbTry("markEmptyWindow", () =>
+            db
+              .update(projectRecaps)
+              .set({
+                lede: RECAP_EMPTY_WINDOW_LEDE,
+                summaryStats: JSON.stringify(EMPTY_RECAP_STATS),
+                sourcePrIds: "[]",
+                sourceWalkthroughIds: "[]",
+                errorMessage: null,
+              })
+              .where(eq(projectRecaps.id, recapId))
+              .run(),
+          );
+        }),
+
+      resetForRerun: (recapId, newBoundaries) =>
+        Effect.gen(function* () {
+          const exists = yield* dbTry("resetForRerun lookup", () =>
+            db
+              .select({ id: projectRecaps.id })
+              .from(projectRecaps)
+              .where(eq(projectRecaps.id, recapId))
+              .get(),
+          );
+          if (!exists) return yield* Effect.fail(new RecapNotFoundError({ recapId }));
+          const patch: Record<string, unknown> = {
+            lede: "",
+            status: "generating",
+            completedAt: null,
+            errorMessage: null,
+            resumeAttempts: 0,
+            generatedAt: new Date().toISOString(),
+            sourcePrIds: "[]",
+            sourceWalkthroughIds: "[]",
+            summaryStats: "{}",
+            tokenUsage: "{}",
+            sourceBundle: null,
+          };
+          if (newBoundaries?.periodStart !== undefined) {
+            patch.periodStart = newBoundaries.periodStart;
+          }
+          if (newBoundaries?.periodEnd !== undefined) {
+            patch.periodEnd = newBoundaries.periodEnd;
+          }
+          // Atomic so a crash can't strand the row in 'generating' with stale entries (invariant #1).
+          yield* dbTry("resetForRerun", () =>
+            db.transaction(() => {
+              db.update(projectRecaps).set(patch).where(eq(projectRecaps.id, recapId)).run();
+              db.delete(recapPrEntries).where(eq(recapPrEntries.recapId, recapId)).run();
+              db.delete(recapThemeSummaries).where(eq(recapThemeSummaries.recapId, recapId)).run();
+            }),
+          );
+        }),
+
+      listGenerating: () =>
+        Effect.gen(function* () {
+          const rows = yield* dbTry("listGenerating", () =>
+            db
+              .select({
+                id: projectRecaps.id,
+                repositoryId: projectRecaps.repositoryId,
+                period: projectRecaps.period,
+                periodStart: projectRecaps.periodStart,
+                periodEnd: projectRecaps.periodEnd,
+                resumeAttempts: projectRecaps.resumeAttempts,
+              })
+              .from(projectRecaps)
+              .where(eq(projectRecaps.status, "generating"))
+              .all(),
+          );
+          return rows.map((r) => ({
+            id: r.id,
+            repositoryId: r.repositoryId,
+            period: r.period as RecapPeriod,
+            periodStart: r.periodStart,
+            periodEnd: r.periodEnd,
+            resumeAttempts: r.resumeAttempts,
+          }));
+        }),
+
+      incrementResumeAttempts: (recapId) =>
+        Effect.gen(function* () {
+          const next = yield* dbTry("incrementResumeAttempts", () => {
+            const row = db
+              .select({ resumeAttempts: projectRecaps.resumeAttempts })
+              .from(projectRecaps)
+              .where(eq(projectRecaps.id, recapId))
+              .get();
+            const value = (row?.resumeAttempts ?? 0) + 1;
+            db.update(projectRecaps)
+              .set({ resumeAttempts: value })
+              .where(eq(projectRecaps.id, recapId))
+              .run();
+            return value;
+          });
+          return next;
+        }),
+
+      readWindow: (recapId) =>
+        dbTry("readWindow", () => {
+          const row = db
+            .select({
+              status: projectRecaps.status,
+              repositoryId: projectRecaps.repositoryId,
+              period: projectRecaps.period,
+              periodStart: projectRecaps.periodStart,
+            })
+            .from(projectRecaps)
+            .where(eq(projectRecaps.id, recapId))
+            .get();
+          return row
+            ? {
+                status: row.status as ProjectRecapStatus,
+                repositoryId: row.repositoryId,
+                period: row.period as RecapPeriod,
+                periodStart: row.periodStart,
+              }
+            : null;
+        }),
+    });
+  }),
+);

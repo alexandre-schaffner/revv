@@ -2,28 +2,16 @@ import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqli
 import { chatSessions } from "./chat-sessions";
 
 /**
- * Agent task list (Claude's `TodoWrite` tool / opencode's daemon-maintained
- * todos surfaced via `todo.updated` SSE).
+ * The agent's task list, from ACP `plan` session updates. Each update is a
+ * full snapshot: rows matching `(chat_session_id, task_id)` are updated in
+ * place (keeping `sequence`), new ones inserted; rows missing from a snapshot
+ * are left alone.
  *
- * Both providers emit FULL snapshots of the current list — there are no
- * incremental events. Our service performs snapshot reconciliation: rows
- * matching by `(chat_session_id, task_id)` are updated in place (preserving
- * `sequence`), new rows inserted at fresh sequences. Rows missing from a
- * snapshot are LEFT ALONE in v1 — the snapshot is "the current view", not
- * "delete-the-rest". Reconsider if users report drift.
+ * `task_id` is the entry's position in the snapshot: ACP plan entries carry
+ * no id.
  *
- * `task_id` source:
- *   - opencode: the daemon supplies a stable id per todo. Use it directly.
- *   - Claude TodoWrite: the SDK input has no id field. We content-hash
- *     `(content + activeForm ?? '')` for stability across snapshot updates.
- *     Two identical tasks collapse — acceptable since this is a display list.
- *
- * `sequence` shares the per-session monotonic space with `chat_messages`,
- * `chat_activities`, `chat_plans`, and `chat_subagent_invocations`. Each task
- * gets its own sequence on first insert, then sticks with it. The route
- * groups all task rows of a turn into a single timeline entry positioned at
- * the *minimum* sequence among the turn's tasks (so the list appears once
- * inline, not as N scattered rows).
+ * The timeline groups a turn's task rows into one entry at the minimum
+ * sequence among them, so the list appears once inline.
  */
 export const chatTasks = sqliteTable(
   "chat_tasks",
@@ -35,9 +23,8 @@ export const chatTasks = sqliteTable(
     turnId: text("turn_id").notNull(),
     taskId: text("task_id").notNull(),
     content: text("content").notNull(),
-    // Claude TodoWrite supplies the in-progress phrasing ("Reading file X");
-    // opencode does not. Nullable so the UI can fall back to `content` when
-    // missing.
+    // Null from ACP, whose plan entries have no in-progress phrasing; the UI
+    // falls back to `content`.
     activeForm: text("active_form"),
     // 'pending' | 'in_progress' | 'completed'
     status: text("status").notNull(),

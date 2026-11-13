@@ -1,12 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { classifyLayerMergeState } from "@revv/shared";
-import {
-  type GitHubStack,
-  type MirroredLayer,
-  membershipSupersededByPoll,
-  stackFromMirror,
-  stackStatus,
-} from "./map";
+import type { GitHubStack } from "../github/stacks";
+import { type MirroredLayer, membershipSupersededByPoll, stackFromMirror } from "./map";
 import { chooseStackSource } from "./StackService";
 
 const POLLED = "2026-10-19T10:00:00.000Z";
@@ -142,20 +137,6 @@ describe("stackFromMirror", () => {
 
   test("a stack of one is just a PR", () => {
     expect(stackFromMirror(4113, [row(4112, 1)], POLLED)).toBeNull();
-  });
-});
-
-describe("stackStatus", () => {
-  test.each([
-    ["MERGED", false, "UNKNOWN", "merged"],
-    ["CLOSED", false, "CLEAN", "closed"],
-    ["OPEN", true, "CLEAN", "draft"],
-    ["OPEN", false, "CLEAN", "ready"],
-    ["OPEN", false, "UNSTABLE", "ready"],
-    ["OPEN", false, "BLOCKED", "not_ready"],
-    ["OPEN", false, null, "not_ready"],
-  ] as const)("%s draft=%s %s → %s", (state, isDraft, mergeStateStatus, status) => {
-    expect(stackStatus({ state, isDraft, mergeStateStatus })).toBe(status);
   });
 });
 

@@ -82,7 +82,3 @@ export function githubTryPromise<A, E>(
         : Effect.tryPromise({ try: underOrigin(origin, arg.try), catch: arg.catch }),
   );
 }
-
-export function githubPromise<A>(thunk: (signal: AbortSignal) => PromiseLike<A>): Effect.Effect<A> {
-  return Effect.flatMap(GitHubOrigin, (origin) => Effect.promise(underOrigin(origin, thunk)));
-}

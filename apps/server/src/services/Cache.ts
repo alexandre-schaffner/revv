@@ -1,16 +1,45 @@
-import { and, eq, lt } from "drizzle-orm";
-import { Context, Effect, type Exit, Layer } from "effect";
+import { and, eq, isNull, lt, or } from "drizzle-orm";
+import { Context, Effect, Layer } from "effect";
+import { daysBefore, type RetentionPolicy } from "../db/retention";
 import { kvCache } from "../db/schema/index";
-import { DbError } from "../domain/errors";
+import type { DbError } from "../domain/errors";
+import { dbTry } from "../effects/db-try";
+import { keyedSingleFlight } from "../effects/keyed-single-flight";
 import { DbService } from "./Db";
 
 /**
- * Options governing a single `set` (or `getOrFetch`) write.
- *
- * Exactly one of `ttlMs` or `immutable` should be meaningful in practice —
- * passing `immutable: true` clears any `ttlMs`, and keys that legitimately
- * never go stale (anything containing `headSha` / `baseSha` / `ref`) should
- * set `immutable: true` so the row isn't swept by the expiry check.
+ * How long an entry that never goes stale is kept after it was written. Its
+ * key pins content (a head SHA, a diff), so once that content is this old
+ * nothing asks for it again; an entry that is asked for is simply recomputed.
+ */
+const IMMUTABLE_RETENTION_DAYS = 30;
+
+/** Entries past their expiry, and entries that never expire once they are old. */
+export const kvCacheRetention: RetentionPolicy = {
+  table: "kv_cache",
+  sweep: (db, now) =>
+    db
+      .delete(kvCache)
+      .where(
+        or(
+          lt(kvCache.expiresAt, now.toISOString()),
+          and(
+            isNull(kvCache.expiresAt),
+            lt(kvCache.fetchedAt, daysBefore(now, IMMUTABLE_RETENTION_DAYS)),
+          ),
+        ),
+      )
+      .returning({ key: kvCache.key })
+      .all().length,
+};
+
+/** Entries held in memory in front of SQLite; the least recently used go first. */
+const MEMORY_ENTRIES = 2_000;
+
+/**
+ * Keys that never go stale (anything containing `headSha` / `baseSha` / `ref`)
+ * should set `immutable: true`: no expiry, kept until retention ages them out.
+ * `immutable: true` overrides `ttlMs`; passing neither is treated as immutable.
  */
 export interface CacheSetOptions {
   readonly ttlMs?: number;
@@ -25,100 +54,97 @@ export interface CacheStatsSnapshot {
 }
 
 /**
- * Generic multi-tier cache: in-memory hot layer + `kv_cache` durable layer.
+ * For **small metadata blobs** (the GitHub repos list, the authenticated-user
+ * payload, TTL-scoped lookups). Large bodies (diffs, file contents, AI
+ * explanations) belong in their purpose-built tables.
  *
- * Designed for **small metadata blobs** — things like the GitHub repos list,
- * the authenticated-user payload, TTL-scoped lookups. For immutable large
- * bodies (diffs, file contents, AI explanations), use their purpose-built
- * tables — they already carry referential integrity and richer queries.
- *
- * ### Semantics
- *
- * - `get` returns `null` on miss OR on expired TTL (TTL entries are only
- *   expired *lazily* on read; no background sweeper).
- * - `set` with `immutable: true` writes `expires_at = NULL`; callers can
- *   store indefinitely and invalidate explicitly.
- * - `set` with `ttlMs` writes `expires_at = now + ttlMs`. No TTL + no
- *   immutable ⇒ rejected at runtime (treated as immutable) so a caller
- *   doesn't silently leak unbounded rows.
- * - `getOrFetch` deduplicates concurrent calls for the same `(ns, key)` via
- *   an in-memory Promise map. The fetcher runs once; all concurrent callers
- *   await the same result.
- * - `invalidate(ns)` drops the whole namespace; `invalidate(ns, key)` drops
- *   one row. Both clear any matching in-memory entries too.
- *
- * Stats are best-effort, in-memory only, and reset on process restart.
+ * Stats are in-memory only and reset on process restart.
  */
 export class CacheService extends Context.Service<
   CacheService,
   {
-    readonly get: <T>(ns: string, key: string) => Effect.Effect<T | null, DbError, DbService>;
+    readonly get: <T>(ns: string, key: string) => Effect.Effect<T | null, DbError>;
     readonly set: <T>(
       ns: string,
       key: string,
       value: T,
       opts?: CacheSetOptions,
-    ) => Effect.Effect<void, DbError, DbService>;
-    readonly invalidate: (ns: string, key?: string) => Effect.Effect<void, DbError, DbService>;
+    ) => Effect.Effect<void, DbError>;
+    readonly invalidate: (ns: string, key: string) => Effect.Effect<void, DbError>;
     readonly getOrFetch: <T, E, R>(
       ns: string,
       key: string,
       fetcher: () => Effect.Effect<T, E, R>,
       opts?: CacheSetOptions,
-    ) => Effect.Effect<T, E | DbError, R | DbService>;
-    readonly stats: () => Effect.Effect<CacheStatsSnapshot, DbError, DbService>;
+    ) => Effect.Effect<T, E | DbError, R>;
+    readonly stats: () => Effect.Effect<CacheStatsSnapshot, DbError>;
   }
 >()("CacheService") {}
 
-export const CacheServiceLive = Layer.sync(CacheService, () => {
-  // Hot-path mirror so repeated reads don't hit SQLite. Values expire on read
-  // (lazy) just like the durable layer.
-  type MemEntry = { value: unknown; expiresAt: number | null };
-  const memory = new Map<string, MemEntry>();
-  const cacheKey = (ns: string, key: string) => `${ns}\0${key}`;
+export const CacheServiceLive = Layer.effect(
+  CacheService,
+  Effect.gen(function* () {
+    const { db } = yield* DbService;
+    type MemEntry = { value: unknown; expiresAt: number | null };
+    const memory = new Map<string, MemEntry>();
+    const cacheKey = (ns: string, key: string) => `${ns}\0${key}`;
 
-  // In-flight dedup — one Promise of the fetcher's Exit per (ns,key), shared across concurrent callers.
-  const inflight = new Map<string, Promise<unknown>>();
+    let hits = 0;
+    let misses = 0;
+    let inflightDedups = 0;
+    // Detached: a fetch outlives an interrupted caller, and the next one joins it.
+    const flight = keyedSingleFlight<string, unknown, unknown>({
+      detach: true,
+      onJoin: () => {
+        inflightDedups++;
+      },
+    });
 
-  let hits = 0;
-  let misses = 0;
-  let inflightDedups = 0;
+    const isExpired = (expiresAt: number | null): boolean =>
+      expiresAt !== null && Date.now() > expiresAt;
 
-  const isExpired = (expiresAt: number | null): boolean =>
-    expiresAt !== null && Date.now() > expiresAt;
+    const parseIso = (s: string | null): number | null => {
+      if (s === null) return null;
+      const t = Date.parse(s);
+      return Number.isFinite(t) ? t : null;
+    };
 
-  const parseIso = (s: string | null): number | null => {
-    if (s === null) return null;
-    const t = Date.parse(s);
-    return Number.isFinite(t) ? t : null;
-  };
-
-  const readMemory = (ns: string, key: string): unknown | undefined => {
-    const k = cacheKey(ns, key);
-    const entry = memory.get(k);
-    if (!entry) return undefined;
-    if (isExpired(entry.expiresAt)) {
+    const readMemory = (ns: string, key: string): unknown | undefined => {
+      const k = cacheKey(ns, key);
+      const entry = memory.get(k);
+      if (!entry) return undefined;
       memory.delete(k);
-      return undefined;
-    }
-    return entry.value;
-  };
+      if (isExpired(entry.expiresAt)) return undefined;
+      memory.set(k, entry);
+      return entry.value;
+    };
 
-  const writeMemory = (ns: string, key: string, value: unknown, expiresAt: number | null): void => {
-    memory.set(cacheKey(ns, key), { value, expiresAt });
-  };
-
-  const get = <T>(ns: string, key: string) =>
-    Effect.gen(function* () {
-      const mem = readMemory(ns, key);
-      if (mem !== undefined) {
-        hits++;
-        return mem as T;
+    const writeMemory = (
+      ns: string,
+      key: string,
+      value: unknown,
+      expiresAt: number | null,
+    ): void => {
+      const k = cacheKey(ns, key);
+      memory.delete(k);
+      memory.set(k, { value, expiresAt });
+      // A Map iterates in insertion order, and a read re-inserts: the first key is the coldest.
+      while (memory.size > MEMORY_ENTRIES) {
+        const coldest = memory.keys().next().value;
+        if (coldest === undefined) break;
+        memory.delete(coldest);
       }
+    };
 
-      const { db } = yield* DbService;
-      const row = yield* Effect.try({
-        try: () =>
+    const get = <T>(ns: string, key: string) =>
+      Effect.gen(function* () {
+        const mem = readMemory(ns, key);
+        if (mem !== undefined) {
+          hits++;
+          return mem as T;
+        }
+
+        const row = yield* dbTry(`cache.get(${ns}, ${key})`, () =>
           db
             .select({
               valueJson: kvCache.valueJson,
@@ -127,59 +153,51 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
             .from(kvCache)
             .where(and(eq(kvCache.ns, ns), eq(kvCache.key, key)))
             .get(),
-        catch: (e) => new DbError({ message: `cache.get(${ns}, ${key}) failed`, cause: e }),
-      });
+        );
 
-      if (!row) {
-        misses++;
-        return null;
-      }
+        if (!row) {
+          misses++;
+          return null;
+        }
 
-      const expiresAt = parseIso(row.expiresAt);
-      if (isExpired(expiresAt)) {
-        // Lazy eviction: row is stale, drop it + register a miss.
-        yield* Effect.try({
-          try: () =>
+        const expiresAt = parseIso(row.expiresAt);
+        if (isExpired(expiresAt)) {
+          yield* dbTry(`cache.get expired delete(${ns}, ${key})`, () =>
             db
               .delete(kvCache)
               .where(and(eq(kvCache.ns, ns), eq(kvCache.key, key)))
               .run(),
-          catch: (e) =>
-            new DbError({ message: `cache.get expired delete(${ns}, ${key}) failed`, cause: e }),
-        });
-        misses++;
-        return null;
-      }
+          );
+          misses++;
+          return null;
+        }
 
-      let parsed: T;
-      try {
-        parsed = JSON.parse(row.valueJson) as T;
-      } catch {
-        // Corrupt JSON — treat as a miss so the next call overwrites.
-        misses++;
-        return null;
-      }
+        let parsed: T;
+        try {
+          parsed = JSON.parse(row.valueJson) as T;
+        } catch {
+          misses++;
+          return null;
+        }
 
-      writeMemory(ns, key, parsed, expiresAt);
-      hits++;
-      return parsed;
-    });
+        writeMemory(ns, key, parsed, expiresAt);
+        hits++;
+        return parsed;
+      });
 
-  const set = <T>(ns: string, key: string, value: T, opts: CacheSetOptions = {}) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const now = Date.now();
-      const expiresAt = opts.immutable
-        ? null
-        : typeof opts.ttlMs === "number"
-          ? new Date(now + opts.ttlMs).toISOString()
-          : null; // default to immutable — forces callers to opt-in to TTL
-      const expiresAtMs = expiresAt ? Date.parse(expiresAt) : null;
-      const valueJson = JSON.stringify(value);
-      const fetchedAt = new Date(now).toISOString();
+    const set = <T>(ns: string, key: string, value: T, opts: CacheSetOptions = {}) =>
+      Effect.gen(function* () {
+        const now = Date.now();
+        const expiresAt = opts.immutable
+          ? null
+          : typeof opts.ttlMs === "number"
+            ? new Date(now + opts.ttlMs).toISOString()
+            : null;
+        const expiresAtMs = expiresAt ? Date.parse(expiresAt) : null;
+        const valueJson = JSON.stringify(value);
+        const fetchedAt = new Date(now).toISOString();
 
-      yield* Effect.try({
-        try: () =>
+        yield* dbTry(`cache.set(${ns}, ${key})`, () =>
           db
             .insert(kvCache)
             .values({
@@ -194,113 +212,61 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
               set: { valueJson, fetchedAt, expiresAt },
             })
             .run(),
-        catch: (e) => new DbError({ message: `cache.set(${ns}, ${key}) failed`, cause: e }),
+        );
+
+        writeMemory(ns, key, value, expiresAtMs);
       });
 
-      writeMemory(ns, key, value, expiresAtMs);
-    });
-
-  const invalidate = (ns: string, key?: string) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      if (key === undefined) {
-        yield* Effect.try({
-          try: () => db.delete(kvCache).where(eq(kvCache.ns, ns)).run(),
-          catch: (e) => new DbError({ message: `cache.invalidate(${ns}) failed`, cause: e }),
-        });
-        // Drop every matching in-memory entry too.
-        const prefix = `${ns}\0`;
-        for (const k of memory.keys()) {
-          if (k.startsWith(prefix)) memory.delete(k);
-        }
-      } else {
-        yield* Effect.try({
-          try: () =>
-            db
-              .delete(kvCache)
-              .where(and(eq(kvCache.ns, ns), eq(kvCache.key, key)))
-              .run(),
-          catch: (e) =>
-            new DbError({ message: `cache.invalidate(${ns}, ${key}) failed`, cause: e }),
-        });
+    const invalidate = (ns: string, key: string) =>
+      Effect.gen(function* () {
+        yield* dbTry(`cache.invalidate(${ns}, ${key})`, () =>
+          db
+            .delete(kvCache)
+            .where(and(eq(kvCache.ns, ns), eq(kvCache.key, key)))
+            .run(),
+        );
         memory.delete(cacheKey(ns, key));
-      }
-    });
+      });
 
-  const getOrFetch = <T, E, R>(
-    ns: string,
-    key: string,
-    fetcher: () => Effect.Effect<T, E, R>,
-    opts?: CacheSetOptions,
-  ): Effect.Effect<T, E | DbError, R | DbService> =>
-    Effect.gen(function* () {
-      const existing = yield* get<T>(ns, key);
-      if (existing !== null) return existing;
+    const getOrFetch = <T, E, R>(
+      ns: string,
+      key: string,
+      fetcher: () => Effect.Effect<T, E, R>,
+      opts?: CacheSetOptions,
+    ): Effect.Effect<T, E | DbError, R> =>
+      Effect.gen(function* () {
+        const existing = yield* get<T>(ns, key);
+        if (existing !== null) return existing;
 
-      const dedupKey = cacheKey(ns, key);
-      const pending = inflight.get(dedupKey);
-      if (pending) {
-        inflightDedups++;
-        const exit = yield* Effect.promise(() => pending as Promise<Exit.Exit<T, E>>);
-        return yield* exit;
-      }
-
-      // Materialize the fetcher as a Promise so concurrent callers can share
-      // it. The Promise carries the fetcher's Exit and never rejects, so every
-      // caller — owner and deduplicated alike — sees a typed failure in the
-      // error channel. A rejecting Promise would reach joiners as a defect,
-      // slipping past their `catchAll`.
-      // The fetcher chain also writes through `set`, which requires
-      // DbService. Grab a runtime that carries both.
-      const runtime = yield* Effect.context<R | DbService>();
-      const promise = Effect.runPromiseWith(runtime)(
-        fetcher().pipe(
-          Effect.tap((value) =>
-            set(ns, key, value, opts).pipe(Effect.orElseSucceed(() => undefined)),
+        // One flight hosts every namespace's fetches, keyed on (ns, key): the
+        // key fixes the value and failure types.
+        return yield* flight(
+          cacheKey(ns, key),
+          fetcher().pipe(
+            Effect.tap((value) =>
+              set(ns, key, value, opts).pipe(Effect.orElseSucceed(() => undefined)),
+            ),
           ),
-          Effect.exit,
-        ),
-      );
-
-      // The entry lives exactly as long as the fetch, which runs detached:
-      // an interrupted owner leaves it running, and a later caller must join
-      // it rather than start a second one. Settling drops it, failure
-      // included, so a failed fetch is never replayed to the next caller.
-      inflight.set(dedupKey, promise);
-      void promise.then(() => {
-        if (inflight.get(dedupKey) === promise) inflight.delete(dedupKey);
-      });
-      const exit = yield* Effect.promise(() => promise);
-      return yield* exit;
-    });
-
-  const stats = () =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-
-      // Sweep expired rows opportunistically — keeps `entries` count honest
-      // and prevents the table from accumulating dead TTL rows forever.
-      const nowIso = new Date().toISOString();
-      yield* Effect.try({
-        try: () => db.delete(kvCache).where(lt(kvCache.expiresAt, nowIso)).run(),
-        catch: (e) => new DbError({ message: "cache.stats sweep failed", cause: e }),
+        ) as Effect.Effect<T, E, R>;
       });
 
-      const rows = yield* Effect.try({
-        try: () => db.select({ ns: kvCache.ns }).from(kvCache).all(),
-        catch: (e) => new DbError({ message: "cache.stats scan failed", cause: e }),
+    const stats = () =>
+      Effect.gen(function* () {
+        const rows = yield* dbTry("cache.stats scan", () =>
+          db.select({ ns: kvCache.ns }).from(kvCache).all(),
+        );
+        const counts = new Map<string, number>();
+        for (const row of rows) {
+          counts.set(row.ns, (counts.get(row.ns) ?? 0) + 1);
+        }
+        return {
+          hits,
+          misses,
+          inflightDedups,
+          namespaces: [...counts.entries()].map(([ns, entries]) => ({ ns, entries })),
+        } satisfies CacheStatsSnapshot;
       });
-      const counts = new Map<string, number>();
-      for (const row of rows) {
-        counts.set(row.ns, (counts.get(row.ns) ?? 0) + 1);
-      }
-      return {
-        hits,
-        misses,
-        inflightDedups,
-        namespaces: [...counts.entries()].map(([ns, entries]) => ({ ns, entries })),
-      } satisfies CacheStatsSnapshot;
-    });
 
-  return { get, set, invalidate, getOrFetch, stats };
-});
+    return { get, set, invalidate, getOrFetch, stats };
+  }),
+);

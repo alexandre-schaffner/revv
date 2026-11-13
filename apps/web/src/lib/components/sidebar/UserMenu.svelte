@@ -1,24 +1,30 @@
 <script lang="ts">
+import { githubHostLabel, sameGithubHost } from "@revv/shared";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import Check from "phosphor-svelte/lib/Check";
 import Gear from "phosphor-svelte/lib/Gear";
 import SignOut from "phosphor-svelte/lib/SignOut";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import User from "phosphor-svelte/lib/User";
+import WarningCircle from "phosphor-svelte/lib/WarningCircle";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 import {
   Content as PopoverContent,
   Root as PopoverRoot,
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
+import { gsapFade, tokens } from "$lib/motion";
+import { type AccountEntry, accountEntries } from "$lib/session/account-entries";
+import { getSwitchingTo, signOut, switchSession } from "$lib/session/lifecycle.svelte";
 import {
   getIsSwitching,
   getLocalAccounts,
   getUser,
-  signOut,
-  switchAccount,
+  getWaitingReauths,
+  openReauth,
 } from "$lib/stores/auth.svelte";
 import { getGithubHost } from "$lib/stores/settings.svelte";
-import { toggleSettings } from "$lib/stores/settingsModal.svelte";
+import { openSettings } from "$lib/stores/settingsModal.svelte";
 
 interface Props {
   collapsed?: boolean;
@@ -26,113 +32,69 @@ interface Props {
 
 let { collapsed = false }: Props = $props();
 
-type SwitcherEntry = {
-  userId: string;
-  host: string;
-  githubLogin: string | null;
-  avatarUrl: string | null;
-  userImage: string | null;
-  userName: string;
-  userEmail: string;
-};
-
 let open = $state(false);
-let _lastAvatar = $state<string | null>(null);
-let _avatarFailedForUrl = $state<string | null>(null);
-let _acctAvatarFailedUrls = $state(new Set<string>());
-let switchingId = $state<string | null>(null);
 
 const user = $derived(getUser());
-const localAccounts = $derived(getLocalAccounts());
+const entries = $derived(accountEntries(getLocalAccounts()));
 const isSwitching = $derived(getIsSwitching());
+const switchingTo = $derived(getSwitchingTo());
 
 const displayAvatar = $derived(user?.image ?? null);
+const waitingReauths = $derived(getWaitingReauths());
 
-// avatarFailed is true only when the current URL has previously errored
-const avatarFailed = $derived(_avatarFailedForUrl === displayAvatar && displayAvatar !== null);
-
-// When isSwitching drops to false, clear the per-row switching tracker
-const _switchingActive = $derived(isSwitching ? switchingId : null);
-
-// Flat list of (userId, host) entries — one row per connected host per user
-const switcherEntries = $derived(
-  localAccounts.flatMap((la) =>
-    la.accounts.map((acct) => ({
-      userId: la.id,
-      host: acct.host,
-      githubLogin: acct.githubLogin,
-      avatarUrl: acct.avatarUrl,
-      userImage: la.image,
-      userName: la.name,
-      userEmail: la.email,
-    })),
-  ),
-);
-
-function hostLabel(host: string): string {
-  if (host === "github.com") return "GitHub";
-  return host;
+function needsReauth(entry: AccountEntry): boolean {
+  return (
+    entry.userId === user?.id && waitingReauths.some((a) => sameGithubHost(a.host, entry.host))
+  );
 }
 
-function isEntryActive(entry: SwitcherEntry): boolean {
-  const currentHost = getGithubHost();
-  return entry.host === currentHost && entry.githubLogin === user?.githubLogin;
+function isEntryActive(entry: AccountEntry): boolean {
+  return sameGithubHost(entry.host, getGithubHost()) && entry.githubLogin === user?.githubLogin;
 }
 
-function entryKey(entry: SwitcherEntry): string {
-  return `${entry.userId}:${entry.host}`;
-}
-
-async function handleSwitchEntry(entry: SwitcherEntry): Promise<void> {
+async function handleSwitchEntry(entry: AccountEntry): Promise<void> {
   if (isEntryActive(entry) || isSwitching) return;
-  switchingId = entryKey(entry);
-  try {
-    await switchAccount(entry.userId, entry.host);
-    open = false;
-  } finally {
-    switchingId = null;
-  }
+  await switchSession(entry.userId, entry.host);
+  open = false;
+}
+
+function handleReauth(host: string): void {
+  open = false;
+  openReauth(host);
 }
 
 function handleSettings(): void {
   open = false;
-  toggleSettings();
+  openSettings("general");
 }
 
-async function handleSignOut(): Promise<void> {
+function handleSignOut(): void {
   open = false;
-  try {
-    await signOut();
-  } catch {
-    // Best-effort — the UI will reflect auth state regardless
-  }
+  void signOut();
 }
 </script>
 
 <PopoverRoot bind:open>
 	<PopoverTrigger class={collapsed ? 'user-trigger user-trigger--collapsed' : 'user-trigger'}>
 		<span class="user-avatar-wrap" class:user-avatar-wrap--switching={isSwitching}>
-			{#if displayAvatar && !avatarFailed}
-				<img
-					src={displayAvatar}
-					alt=""
-					class={collapsed ? 'user-avatar user-avatar--collapsed' : 'user-avatar'}
-					referrerpolicy="no-referrer"
-					onerror={() => (_avatarFailedForUrl = displayAvatar)}
-				/>
-			{:else}
-				<span
-					class={collapsed
-						? 'user-avatar user-avatar--collapsed user-avatar--fallback'
-						: 'user-avatar user-avatar--fallback'}
-					aria-hidden="true"
-				>
-					<User size={collapsed ? 14 : 16} />
-				</span>
-			{/if}
+			<Avatar
+				src={displayAvatar}
+				size={28}
+				fallback="user"
+				glyphSize={collapsed ? 14 : 16}
+				class="user-avatar"
+			/>
 			{#if isSwitching}
 				<span class="user-avatar-spinner" aria-hidden="true">
 					<Spinner size={collapsed ? 12 : 14} class="spin-icon motion-essential-spin" />
+				</span>
+			{:else if waitingReauths.length > 0}
+				<span
+					class="user-reauth-badge"
+					title="An account needs to sign in again"
+					in:gsapFade={{ duration: tokens.quick }}
+				>
+					<WarningCircle size={12} weight="fill" />
 				</span>
 			{/if}
 		</span>
@@ -150,11 +112,20 @@ async function handleSignOut(): Promise<void> {
 		align="start"
 		side="top"
 	>
-		<!-- Account rows -->
-		{#each switcherEntries as entry (entryKey(entry))}
+		{#if waitingReauths.length > 0}
+			{#each waitingReauths as account (account.host)}
+				<button class="menu-row menu-row--warning" onclick={() => handleReauth(account.host)}>
+					<WarningCircle size={13} weight="fill" class="menu-row-icon menu-row-icon--warning" />
+					<span class="menu-row-label">Sign in again</span>
+					<span class="menu-row-hint">{account.githubLogin ?? githubHostLabel(account.host)}</span>
+				</button>
+			{/each}
+			<div class="menu-divider"></div>
+		{/if}
+
+		{#each entries as entry (entry.key)}
 			{@const active = isEntryActive(entry)}
-			{@const switching = _switchingActive === entryKey(entry)}
-			{@const avatar = entry.avatarUrl ?? entry.userImage}
+			{@const switching = switchingTo === entry.key}
 
 			<button
 				class="acct-row"
@@ -163,31 +134,24 @@ async function handleSignOut(): Promise<void> {
 				disabled={isSwitching}
 				aria-pressed={active}
 			>
-				<!-- Avatar -->
 				<span class="acct-avatar-wrap">
-					{#if avatar && !_acctAvatarFailedUrls.has(avatar)}
-						<img
-							src={avatar}
-							alt=""
-							class="acct-avatar"
-							referrerpolicy="no-referrer"
-							onerror={() => { _acctAvatarFailedUrls = new Set([..._acctAvatarFailedUrls, avatar]); }}
-						/>
-					{:else}
-						<User size={13} class="acct-icon" />
-					{/if}
+					<Avatar src={entry.avatarContent} size={18}>
+						{#snippet fallback()}
+							<User size={13} class="acct-icon" />
+						{/snippet}
+					</Avatar>
 				</span>
 
-				<!-- Identity -->
 				<span class="acct-body">
-					<span class="acct-login">{entry.githubLogin ?? entry.userName}</span>
-					<span class="acct-host">{entry.githubLogin ?? entry.userEmail} · {hostLabel(entry.host)}</span>
+					<span class="acct-login">{entry.login}</span>
+					<span class="acct-host">{entry.githubLogin ?? entry.email} · {entry.hostLabel}</span>
 				</span>
 
-				<!-- Status indicator -->
 				<span class="acct-status-slot">
 					{#if switching}
 						<Spinner size={12} class="acct-spinner motion-essential-spin" />
+					{:else if needsReauth(entry)}
+						<WarningCircle size={12} weight="fill" class="acct-warning" aria-label="Needs to sign in again" />
 					{:else if active}
 						<Check size={12} class="acct-check" />
 					{/if}
@@ -197,13 +161,11 @@ async function handleSignOut(): Promise<void> {
 
 		<div class="menu-divider"></div>
 
-		<!-- Settings -->
 		<button class="menu-row" onclick={handleSettings}>
 			<Gear size={13} class="menu-row-icon" />
 			<span class="menu-row-label">Settings</span>
 		</button>
 
-		<!-- Sign out -->
 		<button class="menu-row menu-row--danger" onclick={handleSignOut}>
 			<SignOut size={13} class="menu-row-icon" />
 			<span class="menu-row-label">Sign out</span>
@@ -212,12 +174,6 @@ async function handleSignOut(): Promise<void> {
 </PopoverRoot>
 
 <style>
-	/* ── Trigger ──
-	   Lives inside the userbar chrome strip (AppShell .userbar-area). The
-	   trigger fills the bar width; padding/gap come from island tokens so
-	   the chip-on-chrome rhythm matches .acct-row / .menu-row below. The
-	   collapsed variant centers the 28px avatar inside the rail's
-	   effective width (RAIL_WIDTH − userbar's chrome-gap padding-left). */
 	:global(.user-trigger) {
 		display: flex;
 		align-items: center;
@@ -241,28 +197,32 @@ async function handleSignOut(): Promise<void> {
 		background: var(--color-bg-elevated);
 	}
 
-	/* Collapsed: only the rail column is visible. Centering the avatar via
-	   padding-left rather than justify-content keeps the motion continuous
-	   when toggling — justify-content can't be transitioned, so swapping
-	   it caused the avatar to jump sideways at the start of the expand
-	   animation before easing back. padding-left is part of the trigger's
-	   transition list, so it animates with the rest of the geometry.
-	   Value = (RAIL_WIDTH − userbar padding-left − avatar size) / 2
-	         = (64 − 8 − 28) / 2 = 14px. */
+	/* Centered through padding-left, not justify-content: justify-content
+	   can't transition, so the avatar jumped sideways at the start of the
+	   expand. (64 rail − 8 userbar padding − 28 avatar) / 2 = 14px. */
 	:global(.user-trigger--collapsed) {
 		padding: 0 14px;
 		gap: 0;
 	}
 
-	/* ── Trigger avatar with spinner overlay ── */
 	.user-avatar-wrap {
 		position: relative;
 		flex-shrink: 0;
 		display: inline-flex;
 	}
 
-	.user-avatar-wrap--switching .user-avatar {
+	.user-avatar-wrap--switching :global(.user-avatar) {
 		opacity: 0.4;
+	}
+
+	.user-reauth-badge {
+		position: absolute;
+		right: -3px;
+		bottom: -3px;
+		display: flex;
+		border-radius: 999px;
+		background: var(--color-bg-secondary);
+		color: var(--color-warning);
 	}
 
 	.user-avatar-spinner {
@@ -275,23 +235,6 @@ async function handleSignOut(): Promise<void> {
 
 	:global(.spin-icon) {
 		color: var(--color-text-muted);
-	}
-
-	.user-avatar {
-		width: 28px;
-		height: 28px;
-		border-radius: 50%;
-		object-fit: cover;
-		flex-shrink: 0;
-	}
-
-	.user-avatar--fallback {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		background: var(--color-bg-elevated);
-		color: var(--color-text-muted);
-		border-radius: 50%;
 	}
 
 	.user-text {
@@ -308,7 +251,6 @@ async function handleSignOut(): Promise<void> {
 			visibility 0s linear 0s;
 	}
 
-	/* Collapse direction — text fades + collapses out first, ahead of the column */
 	.user-text--gone {
 		opacity: 0;
 		visibility: hidden;
@@ -358,7 +300,6 @@ async function handleSignOut(): Promise<void> {
 			visibility 0s linear var(--duration-quick);
 	}
 
-	/* ── Account rows ── */
 	.acct-row {
 		display: flex;
 		align-items: center;
@@ -395,13 +336,6 @@ async function handleSignOut(): Promise<void> {
 		justify-content: center;
 		width: 20px;
 		height: 20px;
-	}
-
-	.acct-avatar {
-		width: 18px;
-		height: 18px;
-		border-radius: 50%;
-		object-fit: cover;
 	}
 
 	:global(.acct-icon) {
@@ -442,18 +376,20 @@ async function handleSignOut(): Promise<void> {
 		color: var(--color-accent);
 	}
 
+	:global(.acct-warning) {
+		color: var(--color-warning);
+	}
+
 	:global(.acct-spinner) {
 		color: var(--color-text-muted);
 	}
 
-	/* ── Divider ── */
 	.menu-divider {
 		height: 1px;
 		margin: 4px 6px;
 		background: var(--color-border);
 	}
 
-	/* ── Menu rows (Add account, Settings, Sign out) ── */
 	:global(.menu-row) {
 		display: flex;
 		align-items: center;
@@ -491,6 +427,20 @@ async function handleSignOut(): Promise<void> {
 
 	:global(.menu-row-label) {
 		flex: 1;
+	}
+
+	:global(.menu-row-icon--warning),
+	:global(.menu-row--warning:hover .menu-row-icon--warning) {
+		color: var(--color-warning);
+	}
+
+	.menu-row-hint {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 10px;
+		color: var(--color-text-muted);
 	}
 
 </style>

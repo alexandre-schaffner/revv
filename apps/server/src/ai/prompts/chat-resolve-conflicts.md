@@ -16,9 +16,9 @@ A merge is **already in progress**: the user's local branch `{{AGENT_BRANCH}}` i
 
 2. After **every** conflicted file is resolved and staged, run:
    ```
-   git merge --continue
+   git -c core.hooksPath=/dev/null -c core.editor=true merge --continue
    ```
-   (You may need to pass `GIT_EDITOR=true` if it prompts; just use `git -c core.editor=true merge --continue` if needed.)
+   The commit is signed the way the user signs. If signing fails, stop and report the error; never turn signing off.
 
 3. If `git merge --continue` reports new conflicts, repeat step 1 for the new conflicts and try again. Keep going until the merge completes.
 

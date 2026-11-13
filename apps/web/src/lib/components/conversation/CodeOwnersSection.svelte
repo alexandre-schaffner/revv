@@ -1,26 +1,37 @@
 <script lang="ts">
-import { type CodeownersFile, codeownersFor, type ReviewerEntry } from "@revv/shared";
-import CaretRight from "phosphor-svelte/lib/CaretRight";
+import {
+  type CodeownersFile,
+  codeownersFor,
+  loginsMatch,
+  type ReviewerEntry,
+  type ReviewVerdict,
+  reviewerVerdict,
+} from "@revv/shared";
 import CircleDashed from "phosphor-svelte/lib/CircleDashed";
 import UsersThree from "phosphor-svelte/lib/UsersThree";
 import { SvelteSet } from "svelte/reactivity";
 import Avatar from "$lib/components/shared/Avatar.svelte";
+import DisclosureCaret from "$lib/components/shared/DisclosureCaret.svelte";
+import { VERDICT_LABEL } from "$lib/conversation/verdict";
 import { gsapSlide } from "$lib/motion";
-import { getReviewFiles, openFileInDiff } from "$lib/stores/review.svelte";
-import VerdictGlyph, { VERDICT_LABEL } from "./VerdictGlyph.svelte";
+import { getChangedPaths } from "$lib/stores/diff-files.svelte";
+import { openInDiff } from "$lib/stores/review-nav.svelte";
+import SidebarSection from "./SidebarSection.svelte";
+import VerdictGlyph from "./VerdictGlyph.svelte";
 
 // Who CODEOWNERS makes responsible for this PR's files, read from the base
 // branch's CODEOWNERS and matched against the changed files. Each owner
 // carries their review state when they're among the reviewers.
 
 interface Props {
+  prId: string;
   codeowners: CodeownersFile;
   reviewers: readonly ReviewerEntry[];
   /** The conversation's avatars by login, for owners who aren't reviewers. */
   avatars: Readonly<Record<string, string>>;
 }
 
-let { codeowners, reviewers, avatars }: Props = $props();
+let { prId, codeowners, reviewers, avatars }: Props = $props();
 
 /** CODEOWNERS handles needn't match a login's case. */
 const avatarsByHandle = $derived(
@@ -33,10 +44,11 @@ interface OwnerRow {
   readonly name: string;
   readonly files: readonly string[];
   readonly reviewer: ReviewerEntry | null;
+  readonly verdict: ReviewVerdict | null;
   readonly avatarContent: string | null;
 }
 
-const paths = $derived(getReviewFiles().map((f) => f.path));
+const paths = $derived(getChangedPaths(prId));
 const ownersByPath = $derived(codeownersFor(codeowners.rules, paths));
 
 const rows = $derived.by((): OwnerRow[] => {
@@ -52,7 +64,7 @@ const rows = $derived.by((): OwnerRow[] => {
         reviewers.find((r) =>
           r.kind === "team"
             ? team && r.combinedSlug.toLowerCase() === handle.toLowerCase()
-            : !team && r.actor.login.toLowerCase() === handle.toLowerCase(),
+            : !team && loginsMatch(r.actor.login, handle),
         ) ?? null;
       return {
         owner,
@@ -60,6 +72,7 @@ const rows = $derived.by((): OwnerRow[] => {
         name: reviewer?.kind === "team" ? reviewer.name : handle,
         files: owned.sort(),
         reviewer,
+        verdict: reviewer ? reviewerVerdict(reviewer) : null,
         avatarContent:
           (reviewer?.kind === "user" ? reviewer.actor.avatarContent : null) ??
           avatarsByHandle.get(handle.toLowerCase()) ??
@@ -78,19 +91,16 @@ function toggle(owner: string): void {
 }
 
 function stateLabel(row: OwnerRow): string {
-  const r = row.reviewer;
-  if (!r) return "Not requested";
-  if (r.kind === "user" && r.verdict) return VERDICT_LABEL[r.verdict];
-  return "Awaiting review";
+  if (!row.reviewer) return "Not requested";
+  return row.verdict ? VERDICT_LABEL[row.verdict] : "Awaiting review";
 }
 </script>
 
 {#if paths.length > 0 && (rows.length > 0 || unowned > 0)}
-	<section aria-labelledby="side-codeowners">
-		<header class="co-head">
-			<h3 id="side-codeowners">Code owners</h3>
+	<SidebarSection id="side-codeowners" title="Code owners" align="baseline">
+		{#snippet aside()}
 			<span class="co-source" title="Read from {codeowners.path} on {codeowners.ref}">{codeowners.path}</span>
-		</header>
+		{/snippet}
 		<ul class="co-list">
 			{#each rows as row (row.owner)}
 				{@const expanded = open.has(row.owner)}
@@ -102,19 +112,17 @@ function stateLabel(row: OwnerRow): string {
 						title={row.owner}
 						onclick={() => toggle(row.owner)}
 					>
-						<span class="co-caret" class:co-caret--open={expanded} aria-hidden="true">
-							<CaretRight size={9} weight="bold" />
-						</span>
+						<span class="co-caret"><DisclosureCaret open={expanded} size={9} /></span>
 						{#if row.team}
 							<span class="co-team" aria-hidden="true"><UsersThree size={12} /></span>
 						{:else}
-							<Avatar handle={row.name} avatarContent={row.avatarContent} size={18} />
+							<Avatar name={row.name} src={row.avatarContent} size={18} />
 						{/if}
 						<span class="co-name">{row.name}</span>
 						<span class="co-count">{row.files.length} {row.files.length === 1 ? 'file' : 'files'}</span>
 						<span class="co-state" title={stateLabel(row)}>
-							{#if row.reviewer?.kind === 'user' && row.reviewer.verdict}
-								<VerdictGlyph verdict={row.reviewer.verdict} size={13} />
+							{#if row.verdict}
+								<VerdictGlyph verdict={row.verdict} size={13} />
 							{:else if row.reviewer}
 								<CircleDashed size={13} weight="bold" class="co-awaiting" />
 							{/if}
@@ -128,7 +136,7 @@ function stateLabel(row: OwnerRow): string {
 										type="button"
 										class="co-file"
 										title="Open {path} in the diff"
-										onclick={() => openFileInDiff(path)}
+										onclick={() => openInDiff(prId, path)}
 									>
 										{path}
 									</button>
@@ -142,27 +150,10 @@ function stateLabel(row: OwnerRow): string {
 		{#if unowned > 0}
 			<p class="co-note">{unowned} {unowned === 1 ? 'file has' : 'files have'} no code owner</p>
 		{/if}
-	</section>
+	</SidebarSection>
 {/if}
 
 <style>
-	.co-head {
-		display: flex;
-		align-items: baseline;
-		justify-content: space-between;
-		gap: 8px;
-		min-height: 24px;
-		margin-bottom: 6px;
-	}
-
-	.co-head h3 {
-		margin: 0;
-		font-size: 0.75rem;
-		font-weight: 600;
-		letter-spacing: 0.01em;
-		color: var(--color-text-secondary);
-	}
-
 	.co-source {
 		min-width: 0;
 		overflow: hidden;
@@ -202,11 +193,6 @@ function stateLabel(row: OwnerRow): string {
 	.co-caret {
 		display: inline-flex;
 		color: var(--color-text-muted);
-		transition: rotate var(--duration-snap) var(--ease-soft);
-	}
-
-	.co-caret--open {
-		rotate: 90deg;
 	}
 
 	.co-team {

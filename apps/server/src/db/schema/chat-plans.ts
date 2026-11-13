@@ -2,30 +2,13 @@ import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqli
 import { chatSessions } from "./chat-sessions";
 
 /**
- * Plans the agent has presented for approval. Borrows t3code's
- * `sourceProposedPlan` pattern: when a user approves a plan, the next
- * turn-start command carries the plan id forward as `approvedPlanId` so the
- * follow-up execution turn has a record of what plan it's executing.
+ * Plans the agent presented for approval. In plan mode the turn's whole
+ * assistant text is the plan (`ai/providers/chat-acp.ts`), so a turn has at
+ * most one; the unique `(chat_session_id, turn_id)` index enforces it.
+ * Approving a plan sends its id as the next turn's `approvedPlanId`.
  *
- * Sources:
- *   - Claude: emitted on `tool_use { name: "ExitPlanMode" }` with `input.plan`
- *     as a single markdown blob. One plan per ExitPlanMode call.
- *   - Opencode: the named `plan` agent doesn't emit a structured plan
- *     delimiter — the entire assistant text for the turn IS the plan. The
- *     driver buffers all text deltas and synthesizes a single `plan-presented`
- *     event before `controller.close()`. One plan per plan-mode turn.
- *
- * The unique `(chat_session_id, turn_id)` constraint enforces "one plan per
- * turn" at the schema level — the only legitimate way to land two plans in
- * the same turn would be a driver bug, and we surface that loudly via the
- * unique-violation error.
- *
- * Status lifecycle:
- *   - 'pending'    — emitted by agent, awaiting user decision
- *   - 'approved'   — user clicked Approve. `decidedAt` is set.
- *   - 'rejected'   — user clicked Reject. `decidedAt` is set.
- *   - 'superseded' — reserved for future use if the agent re-plans mid-thread
- *                    (today we keep approved/rejected plans visible in history).
+ * Status: 'pending' awaits the user's decision; 'approved' / 'rejected' set
+ * `decidedAt`. Nothing writes 'superseded'.
  */
 export const chatPlans = sqliteTable(
   "chat_plans",

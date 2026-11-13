@@ -4,13 +4,14 @@ import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { createDb, type Db } from "../../../db/index";
 import { projectRecaps } from "../../../db/schema/index";
+import type { RecapSourceBundle, RecapSourcePr } from "../../../db/schema/project-recaps";
 import {
   addPrEntryHandler,
   completeRecapHandler,
   recapCompletionBlocker,
   setLedeHandler,
 } from "./handlers";
-import type { RecapSourceBundle, RecapSourcePr, RecapToolContext } from "./spec";
+import type { RecapToolContext } from "./spec";
 
 const RECAP = "recap-1";
 
@@ -119,6 +120,19 @@ describe("recapCompletionBlocker", () => {
 
   it("refuses a recap that is no longer generating", () => {
     expect(recapCompletionBlocker(seed("error"), RECAP)).toContain("no longer generating");
+  });
+});
+
+describe("set_lede", () => {
+  it("keeps bare <strong>/<em> and strips every other tag, nested ones included", async () => {
+    const db = seed();
+    await setLedeHandler(ctxFor(db), {
+      lede: '<<script>script>x<</script>/script> <STRONG onclick="y">a</STRONG> <em>b</em>',
+    });
+    const lede = recap(db).lede ?? "";
+    expect(lede).not.toContain("<script");
+    expect(lede).not.toContain("onclick");
+    expect(lede).toContain("<em>b</em>");
   });
 });
 

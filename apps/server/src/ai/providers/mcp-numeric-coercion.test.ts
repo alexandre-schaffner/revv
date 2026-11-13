@@ -1,10 +1,8 @@
-// Regression: some ACP agents (opencode) deliver tool-call arguments as
-// strings — `semantic_step_index: "0"` rather than `0`. A plain `z.number()`
-// rejects that with "expected number, received string", which stalled the
-// entire walkthrough pipeline on its first `add_semantic_step` call (the agent
-// burned its retries and the run failed). Every numeric field on the agent tool
-// surfaces must coerce string→number at the wire boundary while still enforcing
-// int/range constraints. This locks that in for every agent MCP surface.
+// Some ACP agents (opencode) deliver tool-call arguments as strings —
+// `semantic_step_index: "0"` rather than `0`. A plain `z.number()` rejects that
+// and stalls the pipeline on the first numeric call, so every numeric field on
+// every agent MCP surface must coerce string→number while still enforcing
+// int/range constraints.
 
 import { describe, expect, it } from "bun:test";
 import { z } from "zod";
@@ -21,25 +19,16 @@ interface SchemaSpec {
 const SURFACES: ReadonlyArray<{ label: string; specs: readonly SchemaSpec[] }> = [
   { label: "walkthrough", specs: WALKTHROUGH_TOOL_BUNDLE.specs },
   { label: "recap", specs: RECAP_TOOL_BUNDLE.specs },
-  { label: "chat-edit", specs: EDIT_TOOL_SPECS as unknown as readonly SchemaSpec[] },
+  { label: "chat-edit", specs: EDIT_TOOL_SPECS },
   { label: "external", specs: EXTERNAL_REVIEW_TOOL_SPECS },
 ];
 
-// Walk the zod tree, returning the path tokens to every leaf whose
-// unwrapped core is a ZodNumber. Optional / Nullable / Default wrappers
-// are stripped so nested numeric fields are reached:
-//   block_refs[].semantic_step_index, citations[].start_line,
-//   initial_block.code.start_line, …
 type PathToken = string | number;
 type NumericPath = ReadonlyArray<PathToken>;
 
-// Peel wrapper types via zod's PUBLIC `.unwrap()` method. The previous
-// version reached into `_zod.def.innerType` (private): if a zod upgrade
-// renamed that field, the loop silently stopped peeling, nested numeric
-// paths were never discovered, and the "no numeric field at any depth"
-// test passed vacuously. Using the public classes + `.unwrap()` makes a
-// break loud — instanceof throws if the class is gone, and the self-check
-// test below pins the nested paths that REQUIRE a peel.
+// Public classes + `.unwrap()` only, never zod's private `_zod.def`: a private
+// rename would silently stop the peel and let the "any depth" test pass
+// vacuously, while a missing public class throws.
 const WRAPPER_CLASSES = [
   z.ZodOptional,
   z.ZodNullable,
@@ -77,8 +66,6 @@ function collectNumericPaths(t: z.ZodType, basePath: NumericPath = []): Readonly
   return [];
 }
 
-// Materialise the containers along `path` on `root`, then drop `value` at the
-// leaf. Sibling fields stay omitted; we only need the probe path populated.
 function setPath(
   root: Record<string, unknown>,
   path: NumericPath,
@@ -125,13 +112,8 @@ describe("agent MCP tools coerce string-valued numeric arguments", () => {
   });
 
   it("walker discovers nested numeric paths that require wrapper peeling", () => {
-    // Self-check. unwrap() peels .optional()/.nullable()/.default() wrappers
-    // via zod's public .unwrap(). If a zod upgrade changes that surface (or
-    // a new wrapper type appears that unwrap() doesn't recognise),
-    // collectNumericPaths silently returns [] for wrapped subtrees and the
-    // main "no numeric field at any depth" test below would pass vacuously.
-    // Pin the nested paths that REQUIRE a peel — plus a plain-array recursion
-    // check — so a broken peel fails HERE instead of masking a regression.
+    // A broken peel (a zod upgrade, or a wrapper unwrap() doesn't know) makes
+    // the next test pass vacuously; pinning paths that need one fails here.
     const pathsOf = (specs: readonly SchemaSpec[], name: string): Set<string> => {
       const spec = specs.find((s) => s.name === name);
       expect(spec).toBeDefined();
@@ -140,49 +122,33 @@ describe("agent MCP tools coerce string-valued numeric arguments", () => {
         : new Set<string>();
     };
     const wt = WALKTHROUGH_TOOL_BUNDLE.specs;
-    const ce = EDIT_TOOL_SPECS as unknown as readonly SchemaSpec[];
+    const ce = EDIT_TOOL_SPECS;
 
-    // add_semantic_step.initial_block.code is .nullable().optional() — the
-    // double-wrap is the worst case for the peel; reaching start_line/end_line
-    // REQUIRES unwrap to fire twice before the ZodObject recurse.
     const addStep = pathsOf(wt, "add_semantic_step");
     expect(addStep.has("initial_block.code.start_line")).toBe(true);
     expect(addStep.has("initial_block.code.end_line")).toBe(true);
 
-    // flag_issue.block_refs is a plain array — peel not required, but the
-    // inner blockRefSchema ZodObject must still be recursed into.
     const flagIssue = pathsOf(wt, "flag_issue");
     expect(flagIssue.has("block_refs.0.semantic_step_index")).toBe(true);
     expect(flagIssue.has("block_refs.0.step_index")).toBe(true);
 
-    // rate_axis exposes both a citations array and a block_refs array.
     const rateAxis = pathsOf(wt, "rate_axis");
     expect(rateAxis.has("citations.0.start_line")).toBe(true);
     expect(rateAxis.has("citations.0.end_line")).toBe(true);
     expect(rateAxis.has("block_refs.0.semantic_step_index")).toBe(true);
 
-    // chat-edit.update_rating: citations AND block_refs are .nullable().optional().
     const updateRating = pathsOf(ce, "update_rating");
     expect(updateRating.has("citations.0.start_line")).toBe(true);
     expect(updateRating.has("citations.0.end_line")).toBe(true);
     expect(updateRating.has("block_refs.0.semantic_step_index")).toBe(true);
     expect(updateRating.has("block_refs.0.step_index")).toBe(true);
 
-    // chat-edit.update_issue: block_refs is .nullable().optional().
     const updateIssue = pathsOf(ce, "update_issue");
     expect(updateIssue.has("block_refs.0.semantic_step_index")).toBe(true);
     expect(updateIssue.has("block_refs.0.step_index")).toBe(true);
   });
 
   it("no numeric field at any depth rejects a numeric string as a non-number", () => {
-    // Recurse into the schema rather than probing only top-level keys, so
-    // nested numeric paths are covered: block_refs[].semantic_step_index,
-    // block_refs[].step_index, citations[].start_line, citations[].end_line,
-    // initial_block.code.start_line, content.code.end_line, … For each
-    // numeric leaf, populate just its path on an empty payload and parse.
-    // The sibling fields stay omitted (they surface their own errors, which
-    // we ignore); the only assertion is that THE probed path does not raise
-    // an "expected number, received string" invalid_type error.
     for (const { label, specs } of SURFACES) {
       for (const spec of specs) {
         for (const path of collectNumericPaths(spec.inputSchema)) {

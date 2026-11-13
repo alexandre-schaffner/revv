@@ -1,33 +1,19 @@
 <script lang="ts">
-import Desktop from "phosphor-svelte/lib/Desktop";
-import Moon from "phosphor-svelte/lib/Moon";
-import Sun from "phosphor-svelte/lib/Sun";
 import type { Snippet } from "svelte";
 import type { Action } from "svelte/action";
+import ThemeIcon from "$lib/components/shared/ThemeIcon.svelte";
+import { cycleThemePreference, themePreferenceLabel } from "$lib/components/shared/theme-cycle";
 import { Dotmatrix, type DotmatrixVariant } from "$lib/components/ui/dotmatrix";
-import {
-  getThemePreference,
-  setThemePreference,
-  type ThemePreference,
-} from "$lib/stores/theme.svelte";
+import { gsapEnter, tokens } from "$lib/motion";
 import RevvBrand from "./RevvBrand.svelte";
 
 /**
- * Cinematic frame for the onboarding flow. Calm, dark, type-led: a
- * book-chapter feel rather than a SaaS welcome modal. Owns the
- * letterboxed canvas, a small persistent brand glyph, a chapter label,
- * the serif title, and a tiny dotmatrix that ticks in the corner so
- * the page never feels static.
- *
- * Everything below the chapter label flows from `children`; the shell
- * itself never pushes a card or a shadow — visual hierarchy comes from
- * typography and breathing room, not container chrome.
+ * A book-chapter feel rather than a SaaS welcome modal. The shell never
+ * pushes a card or a shadow: hierarchy comes from typography and breathing
+ * room, not container chrome.
  */
 
-type StepId = "welcome" | "host" | "signin" | "repo" | "agent" | "done";
-
 interface Props {
-  stepId: StepId;
   stepIndex: number;
   totalSteps: number;
   chapter: string;
@@ -38,7 +24,6 @@ interface Props {
 }
 
 let {
-  stepId,
   stepIndex,
   totalSteps,
   chapter,
@@ -48,26 +33,12 @@ let {
   children,
 }: Props = $props();
 
+const TITLE_REVEAL = { y: 14, blur: 4, duration: tokens.ceremonialSlow } as const;
+
 let pageNumber = $derived(String(stepIndex + 1).padStart(2, "0"));
 let pageTotal = $derived(String(totalSteps).padStart(2, "0"));
 
-const theme = $derived(getThemePreference());
-const cycle: Record<ThemePreference, ThemePreference> = {
-  system: "light",
-  light: "dark",
-  dark: "system",
-};
-const labels: Record<ThemePreference, string> = {
-  system: "System theme",
-  light: "Light theme",
-  dark: "Dark theme",
-};
-
 let isScrollable = $state(false);
-
-function cycleTheme() {
-  setThemePreference(cycle[theme]);
-}
 
 // Show the scrollbar thumb only when the step overflows. A ResizeObserver
 // catches viewport changes; a MutationObserver catches content growing
@@ -108,13 +79,11 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 };
 </script>
 
-<div class="onboarding-shell" data-step={stepId}>
+<div class="onboarding-shell">
 	<div class="grain" aria-hidden="true"></div>
 	<div class="vignette" aria-hidden="true"></div>
 
-	<!-- Header: tiny brand glyph + step counter. Persistent across all
-	     steps — the eye anchors here rather than chasing a morphing logo. -->
-	<header class="header" data-tauri-drag-region>
+	<header class="header" data-tauri-drag-region use:gsapEnter={{ y: 8, duration: tokens.ceremonialSlow }}>
 		<RevvBrand variant="onboarding" />
 		<div class="header-right">
 			<Dotmatrix variant={spinnerVariant} size="small" />
@@ -123,43 +92,41 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 				<span class="page-sep">/</span>
 				<span class="page-total">{pageTotal}</span>
 			</span>
-			<button class="theme-btn" onclick={cycleTheme} aria-label={labels[theme]} title={labels[theme]}>
-				{#if theme === 'light'}
-					<Sun size={13} />
-				{:else if theme === 'dark'}
-					<Moon size={13} />
-				{:else}
-					<Desktop size={13} />
-				{/if}
+			<button
+				class="theme-btn"
+				onclick={cycleThemePreference}
+				aria-label={themePreferenceLabel()}
+				title={themePreferenceLabel()}
+			>
+				<ThemeIcon size={13} />
 			</button>
 		</div>
 	</header>
 
-	<!-- Main column. The title block + content occupies a narrow center
-	     column for that book-page measure. -->
 	<main class="stage" data-scrollable={isScrollable}>
 		<div class="stage-scroll" use:scrollStage={stepIndex}>
 			<div class="title-block">
-				<div class="chapter-label" data-key={stepIndex}>
+				<div class="chapter-label" use:gsapEnter={{ y: 8 }}>
 					<span class="chapter-rule"></span>
 					<span class="chapter-text">{chapter}</span>
 				</div>
-				<h1 class="title" data-key={stepIndex}>
-					<span class="title-line">{title}</span>
+				<h1 class="title">
+					<span class="title-line" use:gsapEnter={TITLE_REVEAL}>{title}</span>
 					{#if titleItalic}
-						<span class="title-line title-italic">{titleItalic}</span>
+						<span class="title-line title-italic" use:gsapEnter={{ ...TITLE_REVEAL, delay: 0.12 }}>
+							{titleItalic}
+						</span>
 					{/if}
 				</h1>
 			</div>
 
-			<div class="content" data-key={stepIndex}>
+			<div class="content" use:gsapEnter={{ y: 8, duration: tokens.ceremonialSlow, delay: 0.2 }}>
 				{@render children()}
 			</div>
 		</div>
 	</main>
 
-	<!-- Footer: thin progress bar made of cells. -->
-	<footer class="footer">
+	<footer class="footer" use:gsapEnter={{ y: 8, duration: tokens.ceremonialSlow }}>
 		<div class="cells">
 			{#each Array(totalSteps) as _, i (i)}
 				<div
@@ -184,7 +151,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		grid-template-columns: 1fr;
 		font-family: var(--font-sans, 'Inter', system-ui, sans-serif);
 
-		/* ── Light mode (default) ───────────────────────────────────── */
 		--ob-bg: #faf9f6;
 		--ob-text: #2a2825;
 		--ob-text-heading: #1a1816;
@@ -208,7 +174,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		--ob-grain-color: rgba(0, 0, 0, 0.4);
 	}
 
-	/* ── Dark mode ──────────────────────────────────────────────── */
 	:global(html.dark) .onboarding-shell {
 		--ob-bg: #0a0a0c;
 		--ob-text: #e6e4dc;
@@ -233,9 +198,8 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		--ob-grain-color: rgba(255, 255, 255, 0.8);
 	}
 
-	/* Film-grain — a barely-perceptible noise that lifts the canvas off
-	 perfect black so it reads as a "scene" rather than dead space. Pure
-	 CSS, very cheap. */
+	/* Film grain lifts the canvas off perfect black. Its drift stays a CSS
+	 animation (see motion/README.md). */
 	.grain {
 		position: absolute;
 		inset: -50%;
@@ -262,7 +226,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		75% { transform: translate(-1%, -2%); }
 	}
 
-	/* Letterbox vignette — darkens the edges. Very subtle, not a spotlight. */
 	.vignette {
 		position: absolute;
 		inset: 0;
@@ -285,7 +248,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 			);
 	}
 
-	/* Header bar */
 	.header {
 		grid-row: 1;
 		display: flex;
@@ -293,7 +255,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		align-items: center;
 		padding: 28px 36px;
 		z-index: 2;
-		animation: fade-up var(--duration-ceremonial-slow) var(--ease-out-expo) backwards;
 	}
 
 	.header-right {
@@ -340,7 +301,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		border-color: var(--ob-text-italic);
 	}
 
-	/* Stage — title + content column */
 	.stage {
 		grid-row: 2;
 		position: relative;
@@ -408,10 +368,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		color: var(--ob-text-label);
 	}
 
-	.chapter-label[data-key] {
-		animation: fade-up var(--duration-ceremonial-medium) var(--ease-out-expo) backwards;
-	}
-
 	.chapter-rule {
 		display: block;
 		width: 36px;
@@ -432,14 +388,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		gap: 2px;
 	}
 
-	.title[data-key] .title-line {
-		animation: title-reveal var(--duration-ceremonial-slow) var(--ease-out-expo) backwards;
-	}
-
-	.title[data-key] .title-line:nth-child(2) {
-		animation-delay: 120ms;
-	}
-
 	.title-italic {
 		font-style: italic;
 		color: var(--ob-text-italic);
@@ -451,15 +399,12 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		flex-direction: column;
 		flex: 0 0 auto;
 		margin-bottom: auto;
-		animation: fade-up var(--duration-ceremonial-slow) var(--ease-out-expo) 200ms backwards;
 	}
 
-	/* Footer — segmented progress bar */
 	.footer {
 		grid-row: 3;
 		padding: 24px 36px 32px;
 		z-index: 2;
-		animation: fade-up var(--duration-ceremonial-slow) var(--ease-out-expo) backwards;
 	}
 
 	.cells {
@@ -482,42 +427,5 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 
 	.cell[data-state='current'] {
 		background: var(--ob-cell-current);
-	}
-
-	@keyframes fade-up {
-		from {
-			opacity: 0;
-			transform: translateY(8px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-		}
-	}
-
-	@keyframes title-reveal {
-		from {
-			opacity: 0;
-			transform: translateY(14px);
-			filter: blur(4px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-			filter: blur(0);
-		}
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.grain {
-			animation: none;
-		}
-		.header,
-		.chapter-label,
-		.title .title-line,
-		.content,
-		.footer {
-			animation: none !important;
-		}
 	}
 </style>

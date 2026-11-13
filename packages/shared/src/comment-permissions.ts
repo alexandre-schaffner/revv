@@ -1,3 +1,6 @@
+import { loginsMatch } from "./identity";
+import { isThreadResolved } from "./review";
+
 export interface CommentPermissionMessage {
   readonly authorRole: string;
   readonly authorLogin: string | null;
@@ -6,10 +9,6 @@ export interface CommentPermissionMessage {
 
 export interface DraftReviewMessage extends CommentPermissionMessage {
   readonly body: string;
-}
-
-function normalizeLogin(login: string): string {
-  return login.trim().toLowerCase();
 }
 
 /**
@@ -23,15 +22,51 @@ export function canUserModifyComment(
 ): boolean {
   if (message.externalId !== null) return false;
   if (message.authorRole === "ai_agent") return true;
-  if (!message.authorLogin || !currentUserLogin) return false;
-  return normalizeLogin(message.authorLogin) === normalizeLogin(currentUserLogin);
+  return loginsMatch(message.authorLogin, currentUserLogin);
 }
 
-/** A local human or Revv-authored draft that can be included in a GitHub review. */
-export function isPublishableDraftComment(message: DraftReviewMessage): boolean {
-  return (
-    message.externalId === null &&
-    (message.authorRole === "reviewer" || message.authorRole === "ai_agent") &&
-    message.body.trim().length > 0
-  );
+/**
+ * A draft the signed-in user publishes: one they may still change (theirs or
+ * Revv's, not yet on GitHub) with some text. An external coding agent's reply
+ * is not theirs; it goes up only when the agent asks.
+ */
+export function isPublishableDraftComment(
+  message: DraftReviewMessage,
+  viewerLogin: string | null,
+): boolean {
+  return canUserModifyComment(message, viewerLogin) && message.body.trim().length > 0;
+}
+
+export interface DraftThread {
+  readonly status: string;
+  readonly externalCommentId: string | null;
+}
+
+/**
+ * What a thread not yet on GitHub posts as one review comment: its publishable
+ * drafts, joined. Null when it posts nothing (resolved, already on GitHub, or
+ * no draft with text).
+ */
+export function draftCommentBody(
+  thread: DraftThread,
+  messages: readonly DraftReviewMessage[],
+  viewerLogin: string | null,
+): string | null {
+  if (isThreadResolved(thread.status)) return null;
+  if (thread.externalCommentId !== null) return null;
+  const body = messages
+    .filter((m) => isPublishableDraftComment(m, viewerLogin))
+    .map((m) => m.body)
+    .join("\n\n");
+  return body === "" ? null : body;
+}
+
+/** A thread already on GitHub posts its publishable drafts as replies, in order. */
+export function unpublishedReplies<M extends DraftReviewMessage>(
+  thread: DraftThread,
+  messages: readonly M[],
+  viewerLogin: string | null,
+): M[] {
+  if (thread.externalCommentId === null) return [];
+  return messages.filter((m) => isPublishableDraftComment(m, viewerLogin));
 }

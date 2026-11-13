@@ -1,16 +1,16 @@
-// ── Artifact craft bar ───────────────────────────────────────────────────────
 // The `artifact` block variant requires live state, a reader-varied control, and a verdict
 // (see `add_diff_step`'s schema). Three nouls turn that contract into a judgment, one per
-// clause, so a rejection names what failed.
+// clause, so a rejection names what failed. Every tool that writes an artifact block —
+// generation and chat edits alike — holds it to this bar (invariant 4).
 //
 // Blocking, unlike the issue gate: a block that appeared then vanished would leave a hole
 // in the chapter's `step_index` sequence, and artifacts are rare enough the latency is fine.
 
 import { noul } from "@typesafe-ai/sdk";
 import { Effect } from "effect";
+import { logError } from "../../logger";
 import type { JevState } from "../../services/Jev";
 import { JevService } from "../../services/Jev";
-import { SettingsService } from "../../services/Settings";
 import { optionalJev } from "./optional";
 
 /** Timeout budget; short because it sits on the write path and a slow answer accepts the block. */
@@ -25,10 +25,17 @@ export const ARTIFACT_CLAUSE_FLOOR = 0.35;
 /** Clauses allowed to fail before rejection. One clause failing is noise in a judgment over generated HTML; two is the signal it isn't an artifact. */
 export const ARTIFACT_MAX_FAILED_CLAUSES = 1;
 
+export interface ArtifactContext {
+  readonly chapterTitle: string;
+  readonly annotation: string | null;
+}
+
+/** The craft bar as a tool handler awaits it. Never rejects. */
+export type ArtifactJudge = (html: string, context: ArtifactContext) => Promise<ArtifactVerdict>;
+
 export interface ArtifactVerdict {
-  /** Clause keys that fell below the floor, in contract order. */
+  /** Labels of the clauses that fell below the floor, in contract order. */
   readonly failed: readonly string[];
-  /** Whether the handler should refuse the block. */
   readonly reject: boolean;
 }
 
@@ -52,15 +59,9 @@ const CLAUSE_LABELS: Record<keyof typeof CLAUSES, string> = {
 /** Judges one artifact against the craft bar. Never fails; an unavailable Jev accepts the block rather than rejecting it. */
 export function judgeArtifact(
   html: string,
-  context: { readonly chapterTitle: string; readonly annotation: string | null },
-): Effect.Effect<ArtifactVerdict, never, JevService | SettingsService> {
+  context: ArtifactContext,
+): Effect.Effect<ArtifactVerdict, never, JevService> {
   return Effect.gen(function* () {
-    const settingsSvc = yield* SettingsService;
-    const settings = yield* settingsSvc.getSettings().pipe(Effect.orElseSucceed(() => null));
-    if (settings?.jev.enabled !== true) {
-      return { failed: [], reject: false };
-    }
-
     const state: JevState = {
       chapter: context.chapterTitle,
       annotation: context.annotation,
@@ -89,7 +90,7 @@ export function judgeArtifact(
     const answers = result.answers;
     const failed = CLAUSE_KEYS.filter((key) => {
       const answer: unknown = answers[key];
-      // Missing answer counts as pass, not fail (per-clause version of the rule above).
+      // A missing answer passes, as an unavailable Jev does.
       if (answer === null || typeof answer !== "object" || !("noul" in answer)) return false;
       return typeof answer.noul === "number" && answer.noul < ARTIFACT_CLAUSE_FLOOR;
     });
@@ -101,7 +102,25 @@ export function judgeArtifact(
   });
 }
 
-/** Agent-facing rejection text: what failed, and what to do instead. */
+/**
+ * {@link judgeArtifact} for a tool handler, run by `run`. A crash accepts the
+ * block, as an unavailable Jev does.
+ */
+export function artifactJudge(
+  run: (effect: Effect.Effect<ArtifactVerdict, never, JevService>) => Promise<ArtifactVerdict>,
+  logScope: string,
+): ArtifactJudge {
+  return (html, context) =>
+    run(judgeArtifact(html, context)).catch((err: unknown) => {
+      logError(
+        logScope,
+        "artifact craft bar crashed:",
+        err instanceof Error ? err.message : String(err),
+      );
+      return { failed: [], reject: false };
+    });
+}
+
 export function renderArtifactRejection(verdict: ArtifactVerdict): string {
   return [
     `Error: this artifact does not clear the craft bar — ${verdict.failed.join("; ")}.`,

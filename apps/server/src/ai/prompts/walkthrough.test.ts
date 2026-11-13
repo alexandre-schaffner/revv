@@ -1,7 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import type { WalkthroughLead, WalkthroughStackSnapshot } from "@revv/shared";
-import type { PrFileMeta } from "../../services/GitHub";
-import { buildWalkthroughPrompt } from "./walkthrough";
+import type { PrFileMeta } from "../../services/github/pulls";
+import { renderCompletionRequirements } from "../../services/walkthrough/completion";
+import { isJourneyChapterText, JOURNEY_CHAPTER_KEYWORDS } from "../../services/walkthrough/content";
+import { buildWalkthroughPrompt, buildWalkthroughSystemPrompt } from "./walkthrough";
 
 const BASE = {
   pr: {
@@ -61,7 +63,6 @@ describe("buildWalkthroughPrompt first-pass leads", () => {
     expect(prompt).toContain(
       "#### src/bar.ts (modified, +3 -1)\nFirst-pass leads:\n- `L2` line 7 — vulnerability (0.50)\n```diff",
     );
-    // The rules come before the files they annotate, and before the first actions.
     expect(prompt.indexOf("### First-pass leads")).toBeLessThan(prompt.indexOf("#### src/foo.ts"));
     expect(prompt.indexOf("### First-pass leads")).toBeLessThan(prompt.indexOf("## First actions"));
     expect(prompt).toContain("It flagged 3 hunks");
@@ -140,17 +141,13 @@ describe("buildWalkthroughPrompt stack block", () => {
     capturedAt: "2026-10-16T00:00:00Z",
   };
 
-  it("places the layer in its stack, after the description and before the principles", () => {
+  it("lists the layers in stack order after the description, marking this PR", () => {
     const prompt = buildWalkthroughPrompt({
       ...BASE,
       pr: { ...BASE.pr, body: "Limits requests per token." },
       stack,
     });
-    const block = prompt.slice(
-      prompt.indexOf("### Stack"),
-      prompt.indexOf("\n\n", prompt.indexOf("- A split")),
-    );
-    expect(block).toBe(
+    expect(prompt).toContain(
       [
         "### Stack",
         "This pull request is layer 2 of 3 in stack #7, onto `main`.",
@@ -158,13 +155,6 @@ describe("buildWalkthroughPrompt stack block", () => {
         '- Layer 1: #120 "Add the store" — merged',
         '- Layer 2: #121 "Add a rate limiter" — not ready ← this PR',
         '- Layer 3: #122 "Wire the limiter" — draft',
-        "",
-        "- The diff below is this layer's own changes only: GitHub scopes it to the layer below.",
-        "- Before you flag something as missing, call `get_stack_context`. A higher layer may add it, and an absence a higher layer fills is not an issue.",
-        "- Code in lower layers is out of scope unless this layer depends on it. When it does, say so in a comment on this layer's code, not in an issue against the lower layer.",
-        "- Cite another layer as `#N (layer k)`.",
-        "- Place this layer in the stack in one sentence of the overview's Context part.",
-        "- A split recommendation, if there is one, concerns this layer alone.",
       ].join("\n"),
     );
     expect(prompt.indexOf("### Description")).toBeLessThan(prompt.indexOf("### Stack"));
@@ -218,5 +208,33 @@ describe("buildWalkthroughPrompt stack block", () => {
     });
     expect(prompt).toContain("#### src/gone.ts (reverted, +0 -0)");
     expect(prompt).toContain("[Change reverted — this layer no longer touches this file]");
+  });
+});
+
+describe("buildWalkthroughSystemPrompt contract fragments", () => {
+  it("leaves no marker unsubstituted in either perspective", () => {
+    for (const mode of ["reviewer", "author"] as const) {
+      expect(buildWalkthroughSystemPrompt(mode)).not.toMatch(/\{\{[A-Z_]+\}\}/);
+    }
+  });
+
+  it("lists every journey keyword the completion gate accepts", () => {
+    const prompt = buildWalkthroughSystemPrompt("reviewer");
+    for (const word of Object.keys(JOURNEY_CHAPTER_KEYWORDS)) {
+      expect(prompt).toContain(`\`${word}\``);
+    }
+  });
+
+  it("offers only journey-chapter titles the completion gate accepts", () => {
+    const prompt = buildWalkthroughSystemPrompt("reviewer");
+    const line = prompt.split("\n").find((l) => l.startsWith("- Title with one of:")) ?? "";
+    const titles = [...line.matchAll(/"([^"]+)"/g)].map((m) => m[1] ?? "");
+    expect(titles.length).toBeGreaterThan(0);
+    for (const title of titles)
+      expect([title, isJourneyChapterText(title, null)]).toEqual([title, true]);
+  });
+
+  it("states the completion gate the gate checks", () => {
+    expect(buildWalkthroughSystemPrompt("reviewer")).toContain(renderCompletionRequirements());
   });
 });

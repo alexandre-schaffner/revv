@@ -1,17 +1,10 @@
 <script lang="ts">
 import { Dialog as DialogPrimitive } from "bits-ui";
-import CalendarDots from "phosphor-svelte/lib/CalendarDots";
-import Cloud from "phosphor-svelte/lib/Cloud";
-import Download from "phosphor-svelte/lib/Download";
-import FolderSimple from "phosphor-svelte/lib/FolderSimple";
-import Gauge from "phosphor-svelte/lib/Gauge";
-import GearSix from "phosphor-svelte/lib/GearSix";
 import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlass";
-import PlugsConnected from "phosphor-svelte/lib/PlugsConnected";
-import Robot from "phosphor-svelte/lib/Robot";
 import User from "phosphor-svelte/lib/User";
 import X from "phosphor-svelte/lib/X";
-import { type Component, tick, untrack } from "svelte";
+import { tick } from "svelte";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 import * as Dialog from "$lib/components/ui/dialog/index.js";
 import {
   bitsAnim,
@@ -22,26 +15,9 @@ import {
   settingFlash,
 } from "$lib/motion";
 import { getUser } from "$lib/stores/auth.svelte";
-import {
-  fetchExternalIntegrationStatuses,
-  getExternalIntegrationStatuses,
-} from "$lib/stores/external-integrations.svelte";
-import { fetchAgentStatus, getAgentStatus, getSettings } from "$lib/stores/settings.svelte";
-import {
-  clearSettingsTargetSection,
-  getSettingsTargetSection,
-  type SettingsSectionId,
-} from "$lib/stores/settingsModal.svelte";
-import AccountPane from "./panes/AccountPane.svelte";
-import AgentPane from "./panes/AgentPane.svelte";
-import GeneralPane from "./panes/GeneralPane.svelte";
-import IntegrationsPane from "./panes/IntegrationsPane.svelte";
-import RecapsPane from "./panes/RecapsPane.svelte";
-import RepositoriesPane from "./panes/RepositoriesPane.svelte";
-import TeamCachePane from "./panes/TeamCachePane.svelte";
-import TypeSafePane from "./panes/TypeSafePane.svelte";
-import UpdatesPane from "./panes/UpdatesPane.svelte";
-import { SETTINGS_PANES, type SettingsSearchHit, searchSettings } from "./settings-index";
+import { getSettingsSection, selectSettingsSection } from "$lib/stores/settingsModal.svelte";
+import { SETTINGS_PANE_CLUSTERS, SETTINGS_PANES, type SettingsPaneEntry } from "./panes";
+import { type SettingsSearchHit, searchSettings } from "./settings-panes";
 
 interface Props {
   open: boolean;
@@ -50,85 +26,23 @@ interface Props {
 
 let { open, onClose }: Props = $props();
 
-// ── Navigation ────────────────────────────────────────────────────────────
-interface NavItem {
-  id: SettingsSectionId;
-  icon: Component<{ size?: number | string }>;
-}
-
-/** Unlabeled clusters, split by a gap: you → what the agent does → team → the app. */
-const navClusters: NavItem[][] = [
-  [
-    { id: "general", icon: GearSix },
-    { id: "account", icon: User },
-    { id: "repositories", icon: FolderSimple },
-  ],
-  [
-    { id: "ai", icon: Robot },
-    { id: "recap", icon: CalendarDots },
-    { id: "jev", icon: Gauge },
-    { id: "integrations", icon: PlugsConnected },
-  ],
-  [{ id: "cache", icon: Cloud }],
-  [{ id: "updates", icon: Download }],
-];
-
-const panes: Record<SettingsSectionId, Component> = {
-  general: GeneralPane,
-  account: AccountPane,
-  repositories: RepositoriesPane,
-  ai: AgentPane,
-  recap: RecapsPane,
-  jev: TypeSafePane,
-  integrations: IntegrationsPane,
-  cache: TeamCachePane,
-  updates: UpdatesPane,
-};
-
-let activePane = $state<SettingsSectionId>("general");
+const activePane = $derived(getSettingsSection());
 let query = $state("");
 let paneEl = $state<HTMLElement | null>(null);
 let navEl = $state<HTMLElement | null>(null);
-const ActivePane = $derived(panes[activePane]);
+const ActivePane = $derived(SETTINGS_PANES.find((p) => p.id === activePane)?.component);
 
-function selectPane(id: SettingsSectionId): void {
-  if (id === activePane) return;
-  activePane = id;
+// A section opens at its top.
+$effect(() => {
+  void activePane;
   if (paneEl) paneEl.scrollTop = 0;
-}
+});
 
-// Every open starts on General, unless a caller asked for a pane.
 $effect(() => {
   if (!open) return;
-  untrack(() => {
-    query = "";
-    activePane = getSettingsTargetSection() ?? "general";
-    clearSettingsTargetSection();
-  });
-  void fetchAgentStatus();
-  void fetchExternalIntegrationStatuses();
+  query = "";
+  for (const pane of SETTINGS_PANES) pane.onModalOpen?.();
 });
-
-// `openSettings("ai")` while already open retargets the visible pane.
-$effect(() => {
-  const target = getSettingsTargetSection();
-  if (!target || !open) return;
-  selectPane(target);
-  clearSettingsTargetSection();
-});
-
-// ── Nav status accessories ────────────────────────────────────────────────
-// Never color alone: every dot carries its meaning as an aria-label / title.
-const agentNeedsAction = $derived.by(() => {
-  const report = getAgentStatus();
-  if (!report) return false;
-  const s = report.agents[getSettings()?.aiAgent ?? "opencode"];
-  return !(s?.installed && s.authed);
-});
-const connectedIntegrations = $derived(
-  getExternalIntegrationStatuses().filter((s) => s.connected).length,
-);
-const cacheOn = $derived(getSettings()?.cache?.enabled ?? false);
 
 function focusNavItem(list: HTMLElement | null, e: KeyboardEvent, onEscapeTop?: () => void): void {
   if (!list) return;
@@ -148,14 +62,13 @@ function focusNavItem(list: HTMLElement | null, e: KeyboardEvent, onEscapeTop?: 
   items[Math.min(next, items.length - 1)]?.focus();
 }
 
-// ── Search ────────────────────────────────────────────────────────────────
 let searchEl = $state<HTMLInputElement | null>(null);
 let resultsEl = $state<HTMLElement | null>(null);
-const hits = $derived(searchSettings(query));
+const hits = $derived(searchSettings<SettingsPaneEntry>(SETTINGS_PANES, query));
 const searching = $derived(query.trim().length > 0);
 
 function splitLabel(hit: SettingsSearchHit): [string, string, string] {
-  const { label } = hit.entry;
+  const { label } = hit.row;
   if (!hit.match) return [label, "", ""];
   return [
     label.slice(0, hit.match.start),
@@ -164,14 +77,14 @@ function splitLabel(hit: SettingsSearchHit): [string, string, string] {
   ];
 }
 
-async function openHit(hit: SettingsSearchHit): Promise<void> {
+async function openHit(hit: SettingsSearchHit<SettingsPaneEntry>): Promise<void> {
   query = "";
-  selectPane(hit.entry.pane);
+  selectSettingsSection(hit.pane.id);
   await tick();
   // A row behind a switch that's off (e.g. the team-cache bucket) isn't
   // rendered: land on the pane's first row, which is that switch.
   const row =
-    paneEl?.querySelector<HTMLElement>(`[data-setting-id="${hit.entry.id}"]`) ??
+    paneEl?.querySelector<HTMLElement>(`[data-setting-id="${hit.row.anchor}"]`) ??
     paneEl?.querySelector<HTMLElement>("[data-setting-id]");
   if (!row) return;
   const reduced = prefersReducedMotion();
@@ -210,14 +123,6 @@ function handleKeydown(e: KeyboardEvent): void {
     searchEl?.select();
   }
 }
-
-// ── Avatar ────────────────────────────────────────────────────────────────
-// URL-keyed: failed state is only true while the current URL is the one that
-// errored. If the URL rotates (e.g. after re-login), the new URL is retried.
-let avatarFailedForUrl = $state<string | null>(null);
-const avatarFailed = $derived(
-  avatarFailedForUrl !== null && avatarFailedForUrl === (getUser()?.image ?? null),
-);
 </script>
 
 <DialogPrimitive.Root
@@ -280,12 +185,12 @@ const avatarFailed = $derived(
 										aria-label="Search results"
 										onkeydown={(e) => focusNavItem(resultsEl, e, () => searchEl?.focus())}
 									>
-										{#each hits as hit (hit.entry.id)}
+										{#each hits as hit (hit.row.anchor)}
 											{@const [before, match, after] = splitLabel(hit)}
 											<li>
 												<button type="button" class="result" data-roving onclick={() => openHit(hit)}>
 													<span class="result-label">{before}<strong>{match}</strong>{after}</span>
-													<span class="result-pane">{SETTINGS_PANES[hit.entry.pane].title}</span>
+													<span class="result-pane">{hit.pane.title}</span>
 												</button>
 											</li>
 										{/each}
@@ -299,8 +204,9 @@ const avatarFailed = $derived(
 									class="nav-list"
 									onkeydown={(e) => focusNavItem(navEl, e, () => searchEl?.focus())}
 								>
-									{#each navClusters as cluster, i (i)}
+									{#each SETTINGS_PANE_CLUSTERS as cluster, i (i)}
 										{#each cluster as item, j (item.id)}
+											{@const badge = item.badge?.()}
 											<li class:nav-cluster-start={i > 0 && j === 0}>
 												<button
 													type="button"
@@ -309,23 +215,19 @@ const avatarFailed = $derived(
 													aria-current={activePane === item.id ? 'page' : undefined}
 													tabindex={activePane === item.id ? 0 : -1}
 													data-roving
-													onclick={() => selectPane(item.id)}
+													onclick={() => selectSettingsSection(item.id)}
 												>
 													<item.icon size={14} />
-													<span class="nav-label">{SETTINGS_PANES[item.id].title}</span>
-													{#if item.id === 'ai' && agentNeedsAction}
-														<span
-															class="nav-dot"
-															role="img"
-															aria-label="Needs attention"
-															title="The selected agent needs setup"
+													<span class="nav-label">{item.title}</span>
+													{#if badge?.kind === 'attention'}
+														<span class="nav-dot" role="img" aria-label="Needs attention" title={badge.title}
 														></span>
-													{:else if item.id === 'integrations' && connectedIntegrations > 0}
-														<span class="nav-accessory" title="{connectedIntegrations} connected">
-															<span class="sr-only">, </span>{connectedIntegrations}<span class="sr-only"> connected</span>
+													{:else if badge?.kind === 'count'}
+														<span class="nav-accessory" title="{badge.count} {badge.noun}">
+															<span class="sr-only">, </span>{badge.count}<span class="sr-only"> {badge.noun}</span>
 														</span>
-													{:else if item.id === 'cache' && cacheOn}
-														<span class="nav-accessory">On</span>
+													{:else if badge?.kind === 'label'}
+														<span class="nav-accessory">{badge.text}</span>
 													{/if}
 												</button>
 											</li>
@@ -337,19 +239,13 @@ const avatarFailed = $derived(
 
 						{#if getUser()}
 							<div class="sidebar-user">
-								{#if getUser()?.image && !avatarFailed}
-									<img
-										src={getUser()?.image}
-										alt=""
-										class="sidebar-avatar"
-										referrerpolicy="no-referrer"
-										onerror={() => (avatarFailedForUrl = getUser()?.image ?? null)}
-									/>
-								{:else}
-									<span class="sidebar-avatar sidebar-avatar--fallback" aria-hidden="true">
-										<User size={11} />
-									</span>
-								{/if}
+								<Avatar src={getUser()?.image} size={22}>
+									{#snippet fallback()}
+										<span class="sidebar-avatar" aria-hidden="true">
+											<User size={11} />
+										</span>
+									{/snippet}
+								</Avatar>
 								<span class="sidebar-username">{getUser()?.githubLogin ?? getUser()?.name ?? 'Account'}</span>
 							</div>
 						{/if}
@@ -358,7 +254,7 @@ const avatarFailed = $derived(
 					<div class="pane" bind:this={paneEl}>
 						{#key activePane}
 							<div class="pane-inner" in:gsapFade>
-								<ActivePane />
+								{#if ActivePane}<ActivePane />{/if}
 							</div>
 						{/key}
 					</div>
@@ -395,7 +291,6 @@ const avatarFailed = $derived(
 			0 4px 12px rgba(0, 0, 0, 0.25);
 	}
 
-	/* ── Sidebar ── */
 	.sidebar {
 		display: flex;
 		width: 232px;
@@ -568,7 +463,6 @@ const avatarFailed = $derived(
 		font-variant-numeric: tabular-nums;
 	}
 
-	/* ── Search results ── */
 	.result {
 		display: flex;
 		flex-direction: column;
@@ -617,7 +511,6 @@ const avatarFailed = $derived(
 		overflow-wrap: anywhere;
 	}
 
-	/* ── User footer ── */
 	.sidebar-user {
 		display: flex;
 		align-items: center;
@@ -631,10 +524,6 @@ const avatarFailed = $derived(
 		height: 22px;
 		flex-shrink: 0;
 		border-radius: 50%;
-		object-fit: cover;
-	}
-
-	.sidebar-avatar--fallback {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
@@ -651,7 +540,6 @@ const avatarFailed = $derived(
 		white-space: nowrap;
 	}
 
-	/* ── Pane ── */
 	.pane {
 		position: relative;
 		min-width: 0;

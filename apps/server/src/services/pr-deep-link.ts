@@ -1,12 +1,17 @@
-import type { PullRequest, PullRequestLocator, Repository } from "@revv/shared";
+import {
+  type PullRequest,
+  type PullRequestLocator,
+  type Repository,
+  sameGithubHost,
+} from "@revv/shared";
 import { Effect, Option } from "effect";
-import type { GitHubError, ValidationError } from "../domain/errors";
-import { asStored, type ObservedPr } from "../domain/observed-pr";
+import type { DbError, GitHubError } from "../domain/errors";
+import { asStored, localPrId, type ObservedPr } from "../domain/observed-pr";
 
 interface ResolvePullRequestLinkOperations<RRepository, RCached, RRemote, RWrite> {
   readonly findRepository: (
     fullName: string,
-  ) => Effect.Effect<Repository | null, never, RRepository>;
+  ) => Effect.Effect<Repository | null, DbError, RRepository>;
   readonly findCachedPullRequest: (
     id: string,
   ) => Effect.Effect<Option.Option<PullRequest>, never, RCached>;
@@ -14,27 +19,10 @@ interface ResolvePullRequestLinkOperations<RRepository, RCached, RRemote, RWrite
     repository: Repository,
     number: number,
   ) => Effect.Effect<ObservedPr, GitHubError, RRemote>;
-  readonly upsertPullRequest: (
-    pullRequest: ObservedPr,
-  ) => Effect.Effect<void, ValidationError, RWrite>;
+  readonly upsertPullRequest: (pullRequest: ObservedPr) => Effect.Effect<void, DbError, RWrite>;
 }
 
-export function localPullRequestId(repositoryId: string, number: number): string {
-  return `${repositoryId}:${number}`;
-}
-
-export function remapPullRequestToLocalRepository(
-  pullRequest: ObservedPr,
-  repositoryId: string,
-): ObservedPr {
-  return {
-    ...pullRequest,
-    id: localPullRequestId(repositoryId, pullRequest.externalId),
-    repositoryId,
-  };
-}
-
-/** Targeted, account-scoped resolution. Account/host matching happens before this workflow. */
+/** The caller has matched the account to the link's host and scoped each operation to it. */
 export function resolvePullRequestLink<RRepository, RCached, RRemote, RWrite>(
   operations: ResolvePullRequestLinkOperations<RRepository, RCached, RRemote, RWrite>,
   locator: PullRequestLocator,
@@ -42,22 +30,18 @@ export function resolvePullRequestLink<RRepository, RCached, RRemote, RWrite>(
   return Effect.gen(function* () {
     const repository = yield* operations.findRepository(locator.repositoryFullName);
     if (!repository) return { status: "repository_not_tracked" } as const;
-    if (repository.githubHost.toLowerCase() !== locator.githubHost) {
+    if (!sameGithubHost(repository.githubHost, locator.githubHost)) {
       return { status: "repository_not_tracked" } as const;
     }
 
-    const localId = localPullRequestId(repository.id, locator.number);
+    const localId = localPrId(repository.id, locator.number);
     const cached = yield* operations.findCachedPullRequest(localId);
     if (Option.isSome(cached)) {
       return { status: "resolved", pullRequest: cached.value } as const;
     }
 
     const remote = yield* operations.fetchPullRequest(repository, locator.number);
-    const local = remapPullRequestToLocalRepository(remote, repository.id);
-    yield* operations.upsertPullRequest(local);
-    return {
-      status: "resolved",
-      pullRequest: asStored(local, Option.getOrUndefined(cached)),
-    } as const;
+    yield* operations.upsertPullRequest(remote);
+    return { status: "resolved", pullRequest: asStored(remote, undefined) } as const;
   }).pipe(Effect.withSpan("resolvePullRequestLink"));
 }

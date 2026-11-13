@@ -1,24 +1,10 @@
-import type { AppChannel } from "@revv/shared";
-import { API_BASE_URL, APP_CHANNEL } from "$lib/api/base-url";
-
-export type RuntimeHealth = {
-  status: "ok";
-  channel: AppChannel;
-  /**
-   * Commit the server was built from; `null` when it can't be read. Absent on
-   * servers that predate this field.
-   */
-  commit?: string | null;
-  port: number;
-  timestamp: string;
-};
+import type { RuntimeHealth } from "@revv/shared";
+import { APP_CHANNEL } from "$lib/api/base-url";
+import { api } from "$lib/api/client";
+import { call } from "$lib/api/errors";
 
 export async function fetchRuntimeHealth(): Promise<RuntimeHealth> {
-  const res = await fetch(`${API_BASE_URL}/api/health`, { cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`API health check failed with HTTP ${res.status}`);
-  }
-  return (await res.json()) as RuntimeHealth;
+  return call(api.api.health.get({ fetch: { cache: "no-store" } }), "API health check failed");
 }
 
 export function assertRuntimeChannel(health: RuntimeHealth): void {

@@ -1,26 +1,23 @@
-// ── walkthrough-blocks ───────────────────────────────────────────────────────
-//
-// Shared block-variant validation + construction for the two MCP tool surfaces
-// that write `walkthrough_blocks` rows: the generation pipeline
-// (`walkthrough-tools/phase-b-handlers.ts`) and the post-completion chat-edit
-// path (`chat-edit-tools/`). Both accept the same four-variant block-content
-// shape (markdown | code | diff | artifact) and MUST validate and build it
-// identically.
-//
-// Keeping that logic here is the concrete expression of CLAUDE.md invariant #2
-// ("tool handler implementations are always shared in-process code") and #13
-// ("agent-path parity"): the artifact size cap, the variant-exclusivity rule,
-// and the typed-block construction cannot drift between the generation path and
-// the chat-edit path because there is only one copy.
+// Block content for every tool that writes `walkthrough_blocks`: the
+// generation pipeline and the post-completion edit path accept the same four
+// variants (markdown | code | diff | artifact), check them with the same rules
+// (`prepareBlock`), hold an artifact to the craft bar (`artifactRefusal`) and
+// write them through `writeBlock` (invariant 4).
 
-import type {
-  ArtifactBlock,
-  CodeBlock,
-  DiffBlock,
-  MarkdownBlock,
-  WalkthroughBlock,
-} from "@revv/shared";
+import type { WalkthroughBlock } from "@revv/shared";
+import { parseHunkHeader } from "@revv/shared";
+import { and, eq } from "drizzle-orm";
+import type { z } from "zod";
+import type { Db } from "../../db";
+import { walkthroughBlocks } from "../../db/schema/walkthrough-blocks";
+import { blockId, blockOrder } from "../../services/walkthrough/content";
+import { type ArtifactJudge, renderArtifactRejection } from "../jev/artifact-quality";
 import { prLensDiagramError } from "./prlens-doc";
+import type {
+  artifactBlockField,
+  codeBlockSchema,
+  diffBlockSchema,
+} from "./walkthrough-content-schema";
 
 /**
  * Max serialized artifact HTML, enforced identically on both write paths. The
@@ -29,61 +26,83 @@ import { prLensDiagramError } from "./prlens-doc";
  */
 export const MAX_ARTIFACT_HTML_BYTES = 256 * 1024;
 
-/**
- * The four mutually-exclusive block-content variants. Structurally identical to
- * the chat-edit `blockContentSchema` inference and the generation pipeline's
- * `add_diff_step` / `add_semantic_step.initial_block` shapes — both decode
- * their input straight into this type.
- */
+/** The four mutually-exclusive block-content variants, as the tool schemas decode them. */
 export interface BlockVariantInput {
   readonly markdown?: { readonly content: string } | null | undefined;
-  readonly code?:
-    | {
-        readonly file_path: string;
-        readonly start_line: number;
-        readonly end_line: number;
-        readonly language: string;
-        readonly content: string;
-        readonly annotation: string | null;
-        readonly annotation_position: "left" | "right";
-      }
-    | null
-    | undefined;
-  readonly diff?:
-    | {
-        readonly file_path: string;
-        readonly patch: string;
-        readonly annotation: string | null;
-        readonly annotation_position: "left" | "right";
-      }
-    | null
-    | undefined;
-  readonly artifact?:
-    | {
-        readonly html: string;
-        readonly annotation: string | null;
-        readonly annotation_position: "left" | "right";
-      }
-    | null
-    | undefined;
+  readonly code?: z.output<typeof codeBlockSchema> | null | undefined;
+  readonly diff?: z.output<typeof diffBlockSchema> | null | undefined;
+  readonly artifact?: z.output<typeof artifactBlockField>;
 }
 
-/** Count the populated variants. Both tool surfaces require exactly 1. */
-export function blockVariantCount(input: BlockVariantInput): number {
-  let n = 0;
-  if (input.markdown != null) n++;
-  if (input.code != null) n++;
-  if (input.diff != null) n++;
-  if (input.artifact != null) n++;
-  return n;
+type PositionKey = "id" | "order" | "semanticStepIndex" | "stepIndex";
+type ContentOf<B> = B extends WalkthroughBlock ? Omit<B, PositionKey> : never;
+
+/** A block's content as it is persisted, without its position. */
+export type BlockContent = ContentOf<WalkthroughBlock>;
+
+function presentVariants(input: BlockVariantInput): BlockContent[] {
+  const present: BlockContent[] = [];
+  if (input.markdown) present.push({ type: "markdown", content: input.markdown.content });
+  if (input.code) {
+    present.push({
+      type: "code",
+      filePath: input.code.file_path,
+      startLine: input.code.start_line,
+      endLine: input.code.end_line,
+      language: input.code.language,
+      content: input.code.content,
+      annotation: input.code.annotation,
+    });
+  }
+  if (input.diff) {
+    present.push({
+      type: "diff",
+      filePath: input.diff.file_path,
+      patch: normalizeDiffPatch(input.diff.patch),
+      annotation: input.diff.annotation,
+    });
+  }
+  if (input.artifact) {
+    present.push({
+      type: "artifact",
+      html: input.artifact.html,
+      annotation: input.artifact.annotation,
+    });
+  }
+  return present;
 }
 
 /**
- * Reject blocks whose payload would render as an empty box. An annotation on a
- * code/diff block reads as commentary *about* code that isn't there — use a
- * markdown block for prose-only content instead. Returns a recoverable error
- * string for the agent, or null when the content is acceptable.
+ * The block a tool call describes, or why it is refused: exactly one variant
+ * (`countError` otherwise, worded by the tool), non-empty, within size, and
+ * its diagrams valid.
  */
+export function prepareBlock(
+  input: BlockVariantInput,
+  countError: string,
+): { readonly block: BlockContent } | { readonly error: string } {
+  const [block, ...others] = presentVariants(input);
+  if (block === undefined || others.length > 0) return { error: countError };
+  const contentError = blockContentError(input);
+  if (contentError) return { error: contentError };
+  return { block };
+}
+
+/**
+ * Why `block` is refused by the artifact craft bar, or null. Awaited before
+ * the write: a block refused after it landed would leave a hole in its
+ * chapter's `step_index` sequence.
+ */
+export async function artifactRefusal(
+  judge: ArtifactJudge,
+  block: BlockContent,
+  chapterTitle: string,
+): Promise<string | null> {
+  if (block.type !== "artifact") return null;
+  const verdict = await judge(block.html, { chapterTitle, annotation: block.annotation });
+  return verdict.reject ? renderArtifactRejection(verdict) : null;
+}
+
 function emptyBlockError(input: BlockVariantInput): string | null {
   if (input.markdown && input.markdown.content.trim().length === 0) {
     return "Error: markdown block requires non-empty content. Either fill it in or omit the block.";
@@ -123,10 +142,6 @@ function diagramBearingFields(input: BlockVariantInput): readonly (readonly [str
 }
 
 /**
- * The full content gate both write paths run before a block is persisted:
- * empty payloads, then unrenderable `prlens` diagrams. Returns a recoverable
- * error string for the agent, or null when the block is safe to store.
- *
  * Diagram validation is a hard rejection rather than the warn-and-save the
  * artifact theming lint uses, because the two failures differ in kind. A
  * hardcoded color still renders — wrong in one theme, readable in the other.
@@ -305,14 +320,6 @@ export function withArtifactWarnings(okText: string, input: BlockVariantInput): 
   return warnings.length > 0 ? `${okText}\n\n${warnings.join("\n\n")}` : okText;
 }
 
-/**
- * A unified-diff hunk header carrying explicit ranges: `@@ -a[,b] +c[,d] @@`.
- * A bare `@@`, a `@@ section label @@`, or a header with missing ranges is
- * malformed — Pierre's parser yields zero hunks for it and the diff renders as
- * a blank panel.
- */
-const VALID_HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/;
-
 const isHunkHeader = (line: string): boolean => line.startsWith("@@");
 
 /**
@@ -352,7 +359,6 @@ export function normalizeDiffPatch(patch: string): string {
   const lines = patch.split("\n");
   const firstHunk = lines.findIndex(isHunkHeader);
 
-  // No hunk header at all: treat the whole body as one headerless hunk.
   if (firstHunk === -1) {
     if (patch.trim().length === 0) return patch;
     return `${synthesizeHunkHeader(lines)}\n${patch}`;
@@ -365,7 +371,7 @@ export function normalizeDiffPatch(patch: string): string {
     let j = i + 1;
     while (j < lines.length && !isHunkHeader(lines[j] ?? "")) j++;
     const body = lines.slice(i + 1, j);
-    out.push(VALID_HUNK_HEADER.test(header) ? header : synthesizeHunkHeader(body));
+    out.push(parseHunkHeader(header) ? header : synthesizeHunkHeader(body));
     out.push(...body);
     i = j;
   }
@@ -373,94 +379,58 @@ export function normalizeDiffPatch(patch: string): string {
 }
 
 /**
- * Construct a typed `WalkthroughBlock` from exactly one populated variant.
- * Returns null when no variant is present — callers validate variant count
- * with {@link blockVariantCount} and reject empty content with
- * {@link emptyBlockError} before calling. `order` is derived deterministically
- * from `(semanticStepIndex, stepIndex)` so the same block always sorts the same
- * way regardless of which tool wrote it.
+ * Write the block at `(semanticStepIndex, stepIndex)` — the one block write
+ * every tool shares. A replay lands on the same row. An existing row keeps
+ * its id: reviews imported before ids were deterministic carry random ones,
+ * and their issues and ratings point at those.
  */
-export function buildBlock(
-  blockId: string,
+export function writeBlock(
+  db: Db,
+  walkthroughId: string,
   semanticStepIndex: number,
   stepIndex: number,
-  input: BlockVariantInput,
-): WalkthroughBlock | null {
-  const order = semanticStepIndex * 10000 + stepIndex;
-
-  if (input.markdown) {
-    const md: MarkdownBlock = {
-      type: "markdown",
-      id: blockId,
-      order,
+  content: BlockContent,
+): WalkthroughBlock {
+  const position = and(
+    eq(walkthroughBlocks.walkthroughId, walkthroughId),
+    eq(walkthroughBlocks.phase, "diff_analysis"),
+    eq(walkthroughBlocks.semanticStepIndex, semanticStepIndex),
+    eq(walkthroughBlocks.stepIndex, stepIndex),
+  );
+  const existing = db
+    .select({ id: walkthroughBlocks.id })
+    .from(walkthroughBlocks)
+    .where(position)
+    .get();
+  const block: WalkthroughBlock = {
+    ...content,
+    id: existing?.id ?? blockId(walkthroughId, semanticStepIndex, stepIndex),
+    order: blockOrder(semanticStepIndex, stepIndex),
+    semanticStepIndex,
+    stepIndex,
+  };
+  const data = JSON.stringify(block);
+  db.insert(walkthroughBlocks)
+    .values({
+      id: block.id,
+      walkthroughId,
       phase: "diff_analysis",
+      order: block.order,
       semanticStepIndex,
       stepIndex,
-      content: input.markdown.content,
-    };
-    return md;
-  }
-  if (input.code) {
-    const code: CodeBlock = {
-      type: "code",
-      id: blockId,
-      order,
-      phase: "diff_analysis",
-      semanticStepIndex,
-      stepIndex,
-      filePath: input.code.file_path,
-      startLine: input.code.start_line,
-      endLine: input.code.end_line,
-      language: input.code.language,
-      content: input.code.content,
-      annotation: input.code.annotation,
-      annotationPosition: input.code.annotation_position,
-    };
-    return code;
-  }
-  if (input.diff) {
-    const diff: DiffBlock = {
-      type: "diff",
-      id: blockId,
-      order,
-      phase: "diff_analysis",
-      semanticStepIndex,
-      stepIndex,
-      filePath: input.diff.file_path,
-      patch: normalizeDiffPatch(input.diff.patch),
-      annotation: input.diff.annotation,
-      annotationPosition: input.diff.annotation_position,
-    };
-    return diff;
-  }
-  if (input.artifact) {
-    const artifact: ArtifactBlock = {
-      type: "artifact",
-      id: blockId,
-      order,
-      phase: "diff_analysis",
-      semanticStepIndex,
-      stepIndex,
-      html: input.artifact.html,
-      annotation: input.artifact.annotation,
-      annotationPosition: input.artifact.annotation_position,
-    };
-    return artifact;
-  }
-  return null;
-}
-
-/**
- * The two `walkthrough_blocks` columns derived from a built block: the variant
- * `type` discriminator and the JSON-serialized payload written to `data`.
- * Centralized here so no write path hand-writes `JSON.stringify(block)` — the
- * serialization that turns a typed block into a row is this module's
- * responsibility, the same way construction is, and must not drift between the
- * generation and chat-edit paths (CLAUDE.md #2, #13).
- */
-export function blockRow(block: WalkthroughBlock): {
-  type: WalkthroughBlock["type"];
-  data: string;
-} {
-  return { type: block.type, data: JSON.stringify(block) };
+      type: block.type,
+      data,
+      createdAt: new Date().toISOString(),
+    })
+    .onConflictDoUpdate({
+      target: [
+        walkthroughBlocks.walkthroughId,
+        walkthroughBlocks.phase,
+        walkthroughBlocks.semanticStepIndex,
+        walkthroughBlocks.stepIndex,
+      ],
+      set: { type: block.type, data },
+    })
+    .run();
+  return block;
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
+import type { RichPart, StackPlace } from "$lib/stacks/stack-margin";
 import LayerChip from "./LayerChip.svelte";
-import type { RichPart, StackPlace } from "./stack-margin";
 
 interface Props {
   parts: readonly RichPart[];

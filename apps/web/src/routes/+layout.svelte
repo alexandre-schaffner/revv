@@ -1,30 +1,22 @@
 <script lang="ts">
 import "../app.css";
 import IconContext from "phosphor-svelte/lib/IconContext";
-import { onMount } from "svelte";
+import { onMount, untrack } from "svelte";
 import { toast } from "svelte-sonner";
 import { page } from "$app/state";
 import { assertRuntimeChannel, fetchRuntimeHealth } from "$lib/api/runtime";
+import ChatPanel from "$lib/components/chat/ChatPanel.svelte";
 import PrDeepLinkCoordinator from "$lib/components/deep-link/PrDeepLinkCoordinator.svelte";
-import CacheInspector from "$lib/components/dev/CacheInspector.svelte";
 import AppShell from "$lib/components/layout/AppShell.svelte";
 import OnboardingGate from "$lib/components/onboarding/OnboardingGate.svelte";
 import { Toaster } from "$lib/components/ui/sonner";
 import { TooltipProvider } from "$lib/components/ui/tooltip";
+import { listenForPrDeepLinks } from "$lib/deep-link/pr-deep-link.svelte";
 import { initGsap } from "$lib/motion";
-import { startPolling, stopPolling } from "$lib/services/sync";
-import { getToken, getUser, loadUser } from "$lib/stores/auth.svelte";
-import { openPrDeepLink } from "$lib/stores/pr-deep-link.svelte";
-import {
-  fetchPinnedPrs,
-  fetchPrs,
-  fetchRepos,
-  getSelectedPr,
-  getSelectedPrId,
-  setSelectedPrId,
-  setSelectedRepoId,
-} from "$lib/stores/prs.svelte";
-import { fetchAllModels, fetchSettings, getSettings } from "$lib/stores/settings.svelte";
+import { detachSession, restoreSession, startSession } from "$lib/session/lifecycle.svelte";
+import { getUser } from "$lib/stores/auth.svelte";
+import { getSelectedPrId } from "$lib/stores/route.svelte";
+import { fetchSettings } from "$lib/stores/settings.svelte";
 import { initShortcuts } from "$lib/stores/shortcuts.svelte";
 import { setSidebarView } from "$lib/stores/sidebar.svelte";
 import { initTheme } from "$lib/stores/theme.svelte";
@@ -32,114 +24,31 @@ import { startUpdater, stopUpdater } from "$lib/updater/service";
 import { warnIfServiceOutOfDate } from "$lib/updater/service-build-warning";
 
 let { children } = $props();
-let hydrated = false;
-let cacheInspectorOpen = $state(false);
 
-// Keep `selectedPrId` in sync with the URL.
-//
-// Previously the store was only written to when a PR page mounted, and
-// never cleared when navigating away. That stale value drove
-// `PrItem`'s `isSelected` prop, so after leaving a PR (e.g. Cmd+W
-// → homepage) the sidebar still thought that PR was selected — and
-// clicking it just toggled the file-tree expander instead of
-// navigating back. Deriving from the URL here makes the URL the
-// single source of truth for every entry/exit path (Cmd+W, sidebar
-// settings link, logout, mouse back, deep link, SSE-driven nav, …).
-//
-// Read the decoded route param, not `page.url.pathname`: PR ids are
-// `<repoId>:<number>`, and a URL carrying the colon as `%3A` left the raw
-// pathname segment matching no PR — the review page loaded the diff (it
-// reads the decoded param) but sat on "Loading…" with no PR row.
+// Covers the URL-driven paths (deep link, back/forward, refresh, SSE-driven
+// nav); clicks go through `openPr`, which sets the view itself. Re-runs only
+// when selectedPrId changes, so swiping back to the PR list while staying on
+// /review/[prId] (Esc / 'h' / breadcrumb) is not clobbered.
 $effect(() => {
-  setSelectedPrId(page.route.id === "/review/[prId]" ? (page.params.prId ?? null) : null);
+  setSidebarView(getSelectedPrId() ? "files" : "prs");
 });
 
-// URL → selectedRepoId. The rail's active highlight and the project
-// column's content both read from this store. Resolution order:
-//   1. /repo/{id}/... — repoId is explicit in the path.
-//   2. /review/{prId} — derive from the active PR's repositoryId.
-//   3. Everything else (/, /settings, …) — null.
-//
-// Same single-source-of-truth pattern as selectedPrId. Re-runs whenever
-// the URL changes or when the active PR resolves (the latter matters on
-// cold-load of /review/{prId} when prs haven't been hydrated yet).
+// An identity appearing (restore, sign-in) starts its session.
+// Only the user id is tracked: the session reads the token synchronously, and
+// subscribing to it would restart the session on every token rotation.
 $effect(() => {
-  const path = page.url.pathname;
-  const repoMatch = path.match(/^\/repo\/([^/]+)/);
-  if (repoMatch?.[1]) {
-    setSelectedRepoId(repoMatch[1]);
-    return;
-  }
-  const selectedPr = getSelectedPr();
-  setSelectedRepoId(selectedPr?.repositoryId ?? null);
+  const userId = getUser()?.id;
+  if (userId) untrack(() => startSession(userId));
 });
 
-// Keep the sidebar view in lockstep with the URL in both directions.
-// PrItem.handleClick and CommandPalette already pair selectPr() with
-// setSidebarView('files') so the click-driven path is in sync. This
-// effect covers every URL-driven path that doesn't go through those
-// handlers — deep link, browser back/forward, refresh, SSE-driven nav,
-// settings-link round-trip — and was previously one-sided (only reset
-// to 'prs' when the route left a PR), which let the header (OrgSwitcher)
-// and the body (file tree, because selectedPrId was set) desync.
-// Re-runs only when selectedPrId changes, so a manual swipe-back to the
-// PR list while staying on /review/[prId] (Esc / 'h' / breadcrumb) is
-// not clobbered.
-//
-// New-PR chat sessions also live in files-mode: the left pane shows the
-// worktree file tree while the main pane hosts the agent chat.
-$effect(() => {
-  const id = getSelectedPrId();
-  const onNewPr = /^\/repo\/[^/]+\/new-pr\/[^/]+/.test(page.url.pathname);
-  setSidebarView(id || onNewPr ? "files" : "prs");
-});
-
-$effect(() => {
-  function handleKeydown(e: KeyboardEvent): void {
-    if (import.meta.env.DEV && e.metaKey && e.shiftKey && e.key === "C") {
-      e.preventDefault();
-      cacheInspectorOpen = !cacheInspectorOpen;
-    }
-  }
-  window.addEventListener("keydown", handleKeydown);
-  return () => window.removeEventListener("keydown", handleKeydown);
-});
-
-// When user becomes authenticated, hydrate app data.
-$effect(() => {
-  const user = getUser();
-  if (user && !hydrated) {
-    hydrated = true;
-    hydrate();
-  }
-  if (!user) {
-    hydrated = false;
-  }
-});
-
-// Runs once, on mount. Deliberately `onMount` and not `$effect`: several of
-// these helpers read reactive state synchronously (`loadUser()` and
-// `fetchAllModels()` both touch the auth token before their first `await`), so
-// an effect would subscribe to it. A token change — better-auth handing back a
-// refreshed `set-auth-token` on sign-in — then tore the whole thing down and
-// re-ran it: polling restarted and, worse, the updater re-armed and fired a
-// second immediate check, producing a duplicate "Update available" toast.
+// `onMount`, not `$effect`: `restoreSession()` reads the auth token before
+// its first `await`, so an effect would re-run on every token change (sign-in, account switch), re-arming the updater into a
+// duplicate "Update available" toast.
 onMount(() => {
   initGsap();
   const cleanupTheme = initTheme();
   const cleanupShortcuts = initShortcuts();
-  let cleanupDeepLinks: (() => void) | undefined;
-
-  if ("__TAURI_INTERNALS__" in window) {
-    void import("@tauri-apps/plugin-deep-link").then(async ({ getCurrent, onOpenUrl }) => {
-      const receive = (urls: string[]): void => {
-        for (const url of urls) void openPrDeepLink(url);
-      };
-      cleanupDeepLinks = await onOpenUrl(receive);
-      const current = await getCurrent().catch(() => null);
-      if (current) receive(current);
-    });
-  }
+  const cleanupDeepLinks = listenForPrDeepLinks();
 
   void fetchRuntimeHealth()
     .then((health) => {
@@ -154,17 +63,10 @@ onMount(() => {
       });
     });
 
-  // On mount: try to restore auth from localStorage.
-  // If the token is valid, loadUser() sets the user, which triggers
-  // the hydration effect above.
-  loadUser();
-  // Fetch settings before arming the updater check loop.
-  // Model prefetch doesn't block anything, so it starts in parallel.
-  void fetchAllModels();
+  restoreSession();
   void fetchSettings().then(() => {
-    // 5s delay so the first update check doesn't compete with
-    // initial PR sync for network. After that the service runs on
-    // its own hourly timer. Tauri-only — the service no-ops in dev.
+    // So the first update check doesn't compete with the initial PR sync
+    // for network.
     setTimeout(() => {
       startUpdater();
     }, 5000);
@@ -173,33 +75,18 @@ onMount(() => {
   return () => {
     cleanupTheme();
     cleanupShortcuts();
-    cleanupDeepLinks?.();
-    stopPolling();
+    cleanupDeepLinks();
+    detachSession();
     stopUpdater();
   };
 });
-
-async function hydrate() {
-  // Load cached data first (instant UI)
-  await Promise.all([fetchPrs(), fetchRepos(), fetchPinnedPrs(), fetchSettings()]);
-
-  // Then kick off a live sync from GitHub
-  const token = getToken();
-  if (!token) return;
-
-  const s = getSettings();
-  const interval = s?.autoFetchInterval ?? 5;
-  startPolling(interval, token);
-}
 </script>
 
-<!-- Iconography defaults (phosphor-svelte). One place decides how every icon
-	 in the app renders, so call sites only state what differs.
+<!-- Iconography defaults (phosphor-svelte); call sites only state what differs.
 
-	   weight "regular" — the outlined default. `weight="fill"` is reserved for
-	     *state*: the on/active/selected half of a toggle, and severity markers
-	     where solidity itself is the signal. Fill as decoration is what let the
-	     same glyph read solid in one row and hairline in the next.
+	   weight "regular" — `weight="fill"` is reserved for *state*: the
+	     on/active/selected half of a toggle, and severity markers where
+	     solidity itself is the signal.
 	   aria-hidden — phosphor stamps `role="img"` on every <svg>, and a role=img
 	     with no accessible name is an unlabelled image (WCAG 1.1.1). Icons here
 	     are decorative; the adjacent label or the button's own aria-label
@@ -218,12 +105,15 @@ async function hydrate() {
 	<OnboardingGate>
 		<AppShell>
 			{@render children()}
+			{#snippet rightPanel()}
+				{@const prId = getSelectedPrId()}
+				{#if prId}
+					<ChatPanel {prId} />
+				{/if}
+			{/snippet}
 		</AppShell>
 	</OnboardingGate>
 	<PrDeepLinkCoordinator />
 	<Toaster />
-	{#if import.meta.env.DEV && cacheInspectorOpen}
-		<CacheInspector onclose={() => { cacheInspectorOpen = false; }} />
-	{/if}
 </TooltipProvider>
 </IconContext>

@@ -1,12 +1,11 @@
 #!/usr/bin/env bun
 
-// ── Revv stdio MCP bridge ───────────────────────────────────────────────────
-//
-// One dependency-free proxy shared by every external coding agent Revv
-// supports (Claude Code, Codex, OpenCode, Cursor). Revv copies this file into
-// the per-agent install directory and injects the credential through the
-// environment; the agent speaks stdio JSON-RPC to it, and it forwards each
-// frame to Revv's loopback MCP route together with the checkout identity.
+// Revv's stdio MCP bridge: one dependency-free proxy shared by every external
+// coding agent Revv supports (Claude Code, Codex, OpenCode, Cursor). Revv
+// copies this file into the per-agent install directory and injects the
+// credential through the environment; the agent speaks stdio JSON-RPC to it,
+// and it forwards each frame to Revv's loopback MCP route together with the
+// checkout identity.
 //
 // The bridge holds no review state: SQLite inside Revv stays authoritative.
 
@@ -28,13 +27,26 @@ interface JsonRpcRequest {
 type JsonRpcPayload = JsonRpcRequest | JsonRpcRequest[];
 
 const token = process.env.REVV_INTEGRATION_TOKEN?.trim() ?? "";
+/**
+ * The server that installed this copy writes its own URL into
+ * `REVV_API_URL`, and rewrites it on every start. Configs written before it
+ * did probe Revv's two channels, production then development (`API_PORT`,
+ * `DEV_API_PORT` in `@revv/shared`; `scripts/check-desktop-contract.ts` holds
+ * them equal) until a Revv that pins them starts (legacy-upgrade: unpinnedBridge).
+ */
+const LEGACY_PORTS = [45678, 45679];
 const configuredEndpoints = process.env.REVV_API_URL?.trim();
 const endpoints = configuredEndpoints
   ? configuredEndpoints
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean)
-  : ["http://127.0.0.1:45678/mcp/external", "http://127.0.0.1:45679/mcp/external"];
+  : LEGACY_PORTS.map((port) => `http://127.0.0.1:${port}/mcp/external`);
+// Bun sends even loopback requests through HTTP_PROXY unless NO_PROXY names
+// the host; a proxy would answer instead of Revv (with a 407, say).
+process.env.NO_PROXY = [process.env.NO_PROXY, process.env.no_proxy, "127.0.0.1", "localhost"]
+  .filter(Boolean)
+  .join(",");
 // Agents differ in how they announce the active project: Claude Code exports
 // `CLAUDE_PROJECT_DIR`, the others spawn the server with the workspace as cwd.
 const projectDir =
@@ -156,7 +168,10 @@ for await (const line of lines) {
   }
 
   let handled = false;
-  let lastFailure = "No Revv endpoint was available.";
+  // The first answer Revv gave stays the reason: an endpoint tried after it
+  // that can't be reached says nothing about the credential it refused.
+  let answered: string | null = null;
+  let unreachable = "No Revv endpoint was available.";
   for (const endpoint of endpoints) {
     try {
       const response = await fetch(endpoint, {
@@ -178,14 +193,15 @@ for await (const line of lines) {
       const body = await response.text();
       if (!response.ok) {
         const detail = body.trim() || response.statusText || "no response body";
-        lastFailure = `Revv returned HTTP ${response.status}: ${detail}`;
+        const failure = `Revv returned HTTP ${response.status}: ${detail}`;
+        answered ??= failure;
         const couldBeWrongChannel =
           response.status === 401 ||
           response.status === 403 ||
           (response.status === 404 && body.trim() === "");
         if (couldBeWrongChannel) continue;
-        const failure = rpcError(request, lastFailure);
-        if (failure) process.stdout.write(`${failure}\n`);
+        const reply = rpcError(request, failure);
+        if (reply) process.stdout.write(`${reply}\n`);
         handled = true;
         break;
       }
@@ -199,11 +215,11 @@ for await (const line of lines) {
       break;
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      lastFailure = `Cannot reach Revv. Keep the app running in the tray and retry. (${detail})`;
+      unreachable = `Cannot reach Revv. Keep the app running in the tray and retry. (${detail})`;
     }
   }
   if (!handled) {
-    const failure = rpcError(request, lastFailure);
+    const failure = rpcError(request, answered ?? unreachable);
     if (failure) process.stdout.write(`${failure}\n`);
   }
 }

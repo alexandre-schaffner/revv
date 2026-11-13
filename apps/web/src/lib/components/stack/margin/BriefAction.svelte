@@ -2,9 +2,10 @@
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import PencilSimpleLine from "phosphor-svelte/lib/PencilSimpleLine";
 import { toast } from "svelte-sonner";
-import { Shimmer } from "$lib/components/ai/shimmer";
+import { thrownMessage } from "$lib/api/wire";
+import { Shimmer } from "$lib/components/ui/shimmer";
+import type { StackPlace } from "$lib/stacks/stack-margin";
 import { requestStackBrief } from "$lib/stores/stacks.svelte";
-import type { StackPlace } from "./stack-margin";
 
 interface Props {
   place: StackPlace;
@@ -18,10 +19,11 @@ const asking = $derived(askedFor === place.stack.brief?.id || askedFor === "none
 
 async function ask(): Promise<void> {
   askedFor = place.stack.brief?.id ?? "none";
-  const id = await requestStackBrief(place.prId);
-  if (id === null) {
+  try {
+    await requestStackBrief(place.prId);
+  } catch (e) {
     askedFor = null;
-    toast.error("Couldn't start the stack brief.");
+    toast.error(thrownMessage(e));
   }
 }
 </script>

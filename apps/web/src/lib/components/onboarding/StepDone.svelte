@@ -1,53 +1,22 @@
 <script lang="ts">
 import { onMount } from "svelte";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
-import { completeOnboarding, getIsOnboarded } from "$lib/stores/auth.svelte";
+import { gsapEnter, tokens } from "$lib/motion";
+import { completeOnboarding, endOnboardingReplay } from "$lib/stores/auth.svelte";
 
-interface Props {
-  onFinish: () => void;
-}
-
-let { onFinish }: Props = $props();
+// Long enough to read the closing message; completing swaps the gate to the app.
+const READ_DELAY_MS = 2200;
 
 onMount(() => {
-  let attempts = 0;
-  const maxAttempts = 5;
-
-  async function tryComplete() {
-    if (typeof sessionStorage !== "undefined") {
-      sessionStorage.removeItem("revv-onboarding-replay");
-    }
-    try {
-      await completeOnboarding();
-    } catch {
-      // Retry below will handle it
-    }
-    if (getIsOnboarded()) {
-      onFinish();
-      return;
-    }
-    // Retry if not yet onboarded (token/user may not be ready)
-    attempts++;
-    if (attempts < maxAttempts) {
-      retryTimer = setTimeout(tryComplete, 1000);
-    } else {
-      // Force finish after max retries — the gate will handle it
-      onFinish();
-    }
-  }
-
-  // Initial delay for the user to read the closing message
-  let retryTimer: ReturnType<typeof setTimeout> | undefined;
-  const initialTimer = setTimeout(tryComplete, 2200);
-
-  return () => {
-    clearTimeout(initialTimer);
-    if (retryTimer) clearTimeout(retryTimer);
-  };
+  const timer = setTimeout(() => {
+    endOnboardingReplay();
+    void completeOnboarding();
+  }, READ_DELAY_MS);
+  return () => clearTimeout(timer);
 });
 </script>
 
-<div class="done">
+<div class="done" use:gsapEnter={{ y: 8, duration: tokens.ceremonialSlow }}>
 	<div class="ornament">
 		<Dotmatrix variant="square-14" />
 	</div>
@@ -57,7 +26,7 @@ onMount(() => {
 		The first one is preparing now.
 	</p>
 
-	<div class="footer-row">
+	<div class="footer-row" use:gsapEnter={{ duration: tokens.ceremonialSlow, delay: 0.6 }}>
 		<span class="dash"></span>
 		<span class="label">Fin</span>
 		<span class="dash"></span>
@@ -70,7 +39,6 @@ onMount(() => {
 		flex-direction: column;
 		gap: 32px;
 		max-width: 520px;
-		animation: scene-in var(--duration-ceremonial-slow) var(--ease-out-expo) backwards;
 	}
 
 	.ornament {
@@ -93,7 +61,6 @@ onMount(() => {
 		align-items: center;
 		gap: 14px;
 		padding-top: 16px;
-		animation: fin-in var(--duration-ceremonial-slow) var(--ease-out-expo) 600ms backwards;
 	}
 
 	.dash {
@@ -108,32 +75,5 @@ onMount(() => {
 		font-size: 14px;
 		color: var(--ob-text-label);
 		letter-spacing: 0.08em;
-	}
-
-	@keyframes scene-in {
-		from {
-			opacity: 0;
-			transform: translateY(8px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-		}
-	}
-
-	@keyframes fin-in {
-		from {
-			opacity: 0;
-		}
-		to {
-			opacity: 1;
-		}
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.done,
-		.footer-row {
-			animation: none;
-		}
 	}
 </style>

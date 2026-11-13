@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AppInstallation } from "./GitHub";
+import type { AppInstallation } from "./github/repos";
 import { explainRepoNotFound } from "./repo-access";
 
 const HOST = "acme.ghe.com";
