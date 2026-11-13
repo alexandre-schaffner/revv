@@ -17,7 +17,7 @@
     "@opentelemetry/sdk-trace-web": "^2.11.0",
     "@sinclair/typebox": "^0.34.52",
     "@sveltejs/adapter-static": "^3.0.10",
-    "@sveltejs/kit": "^2.70.3",
+    "@sveltejs/kit": "^3.1.1",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tailwindcss/typography": "^0.5.20",
     "@tailwindcss/vite": "^4.3.3",
