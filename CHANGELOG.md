@@ -1,5 +1,73 @@
 # Changelog
 
+## [0.35.0](https://github.com/alexandre-schaffner/revv/compare/v0.34.0...v0.35.0) (2026-11-13)
+
+
+### Features
+
+* **db:** migration 0490 — walkthrough end reason and launch plan, recap source bundle, stack reviews ([186e866](https://github.com/alexandre-schaffner/revv/commit/186e8669abc89a55b9cd8b19e2a57263ccc6667f))
+* **resolve:** Stop for the agent's conflict-resolve runs ([56d02a3](https://github.com/alexandre-schaffner/revv/commit/56d02a3be98de30c2650635322900011fccba9ee))
+* **sync:** server completion signals replace web polling; one diff get-or-fetch ([56c5ad1](https://github.com/alexandre-schaffner/revv/commit/56c5ad15493aaad4ba0b3ae8ea4a7d25fa8d8ecb))
+* **web:** a signed-out window offers the sessions this machine holds ([7fc57e9](https://github.com/alexandre-schaffner/revv/commit/7fc57e9ed1e23d8fb6db3828bcf74a0ceeec5820))
+
+
+### Bug Fixes
+
+* **auth:** re-auth falls back to the host's saved client when GitHub refuses the account's ([e7b582f](https://github.com/alexandre-schaffner/revv/commit/e7b582f5eb65491432cb4b10bfdfacc4718bb86f))
+* **cache-signing:** detect a missing ssh-keygen from the spawn error, not its stderr ([79aee85](https://github.com/alexandre-schaffner/revv/commit/79aee854f53d9d467da49407920bff040549297f))
+* **chat:** composer warm-up keeps an existing worktree and resolves a missing head ([5a88252](https://github.com/alexandre-schaffner/revv/commit/5a88252b29b8ce666393d01e5272f8d1b090c851))
+* **chat:** read the transcript, mode and proposed commits from the mirror alone ([83542a2](https://github.com/alexandre-schaffner/revv/commit/83542a2ccda1031f0f4c4c71f0ca5a987aa52e70))
+* **clone:** a refused clone folder stays the row's destination; boot status writes go through setCloneState ([c82372c](https://github.com/alexandre-schaffner/revv/commit/c82372ce6e0a6ed8a6c76a7a85828216c531d4a3))
+* **clone:** record that Revv wrote the clone folder, and drop review_status ([8ce1b2f](https://github.com/alexandre-schaffner/revv/commit/8ce1b2ff5743dc5b86c456a6834442993661f88f))
+* **desktop-contract:** dev port truth and every cross-process literal checked ([c09d63d](https://github.com/alexandre-schaffner/revv/commit/c09d63d21a1204af90482c41a714d50ec97aaf56))
+* **external-integrations:** rewrite or remove only this server's installs ([d97da17](https://github.com/alexandre-schaffner/revv/commit/d97da1747f998a5eca9fb87d8c0bba9b70ed66ca))
+* **forget:** forgetting an account or user uninstalls its external-agent installs ([ba5f91b](https://github.com/alexandre-schaffner/revv/commit/ba5f91bfa202e096aca130cc89ee731d1a3757b4))
+* **git:** commits written for the user's branches follow their signing config ([a947d1f](https://github.com/alexandre-schaffner/revv/commit/a947d1ffb4a33f687d7bf5e81946f21b289702b3))
+* **install:** an unset GitHub override leaves the server config; checkout .env only on request ([b6fa967](https://github.com/alexandre-schaffner/revv/commit/b6fa967fb975c02d4649f22c54d6bd35827d761c))
+* **jev:** don't judge a flagged concern a duplicate of itself ([ebd3b11](https://github.com/alexandre-schaffner/revv/commit/ebd3b11de9ff7fe28f04f49122deed3d3511db59))
+* **jev:** job-start judgment reads only what its cache key covers ([14f9e75](https://github.com/alexandre-schaffner/revv/commit/14f9e753a2f4254128a57335c06c61351f35cb08))
+* **jev:** job-start judgment sees commit subjects again, from the cached diff on every path ([652b328](https://github.com/alexandre-schaffner/revv/commit/652b32826a70dc3b51e4ad35148e0c5018d245c5))
+* **recaps:** a rerun ends the replaced run's stream with restarted, not a false Stop ([1dd7394](https://github.com/alexandre-schaffner/revv/commit/1dd7394087284f5a91e65dad3cff2a70c70215b4))
+* **recaps:** decision reads raise DB errors instead of answering "none" ([c0b6b2f](https://github.com/alexandre-schaffner/revv/commit/c0b6b2f0e0f5518fbceb4957cad0447c8a3a07cb))
+* **repos:** re-adding a tracked repository keeps its clone ([4eda4a3](https://github.com/alexandre-schaffner/revv/commit/4eda4a390ab2c80b635d199248b151e1c166c0af))
+* **review:** a status GitHub hasn't taken survives the next pull ([17cb925](https://github.com/alexandre-schaffner/revv/commit/17cb92580df8dcc4ea9212b7f1e0b9a7433f0e74))
+* **scripts:** resolve @revv/shared from source in the scripts typecheck ([53c73ad](https://github.com/alexandre-schaffner/revv/commit/53c73add43f7c32cc42ca3698d8f3b4d9fe4846d))
+* **security:** linear-time host and mention trimming; recap lede keeps only bare strong/em ([bf54f0b](https://github.com/alexandre-schaffner/revv/commit/bf54f0b11567b6d24a0207a090ac37d30958827b))
+* **security:** strip lede tags and CODEOWNERS comments with character loops ([57bcd9a](https://github.com/alexandre-schaffner/revv/commit/57bcd9a965dac64cff39aac22b6d57eb56476c75))
+* **server:** exit when the runtime fails to build ([d2b20a3](https://github.com/alexandre-schaffner/revv/commit/d2b20a3167f5076afde9cfae02bb50ba724f967f))
+* **server:** log a failed thread-event broadcast instead of dropping it ([6690eb5](https://github.com/alexandre-schaffner/revv/commit/6690eb544ffdf61be0faa8d4dc019f98c1d222ed))
+* **server:** pins within one second, and re-pinning, no longer fail ([ed2df47](https://github.com/alexandre-schaffner/revv/commit/ed2df479d3628392d9aefaa977f87cd292bf20cb))
+* **server:** put process-spawning settings routes behind auth ([90cb205](https://github.com/alexandre-schaffner/revv/commit/90cb205c4fbee07558debaa1f7a57f3e256b3453))
+* **server:** serialize SettingsService.updateSettings ([50197b2](https://github.com/alexandre-schaffner/revv/commit/50197b28b208da9be1e0ded829deef82195a6db0))
+* **server:** user:updated carries the cached avatar, not GitHub's URL ([9b3e74d](https://github.com/alexandre-schaffner/revv/commit/9b3e74df082ae7b5d2355fd980924ef4721bb51e))
+* **settings:** GITHUB_HOST points a fresh install's settings at its host ([7bc816e](https://github.com/alexandre-schaffner/revv/commit/7bc816e1cd32451219f5fac203851568bb584b6c))
+* **settings:** normalize the first-boot seed's GitHub host ([9a02271](https://github.com/alexandre-schaffner/revv/commit/9a022719adb477a95cf6c4be373ba5f6575d1cd1))
+* **stacks:** log a merge run that couldn't be marked failed ([dfa2f9b](https://github.com/alexandre-schaffner/revv/commit/dfa2f9b43b8139ec6c04732310262dbf1e299425))
+* **stacks:** Review the stack runs each layer in its own review perspective ([434d01c](https://github.com/alexandre-schaffner/revv/commit/434d01cd0507eb374bcc8a2e5a9cd1dc4c637180))
+* **suggestions:** never cache the fallback prompts; key on the walkthrough and diff they were built from ([9f3bd65](https://github.com/alexandre-schaffner/revv/commit/9f3bd654c298893442f59f3f780b7f4a7101a045))
+* **team-cache:** key reviews on the repository's GitHub host ([5f2544e](https://github.com/alexandre-schaffner/revv/commit/5f2544ee2ccc53884d69a47c0e411c5dd85ebef5))
+* **walkthrough:** announce thread:deleted for the AI threads a supersede removes ([fb04842](https://github.com/alexandre-schaffner/revv/commit/fb0484251d479e3294547c08e8aa2816794cb4ef))
+* **walkthrough:** decodeBlock takes phase and step indices from the row ([0b310db](https://github.com/alexandre-schaffner/revv/commit/0b310dbcb560f088d02203012af4c46ceba6bede))
+* **walkthrough:** narrow-pane blocks keep the wide layout's 20px gap ([c4f3910](https://github.com/alexandre-schaffner/revv/commit/c4f3910036e3bb3937eddace88e8a6f9914dd578))
+* **walkthrough:** the advisory prose check no longer delays the completion gate ([b38c904](https://github.com/alexandre-schaffner/revv/commit/b38c904a3f04ddd6d5074af6cadacabbd5e3a4ea))
+* **web-onboarding:** StepAgent install state belongs to its agent; traits from the registry ([5fbfece](https://github.com/alexandre-schaffner/revv/commit/5fbfeceeea1affa77f23f6664f22e9d9fa98f32c))
+* **web-review:** pass the session to the review payload; drop the never-set cursor side ([6a08216](https://github.com/alexandre-schaffner/revv/commit/6a08216fec7c636c6bb8559542cf92bea7c7faa9))
+* **web/events:** a window focus can no longer cancel the reconnect catch-up ([bea8703](https://github.com/alexandre-schaffner/revv/commit/bea87034888179889558d8b8d775c41b0c50e58c))
+* **web/settings:** read the model catalog with the session, never before it ([554c5b6](https://github.com/alexandre-schaffner/revv/commit/554c5b6878eea15c5b9127d6e1793ad8fbf465cb))
+* **web:** device-flow sign-ins keyed by host; a cleared re-auth ends its sign-in ([cd44e10](https://github.com/alexandre-schaffner/revv/commit/cd44e106cf11600ac64ec9273d5824c75b999b81))
+* **web:** Escape dismisses only the topmost comment input; image diff errors read the server's message ([7c8d926](https://github.com/alexandre-schaffner/revv/commit/7c8d926f2231d141366ff8c2375505cac64232a5))
+* **web:** make the reduced-motion reset outrank class animations ([38f788e](https://github.com/alexandre-schaffner/revv/commit/38f788e8fa13110960297b379b83f49bacdc2dd8))
+* **web:** repo page waits for the repo list before saying not found ([49e4fdb](https://github.com/alexandre-schaffner/revv/commit/49e4fdb8edf541a93694efd1b0fd8ab0be0bd6af))
+* **web:** streaming fade honours reduced motion; terminal peek disposes when collapsed mid-load ([3349e05](https://github.com/alexandre-schaffner/revv/commit/3349e050e8094a5be3bf9e22657692d186c3a9c1))
+* **workspace:** refuse a turn whose worktree move would strand the agent's commits ([fb55082](https://github.com/alexandre-schaffner/revv/commit/fb5508233c28c1cb569a437835c8e81f46d24b3a))
+
+
+### Performance Improvements
+
+* **acp:** agent PATH probes stop blocking the event loop where the interface allows ([092e702](https://github.com/alexandre-schaffner/revv/commit/092e70248ce44a97a94d2206f445ec796205baf4))
+* **team-cache:** probe gcloud ADC without blocking the event loop ([9c8d446](https://github.com/alexandre-schaffner/revv/commit/9c8d446b90c16f84d6a6bc1ff8b66084aa4dec44))
+* **workspace:** list proposed commits with one git log ([339f644](https://github.com/alexandre-schaffner/revv/commit/339f6440251e3454a6f4054e473d21cf57618aab))
+
 ## [0.34.0](https://github.com/alexandre-schaffner/revv/compare/v0.33.0...v0.34.0) (2026-11-06)
 
 
