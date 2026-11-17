@@ -10,6 +10,7 @@ import type {
   LinkedIssue,
   PrConversation,
   PrLabel,
+  PrOwnership,
   ReviewDecision,
   ReviewerEntry,
   ReviewVerdict,
@@ -589,7 +590,12 @@ function toEventItem(node: RawEventNode): TimelineItem | null {
   }
 }
 
-function mapReviewers(pr: RawPullRequest): ReviewerEntry[] {
+type RawReviewers = Pick<
+  RawPullRequest,
+  "author" | "reviewRequests" | "latestOpinionatedReviews" | "latestReviews" | "reviews"
+>;
+
+function mapReviewers(pr: RawReviewers): ReviewerEntry[] {
   // Latest verdict per login. `latestOpinionatedReviews` wins over a later
   // plain comment (GitHub's own sidebar does the same: an approval followed
   // by a comment still reads as an approval).
@@ -688,6 +694,32 @@ const WRITE_PERMISSIONS = new Set(["ADMIN", "MAINTAIN", "WRITE"]);
  * service adds them.
  */
 export type MappedConversation = Omit<PrConversation, "codeowners" | "avatars" | "viewerTeams">;
+
+/** What the ownership query answers: the reviewers, plus who asked them. */
+export interface RawOwnership {
+  readonly viewer: { readonly login: string };
+  readonly repository: {
+    readonly pullRequest:
+      | (RawReviewers & { readonly timelineItems: RawConnection<RawTimelineNode> | null })
+      | null;
+  } | null;
+}
+
+export type MappedOwnership = Omit<PrOwnership, "codeowners" | "viewerTeams">;
+
+export function mapOwnership(raw: RawOwnership, fetchedAt: string): MappedOwnership | null {
+  const pr = raw.repository?.pullRequest;
+  if (!pr) return null;
+  return {
+    viewerLogin: raw.viewer.login,
+    author: toActor(pr.author),
+    reviewers: mapReviewers(pr),
+    timeline: nodesOf(pr.timelineItems)
+      .map(toTimelineItem)
+      .filter((item): item is TimelineItem => item?.kind === "review_requested"),
+    fetchedAt,
+  };
+}
 
 /**
  * `olderTimeline` is the pages read before the query's own (newest) page,

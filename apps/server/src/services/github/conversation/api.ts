@@ -6,6 +6,7 @@ import type {
   CiRollup,
   CodeownersFile,
   TeamOption,
+  ViewerTeam,
 } from "@revv/shared";
 import { CODEOWNERS_PATHS, parseCodeowners } from "@revv/shared";
 import { Effect } from "effect";
@@ -27,13 +28,16 @@ import { extractLogTail } from "./log-tail";
 import {
   collectAvatarUrls,
   type MappedConversation,
+  type MappedOwnership,
   mapConversation,
+  mapOwnership,
   mapRollup,
   nodesOf,
   type RawCheckRollup,
   type RawConnection,
   type RawConversation,
   type RawLabel,
+  type RawOwnership,
   type RawPage,
   type RawRollupCommits,
   type RawTimelineNode,
@@ -45,6 +49,7 @@ import {
   checksQuery,
   conversationQuery,
   MODERN_TOKENS,
+  ownershipQuery,
   TIMELINE_MAX_PAGES,
   timelinePageQuery,
   VIEWER_TEAMS_QUERY,
@@ -297,14 +302,19 @@ function fetchViewerTeams(
   client: GitHubClient,
   ref: RepoRef,
   login: string,
-): Effect.Effect<string[], GitHubError> {
+): Effect.Effect<ViewerTeam[], GitHubError> {
+  type RawTeam = { combinedSlug: string; members: { totalCount: number } | null } | null;
   return http
     .graphqlPartial<{
-      organization: { teams: { nodes: ReadonlyArray<{ combinedSlug: string } | null> } } | null;
+      organization: { teams: { nodes: ReadonlyArray<RawTeam> } } | null;
     }>(client, VIEWER_TEAMS_QUERY, { org: ref.owner, login })
     .pipe(
       Effect.map(({ data }) =>
-        (data.organization?.teams.nodes ?? []).flatMap((team) => (team ? [team.combinedSlug] : [])),
+        (data.organization?.teams.nodes ?? []).flatMap((team) =>
+          team
+            ? [{ combinedSlug: team.combinedSlug, memberCount: team.members?.totalCount ?? 0 }]
+            : [],
+        ),
       ),
       Effect.catchIf(
         (e) =>
@@ -314,6 +324,32 @@ function fetchViewerTeams(
         () => Effect.succeed([]),
       ),
     );
+}
+
+/** The reviewers, their verdicts and who asked them: the review-request header's light read. */
+function fetchOwnership(
+  http: GitHubHttp,
+  client: GitHubClient,
+  ref: RepoRef,
+  number: number,
+): Effect.Effect<MappedOwnership, GitHubError> {
+  return Effect.gen(function* () {
+    const { data } = yield* askWithFallback<RawOwnership>(http, client, ownershipQuery, {
+      owner: ref.owner,
+      repo: ref.repo,
+      number,
+    });
+    const ownership = mapOwnership(data, new Date().toISOString());
+    if (!ownership) {
+      return yield* Effect.fail(
+        new GitHubNotFoundError({
+          resource: "pull_request",
+          id: `${ref.owner}/${ref.repo}#${number}`,
+        }),
+      );
+    }
+    return ownership;
+  }).pipe(retryTransient);
 }
 
 interface RawCheckRun {
@@ -518,6 +554,7 @@ export const conversationApi = (http: GitHubHttp) => {
     ciRollup: onRepo(fetchCiRollup),
     codeowners: onRepo(fetchCodeowners),
     viewerTeams: onRepo(fetchViewerTeams),
+    ownership: onRepo(fetchOwnership),
     checkDetails: onRepo(fetchCheckDetails),
     labels: onRepo(listRepoLabels),
     assignableUsers: onRepo(searchAssignableUsers),

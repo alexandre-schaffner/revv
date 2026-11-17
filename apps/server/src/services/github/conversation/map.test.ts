@@ -3,7 +3,9 @@ import {
   checkBucket,
   collectAvatarUrls,
   mapConversation,
+  mapOwnership,
   type RawConversation,
+  type RawOwnership,
   type RawTimelineNode,
 } from "./map";
 
@@ -296,6 +298,45 @@ describe("mapConversation", () => {
       repository: { viewerPermission: null, pullRequest: null },
     };
     expect(mapConversation(raw, [], "pr-1", false, "now")).toBeNull();
+  });
+});
+
+describe("mapOwnership", () => {
+  test("keeps the reviewers and only who asked whom", () => {
+    const conversation = rawConversation();
+    const pr = conversation.repository?.pullRequest;
+    if (!pr) throw new Error("fixture has no PR");
+    const raw: RawOwnership = {
+      viewer: conversation.viewer,
+      repository: {
+        pullRequest: {
+          ...pr,
+          timelineItems: {
+            nodes: [
+              {
+                __typename: "ReviewRequestedEvent",
+                id: "rr1",
+                createdAt: "2026-10-02T00:00:00Z",
+                actor: user("alice"),
+                requestedReviewer: { __typename: "Team", combinedSlug: "o/core" },
+              },
+              ...(pr.timelineItems?.nodes ?? []),
+            ] as RawTimelineNode[],
+          },
+        },
+      },
+    };
+    const own = mapOwnership(raw, "now");
+    expect(own?.viewerLogin).toBe("me");
+    expect(own?.reviewers.length).toBe(
+      mapConversation(conversation, [], "pr-1", false, "now")?.reviewers.length,
+    );
+    expect(own?.timeline.map((t) => t.kind)).toEqual(["review_requested"]);
+    expect(own?.fetchedAt).toBe("now");
+  });
+
+  test("answers null when the PR isn't visible", () => {
+    expect(mapOwnership({ viewer: { login: "me" }, repository: null }, "now")).toBeNull();
   });
 });
 

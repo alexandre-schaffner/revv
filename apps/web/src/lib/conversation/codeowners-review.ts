@@ -3,15 +3,21 @@
 // GitHub says that you (or a team of yours) were requested, not which files
 // made it so. The answer is the base branch's CODEOWNERS: the files whose
 // last matching rule names you or one of your teams. Pure logic over the
-// Conversation snapshot and the PR's changed paths, so the sidebar header,
-// the file tree, and the Conversation tab's Code owners section all read the
-// same answer.
+// ownership read (or the conversation, which carries the same fields) and the
+// PR's changed paths, so the files sidebar, the file tree, and the
+// Conversation tab's Code owners section all read the same answer.
+//
+// A viewer can own a file several ways at once (themselves, a small team, a
+// company-wide team). The narrowest is the one that says the most: a file
+// only R&D owns matters more to an R&D member than one every developer owns.
+// So groups rank narrowest first (the viewer alone, then the smallest team),
+// and the sidebar scopes to the narrowest by default.
 
 import {
   type CodeownersRule,
   codeownersRuleFor,
   loginsMatch,
-  type PrConversation,
+  type PrOwnership,
   type ReviewerEntry,
 } from "@revv/shared";
 
@@ -28,6 +34,8 @@ export interface OwnerGroup {
   readonly files: readonly string[];
   /** The viewer is this owner, or a member of this team. */
   readonly mine: boolean;
+  /** People it stands for: 1 for a person, the team's size, null when unknown. */
+  readonly size: number | null;
   readonly status: OwnerStatus;
   /**
    * Logins whose approval stands for this owner: the user themselves, or the
@@ -37,10 +45,10 @@ export interface OwnerGroup {
   readonly changesRequestedBy: readonly string[];
 }
 
-/** A changed file the viewer owns, and the rule that makes it so. */
-export interface OwnedFile {
+/** A changed file in the chosen scope, and the rule that puts it there. */
+export interface ScopedFile {
   readonly rule: CodeownersRule;
-  /** The rule's owners that are the viewer or one of their teams, as written. */
+  /** The rule's owners that are in the scope, as written. */
   readonly via: readonly string[];
 }
 
@@ -60,58 +68,89 @@ export type RequestReason =
 export interface ReviewOwnership {
   /** Null when the viewer wrote the PR, or has nothing to do with it. */
   readonly reason: RequestReason | null;
-  /** Changed files owned by the viewer or their teams, by path. */
-  readonly mine: ReadonlyMap<string, OwnedFile>;
   readonly totalFiles: number;
-  /** Mine first, then by file count. Empty without a CODEOWNERS file. */
+  /**
+   * The viewer's groups first, narrowest first; then everyone else's, by
+   * file count. Empty without a CODEOWNERS file.
+   */
   readonly groups: readonly OwnerGroup[];
+  /** The rule that decides each changed path; null when none matches. */
+  readonly rules: ReadonlyMap<string, CodeownersRule | null>;
+  /** Where the rules come from, e.g. `.github/CODEOWNERS`. Null without a file. */
+  readonly source: string | null;
 }
 
 const handleOf = (owner: string): string => owner.replace(/^@/, "");
 
-export function reviewOwnership(
-  conversation: PrConversation,
-  paths: readonly string[],
-): ReviewOwnership {
-  const viewer = conversation.viewerLogin;
-  const myTeams = new Set(conversation.viewerTeams.map((t) => t.toLowerCase()));
-  const isMine = (owner: string): boolean => {
+/** Narrowest first: a person, then the smallest team; unknown sizes last, then fewer files. */
+function narrowestFirst(a: OwnerGroup, b: OwnerGroup): number {
+  const size = (g: OwnerGroup) => g.size ?? Number.POSITIVE_INFINITY;
+  return size(a) - size(b) || a.files.length - b.files.length || a.handle.localeCompare(b.handle);
+}
+
+export function reviewOwnership(src: PrOwnership, paths: readonly string[]): ReviewOwnership {
+  const viewer = src.viewerLogin;
+  const teamSize = new Map(
+    src.viewerTeams.map((t) => [t.combinedSlug.toLowerCase(), t.memberCount] as const),
+  );
+  const sizeIfMine = (owner: string): number | null | undefined => {
     const handle = handleOf(owner);
-    return handle.includes("/") ? myTeams.has(handle.toLowerCase()) : loginsMatch(handle, viewer);
+    if (!handle.includes("/")) return loginsMatch(handle, viewer) ? 1 : undefined;
+    const size = teamSize.get(handle.toLowerCase());
+    return size === undefined ? undefined : size > 0 ? size : null;
   };
 
-  const rules = codeownersRuleFor(conversation.codeowners?.rules ?? [], paths);
-  const mine = new Map<string, OwnedFile>();
+  const rules = codeownersRuleFor(src.codeowners?.rules ?? [], paths);
   const filesByOwner = new Map<string, string[]>();
   for (const [path, rule] of rules) {
     if (!rule) continue;
-    const via = rule.owners.filter(isMine);
-    if (via.length > 0) mine.set(path, { rule, via });
-    for (const owner of rule.owners)
+    for (const owner of rule.owners) {
       filesByOwner.set(owner, [...(filesByOwner.get(owner) ?? []), path]);
+    }
   }
 
-  const groups = [...filesByOwner]
-    .map(([owner, files]) => ownerGroup(owner, files, isMine(owner), conversation.reviewers))
-    .sort(
-      (a, b) =>
-        Number(b.mine) - Number(a.mine) ||
-        b.files.length - a.files.length ||
-        a.handle.localeCompare(b.handle),
-    );
+  const all = [...filesByOwner].map(([owner, files]) =>
+    ownerGroup(owner, files, sizeIfMine(owner), src.reviewers),
+  );
+  const mine = all.filter((g) => g.mine).sort(narrowestFirst);
+  const others = all
+    .filter((g) => !g.mine)
+    .sort((a, b) => b.files.length - a.files.length || a.handle.localeCompare(b.handle));
 
   return {
-    reason: requestReason(conversation, myTeams, mine.size > 0),
-    mine,
+    reason: requestReason(src, new Set(teamSize.keys()), mine.length > 0),
     totalFiles: paths.length,
-    groups,
+    groups: [...mine, ...others],
+    rules,
+    source: src.codeowners?.path ?? null,
   };
+}
+
+/** The scope the sidebar opens with: the viewer's narrowest group, if they own anything here. */
+export function defaultScope(own: ReviewOwnership): string[] {
+  const narrowest = own.groups.find((g) => g.mine);
+  return narrowest ? [narrowest.owner] : [];
+}
+
+/** The changed files whose deciding rule names someone in `scope`. */
+export function filesInScope(
+  own: ReviewOwnership,
+  scope: ReadonlySet<string>,
+): Map<string, ScopedFile> {
+  const files = new Map<string, ScopedFile>();
+  if (scope.size === 0) return files;
+  for (const [path, rule] of own.rules) {
+    const via = rule?.owners.filter((o) => scope.has(o)) ?? [];
+    if (rule && via.length > 0) files.set(path, { rule, via });
+  }
+  return files;
 }
 
 function ownerGroup(
   owner: string,
   files: string[],
-  mine: boolean,
+  /** Undefined when the owner isn't the viewer or one of their teams. */
+  size: number | null | undefined,
   reviewers: readonly ReviewerEntry[],
 ): OwnerGroup {
   const handle = handleOf(owner);
@@ -131,7 +170,8 @@ function ownerGroup(
     handle,
     team,
     files: files.sort(),
-    mine,
+    mine: size !== undefined,
+    size: size ?? null,
     // Changes requested by an owner block the merge whatever else approved.
     status:
       changesRequestedBy.length > 0
@@ -145,7 +185,7 @@ function ownerGroup(
 }
 
 function requestReason(
-  conversation: PrConversation,
+  conversation: PrOwnership,
   myTeams: ReadonlySet<string>,
   ownsFiles: boolean,
 ): RequestReason | null {
@@ -183,7 +223,7 @@ function requestReason(
 }
 
 /** Who last asked `reviewer` (a login or `org/slug`) for a review, from the timeline. */
-function latestRequester(conversation: PrConversation, reviewer: string): string | null {
+function latestRequester(conversation: PrOwnership, reviewer: string): string | null {
   for (let i = conversation.timeline.length - 1; i >= 0; i--) {
     const item = conversation.timeline[i];
     if (item?.kind === "review_requested" && loginsMatch(item.reviewer, reviewer)) {
@@ -193,20 +233,11 @@ function latestRequester(conversation: PrConversation, reviewer: string): string
   return null;
 }
 
-/** "4 of 32 files". */
-export function fileShare(owned: number, total: number): string {
-  return `${owned} of ${total} ${total === 1 ? "file" : "files"}`;
-}
-
 /** The header's one-line answer to "why am I asked to review this?". */
 export function reasonText(reason: RequestReason): string {
   switch (reason.kind) {
-    case "codeowners": {
-      const self = reason.via.length === 1 && !reason.via[0]?.includes("/");
-      return self
-        ? "Requested via CODEOWNERS"
-        : `Requested as ${reason.via.join(", ")} via CODEOWNERS`;
-    }
+    case "codeowners":
+      return `Requested as ${reason.via.join(", ")} via CODEOWNERS`;
     case "direct": {
       const who = reason.byAuthor
         ? "the author"
@@ -222,8 +253,8 @@ export function reasonText(reason: RequestReason): string {
   }
 }
 
-/** Hover text for a file the viewer owns: the rule and where it lives. */
-export function ownedFileTitle(file: OwnedFile, source: string): string {
+/** Hover text for a file in scope: who owns it, the rule, and where it lives. */
+export function scopedFileTitle(file: ScopedFile, source: string): string {
   const owners = file.rule.owners.join(" ");
   return `Owned by ${file.via.join(", ")}\n${source}:${file.rule.line}  ${file.rule.pattern} ${owners}`;
 }

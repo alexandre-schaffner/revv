@@ -15,9 +15,11 @@ interface Props {
   statusByPath: Map<string, GitStatusEntry["status"]>;
   /** Line-change stats for the row badge; only changed files have entries. */
   statsMap?: Map<string, { additions: number; deletions: number }>;
-  /** Files CODEOWNERS assigns to the viewer, with the hover text naming the
-   *  rule that does. Each gets a "you" badge left of its line counts. */
+  /** Files in the code-owner scope, with the hover text naming the rule
+   *  that puts them there. Each gets a badge left of its line counts. */
   ownedTitles?: Map<string, string>;
+  /** The badge's text: "you" for the viewer's own groups. */
+  ownedBadge?: string;
   /** Currently focused file in the diff viewer (for highlighting). */
   activePath: string | null;
   /** User clicked a *file* (directories are handled internally by the tree). */
@@ -43,6 +45,7 @@ let {
   statusByPath,
   statsMap,
   ownedTitles,
+  ownedBadge = "you",
   activePath,
   onSelect,
   shouldFocus = false,
@@ -128,9 +131,11 @@ $effect(() => {
 // Same ref pattern as `statsRef`: `renderRowDecoration` reads the current
 // owner badges without a tree rebuild, and a git-status poke repaints rows.
 let ownedRef: Map<string, string> = new Map();
+let ownedBadgeRef = "you";
 
 $effect(() => {
   ownedRef = ownedTitles ?? new Map();
+  ownedBadgeRef = ownedBadge;
   untrack(() => tree?.setGitStatus(buildGitStatus(statusByPath)));
 });
 
@@ -253,12 +258,12 @@ $effect(() => {
 					`,
         // The cell has to exist to host the `::before`/`::after` stats that
         // `syncStatsStyle()` fills in.
-        // A file the viewer owns (CODEOWNERS) puts "you" in the span itself,
-        // styled as a badge; hovering it names the matching rule and line.
+        // A file in the code-owner scope puts its badge text in the span
+        // itself; hovering it names the matching rule and line.
         renderRowDecoration: (ctx) => {
           if (ctx.item.kind !== "file") return null;
           const owned = ownedRef.get(ctx.item.path);
-          if (owned) return { text: "you", title: owned };
+          if (owned) return { text: ownedBadgeRef, title: owned };
           const stats = statsRef.get(ctx.item.path);
           if (!stats || (stats.additions === 0 && stats.deletions === 0)) {
             return null;

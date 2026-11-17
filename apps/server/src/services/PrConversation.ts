@@ -19,8 +19,11 @@ import type {
   PrConversation,
   PrConversationResponse,
   PrLabel,
+  PrOwnership,
+  PrOwnershipResponse,
   ReviewerEntry,
   ReviewerOptions,
+  ViewerTeam,
 } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
 import { type DbError, type GitHubError, isGitHubUnreachable } from "../domain/errors";
@@ -44,7 +47,9 @@ const DETAILS_NS = "pr-check-details";
 const CODEOWNERS_NS = "pr-codeowners";
 /** CODEOWNERS rarely moves; a base branch's copy is re-read at most this often. */
 const CODEOWNERS_TTL_MS = 10 * 60 * 1000;
-const VIEWER_TEAMS_NS = "viewer-teams";
+const OWNERSHIP_NS = "pr-ownership";
+// v2: each team carries its member count.
+const VIEWER_TEAMS_NS = "viewer-teams-v2";
 /** Team membership changes rarely; one org's answer serves every PR in it for this long. */
 const VIEWER_TEAMS_TTL_MS = 60 * 60 * 1000;
 
@@ -60,6 +65,12 @@ export class PrConversationService extends Context.Service<
      * (`stale: true`) when GitHub is unreachable or rate-limited.
      */
     readonly load: (prId: string) => Effect.Effect<PrConversationResponse, ConversationError>;
+    /**
+     * Who asked the viewer to review, and which CODEOWNERS rules make them
+     * responsible: a light read that lands with the diff. Falls back to the
+     * cached snapshot (`stale: true`) when GitHub is unreachable.
+     */
+    readonly ownership: (prId: string) => Effect.Effect<PrOwnershipResponse, ConversationError>;
     /** The head commit's CI rollup only; cheap enough to poll. */
     readonly checks: (
       prId: string,
@@ -110,7 +121,7 @@ function loginsOf(conversation: PrConversation): Set<string> {
 
 /** A snapshot cached by an older build may predate these fields. */
 type SnapshotOnDisk = Omit<PrConversation, "viewerTeams" | "reviewers"> & {
-  readonly viewerTeams?: readonly string[];
+  readonly viewerTeams?: ReadonlyArray<ViewerTeam | string>;
   readonly reviewers: ReadonlyArray<
     | Extract<ReviewerEntry, { kind: "team" }>
     | (Omit<Extract<ReviewerEntry, { kind: "user" }>, "onBehalfOf"> & {
@@ -122,7 +133,9 @@ type SnapshotOnDisk = Omit<PrConversation, "viewerTeams" | "reviewers"> & {
 function upgradeSnapshot(snapshot: SnapshotOnDisk): PrConversation {
   return {
     ...snapshot,
-    viewerTeams: snapshot.viewerTeams ?? [],
+    viewerTeams: (snapshot.viewerTeams ?? []).map((t) =>
+      typeof t === "string" ? { combinedSlug: t, memberCount: 0 } : t,
+    ),
     reviewers: snapshot.reviewers.map(
       (r): ReviewerEntry => (r.kind === "team" ? r : { ...r, onBehalfOf: r.onBehalfOf ?? [] }),
     ),
@@ -168,13 +181,13 @@ export const PrConversationServiceLive = Layer.effect(
      */
     const viewerTeamsFor = (
       ctx: PrContextBasic,
-      mapped: MappedConversation,
+      mapped: Pick<MappedConversation, "reviewers" | "viewerLogin">,
       codeowners: CodeownersFile | null,
     ) => {
       const involvesTeams =
         mapped.reviewers.some((r) => r.kind === "team" || r.onBehalfOf.length > 0) ||
         (codeowners?.rules.some((rule) => rule.owners.some((o) => o.includes("/"))) ?? false);
-      if (!involvesTeams) return Effect.succeed<readonly string[]>([]);
+      if (!involvesTeams) return Effect.succeed<readonly ViewerTeam[]>([]);
       return cache.getOrFetch(
         VIEWER_TEAMS_NS,
         `${ctx.repo.githubHost}:${ctx.repo.fullName.split("/")[0]}:${mapped.viewerLogin}`.toLowerCase(),
@@ -231,6 +244,56 @@ export const PrConversationServiceLive = Layer.effect(
             Effect.flatMap(readCached(prId, ctx.repo.githubHost), (snapshot) =>
               snapshot
                 ? Effect.succeed<PrConversationResponse>({ conversation: snapshot, stale: true })
+                : Effect.fail(err),
+            ),
+          ),
+        );
+      });
+
+    const fetchOwnership = (ctx: PrContextBasic, prId: string) =>
+      Effect.gen(function* () {
+        const [mapped, codeowners] = yield* Effect.all(
+          [
+            github.conversation.ownership(ctx.client, ctx.repo.fullName, ctx.pr.externalId),
+            codeownersFor(ctx),
+          ],
+          { concurrency: 2 },
+        );
+        const viewerTeams = yield* viewerTeamsFor(ctx, mapped, codeowners);
+        const ownership: PrOwnership = { ...mapped, codeowners, viewerTeams };
+        yield* cache.set(OWNERSHIP_NS, prId, ownership, { ttlMs: CACHE_TTL_MS });
+        return ownership;
+      });
+
+    /** The last ownership snapshot, or the conversation snapshot it is a part of. */
+    const cachedOwnership = (prId: string) =>
+      Effect.gen(function* () {
+        const own = yield* cache.get<PrOwnership>(OWNERSHIP_NS, prId);
+        if (own) return own;
+        const snapshot = yield* cache.get<SnapshotOnDisk>(CACHE_NS, prId);
+        return snapshot ? upgradeSnapshot(snapshot) : null;
+      });
+
+    const ownership = (prId: string) =>
+      Effect.gen(function* () {
+        const ctx = yield* prContext.forPr(prId);
+        return yield* fetchOwnership(ctx, prId).pipe(
+          Effect.map((own): PrOwnershipResponse => ({ ownership: own, stale: false })),
+          Effect.catchIf(isGitHubUnreachable, (err) =>
+            Effect.flatMap(cachedOwnership(prId), (snapshot) =>
+              snapshot
+                ? Effect.succeed<PrOwnershipResponse>({
+                    ownership: {
+                      viewerLogin: snapshot.viewerLogin,
+                      viewerTeams: snapshot.viewerTeams,
+                      author: snapshot.author,
+                      reviewers: snapshot.reviewers,
+                      codeowners: snapshot.codeowners,
+                      timeline: snapshot.timeline.filter((t) => t.kind === "review_requested"),
+                      fetchedAt: snapshot.fetchedAt,
+                    },
+                    stale: true,
+                  })
                 : Effect.fail(err),
             ),
           ),
@@ -358,6 +421,7 @@ export const PrConversationServiceLive = Layer.effect(
     return {
       cached,
       load,
+      ownership,
       checks,
       checkDetails,
       write,

@@ -6,7 +6,13 @@ import {
   type ReviewerEntry,
   type TimelineItem,
 } from "@revv/shared";
-import { ownedFileTitle, reasonText, reviewOwnership } from "./codeowners-review";
+import {
+  defaultScope,
+  filesInScope,
+  reasonText,
+  reviewOwnership,
+  scopedFileTitle,
+} from "./codeowners-review";
 
 const actor = (login: string): ConversationActor => ({
   login,
@@ -67,7 +73,7 @@ function conversation(overrides: Partial<PrConversation> = {}): PrConversation {
     isDraft: false,
     reviewDecision: null,
     viewerLogin: "me",
-    viewerTeams: ["o/web"],
+    viewerTeams: [{ combinedSlug: "o/web", memberCount: 12 }],
     viewerCanUpdate: true,
     viewerCanPush: true,
     labels: [],
@@ -92,21 +98,24 @@ describe("reviewOwnership", () => {
     const own = reviewOwnership(conversation({ reviewers: [team("o/web", true)] }), PATHS);
     expect(own.reason).toEqual({ kind: "codeowners", via: ["@o/web"] });
     expect(reasonText(own.reason ?? { kind: "owner" })).toBe("Requested as @o/web via CODEOWNERS");
+    expect(own.totalFiles).toBe(5);
     // Mine through the team (web) and personally (server); `*.md` has no owner.
-    expect([...own.mine.keys()].sort()).toEqual([
+    const mine = own.groups.filter((g) => g.mine).map((g) => g.owner);
+    expect([...filesInScope(own, new Set(mine)).keys()].sort()).toEqual([
       "apps/server/c.ts",
       "apps/web/a.ts",
       "apps/web/b.ts",
     ]);
-    expect(own.totalFiles).toBe(5);
   });
 
   it("lets the last matching rule win, and an ownerless rule unown", () => {
     const own = reviewOwnership(conversation(), PATHS);
     const handles = own.groups.map((g) => [g.handle, g.files.length]);
+    // The viewer's groups first, narrowest first (themselves, then a team of
+    // 12); everyone else's by file count.
     expect(handles).toEqual([
-      ["o/web", 2],
       ["me", 1],
+      ["o/web", 2],
       ["o/api", 1],
       ["o/everyone", 1],
     ]);
@@ -115,10 +124,10 @@ describe("reviewOwnership", () => {
 
   it("points a file at the rule and line that owns it", () => {
     const own = reviewOwnership(conversation(), PATHS);
-    const file = own.mine.get("apps/server/c.ts");
+    const file = filesInScope(own, new Set(["@me"])).get("apps/server/c.ts");
     expect(file?.rule.line).toBe(3);
     expect(file?.via).toEqual(["@me"]);
-    expect(file && ownedFileTitle(file, ".github/CODEOWNERS")).toBe(
+    expect(file && scopedFileTitle(file, ".github/CODEOWNERS")).toBe(
       "Owned by @me\n.github/CODEOWNERS:3  /apps/server/ @o/api @me",
     );
   });
@@ -151,8 +160,8 @@ describe("reviewOwnership", () => {
       }),
       PATHS,
     );
-    expect(own.mine.size).toBe(0);
     expect(own.groups).toEqual([]);
+    expect(defaultScope(own)).toEqual([]);
     expect(reasonText(own.reason ?? { kind: "owner" })).toBe("Requested directly by the author");
 
     const byBob = reviewOwnership(
@@ -163,6 +172,29 @@ describe("reviewOwnership", () => {
       PATHS,
     );
     expect(reasonText(byBob.reason ?? { kind: "owner" })).toBe("Requested as @o/web by @bob");
+  });
+
+  it("scopes to the viewer's narrowest group by default", () => {
+    const rules = parseCodeowners(
+      ["*  @o/devs", "/apps/flow/  @o/devs @o/rnd", "/apps/flow/core/  @o/rnd"].join("\n"),
+    );
+    const own = reviewOwnership(
+      conversation({
+        codeowners: { path: "CODEOWNERS", ref: "main", rules },
+        viewerTeams: [
+          { combinedSlug: "o/devs", memberCount: 40 },
+          { combinedSlug: "o/rnd", memberCount: 6 },
+        ],
+      }),
+      ["apps/flow/a.ts", "apps/flow/core/b.ts", "apps/web/c.ts", "README.md"],
+    );
+    // R&D is the smaller team: its two files, not every developer's four.
+    expect(defaultScope(own)).toEqual(["@o/rnd"]);
+    expect([...filesInScope(own, new Set(defaultScope(own))).keys()].sort()).toEqual([
+      "apps/flow/a.ts",
+      "apps/flow/core/b.ts",
+    ]);
+    expect(filesInScope(own, new Set(["@o/devs"])).size).toBe(3);
   });
 
   it("has no reason for the author or a bystander", () => {

@@ -46,6 +46,12 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
     runRoute(Effect.flatMap(PrConversationService, (s) => s.load(ctx.params.id))),
   )
 
+  // Why the viewer is asked to review: lands with the diff, ahead of the
+  // full conversation.
+  .get("/:id/ownership", (ctx) =>
+    runRoute(Effect.flatMap(PrConversationService, (s) => s.ownership(ctx.params.id))),
+  )
+
   // The cached snapshot only, for an instant first paint; null on a miss.
   .get("/:id/conversation/cached", (ctx) =>
     runRoute(

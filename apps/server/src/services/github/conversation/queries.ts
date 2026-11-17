@@ -162,6 +162,56 @@ function rollupBlock(modern: boolean): string {
 // No `stack` here: its layers' merge states are computed on demand, and on a
 // tall stack that alone pushes GitHub past its query timeout, which would
 // cost this page its description. The stack store reads it on its own.
+/** Who is asked to review and who answered: the reviewer list and the code-owner rows read it. */
+function reviewersBlock(modern: boolean): string {
+  return `
+    reviewRequests(first: 50) {
+      nodes {
+        ${modern ? "asCodeOwner" : ""}
+        requestedReviewer {
+          __typename
+          ... on User { login name avatarUrl databaseId }
+          ... on Bot { login avatarUrl }
+          ... on Mannequin { login avatarUrl }
+          ... on Team { slug name combinedSlug }
+        }
+      }
+    }
+    ${
+      modern
+        ? `latestOpinionatedReviews(first: 50, writersOnly: true) {
+             nodes { state submittedAt author { ${ACTOR} } ${ON_BEHALF_OF} }
+           }
+           latestReviews(first: 50) {
+             nodes { state submittedAt author { ${ACTOR} } ${ON_BEHALF_OF} }
+           }`
+        : `reviews(last: 100) { nodes { state submittedAt author { ${ACTOR} } } }`
+    }
+  `;
+}
+
+/**
+ * Just what explains a review request: the reviewers, their verdicts, and who
+ * asked whom. A fraction of the conversation query (no timeline pages, no CI),
+ * so the review page can show it with the diff instead of seconds later.
+ */
+export function ownershipQuery(modern: boolean): string {
+  return `
+    query PrOwnership($owner: String!, $repo: String!, $number: Int!) {
+      viewer { login }
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $number) {
+          author { ${ACTOR} }
+          ${reviewersBlock(modern)}
+          timelineItems(last: 50, itemTypes: [REVIEW_REQUESTED_EVENT]) {
+            nodes { ${TIMELINE_NODE} }
+          }
+        }
+      }
+    }
+  `;
+}
+
 export function conversationQuery(modern: boolean): string {
   return `
     query PrConversation($owner: String!, $repo: String!, $number: Int!, $checkCursor: String) {
@@ -176,28 +226,7 @@ export function conversationQuery(modern: boolean): string {
           labels(first: 50) { nodes { name color description } }
           assignees(first: 20) { nodes { login name avatarUrl databaseId } }
           participants(first: 30) { nodes { login name avatarUrl databaseId } }
-          reviewRequests(first: 50) {
-            nodes {
-              ${modern ? "asCodeOwner" : ""}
-              requestedReviewer {
-                __typename
-                ... on User { login name avatarUrl databaseId }
-                ... on Bot { login avatarUrl }
-                ... on Mannequin { login avatarUrl }
-                ... on Team { slug name combinedSlug }
-              }
-            }
-          }
-          ${
-            modern
-              ? `latestOpinionatedReviews(first: 50, writersOnly: true) {
-                   nodes { state submittedAt author { ${ACTOR} } ${ON_BEHALF_OF} }
-                 }
-                 latestReviews(first: 50) {
-                   nodes { state submittedAt author { ${ACTOR} } ${ON_BEHALF_OF} }
-                 }`
-              : `reviews(last: 100) { nodes { state submittedAt author { ${ACTOR} } } }`
-          }
+          ${reviewersBlock(modern)}
           timelineItems(last: ${TIMELINE_PAGE}, itemTypes: [${timelineTypes(modern)}]) {
             pageInfo { hasPreviousPage startCursor }
             nodes { ${TIMELINE_NODE} ${modernTimelineNodes(modern)} }
@@ -256,7 +285,7 @@ export function checkContextsPageQuery(modern: boolean): string {
 export const VIEWER_TEAMS_QUERY = `
   query ViewerTeams($org: String!, $login: String!) {
     organization(login: $org) {
-      teams(first: 100, userLogins: [$login]) { nodes { combinedSlug } }
+      teams(first: 100, userLogins: [$login]) { nodes { combinedSlug members { totalCount } } }
     }
   }
 `;
