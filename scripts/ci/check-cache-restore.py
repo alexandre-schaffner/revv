@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-OUTPUTS = ["apps/web/build", "apps/web/.svelte-kit", "apps/server/dist", "apps/collector/dist"]
+OUTPUTS = ["apps/web/build", "apps/web/.svelte-kit", "apps/web/node_modules/$app", "apps/server/dist", "apps/collector/dist"]
 SAMPLES = ["apps/web/build/index.html", "apps/server/dist/index.js", "apps/collector/dist/index.js"]
 
 
@@ -25,7 +25,7 @@ def main():
             for name, digest in expected.items():
                 if hashlib.sha256((ROOT / name).read_bytes()).digest() != digest:
                     raise ValueError(f"Restored build differs: {name}")
-            if not (ROOT / "apps/web/.svelte-kit/tsconfig.json").is_file():
+            if not (ROOT / "apps/web/node_modules/$app/tsconfig.json").is_file():
                 raise ValueError("Generated SvelteKit config was not restored")
         except BaseException:
             for index, name in enumerate(OUTPUTS):

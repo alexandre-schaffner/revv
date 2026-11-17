@@ -60,7 +60,7 @@ type Owned = keyof typeof OWNING_REPOSITORY;
 type Fields = Readonly<Record<string, Owned>>;
 
 interface GuardedRequest {
-  readonly params: Record<string, string | undefined>;
+  readonly params?: Record<string, string | undefined>;
   readonly body: unknown;
 }
 
@@ -73,7 +73,7 @@ export const checkOwnership = (fields: Fields, request: GuardedRequest, userId: 
     dbTry("check ownership", () => {
       const body = typeof request.body === "object" && request.body !== null ? request.body : {};
       for (const [field, kind] of Object.entries(fields)) {
-        const id = request.params[field] ?? (body as Record<string, unknown>)[field];
+        const id = request.params?.[field] ?? (body as Record<string, unknown>)[field];
         if (typeof id !== "string") continue;
         const repositoryId = OWNING_REPOSITORY[kind](db, id);
         const owned =

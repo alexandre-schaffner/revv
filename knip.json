@@ -19,7 +19,6 @@
         "src/app.d.ts",
         "src/hooks.server.ts",
         "src/hooks.client.ts",
-        "svelte.config.js",
         "vite.config.ts",
         "static/**"
       ],

@@ -52,7 +52,7 @@ const check = (
   request: { params?: Record<string, string>; body?: unknown },
 ) =>
   Effect.runPromiseExit(
-    checkOwnership(fields, { params: request.params ?? {}, body: request.body }, "user-1").pipe(
+    checkOwnership(fields, { ...request, body: request.body }, "user-1").pipe(
       Effect.provide(Layer.succeed(DbService, { db })),
     ),
   );

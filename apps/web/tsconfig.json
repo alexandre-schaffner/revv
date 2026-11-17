@@ -1,5 +1,5 @@
 {
-  "extends": "./.svelte-kit/tsconfig.json",
+  "extends": "$app/tsconfig",
   "compilerOptions": {
     "strict": true,
     "exactOptionalPropertyTypes": true,
@@ -7,6 +7,14 @@
     "moduleResolution": "bundler",
     "allowJs": true,
     "skipLibCheck": true,
-    "types": ["bun-types"]
-  }
+    "types": ["bun-types", "$app/types"],
+    "paths": {
+      "$lib": ["./src/lib"],
+      "$lib/*": ["./src/lib/*"],
+      "@revv/server": ["../server/src/index.ts"],
+      "@revv/server/*": ["../server/src/*"]
+    }
+  },
+  "include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.svelte", "vite.config.ts"],
+  "exclude": ["node_modules", "build", ".svelte-kit"]
 }
