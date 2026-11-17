@@ -1,4 +1,9 @@
-import { isLatestClosedWindow, type RecapPeriod, type RecapWindowBounds } from "@revv/shared";
+import {
+  isLatestClosedWindow,
+  type ProjectRecapStatus,
+  type RecapPeriod,
+  type RecapWindowBounds,
+} from "@revv/shared";
 
 /**
  * Why a recap is being asked for. `scheduled`: the scheduler's sweep over
@@ -15,8 +20,8 @@ export type RecapRequestPlan = "create" | "reuse" | "rerun";
  * request either creates it or decides what to do with the one there:
  *
  * - `regenerate` always reruns.
- * - `manual` reruns the open window (it has moved on since) and reuses a
- *   pinned closed one, whose answer can't change.
+ * - `manual` reruns the open window and failed/stopped rows. A complete
+ *   pinned closed window is reused.
  * - `scheduled` reruns a recap of the most recently closed window that was
  *   written before the window closed, so it caught only part of it; anything
  *   else stands.
@@ -27,7 +32,7 @@ export function planRecapRequest(input: {
   readonly window: RecapWindowBounds;
   /** The window is the open one, up to now, rather than a pinned one. */
   readonly rolling: boolean;
-  readonly existing: { readonly generatedAt: string } | null;
+  readonly existing: { readonly generatedAt: string; readonly status?: ProjectRecapStatus } | null;
   readonly now: Date;
 }): RecapRequestPlan {
   const { existing } = input;
@@ -36,8 +41,13 @@ export function planRecapRequest(input: {
     case "regenerate":
       return "rerun";
     case "manual":
-      return input.rolling ? "rerun" : "reuse";
+      return input.rolling || existing.status === "error" || existing.status === "stopped"
+        ? "rerun"
+        : "reuse";
     case "scheduled":
+      // A terminal job exhausted its automatic budget or was explicitly stopped.
+      // Only a user request may reset that budget.
+      if (existing.status === "error" || existing.status === "stopped") return "reuse";
       return isLatestClosedWindow(input.period, input.window, input.now) &&
         new Date(existing.generatedAt).getTime() < new Date(input.window.periodEnd).getTime()
         ? "rerun"

@@ -17,7 +17,7 @@ import {
   RECAP_EMPTY_WINDOW_LEDE,
   recapSummaryOf,
 } from "@revv/shared";
-import { and, asc, desc, eq, gte, isNull, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNull, lt, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import {
   projectRecaps,
@@ -81,7 +81,8 @@ function rowToRecap(
   }
   return {
     id: row.id,
-    repositoryId: row.repositoryId,
+    // Compatibility anchor for repo-based clients; scoped ownership is accountId.
+    repositoryId: row.repositoryId ?? row.sourceScope?.repositoryIds[0] ?? "",
     sourceScope: row.sourceScope ?? null,
     period: row.period as RecapPeriod,
     periodStart: row.periodStart,
@@ -304,7 +305,8 @@ export const ProjectRecapServiceLive = Layer.effect(
           const inserted = yield* dbTry("createPartial", () => {
             const values: typeof projectRecaps.$inferInsert = {
               id,
-              repositoryId: params.repositoryId,
+              repositoryId: params.sourceScope ? null : params.repositoryId,
+              accountId: params.sourceScope?.accountId ?? null,
               scopeKey: params.sourceScope?.key ?? "",
               sourceScope: params.sourceScope ?? null,
               period: params.period,
@@ -338,13 +340,15 @@ export const ProjectRecapServiceLive = Layer.effect(
             return yield* Effect.fail(new RecapNotFoundError({ recapId: id }));
           }
           if (accountId) {
-            const owner = yield* dbTry("getById owner", () =>
-              db
-                .select({ accountId: repositories.accountId })
-                .from(repositories)
-                .where(eq(repositories.id, row.repositoryId))
-                .get(),
-            );
+            const owner = row.accountId
+              ? { accountId: row.accountId }
+              : yield* dbTry("getById owner", () =>
+                  db
+                    .select({ accountId: repositories.accountId })
+                    .from(repositories)
+                    .where(eq(repositories.id, row.repositoryId ?? ""))
+                    .get(),
+                );
             if (
               owner?.accountId !== accountId ||
               (row.sourceScope && row.sourceScope.accountId !== accountId)
@@ -355,7 +359,10 @@ export const ProjectRecapServiceLive = Layer.effect(
             db
               .select({
                 entry: recapPrEntries,
-                avatarContent: avatarOfRepoLogin(recapPrEntries.prAuthorLogin, row.repositoryId),
+                avatarContent: avatarOfRepoLogin(
+                  recapPrEntries.prAuthorLogin,
+                  sql`coalesce(nullif(${recapPrEntries.repositoryId}, ''), ${row.repositoryId ?? row.sourceScope?.repositoryIds[0] ?? ""})`,
+                ),
               })
               .from(recapPrEntries)
               .where(eq(recapPrEntries.recapId, id))
@@ -581,6 +588,8 @@ export const ProjectRecapServiceLive = Layer.effect(
           }
           if (newBoundaries?.sourceScope) {
             patch.sourceScope = newBoundaries.sourceScope;
+            patch.accountId = newBoundaries.sourceScope.accountId;
+            patch.repositoryId = null;
             patch.scopeKey = newBoundaries.sourceScope.key;
           }
           // Atomic so a crash can't strand the row in 'generating' with stale entries (invariant #1).
@@ -612,7 +621,7 @@ export const ProjectRecapServiceLive = Layer.effect(
           );
           return rows.map((r) => ({
             id: r.id,
-            repositoryId: r.repositoryId,
+            repositoryId: r.repositoryId ?? r.sourceScope?.repositoryIds[0] ?? "",
             period: r.period as RecapPeriod,
             periodStart: r.periodStart,
             periodEnd: r.periodEnd,
@@ -656,7 +665,7 @@ export const ProjectRecapServiceLive = Layer.effect(
             ? {
                 status: row.status as ProjectRecapStatus,
                 scopeKey: row.scopeKey,
-                repositoryId: row.repositoryId,
+                repositoryId: row.repositoryId ?? "",
                 period: row.period as RecapPeriod,
                 periodStart: row.periodStart,
               }

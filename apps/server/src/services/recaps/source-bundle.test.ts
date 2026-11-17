@@ -32,4 +32,43 @@ describe("recap sources", () => {
     const silent = await Effect.runPromiseExit(sources.windowIsSilent("repo-1", CLOSED_WINDOW));
     expect(silent._tag).toBe("Failure");
   });
+
+  it("skips removed repositories in a persisted scope and reads the remaining ones", async () => {
+    const queried: string[] = [];
+    const sources = makeRecapSources({
+      prs: {
+        listArchivedPrsForWindow: (id: string) =>
+          Effect.sync(() => {
+            queried.push(id);
+            return [];
+          }),
+        listOpenPrsAsOfWindow: () => Effect.succeed([]),
+      } as never,
+      prContext: {
+        listReposForAccount: () => Effect.succeed([{ id: "live", fullName: "acme/live" }]),
+        forRepo: () => Effect.fail(new DbError({ message: "No token in this test" })),
+      } as never,
+      diffCache: {} as never,
+      github: {} as never,
+      mirror: {} as never,
+    });
+    expect(
+      await Effect.runPromise(
+        sources.assemble(
+          {
+            ...CLOSED_WINDOW,
+            sourceScope: {
+              key: "all",
+              kind: "all",
+              accountId: "account",
+              label: "Everything",
+              repositoryIds: ["removed", "live"],
+            },
+          },
+          "acme/removed",
+        ),
+      ),
+    ).toBe("empty");
+    expect(queried).toEqual(["live"]);
+  });
 });

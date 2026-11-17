@@ -1,5 +1,6 @@
 import type { RecapPeriod, RecapSourceScope, RecapSummaryStats } from "@revv/shared";
 import { type AnySQLiteColumn, index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { account } from "./auth";
 import { repositories } from "./repositories";
 
 export interface RecapSourcePrDigest {
@@ -92,9 +93,10 @@ export const projectRecaps = sqliteTable(
   "project_recaps",
   {
     id: text("id").primaryKey(),
-    repositoryId: text("repository_id")
-      .notNull()
-      .references(() => repositories.id, { onDelete: "cascade" }),
+    /** Repository-only recaps keep their normal deletion lifecycle. */
+    repositoryId: text("repository_id").references(() => repositories.id, { onDelete: "cascade" }),
+    /** Team and Everything recaps belong to an account, independently of any source repo. */
+    accountId: text("account_id").references(() => account.id, { onDelete: "cascade" }),
     /** `'daily' | 'weekly'`. */
     scopeKey: text("scope_key").notNull().default(""),
     sourceScope: text("source_scope", { mode: "json" }).$type<RecapSourceScope>(),

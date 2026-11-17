@@ -75,15 +75,28 @@ export const checkOwnership = (fields: Fields, request: GuardedRequest, userId: 
       for (const [field, kind] of Object.entries(fields)) {
         const id = request.params?.[field] ?? (body as Record<string, unknown>)[field];
         if (typeof id !== "string") continue;
+        const recapAccountId =
+          kind === "recap"
+            ? db
+                .select({ accountId: projectRecaps.accountId })
+                .from(projectRecaps)
+                .where(eq(projectRecaps.id, id))
+                .get()?.accountId
+            : null;
         const repositoryId = OWNING_REPOSITORY[kind](db, id);
-        const owned =
-          repositoryId !== undefined &&
-          db
-            .select({ id: repositories.id })
-            .from(repositories)
-            .innerJoin(account, eq(account.id, repositories.accountId))
-            .where(and(eq(repositories.id, repositoryId), eq(account.userId, userId)))
-            .get() !== undefined;
+        const owned = recapAccountId
+          ? db
+              .select({ id: account.id })
+              .from(account)
+              .where(and(eq(account.id, recapAccountId), eq(account.userId, userId)))
+              .get() !== undefined
+          : repositoryId != null &&
+            db
+              .select({ id: repositories.id })
+              .from(repositories)
+              .innerJoin(account, eq(account.id, repositories.accountId))
+              .where(and(eq(repositories.id, repositoryId), eq(account.userId, userId)))
+              .get() !== undefined;
         if (!owned) return new NotFoundError({ resource: kind, id });
       }
       return null;

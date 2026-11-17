@@ -1,4 +1,9 @@
-import { canonicalWindow, type RecapSourceScope, rollingWindow } from "@revv/shared";
+import {
+  canonicalWindow,
+  type RecapSourceScope,
+  recapScopeCovers,
+  rollingWindow,
+} from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { RecapNotFoundError, ValidationError } from "../domain/errors";
@@ -29,7 +34,7 @@ interface Selection {
   team?: string;
 }
 
-function resolveScope(
+export function resolveRecapScope(
   accountId: string,
   client: GitHubClient,
   selection: Selection,
@@ -66,8 +71,9 @@ function resolveScope(
       repositoryIds: scopedRepos.map((r) => r.id),
     };
     if (org && team) {
-      const teams = yield* github.repos.teamsForOrg(client, org);
-      const githubTeam = teams.find((t) => t.slug.toLowerCase() === team);
+      const githubTeam = snapshotTeams
+        ? (yield* github.repos.teamsForOrg(client, org)).find((t) => t.slug.toLowerCase() === team)
+        : { slug: team, name: selection.team ?? team, memberLogins: [] };
       if (!githubTeam)
         return yield* Effect.fail(
           new ValidationError({ message: "GitHub team not found or not accessible" }),
@@ -130,8 +136,11 @@ export const recapFeedRoutes = new Elysia({ prefix: "/api/recap-feed" })
       try {
         return await runRoute(
           Effect.gen(function* () {
-            const canonical = yield* resolveScope(ctx.account.accountId, ctx.account.client, {});
-            if (!canonical.repoId) return { recaps: [], nextCursor: null, label: canonical.label };
+            const canonical = yield* resolveRecapScope(
+              ctx.account.accountId,
+              ctx.account.client,
+              {},
+            );
             const service = yield* ProjectRecapService;
             const params = {
               period: ctx.query.period,
@@ -140,35 +149,44 @@ export const recapFeedRoutes = new Elysia({ prefix: "/api/recap-feed" })
               ...(ctx.query.to ? { to: ctx.query.to } : {}),
             };
             let resolved = canonical;
-            let result = yield* service.listForRepo(canonical.repoId, {
+            let result = yield* service.listForRepo(canonical.repoId ?? "", {
               ...params,
               scopeKey: canonical.scope?.key ?? "",
             });
             if (ctx.query.repoId || ctx.query.team) {
-              resolved = yield* resolveScope(ctx.account.accountId, ctx.account.client, ctx.query);
-              if (resolved.repoId) {
-                const legacy = yield* service.listForRepo(resolved.repoId, {
-                  ...params,
-                  scopeKey: resolved.scope?.key ?? "",
-                });
-                const windows = new Set(result.recaps.map((r) => r.periodStart));
-                result = {
-                  recaps: [
-                    ...result.recaps,
-                    ...legacy.recaps.filter((r) => !windows.has(r.periodStart)),
-                  ],
-                  nextCursor:
-                    [result.nextCursor, legacy.nextCursor]
-                      .filter((v): v is string => v !== null)
-                      .sort()
-                      .at(-1) ?? null,
-                };
-              }
+              resolved = yield* resolveRecapScope(
+                ctx.account.accountId,
+                ctx.account.client,
+                ctx.query,
+              );
+              result = {
+                ...result,
+                recaps: result.recaps.filter((recap) =>
+                  recapScopeCovers(recap.sourceScope, ctx.query),
+                ),
+              };
+              const legacy = yield* service.listForRepo(resolved.repoId ?? "", {
+                ...params,
+                scopeKey: resolved.scope?.key ?? "",
+              });
+              const windows = new Set(result.recaps.map((r) => r.periodStart));
+              result = {
+                recaps: [
+                  ...result.recaps,
+                  ...legacy.recaps.filter((r) => !windows.has(r.periodStart)),
+                ],
+                nextCursor:
+                  [result.nextCursor, legacy.nextCursor]
+                    .filter((v): v is string => v !== null)
+                    .sort()
+                    .at(-1) ?? null,
+              };
             }
             if (ctx.query.recapId && !result.recaps.some((r) => r.id === ctx.query.recapId)) {
               const chosen = yield* getRecapForAccount(ctx.query.recapId, ctx.account.accountId);
               const matches =
-                chosen.sourceScope?.key === canonical.scope?.key ||
+                (chosen.sourceScope?.key === canonical.scope?.key &&
+                  recapScopeCovers(chosen.sourceScope, ctx.query)) ||
                 (resolved.scope
                   ? chosen.sourceScope?.key === resolved.scope.key
                   : !chosen.sourceScope && chosen.repositoryId === resolved.repoId);
@@ -205,7 +223,7 @@ export const recapFeedRoutes = new Elysia({ prefix: "/api/recap-feed" })
       try {
         return await runRoute(
           Effect.gen(function* () {
-            const resolved = yield* resolveScope(
+            const resolved = yield* resolveRecapScope(
               ctx.account.accountId,
               ctx.account.client,
               ctx.body,
@@ -235,7 +253,7 @@ export const recapFeedRoutes = new Elysia({ prefix: "/api/recap-feed" })
               if (
                 covering &&
                 (covering.status === "complete" || covering.status === "generating") &&
-                (!ctx.body.repoId || covering.sourceScope?.repositoryIds.includes(ctx.body.repoId))
+                recapScopeCovers(covering.sourceScope, ctx.body)
               )
                 return { recapId: covering.id };
             }

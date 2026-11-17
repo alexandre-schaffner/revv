@@ -194,9 +194,9 @@ export const reposApi = (http: GitHubHttp) => {
     /**
      * An org's teams and their members. Needs `read:org` and org membership.
      * For an org whose teams the token can't see, GraphQL answers 200 with
-     * `organization: null` and an `errors` entry; teams whose member lists all
-     * come back empty are then asked of REST, keeping the GraphQL answer if
-     * REST fails too.
+     * `organization: null` and an `errors` entry. Capped results or empty
+     * memberships are expanded through REST, keeping the partial GraphQL
+     * answer if REST fails.
      */
     teamsForOrg: (client: GitHubClient, org: string): Effect.Effect<Team[], GitHubError> =>
       Effect.gen(function* () {
@@ -241,7 +241,7 @@ export const reposApi = (http: GitHubHttp) => {
             graphqlTeams.length >= 100 ||
             graphqlTeams.some((team) => team.memberLogins.length >= 100)
           )
-            return yield* fromRest;
+            return yield* fromRest.pipe(Effect.catch(() => Effect.succeed(graphqlTeams)));
           if (graphqlTeams.some((team) => team.memberLogins.length > 0)) return graphqlTeams;
           return yield* fromRest.pipe(Effect.catch(() => Effect.succeed(graphqlTeams)));
         }

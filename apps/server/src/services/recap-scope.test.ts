@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { RecapSourceScope } from "@revv/shared";
+import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { createDb, type Db } from "../db";
 import { account, recapThemeSummaries, repositories, user } from "../db/schema";
@@ -64,6 +65,34 @@ const boundaries = {
 };
 
 describe("recap scope journal", () => {
+  it("preserves account history and supporting work after all source repositories are removed", async () => {
+    const db = seed();
+    await run(
+      db,
+      Effect.gen(function* () {
+        const service = yield* ProjectRecapService;
+        const recap = yield* service.createPartial({
+          repositoryId: "repo",
+          sourceScope: scope,
+          ...boundaries,
+        });
+        db.insert(recapThemeSummaries)
+          .values({ id: "topic", recapId: recap.id, theme: "delivery", summary: "Shipped" })
+          .run();
+        db.delete(repositories).where(eq(repositories.accountId, "account")).run();
+        const persisted = yield* service.getById(recap.id, "account");
+        expect(persisted.themeSummaries[0]?.summary).toBe("Shipped");
+        expect(
+          (yield* service.listForRepo("", { scopeKey: scope.key })).recaps.map((r) => r.id),
+        ).toEqual([recap.id]);
+        db.delete(account).where(eq(account.id, "account")).run();
+        expect((yield* service.getById(recap.id).pipe(Effect.flip))._tag).toBe(
+          "RecapNotFoundError",
+        );
+      }),
+    );
+    db.$client.close();
+  });
   it("denies another account access before returning recap content", async () => {
     const db = seed();
     await run(

@@ -21,6 +21,23 @@ export interface RecapSourceScope {
   }[];
 }
 
+/** A saved broad recap may serve only views actually represented in its snapshot. */
+export function recapScopeCovers(
+  scope: RecapSourceScope | null | undefined,
+  selection: { readonly repoId?: string; readonly org?: string; readonly team?: string },
+): boolean {
+  if (!selection.repoId && !selection.team) return true;
+  if (!scope || scope.kind !== "all") return false;
+  if (selection.repoId) return scope.repositoryIds.includes(selection.repoId);
+  return Boolean(
+    scope.teams?.some(
+      (team) =>
+        team.org.toLowerCase() === selection.org?.toLowerCase() &&
+        team.slug.toLowerCase() === selection.team?.toLowerCase(),
+    ),
+  );
+}
+
 export const RECAP_PERIODS = ["daily", "weekly"] as const;
 export type RecapPeriod = (typeof RECAP_PERIODS)[number];
 

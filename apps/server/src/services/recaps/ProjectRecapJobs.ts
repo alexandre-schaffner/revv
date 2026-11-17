@@ -20,6 +20,7 @@ import type {
   RecapSourceScope,
   RecapStreamEvent,
   RecapWindowBounds,
+  ServerEventMessage,
 } from "@revv/shared";
 import { rollingWindow } from "@revv/shared";
 import { SPAN, SPAN_ATTR } from "@revv/shared/telemetry";
@@ -222,7 +223,11 @@ export const ProjectRecapJobsLive = Layer.effect(
         if (!moved || !fresh) return;
         // completedAt and errorMessage go out even when null, so a client
         // cache drops the values of an earlier status.
-        yield* realtime.toRepo(fresh.repositoryId, {
+        const sourceScope = fresh.sourceScope;
+        const publish = sourceScope
+          ? (event: ServerEventMessage) => realtime.toAccount(sourceScope.accountId, event)
+          : (event: ServerEventMessage) => realtime.toRepo(fresh.repositoryId, event);
+        yield* publish({
           type: "recap:status-changed",
           data: {
             recapId,
@@ -234,7 +239,7 @@ export const ProjectRecapJobsLive = Layer.effect(
           },
         });
         if (status === "complete") {
-          yield* realtime.toRepo(fresh.repositoryId, {
+          yield* publish({
             type: "recap:added",
             data: { recap: fresh },
           });
@@ -290,9 +295,13 @@ export const ProjectRecapJobsLive = Layer.effect(
           .getById(run.id)
           .pipe(Effect.catchTag("RecapNotFoundError", () => Effect.succeed(null)));
         if (!recap) return { kind: "failed", failure: "Recap row not found" };
-        const repo = yield* prCtx
-          .getRepo(recap.repositoryId)
-          .pipe(Effect.catchTag("NotFoundError", () => Effect.succeed(null)));
+        const repo = recap.sourceScope
+          ? (yield* prCtx.listReposForAccount(recap.sourceScope.accountId)).find((repo) =>
+              recap.sourceScope?.repositoryIds.includes(repo.id),
+            )
+          : yield* prCtx
+              .getRepo(recap.repositoryId)
+              .pipe(Effect.catchTag("NotFoundError", () => Effect.succeed(null)));
         if (!repo) {
           return { kind: "failed", failure: "Repository not found — cannot build source bundle" };
         }
@@ -300,7 +309,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         const assembled =
           (yield* recapService.getSourceBundle(run.id)) ??
           (yield* sources
-            .assemble(recap, repo.fullName)
+            .assemble({ ...recap, repositoryId: repo.id }, repo.fullName)
             .pipe(
               Effect.tap((bundle) =>
                 typeof bundle === "string"
@@ -402,7 +411,11 @@ export const ProjectRecapJobsLive = Layer.effect(
       Effect.gen(function* () {
         const now = new Date();
         const window = request.window ?? rollingWindow(request.period, now);
-        const { repoId, period } = request;
+        const { repoId, period, sourceScope } = request;
+        const publish = (event: ServerEventMessage) =>
+          sourceScope
+            ? realtime.toAccount(sourceScope.accountId, event)
+            : realtime.toRepo(repoId, event);
         return yield* underWindowLock(
           {
             repositoryId: repoId,
@@ -448,7 +461,7 @@ export const ProjectRecapJobsLive = Layer.effect(
                 .getById(existing.id)
                 .pipe(Effect.catch(() => Effect.succeed(null)));
               if (refreshed) {
-                yield* realtime.toRepo(repoId, {
+                yield* publish({
                   type: "recap:added",
                   data: { recap: refreshed },
                 });
@@ -468,7 +481,7 @@ export const ProjectRecapJobsLive = Layer.effect(
               period,
               ...window,
             });
-            yield* realtime.toRepo(repoId, {
+            yield* publish({
               type: "recap:added",
               data: { recap: created },
             });

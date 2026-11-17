@@ -4,6 +4,7 @@ import type {
   ProjectRecapSummary,
   RecapPeriod,
 } from "@revv/shared";
+import { recapScopeCovers } from "@revv/shared";
 import { api } from "$lib/api/client";
 import { monthGridRange } from "$lib/recaps/period-window";
 import { RequestState, type RequestState as State } from "$lib/stores/_types";
@@ -49,10 +50,18 @@ export function getRecapFeed(key: string): State<Feed> {
   const canonical = entries.get(recapFeedKey({}, request.period));
   if (canonical?.status !== "ok" || canonical.data.recaps.length === 0)
     return own ?? canonical ?? RequestState.idle();
-  const merged = [...(own?.status === "ok" ? own.data.recaps : []), ...canonical.data.recaps];
+  const merged = [
+    ...(own?.status === "ok" ? own.data.recaps : []),
+    ...canonical.data.recaps.filter((recap) =>
+      recapScopeCovers(recap.sourceScope, request.selection),
+    ),
+  ];
   return RequestState.ok({
     ...canonical.data,
-    recaps: [...new Map(merged.map((r) => [r.id, r])).values()],
+    recaps: [...new Map(merged.map((r) => [r.id, r])).values()].filter(
+      (recap) =>
+        recap.sourceScope?.kind !== "all" || recapScopeCovers(recap.sourceScope, request.selection),
+    ),
   });
 }
 
@@ -75,6 +84,7 @@ export async function fetchRecapFeed(
       !range &&
       !cursor &&
       canonical.data.recaps.length > 0 &&
+      canonical.data.recaps.every((recap) => recapScopeCovers(recap.sourceScope, selection)) &&
       (!recapId || canonical.data.recaps.some((recap) => recap.id === recapId))
     ) {
       if (generation !== epoch || key !== recapFeedKey(selection, period)) return false;
@@ -186,14 +196,21 @@ export async function generateScopeRecap(
 /** Full-state SSE writes update only matching, already-loaded account/scope feeds. */
 export function onRecapFeedAdded(data: { recap: ProjectRecap }): void {
   const recap = data.recap;
-  if (!getRepositories().some((repo) => repo.id === recap.repositoryId)) return;
+  if (
+    !getRepositories().some((repo) =>
+      recap.sourceScope
+        ? recap.sourceScope.repositoryIds.includes(repo.id)
+        : repo.id === recap.repositoryId,
+    )
+  )
+    return;
   for (const [key, request] of selections) {
     if (key !== recapFeedKey(request.selection, request.period) || request.period !== recap.period)
       continue;
     const { repoId, org, team } = request.selection;
     const scope = recap.sourceScope;
     const matches =
-      scope?.kind === "all" ||
+      (scope?.kind === "all" && recapScopeCovers(scope, request.selection)) ||
       (repoId
         ? !scope && recap.repositoryId === repoId
         : team
