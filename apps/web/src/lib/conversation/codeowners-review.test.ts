@@ -9,7 +9,9 @@ import {
 import {
   defaultScope,
   filesInScope,
+  newerOf,
   reasonText,
+  resolveScope,
   reviewOwnership,
   scopedFileTitle,
 } from "./codeowners-review";
@@ -195,6 +197,29 @@ describe("reviewOwnership", () => {
       "apps/flow/core/b.ts",
     ]);
     expect(filesInScope(own, new Set(["@o/devs"])).size).toBe(3);
+  });
+
+  it("holds a pick where its owners have files, and empties only the PR it was made on", () => {
+    const own = reviewOwnership(conversation(), PATHS);
+    // Default: the viewer alone is narrower than their team.
+    expect([...resolveScope(own, null, "pr-1")]).toEqual(["@me"]);
+    expect([...resolveScope(own, { owners: ["@o/web"], prId: "pr-1" }, "pr-2")]).toEqual([
+      "@o/web",
+    ]);
+    // Owners with no files here fall back to the default.
+    expect([...resolveScope(own, { owners: ["@o/gone"], prId: "pr-1" }, "pr-2")]).toEqual(["@me"]);
+    // Unchecking everything empties that PR's scope, not the next PR's.
+    expect(resolveScope(own, { owners: [], prId: "pr-1" }, "pr-1").size).toBe(0);
+    expect([...resolveScope(own, { owners: [], prId: "pr-1" }, "pr-2")]).toEqual(["@me"]);
+  });
+
+  it("prefers the fresher of the ownership read and the conversation", () => {
+    const old = { fetchedAt: "2026-10-01T00:00:00Z", id: "snapshot" };
+    const fresh = { fetchedAt: "2026-11-17T00:00:00Z", id: "read" };
+    expect(newerOf(old, fresh)?.id).toBe("read");
+    expect(newerOf(fresh, old)?.id).toBe("read");
+    expect(newerOf(null, old)?.id).toBe("snapshot");
+    expect(newerOf(null, null)).toBeNull();
   });
 
   it("has no reason for the author or a bystander", () => {

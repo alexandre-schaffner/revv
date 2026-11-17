@@ -103,6 +103,11 @@ export function getConversation(prId: string): ConversationEntry {
   return entries.get(prId) ?? EMPTY;
 }
 
+/** GitHub's own answer has landed: what's shown is more than the cached snapshot. */
+export function hasFreshConversation(prId: string): boolean {
+  return reads.entry(prId).request.status === "ok";
+}
+
 export interface ConversationAbilities {
   /** Edit the description, reviewers, assignees and labels. */
   readonly canEdit: boolean;

@@ -132,6 +132,35 @@ export function defaultScope(own: ReviewOwnership): string[] {
   return narrowest ? [narrowest.owner] : [];
 }
 
+/**
+ * The scope on PR `prId`, given what the viewer picked (null: nothing yet).
+ * A pick naming owners holds wherever one of them owns files, and falls back
+ * to the default elsewhere; an empty pick empties only the PR it was made on.
+ */
+export function resolveScope(
+  own: ReviewOwnership,
+  pick: { readonly owners: readonly string[]; readonly prId: string } | null,
+  prId: string,
+): Set<string> {
+  if (pick === null) return new Set(defaultScope(own));
+  if (pick.owners.length === 0) return new Set(pick.prId === prId ? [] : defaultScope(own));
+  const here = new Set(own.groups.map((g) => g.owner));
+  const kept = pick.owners.filter((owner) => here.has(owner));
+  return new Set(kept.length > 0 ? kept : defaultScope(own));
+}
+
+/**
+ * The fresher of two reads of the same fields: the light ownership read and
+ * the conversation (whose first paint may be an old cached snapshot).
+ */
+export function newerOf<T extends { readonly fetchedAt: string }>(
+  a: T | null,
+  b: T | null,
+): T | null {
+  if (!a || !b) return a ?? b;
+  return a.fetchedAt >= b.fetchedAt ? a : b;
+}
+
 /** The changed files whose deciding rule names someone in `scope`. */
 export function filesInScope(
   own: ReviewOwnership,

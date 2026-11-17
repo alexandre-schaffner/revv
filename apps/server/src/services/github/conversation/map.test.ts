@@ -4,6 +4,7 @@ import {
   collectAvatarUrls,
   mapConversation,
   mapOwnership,
+  mapViewerTeams,
   type RawConversation,
   type RawOwnership,
   type RawTimelineNode,
@@ -337,6 +338,24 @@ describe("mapOwnership", () => {
 
   test("answers null when the PR isn't visible", () => {
     expect(mapOwnership({ viewer: { login: "me" }, repository: null }, "now")).toBeNull();
+  });
+});
+
+describe("mapViewerTeams", () => {
+  test("counts the teams above the viewer's as theirs, once each", () => {
+    const team = (combinedSlug: string, totalCount: number) => ({
+      combinedSlug,
+      members: { totalCount },
+    });
+    const teams = mapViewerTeams([
+      { ...team("o/rnd", 4), ancestors: { nodes: [team("o/devs", 14)] } },
+      { ...team("o/Devs", 14), ancestors: { nodes: [] } },
+      null,
+    ]);
+    expect(teams).toEqual([
+      { combinedSlug: "o/rnd", memberCount: 4 },
+      { combinedSlug: "o/devs", memberCount: 14 },
+    ]);
   });
 });
 

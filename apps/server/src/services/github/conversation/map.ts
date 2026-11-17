@@ -15,6 +15,7 @@ import type {
   ReviewerEntry,
   ReviewVerdict,
   TimelineItem,
+  ViewerTeam,
 } from "@revv/shared";
 
 // Raw GraphQL shapes: only the fields the mapper reads.
@@ -694,6 +695,35 @@ const WRITE_PERMISSIONS = new Set(["ADMIN", "MAINTAIN", "WRITE"]);
  * service adds them.
  */
 export type MappedConversation = Omit<PrConversation, "codeowners" | "avatars" | "viewerTeams">;
+
+interface RawTeamRef {
+  readonly combinedSlug: string;
+  readonly members: { readonly totalCount: number } | null;
+}
+
+export type RawViewerTeam =
+  | (RawTeamRef & { readonly ancestors?: RawConnection<RawTeamRef> | null })
+  | null;
+
+/** The viewer's teams and every team above them, once each. */
+export function mapViewerTeams(nodes: ReadonlyArray<RawViewerTeam>): ViewerTeam[] {
+  const teams = new Map<string, ViewerTeam>();
+  const add = (team: RawTeamRef) => {
+    const key = team.combinedSlug.toLowerCase();
+    if (!teams.has(key)) {
+      teams.set(key, {
+        combinedSlug: team.combinedSlug,
+        memberCount: team.members?.totalCount ?? 0,
+      });
+    }
+  };
+  for (const team of nodes) {
+    if (!team) continue;
+    add(team);
+    for (const ancestor of nodesOf(team.ancestors)) add(ancestor);
+  }
+  return [...teams.values()];
+}
 
 /** What the ownership query answers: the reviewers, plus who asked them. */
 export interface RawOwnership {

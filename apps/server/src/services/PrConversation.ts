@@ -30,6 +30,7 @@ import { type DbError, type GitHubError, isGitHubUnreachable } from "../domain/e
 import { logError } from "../logger";
 import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { CacheService } from "./Cache";
+import { GitHubAccounts } from "./github/accounts";
 import { AvatarCache } from "./github/avatars";
 import type { MappedConversation } from "./github/conversation/map";
 import { GitHubGateway } from "./github/gateway";
@@ -146,6 +147,7 @@ export const PrConversationServiceLive = Layer.effect(
   PrConversationService,
   Effect.gen(function* () {
     const prContext = yield* PrContextService;
+    const accounts = yield* GitHubAccounts;
     const github = yield* GitHubGateway;
     const cache = yield* CacheService;
     const avatars = yield* AvatarCache;
@@ -174,27 +176,34 @@ export const PrConversationServiceLive = Layer.effect(
         { ttlMs: CODEOWNERS_TTL_MS },
       );
 
-    /**
-     * The viewer's teams in the repo's org, asked only when the PR involves
-     * a team: a CODEOWNERS team owner, a team review request, or a review
-     * given on a team's behalf.
-     */
-    const viewerTeamsFor = (
-      ctx: PrContextBasic,
-      mapped: Pick<MappedConversation, "reviewers" | "viewerLogin">,
-      codeowners: CodeownersFile | null,
-    ) => {
-      const involvesTeams =
-        mapped.reviewers.some((r) => r.kind === "team" || r.onBehalfOf.length > 0) ||
-        (codeowners?.rules.some((rule) => rule.owners.some((o) => o.includes("/"))) ?? false);
-      if (!involvesTeams) return Effect.succeed<readonly ViewerTeam[]>([]);
-      return cache.getOrFetch(
+    /** The viewer's teams in the repo's org; one org's answer serves every PR in it for an hour. */
+    const teamsOf = (ctx: PrContextBasic, login: string) =>
+      cache.getOrFetch(
         VIEWER_TEAMS_NS,
-        `${ctx.repo.githubHost}:${ctx.repo.fullName.split("/")[0]}:${mapped.viewerLogin}`.toLowerCase(),
-        () => github.conversation.viewerTeams(ctx.client, ctx.repo.fullName, mapped.viewerLogin),
+        `${ctx.repo.githubHost}:${ctx.repo.fullName.split("/")[0]}:${login}`.toLowerCase(),
+        () => github.conversation.viewerTeams(ctx.client, ctx.repo.fullName, login),
         { ttlMs: VIEWER_TEAMS_TTL_MS },
       );
-    };
+
+    /**
+     * `read`, the base branch's CODEOWNERS and the viewer's teams, all at
+     * once: the account's stored login lets the teams query start without
+     * waiting for `read` to name the viewer. An account with no stored login
+     * asks for the teams once `read` answers.
+     */
+    const withOwnersAndTeams = <A extends { readonly viewerLogin: string }, E>(
+      ctx: PrContextBasic,
+      read: Effect.Effect<A, E>,
+    ) =>
+      Effect.gen(function* () {
+        const login = yield* accounts.viewerLogin(ctx.accountId);
+        const [answer, codeowners, early] = yield* Effect.all(
+          [read, codeownersFor(ctx), login ? teamsOf(ctx, login) : Effect.succeed(null)],
+          { concurrency: 3 },
+        );
+        const viewerTeams = early ?? (yield* teamsOf(ctx, answer.viewerLogin));
+        return { answer, codeowners, viewerTeams };
+      });
 
     /** Fill in the avatars `remote_users` holds for everyone the conversation names. */
     const withAvatars = (host: string, conversation: PrConversation) =>
@@ -205,14 +214,16 @@ export const PrConversationServiceLive = Layer.effect(
 
     const fetchFresh = (ctx: PrContextBasic, prId: string) =>
       Effect.gen(function* () {
-        const [{ conversation: mapped, avatarUrls }, codeowners] = yield* Effect.all(
-          [
-            github.conversation.fetch(ctx.client, ctx.repo.fullName, ctx.pr.externalId, prId),
-            codeownersFor(ctx),
-          ],
-          { concurrency: 2 },
+        const { answer, codeowners, viewerTeams } = yield* withOwnersAndTeams(
+          ctx,
+          github.conversation.fetch(ctx.client, ctx.repo.fullName, ctx.pr.externalId, prId).pipe(
+            Effect.map((fetched) => ({
+              ...fetched,
+              viewerLogin: fetched.conversation.viewerLogin,
+            })),
+          ),
         );
-        const viewerTeams = yield* viewerTeamsFor(ctx, mapped, codeowners);
+        const { conversation: mapped, avatarUrls } = answer;
         // Cached without images: they live in `remote_users`, and every read
         // fills them in from there.
         const snapshot: PrConversation = { ...mapped, codeowners, viewerTeams, avatars: {} };
@@ -252,15 +263,11 @@ export const PrConversationServiceLive = Layer.effect(
 
     const fetchOwnership = (ctx: PrContextBasic, prId: string) =>
       Effect.gen(function* () {
-        const [mapped, codeowners] = yield* Effect.all(
-          [
-            github.conversation.ownership(ctx.client, ctx.repo.fullName, ctx.pr.externalId),
-            codeownersFor(ctx),
-          ],
-          { concurrency: 2 },
+        const { answer, codeowners, viewerTeams } = yield* withOwnersAndTeams(
+          ctx,
+          github.conversation.ownership(ctx.client, ctx.repo.fullName, ctx.pr.externalId),
         );
-        const viewerTeams = yield* viewerTeamsFor(ctx, mapped, codeowners);
-        const ownership: PrOwnership = { ...mapped, codeowners, viewerTeams };
+        const ownership: PrOwnership = { ...answer, codeowners, viewerTeams };
         yield* cache.set(OWNERSHIP_NS, prId, ownership, { ttlMs: CACHE_TTL_MS });
         return ownership;
       });

@@ -1,8 +1,10 @@
 <script lang="ts">
+import { loginsMatch } from "@revv/shared";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import {
-  defaultScope,
   filesInScope,
+  newerOf,
+  resolveScope,
   reviewOwnership,
   scopedFileTitle,
 } from "$lib/conversation/codeowners-review";
@@ -11,10 +13,12 @@ import {
   getOwnership,
   getPickedScope,
   isOwnershipSettled,
+  repoLacksCodeowners,
   setOnlyScope,
   setPickedScope,
 } from "$lib/conversation/ownership.svelte";
-import { getConversation } from "$lib/stores/conversation.svelte";
+import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
+import { getConversation, hasFreshConversation } from "$lib/stores/conversation.svelte";
 import { getLoadedFiles, getReviewFiles } from "$lib/stores/diff-files.svelte";
 import { enterScrollMode, getActivePanel } from "$lib/stores/focus-mode.svelte";
 import {
@@ -23,6 +27,7 @@ import {
   setActiveFilePath,
   setActiveTab,
 } from "$lib/stores/pr-view-state.svelte";
+import { getPrById } from "$lib/stores/prs.svelte";
 import { scrollDiffToTop } from "$lib/stores/review-nav.svelte";
 import { getSelectedPrId } from "$lib/stores/route.svelte";
 import { getFileSearchQuery, getSidebarView, setFileSearchQuery } from "$lib/stores/sidebar.svelte";
@@ -34,37 +39,33 @@ import SidebarFilesSearch from "./SidebarFilesSearch.svelte";
 /**
  * How long the tree waits for the ownership read before showing without it.
  * The read usually lands with the diff; waiting a moment makes the tree,
- * its badges and the request line appear in one go instead of shifting.
+ * its badges and the request line appear in one go instead of shifting. It
+ * only waits on a first visit where a line can come (see `ownershipReady`).
  */
-const OWNERSHIP_WAIT_MS = 2000;
+const OWNERSHIP_WAIT_MS = 1000;
 
 const prId = $derived(getSelectedPrId());
 const reviewFiles = $derived(prId ? getLoadedFiles(prId) : []);
 const allPaths = $derived(reviewFiles.map((f) => f.path));
 
-// The light ownership read lands with the diff; once the full conversation
-// is loaded it carries the same fields and follows the tab's writes, so it
-// wins.
+// The light ownership read and the conversation carry the same fields; the
+// fresher wins. The conversation's first paint can be an old cached snapshot,
+// and after a write in the Conversation tab it is the newer of the two.
 const source = $derived.by(() => {
   if (!prId) return null;
   const conversation = getConversation(prId).request;
-  if (conversation.status === "ok") return conversation.data;
   const read = getOwnership(prId);
-  return read.status === "ok" ? read.data : null;
+  return newerOf(
+    conversation.status === "ok" ? conversation.data : null,
+    read.status === "ok" ? read.data : null,
+  );
 });
 const ownership = $derived(source ? reviewOwnership(source, allPaths) : null);
 
-// The scope: what the viewer picked, where those owners have files here;
-// otherwise their narrowest group.
-const scope = $derived.by((): ReadonlySet<string> => {
-  if (!ownership) return new Set();
-  const picked = getPickedScope();
-  if (picked === null) return new Set(defaultScope(ownership));
-  if (picked.length === 0) return new Set();
-  const here = new Set(ownership.groups.map((g) => g.owner));
-  const kept = picked.filter((owner) => here.has(owner));
-  return new Set(kept.length > 0 ? kept : defaultScope(ownership));
-});
+const scope = $derived.by(
+  (): ReadonlySet<string> =>
+    ownership && prId ? resolveScope(ownership, getPickedScope(), prId) : new Set(),
+);
 const scoped = $derived(ownership ? filesInScope(ownership, scope) : new Map());
 const scopedTitles = $derived.by((): Map<string, string> => {
   const titles = new Map<string, string>();
@@ -82,7 +83,7 @@ function toggleScope(owner: string): void {
   const next = new Set(scope);
   if (next.has(owner)) next.delete(owner);
   else next.add(owner);
-  setPickedScope([...next]);
+  if (prId) setPickedScope({ owners: [...next], prId });
 }
 
 // "Only these files" narrows the tree to the scope; it can't empty the tree,
@@ -99,9 +100,16 @@ $effect(() => {
   }, OWNERSHIP_WAIT_MS);
   return () => clearTimeout(timer);
 });
-const ownershipReady = $derived(
-  !prId || source !== null || isOwnershipSettled(prId) || waitedFor === prId,
-);
+// Ready once GitHub's answer is in (the ownership read, or the full
+// conversation, not its cached snapshot), or when waiting can't change
+// what shows: the viewer wrote the PR, or the repo has no CODEOWNERS.
+const ownershipReady = $derived.by(() => {
+  if (!prId) return true;
+  if (isOwnershipSettled(prId) || hasFreshConversation(prId) || waitedFor === prId) return true;
+  const pr = getPrById(prId);
+  if (!pr) return false;
+  return loginsMatch(pr.authorLogin, getCurrentUserLogin()) || repoLacksCodeowners(pr.repositoryId);
+});
 const status = $derived(prId && getReviewFiles(prId).status === "loading" ? "loading" : "ready");
 const activePath = $derived(getActiveFilePath());
 const shouldFocus = $derived(getSidebarView() === "files");

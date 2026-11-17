@@ -32,6 +32,7 @@ import {
   mapConversation,
   mapOwnership,
   mapRollup,
+  mapViewerTeams,
   nodesOf,
   type RawCheckRollup,
   type RawConnection,
@@ -41,6 +42,7 @@ import {
   type RawPage,
   type RawRollupCommits,
   type RawTimelineNode,
+  type RawViewerTeam,
   toLabel,
 } from "./map";
 import {
@@ -303,19 +305,12 @@ function fetchViewerTeams(
   ref: RepoRef,
   login: string,
 ): Effect.Effect<ViewerTeam[], GitHubError> {
-  type RawTeam = { combinedSlug: string; members: { totalCount: number } | null } | null;
   return http
     .graphqlPartial<{
-      organization: { teams: { nodes: ReadonlyArray<RawTeam> } } | null;
+      organization: { teams: { nodes: ReadonlyArray<RawViewerTeam> } } | null;
     }>(client, VIEWER_TEAMS_QUERY, { org: ref.owner, login })
     .pipe(
-      Effect.map(({ data }) =>
-        (data.organization?.teams.nodes ?? []).flatMap((team) =>
-          team
-            ? [{ combinedSlug: team.combinedSlug, memberCount: team.members?.totalCount ?? 0 }]
-            : [],
-        ),
-      ),
+      Effect.map(({ data }) => mapViewerTeams(data.organization?.teams.nodes ?? [])),
       Effect.catchIf(
         (e) =>
           e instanceof GitHubApiError ||

@@ -278,14 +278,22 @@ export function checkContextsPageQuery(modern: boolean): string {
 }
 
 /**
- * The teams in `$org` that `$login` belongs to. GitHub answers with the
- * teams the token may see, so a token without `read:org` (or a GitHub App
- * without the members permission) gets an error or an empty list.
+ * The teams in `$org` that `$login` belongs to, with their ancestors: GitHub
+ * counts a child team's members as members of its parents (CODEOWNERS
+ * included), and `userLogins` isn't documented to return those parents.
+ * `members` counts child teams' members too. GitHub answers with the teams
+ * the token may see, so a token without `read:org` (or a GitHub App without
+ * the members permission) gets an error or an empty list.
  */
 export const VIEWER_TEAMS_QUERY = `
   query ViewerTeams($org: String!, $login: String!) {
     organization(login: $org) {
-      teams(first: 100, userLogins: [$login]) { nodes { combinedSlug members { totalCount } } }
+      teams(first: 100, userLogins: [$login]) {
+        nodes {
+          combinedSlug members { totalCount }
+          ancestors(first: 10) { nodes { combinedSlug members { totalCount } } }
+        }
+      }
     }
   }
 `;
