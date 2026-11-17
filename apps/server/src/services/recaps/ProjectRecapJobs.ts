@@ -17,6 +17,7 @@ import type {
   ProjectRecap,
   ProjectRecapStatus,
   RecapPeriod,
+  RecapSourceScope,
   RecapStreamEvent,
   RecapWindowBounds,
 } from "@revv/shared";
@@ -69,6 +70,7 @@ interface RecapRun extends SubscriberChannel<RecapStreamEvent>, ToolGate {
 
 export interface RecapRequest {
   readonly repoId: string;
+  readonly sourceScope?: RecapSourceScope;
   readonly period: RecapPeriod;
   /** Omitted: the open window, up to now. */
   readonly window?: RecapWindowBounds;
@@ -173,7 +175,9 @@ export const ProjectRecapJobsLive = Layer.effect(
       effect: Effect.Effect<A, E>,
     ) =>
       Effect.flatMap(
-        windowLocks.acquire(`${window.repositoryId}:${window.period}:${window.periodStart}`),
+        windowLocks.acquire(
+          `${window.scopeKey || window.repositoryId}:${window.period}:${window.periodStart}`,
+        ),
         (lock) => lock.withPermits(1)(effect),
       );
     const subscribers = makeSubscriberRegistry<RecapStreamEvent>({
@@ -317,9 +321,12 @@ export const ProjectRecapJobsLive = Layer.effect(
           return { kind: "complete" };
         }
 
-        const priorRecaps = yield* recapService.getLatestForRepo(recap.repositoryId, { limit: 5 });
+        const priorRecaps = yield* recapService.getLatestForRepo(recap.repositoryId, {
+          limit: 5,
+          scopeKey: recap.sourceScope?.key ?? "",
+          beforePeriodStart: recap.periodStart,
+        });
 
-        const repoClient = yield* Effect.cached(sources.repoClient(recap.repositoryId));
         const runContext = yield* Effect.context<never>();
         const tools: RecapToolContext = {
           db,
@@ -329,7 +336,11 @@ export const ProjectRecapJobsLive = Layer.effect(
           getPrDiff: (prId) =>
             prService.getPr(prId).pipe(
               Effect.flatMap((pr) =>
-                Effect.flatMap(repoClient, (client) => sources.loadDiff(pr, repo.fullName, client)),
+                Effect.flatMap(prCtx.getRepo(pr.repositoryId), (repo) =>
+                  Effect.flatMap(sources.repoClient(repo.id), (client) =>
+                    sources.loadDiff(pr, repo.fullName, client),
+                  ),
+                ),
               ),
               Effect.catch(() => Effect.succeed(null)),
               Effect.provide(runContext),
@@ -393,12 +404,18 @@ export const ProjectRecapJobsLive = Layer.effect(
         const window = request.window ?? rollingWindow(request.period, now);
         const { repoId, period } = request;
         return yield* underWindowLock(
-          { repositoryId: repoId, period, periodStart: window.periodStart },
+          {
+            repositoryId: repoId,
+            scopeKey: request.sourceScope?.key ?? "",
+            period,
+            periodStart: window.periodStart,
+          },
           Effect.gen(function* () {
             const existing = yield* recapService.findActiveForPeriod(
               repoId,
               period,
               window.periodStart,
+              request.sourceScope?.key ?? "",
             );
             const plan = planRecapRequest({
               intent: request.intent,
@@ -417,7 +434,10 @@ export const ProjectRecapJobsLive = Layer.effect(
             if (existing && plan === "rerun") {
               const replaced = yield* jobs.running(existing.id);
               yield* jobs.stop(existing.id, "superseded");
-              yield* recapService.resetForRerun(existing.id, window);
+              yield* recapService.resetForRerun(existing.id, {
+                ...window,
+                ...(request.sourceScope ? { sourceScope: request.sourceScope } : {}),
+              });
               if (replaced) {
                 subscribers.fanOut(existing.id, replaced.context, {
                   type: "restarted",
@@ -444,6 +464,7 @@ export const ProjectRecapJobsLive = Layer.effect(
             }
             const created = yield* recapService.createPartial({
               repositoryId: repoId,
+              ...(request.sourceScope ? { sourceScope: request.sourceScope } : {}),
               period,
               ...window,
             });

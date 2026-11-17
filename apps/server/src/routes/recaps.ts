@@ -118,6 +118,7 @@ const recapByIdRoutes = new Elysia({ prefix: "/api/recaps" })
         return yield* jobs.requestRecap({
           repoId: existing.repositoryId,
           period: existing.period,
+          ...(existing.sourceScope ? { sourceScope: existing.sourceScope } : {}),
           window: canonicalWindow(existing.period, existing.periodStart),
           intent: "regenerate",
         });

@@ -237,6 +237,11 @@ export const reposApi = (http: GitHubHttp) => {
         const graphqlResult = yield* Effect.result(fromGraphql);
         if (Result.isSuccess(graphqlResult)) {
           const graphqlTeams = graphqlResult.success;
+          if (
+            graphqlTeams.length >= 100 ||
+            graphqlTeams.some((team) => team.memberLogins.length >= 100)
+          )
+            return yield* fromRest;
           if (graphqlTeams.some((team) => team.memberLogins.length > 0)) return graphqlTeams;
           return yield* fromRest.pipe(Effect.catch(() => Effect.succeed(graphqlTeams)));
         }

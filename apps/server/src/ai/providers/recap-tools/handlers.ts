@@ -3,7 +3,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { ProjectRecap, RecapPrEntry, RecapThemeSummary } from "@revv/shared";
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import type { Db } from "../../../db";
 import {
@@ -55,6 +55,9 @@ export const getRecapStateHandler: RecapToolHandler<GetRecapStateInput> = async 
     .select({
       theme: recapThemeSummaries.theme,
       summary: recapThemeSummaries.summary,
+      context: recapThemeSummaries.context,
+      approach: recapThemeSummaries.approach,
+      currentState: recapThemeSummaries.currentState,
     })
     .from(recapThemeSummaries)
     .where(eq(recapThemeSummaries.recapId, ctx.recapId))
@@ -76,6 +79,7 @@ export const getRecapStateHandler: RecapToolHandler<GetRecapStateInput> = async 
     recapId: ctx.recapId,
     repoId: ctx.sourceBundle.repoId,
     repoFullName: ctx.sourceBundle.repoFullName,
+    sourceScope: ctx.sourceBundle.sourceScope ?? null,
     period: ctx.sourceBundle.period,
     periodStart: ctx.sourceBundle.periodStart,
     periodEnd: ctx.sourceBundle.periodEnd,
@@ -180,7 +184,7 @@ export const getRepoContextHandler: RecapToolHandler<GetRepoContextInput> = asyn
         completedAt: r.completedAt,
         lede: r.lede,
         themes: Array.from(new Set(themesByRecapId.get(r.id) ?? [])),
-        stats: r.summaryStats,
+        topicExplanations: r.themeSummaries,
       })),
       instructions:
         "Prior recaps for this repo. Use them for rolling continuity — call out themes that persist, follow-throughs on issues flagged previously, or shifts in direction. Don't restate; build on.",
@@ -273,6 +277,7 @@ export const addPrEntryHandler: RecapToolHandler<AddPrEntryInput> = async (ctx, 
 
   const prRow = ctx.db
     .select({
+      repositoryId: pullRequests.repositoryId,
       title: pullRequests.title,
       externalId: pullRequests.externalId,
       authorLogin: pullRequests.authorLogin,
@@ -288,6 +293,11 @@ export const addPrEntryHandler: RecapToolHandler<AddPrEntryInput> = async (ctx, 
         id: randomUUID(),
         recapId: ctx.recapId,
         prId: input.pr_id,
+        repositoryId:
+          prRow?.repositoryId ??
+          [...ctx.sourceBundle.prs, ...ctx.sourceBundle.openPrs].find((pr) => pr.id === input.pr_id)
+            ?.repositoryId ??
+          ctx.sourceBundle.repoId,
         position: input.position,
         theme,
         verb,
@@ -305,6 +315,7 @@ export const addPrEntryHandler: RecapToolHandler<AddPrEntryInput> = async (ctx, 
           position: sql`excluded.position`,
           theme: sql`excluded.theme`,
           verb: sql`excluded.verb`,
+          repositoryId: sql`excluded.repository_id`,
           prTitle: sql`excluded.pr_title`,
           prExternalId: sql`excluded.pr_external_id`,
           prAuthorLogin: sql`excluded.pr_author_login`,
@@ -334,6 +345,7 @@ export const addPrEntryHandler: RecapToolHandler<AddPrEntryInput> = async (ctx, 
       id: persisted.id,
       recapId: persisted.recapId,
       prId: persisted.prId,
+      repositoryId: persisted.repositoryId,
       position: persisted.position,
       theme: persisted.theme,
       verb: persisted.verb,
@@ -396,6 +408,21 @@ export const setThemeSummaryHandler: RecapToolHandler<SetThemeSummaryInput> = as
     );
   }
 
+  const context = input.context.trim();
+  const approach = input.approach.trim();
+  const currentState = input.current_state.trim();
+  if (!context || !approach || !currentState)
+    return fail(
+      "Every topic needs context, approach, and current_state. State unknowns explicitly when sources are insufficient.",
+    );
+  const evidence = ctx.db
+    .select({ id: recapPrEntries.id })
+    .from(recapPrEntries)
+    .where(and(eq(recapPrEntries.recapId, ctx.recapId), eq(recapPrEntries.theme, theme)))
+    .get();
+  if (!evidence)
+    return fail("Add supporting PR evidence under this topic before set_theme_summary.");
+
   const [persisted] = ctx.db
     .insert(recapThemeSummaries)
     .values({
@@ -403,11 +430,19 @@ export const setThemeSummaryHandler: RecapToolHandler<SetThemeSummaryInput> = as
       recapId: ctx.recapId,
       theme,
       summary,
+      context,
+      approach,
+      currentState,
+      worthWatching: input.worth_watching?.trim() ?? "",
     })
     .onConflictDoUpdate({
       target: [recapThemeSummaries.recapId, recapThemeSummaries.theme],
       set: {
         summary: sql`excluded.summary`,
+        context: sql`excluded.context`,
+        approach: sql`excluded.approach`,
+        currentState: sql`excluded.current_state`,
+        worthWatching: sql`excluded.worth_watching`,
       },
     })
     .returning()
@@ -419,6 +454,10 @@ export const setThemeSummaryHandler: RecapToolHandler<SetThemeSummaryInput> = as
       recapId: persisted.recapId,
       theme: persisted.theme,
       summary: persisted.summary,
+      context: persisted.context,
+      approach: persisted.approach,
+      currentState: persisted.currentState,
+      worthWatching: persisted.worthWatching,
     };
     ctx.emit({ type: "theme_summary", data: { summary: event } });
   }
@@ -451,6 +490,29 @@ export function recapCompletionBlocker(db: Db, recapId: string): string | null {
   if (!entry) {
     return "Error: no PR entries have been added. Call add_pr_entry once per PR you want in the recap before complete_recap.";
   }
+  const topics = db
+    .select({ theme: recapPrEntries.theme })
+    .from(recapPrEntries)
+    .where(eq(recapPrEntries.recapId, recapId))
+    .all();
+  const explanations = db
+    .select()
+    .from(recapThemeSummaries)
+    .where(eq(recapThemeSummaries.recapId, recapId))
+    .all();
+  const missing = topics.find(
+    (topic) =>
+      !explanations.some(
+        (s) =>
+          s.theme === topic.theme &&
+          s.summary.trim() &&
+          s.context.trim() &&
+          s.approach.trim() &&
+          s.currentState.trim(),
+      ),
+  );
+  if (missing)
+    return `Topic "${missing.theme}" needs a complete set_theme_summary (summary, context, approach, current_state) before completion.`;
   return null;
 }
 

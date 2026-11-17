@@ -321,6 +321,11 @@ export function reconcileJournal(sqlite: Database, migrations: readonly Migratio
         record.run(migration.hash, migration.when);
       })();
       console.warn(`[db] Applied migration ${migration.when} that Drizzle would have skipped`);
+    } else if (!whens.has(migration.when)) {
+      // A branch migration can keep its SQL (and hash) while moving after
+      // newer migrations on main. Drizzle checks timestamps, not hashes:
+      // record its current timestamp so it cannot replay the existing DDL.
+      record.run(migration.hash, migration.when);
     }
     repairDrift(sqlite, migration, undone);
   }

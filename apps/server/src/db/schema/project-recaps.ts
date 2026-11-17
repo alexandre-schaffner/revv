@@ -1,4 +1,4 @@
-import type { RecapPeriod, RecapSummaryStats } from "@revv/shared";
+import type { RecapPeriod, RecapSourceScope, RecapSummaryStats } from "@revv/shared";
 import { type AnySQLiteColumn, index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { repositories } from "./repositories";
 
@@ -17,6 +17,7 @@ export interface RecapSourcePrDigest {
 }
 
 export interface RecapSourcePr {
+  readonly repositoryId?: string;
   readonly id: string;
   readonly externalId: number;
   readonly title: string;
@@ -52,6 +53,7 @@ export interface RecapSourcePr {
 }
 
 export interface RecapSourceBundle {
+  readonly sourceScope?: RecapSourceScope;
   readonly repoId: string;
   readonly repoFullName: string;
   readonly period: RecapPeriod;
@@ -94,6 +96,8 @@ export const projectRecaps = sqliteTable(
       .notNull()
       .references(() => repositories.id, { onDelete: "cascade" }),
     /** `'daily' | 'weekly'`. */
+    scopeKey: text("scope_key").notNull().default(""),
+    sourceScope: text("source_scope", { mode: "json" }).$type<RecapSourceScope>(),
     period: text("period").notNull(),
     /** Inclusive lower bound on the period window (ISO 8601 UTC). */
     periodStart: text("period_start").notNull(),
@@ -170,5 +174,10 @@ export const projectRecaps = sqliteTable(
     ),
     /** Boot-time `resumePending` enumeration index. */
     statusIdx: index("project_recaps_status_idx").on(t.status),
+    scopePeriodStartIdx: index("project_recaps_scope_period_start_idx").on(
+      t.scopeKey,
+      t.period,
+      t.periodStart,
+    ),
   }),
 );

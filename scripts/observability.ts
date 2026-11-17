@@ -8,6 +8,11 @@ const state = join(homedir(), ".revv", "telemetry");
 const stack = join(state, "grafana-stack");
 const action = process.argv[2] ?? "up";
 if (action !== "up" && action !== "down") throw new Error("Use up or down");
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: this launcher switch does not affect any cached Turbo task
+if (action === "up" && process.env.REVV_SKIP_OBSERVABILITY === "1") {
+  console.log("Skipping telemetry dashboards (REVV_SKIP_OBSERVABILITY=1).");
+  process.exit(0);
+}
 if (action === "up") {
   await mkdir(state, { recursive: true });
   const password = join(state, "grafana-admin-password");

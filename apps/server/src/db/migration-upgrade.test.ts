@@ -261,6 +261,27 @@ describe("database upgrades", () => {
     expect(ledgerWhens(sqlite)).toEqual(journal.entries.map((entry) => entry.when));
     sqlite.close();
   });
+
+  it("does not replay unchanged SQL after a branch migration is renumbered", () => {
+    const path = join(scratch, "renumbered-migration.db");
+    const before = createDb(path).$client;
+    const latest = journal.entries.at(-1);
+    const first = journal.entries[0];
+    if (!latest || !first) throw new Error("no migrations");
+    const oldWhen = first.when - 1;
+    before
+      .prepare("UPDATE __drizzle_migrations SET created_at = ? WHERE created_at = ?")
+      .run(oldWhen, latest.when);
+    before.close();
+
+    const after = createDb(path).$client;
+    expect(ledgerWhens(after)).toEqual([oldWhen, ...journal.entries.map((entry) => entry.when)]);
+    after.close();
+
+    const reopened = createDb(path).$client;
+    expect(ledgerWhens(reopened)).toEqual([oldWhen, ...journal.entries.map((entry) => entry.when)]);
+    reopened.close();
+  });
 });
 
 describe("schema applied outside the journal", () => {

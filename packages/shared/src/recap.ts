@@ -1,6 +1,26 @@
 import type { Activity } from "./activity";
 import type { StreamErrorCode } from "./stream-frames";
 
+/** Durable source snapshot: boot resumption uses these repositories and members. */
+export interface RecapSourceScope {
+  readonly key: string;
+  readonly kind: "all" | "team";
+  readonly label: string;
+  readonly accountId: string;
+  readonly repositoryIds: readonly string[];
+  readonly org?: string;
+  readonly teamSlug?: string;
+  readonly memberLogins?: readonly string[];
+  /** GitHub membership snapshot used for stable team sections and local filtering. */
+  readonly teams?: readonly {
+    readonly org: string;
+    readonly slug: string;
+    readonly name: string;
+    readonly memberLogins: readonly string[];
+    readonly repositoryIds: readonly string[];
+  }[];
+}
+
 export const RECAP_PERIODS = ["daily", "weekly"] as const;
 export type RecapPeriod = (typeof RECAP_PERIODS)[number];
 
@@ -45,6 +65,8 @@ export interface RecapPrEntry {
   readonly id: string;
   readonly recapId: string;
   readonly prId: string;
+  /** Snapshotted provenance, preserved after source PR pruning. */
+  readonly repositoryId?: string;
   readonly position: number;
   readonly theme: string;
   readonly verb: string;
@@ -80,11 +102,18 @@ export interface RecapThemeSummary {
   readonly theme: string;
   /** 1–2 sentence summary. May contain backtick-wrapped code spans. */
   readonly summary: string;
+  /** Background and explanation, frozen at this recap's generation time. */
+  readonly context?: string;
+  readonly approach?: string;
+  readonly currentState?: string;
+  /** Concrete symptom and first check, or empty when no evidenced risk exists. */
+  readonly worthWatching?: string;
 }
 
 export interface ProjectRecap {
   readonly id: string;
   readonly repositoryId: string;
+  readonly sourceScope?: RecapSourceScope | null;
   readonly period: RecapPeriod;
   readonly periodStart: string;
   readonly periodEnd: string;
@@ -117,6 +146,7 @@ export interface ProjectRecap {
 export interface ProjectRecapSummary {
   readonly id: string;
   readonly repositoryId: string;
+  readonly sourceScope?: RecapSourceScope | null;
   readonly period: RecapPeriod;
   readonly periodStart: string;
   readonly periodEnd: string;
@@ -133,6 +163,7 @@ export function recapSummaryOf(recap: ProjectRecap): ProjectRecapSummary {
   return {
     id: recap.id,
     repositoryId: recap.repositoryId,
+    sourceScope: recap.sourceScope ?? null,
     period: recap.period,
     periodStart: recap.periodStart,
     periodEnd: recap.periodEnd,
