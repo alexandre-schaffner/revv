@@ -757,7 +757,7 @@ Call sites state only what differs. Props beat context, so both stay overridable
 
 **The severity ramp.** Solidity descends with severity, so the most severe mark is
 always the heaviest on screen. Applies to the issues panel, the ratings panel, the
-approve dialog, and toasts.
+submit-review dialog, and toasts.
 
 | Level | Glyph | Weight |
 | --- | --- | --- |

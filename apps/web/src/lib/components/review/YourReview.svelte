@@ -1,19 +1,24 @@
 <script lang="ts">
-import { isIssueResolved, isThreadResolved, type ReviewAction } from "@revv/shared";
+import {
+  isIssueResolved,
+  isThreadResolved,
+  type ReviewAction,
+  type WalkthroughIssue,
+} from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { submitChatMessage } from "$lib/chat/turn.svelte";
 import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import ReviewActionBar from "$lib/components/review/chrome/ReviewActionBar.svelte";
+import { viewerIsAuthor } from "$lib/prs/viewer";
 import { buildAddressIssuesPrompt } from "$lib/review/address-issues-prompt";
 import { IssueSelection } from "$lib/review/issue-selection.svelte";
 import { submitReview } from "$lib/review/submit-review";
-import { postableThreadCount } from "$lib/review/threads";
+import { postableThreads } from "$lib/review/threads";
 import { getActiveTab } from "$lib/stores/pr-view-state.svelte";
 import { deleteThread, getThreads } from "$lib/stores/review.svelte";
 import { setRightPanelOpen } from "$lib/stores/sidebar.svelte";
-import { outstandingItemsPhrase } from "$lib/walkthrough/issues";
 import { getIssueSignal } from "$lib/walkthrough/store.svelte";
-import ApproveWithIssuesDialog from "./ApproveWithIssuesDialog.svelte";
+import SubmitReviewDialog from "./SubmitReviewDialog.svelte";
 import CommentsPanel from "./spec-panel/CommentsPanel.svelte";
 import IssuesPanel from "./spec-panel/IssuesPanel.svelte";
 
@@ -32,33 +37,35 @@ const unresolvedThreads = $derived(getThreads(prId).filter((t) => !isThreadResol
 
 const selection = new IssueSelection(() => issues);
 let submitting = $state<ReviewAction | null>(null);
-let approveDialogOpen = $state(false);
-
-/**
- * Outstanding issues or unresolved threads make the reviewer confirm that
- * they're approving despite them; a clean slate submits directly.
- */
-function handleApproveClick(): void {
-  if (submitting) return;
-  if (unresolvedIssues.length > 0 || unresolvedThreads.length > 0) {
-    approveDialogOpen = true;
-    return;
-  }
-  void submit("approve");
-}
+let dialogOpen = $state(false);
+let dialogAction = $state<ReviewAction>("comment");
 
 const selectedCount = $derived(selection.selected.length);
-const canComment = $derived(selectedCount > 0 || postableThreadCount(prId) > 0);
+// With no issue ticked, only the reviewer's own drafts are left to post.
+const canComment = $derived(selectedCount > 0 || postableThreads(prId, new Set()).length > 0);
 
-const approveBlockerSummary = $derived(
-  outstandingItemsPhrase(unresolvedIssues.length, unresolvedThreads.length),
-);
-
-async function submit(action: ReviewAction): Promise<void> {
+/**
+ * Every review goes through the dialog, which owns the choice of event. It
+ * opens on the likeliest one: ticked issues ask for changes, drafts make a
+ * comment, and with nothing to post the review can only be an approval.
+ */
+function openDialog(): void {
   if (submitting) return;
+  dialogAction = selectedCount > 0 ? "request_changes" : canComment ? "comment" : "approve";
+  dialogOpen = true;
+}
+
+async function submit(
+  action: ReviewAction,
+  issues: readonly WalkthroughIssue[],
+  threadIds: readonly string[],
+): Promise<boolean> {
+  if (submitting) return false;
   submitting = action;
   try {
-    if (await submitReview(prId, action, selection.selected)) selection.clear();
+    const ok = await submitReview(prId, action, issues, threadIds);
+    if (ok) selection.clear();
+    return ok;
   } finally {
     submitting = null;
   }
@@ -84,20 +91,15 @@ useShellChrome(() => ({
 </script>
 
 {#snippet reviewActions()}
-	<!-- One submit posts everything in a single GitHub review. The review event
-	     is decided by content: selecting walkthrough issues means "request
-	     changes"; with none it's a plain comment review. Either way the line
-	     comments ride along. -->
+	<!-- One "Submit review" opens the dialog, where the reviewer picks the
+	     event and sees everything the review posts. -->
 	<ReviewActionBar
 		{prId}
 		{submitting}
 		{selectedCount}
 		{canComment}
-		{approveBlockerSummary}
 		onGenerateChanges={generateChanges}
-		onSubmitReview={() => void submit(selectedCount > 0 ? 'request_changes' : 'comment')}
-		onComment={() => void submit('comment')}
-		onApprove={handleApproveClick}
+		onSubmitReview={openDialog}
 	/>
 {/snippet}
 
@@ -111,12 +113,16 @@ useShellChrome(() => ({
 	/>
 </div>
 
-<ApproveWithIssuesDialog
-	bind:open={approveDialogOpen}
+<SubmitReviewDialog
+	bind:open={dialogOpen}
 	{prId}
-	issues={unresolvedIssues}
-	pendingThreads={unresolvedThreads}
-	onconfirm={() => void submit('approve')}
+	initialAction={dialogAction}
+	commentOnly={viewerIsAuthor(prId)}
+	issues={selection.selected}
+	unresolvedIssueCount={unresolvedIssues.length}
+	unresolvedThreadCount={unresolvedThreads.length}
+	submitting={submitting !== null}
+	onsubmit={submit}
 />
 
 <style>
