@@ -16,7 +16,7 @@
     "@coldtea/pr-lens-schema": "^0.6.0",
     "@effect/opentelemetry": "4.0.7",
     "@elysiajs/cors": "^1.4.2",
-    "@google-cloud/storage": "^8.2.0",
+    "@google-cloud/storage": "^8.4.0",
     "@napi-rs/keyring": "^2.1.2",
     "@opentelemetry/api": "^1.10.0",
     "@opentelemetry/core": "^3.0.0",
