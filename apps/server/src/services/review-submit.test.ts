@@ -42,6 +42,7 @@ function thread(overrides: Partial<CommentThread> & { id: string }): CommentThre
     externalThreadId: null,
     externalCommentId: null,
     lastSyncedAt: null,
+    walkthroughIssueId: null,
     ...overrides,
   };
 }
@@ -79,10 +80,12 @@ function plan(
   threads: CommentThread[],
   messages: Record<string, ThreadMessage[]>,
   cachedFiles: CachedDiffFile[] | null = null,
+  issueIds: ReadonlySet<string> = new Set(),
 ) {
   return planReviewComments(
     { threads, messages },
     new Set(threads.map((t) => t.id)),
+    issueIds,
     cachedFiles,
     "me",
   );
@@ -110,6 +113,7 @@ describe("planReviewComments", () => {
     const result = planReviewComments(
       { threads, messages },
       new Set(["resolved", "synced"]),
+      new Set(),
       null,
       "me",
     );
@@ -131,6 +135,25 @@ describe("planReviewComments", () => {
         reason: "the file is no longer part of the diff",
       },
     ]);
+  });
+
+  it("posts Revv's comment on an issue only when the review lists that issue", () => {
+    const threads = [
+      thread({ id: "mine" }),
+      thread({ id: "ai-picked", walkthroughIssueId: "i1" }),
+      thread({ id: "ai-unpicked", walkthroughIssueId: "i2" }),
+    ];
+    const messages = {
+      mine: [message("mine")],
+      "ai-picked": [message("ai-picked", { authorRole: "ai_agent", authorLogin: null })],
+      "ai-unpicked": [message("ai-unpicked", { authorRole: "ai_agent", authorLogin: null })],
+    };
+    expect(plan(threads, messages, null, new Set(["i1"])).posted.map((p) => p.threadId)).toEqual([
+      "mine",
+      "ai-picked",
+    ]);
+    // An approve with no issue picked sends only the reviewer's own comments.
+    expect(plan(threads, messages).posted.map((p) => p.threadId)).toEqual(["mine"]);
   });
 
   it("keeps every file while no diff is cached", () => {

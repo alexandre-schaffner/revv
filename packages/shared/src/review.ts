@@ -69,6 +69,12 @@ export interface CommentThread {
   externalThreadId: string | null;
   externalCommentId: string | null;
   lastSyncedAt: string | null;
+  /**
+   * The walkthrough issue Revv's agent wrote this thread for; null for
+   * everyone else's threads. While a draft, it goes up only with its issue
+   * (`postsWithReview`).
+   */
+  walkthroughIssueId: string | null;
 }
 
 export interface ThreadMessage {

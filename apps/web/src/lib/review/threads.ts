@@ -6,6 +6,7 @@ import {
   type CommentThread,
   canUserModifyComment,
   draftCommentBody,
+  postsWithReview,
   type ThreadMessage,
   unpublishedReplies,
 } from "@revv/shared";
@@ -33,21 +34,31 @@ export function lineRangeLabel(thread: Pick<CommentThread, "startLine" | "endLin
   return endLine && endLine !== startLine ? `:${startLine}-${endLine}` : `:${startLine}`;
 }
 
-/** Threads not yet on GitHub that a submit posts as new review comments. */
-export function draftThreadIds(prId: string): string[] {
+/**
+ * Threads not yet on GitHub that a submit listing `issueIds` posts as new
+ * review comments. Revv's comment on an issue goes up only with that issue.
+ */
+export function draftThreadIds(prId: string, issueIds: ReadonlySet<string>): string[] {
   const viewer = viewerLoginOnPr(prId);
   return getThreads(prId)
-    .filter((t) => draftCommentBody(t, getThreadMessages(prId, t.id), viewer) !== null)
+    .filter(
+      (t) =>
+        postsWithReview(t, issueIds) &&
+        draftCommentBody(t, getThreadMessages(prId, t.id), viewer) !== null,
+    )
     .map((t) => t.id);
 }
 
-/** Threads a submit posts something on: a new comment, or a reply to one GitHub has. */
-export function postableThreadCount(prId: string): number {
+/**
+ * Threads a submit listing `issueIds` posts something on: a new comment, or a
+ * reply to one GitHub has.
+ */
+export function postableThreadCount(prId: string, issueIds: ReadonlySet<string>): number {
   const viewer = viewerLoginOnPr(prId);
   return getThreads(prId).filter((t) => {
     const messages = getThreadMessages(prId, t.id);
     return (
-      draftCommentBody(t, messages, viewer) !== null ||
+      (postsWithReview(t, issueIds) && draftCommentBody(t, messages, viewer) !== null) ||
       unpublishedReplies(t, messages, viewer).length > 0
     );
   }).length;

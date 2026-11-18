@@ -28,8 +28,9 @@ export async function submitReview(
   issues: readonly WalkthroughIssue[],
 ): Promise<boolean> {
   const issueIds = issues.map((issue) => issue.id);
-  // The drafts on screen, so nothing the reviewer hasn't seen goes up.
-  const threadIds = draftThreadIds(prId);
+  // The drafts on screen, so nothing the reviewer hasn't seen goes up, and
+  // Revv's comments only on the issues this review lists.
+  const threadIds = draftThreadIds(prId, new Set(issueIds));
   try {
     const result = await call(
       api.api.reviews({ id: prId })["github-submit"].post({ action, threadIds, issueIds }),

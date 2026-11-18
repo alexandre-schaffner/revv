@@ -61,6 +61,19 @@ export function draftCommentBody(
   return body === "" ? null : body;
 }
 
+/**
+ * Whether a review that lists `issueIds` takes this draft thread. A thread
+ * the walkthrough wrote for an issue goes up only with that issue: approving,
+ * or posting your own comments, never sends Revv's comments on issues you
+ * didn't pick.
+ */
+export function postsWithReview(
+  thread: { readonly walkthroughIssueId: string | null },
+  issueIds: ReadonlySet<string>,
+): boolean {
+  return thread.walkthroughIssueId === null || issueIds.has(thread.walkthroughIssueId);
+}
+
 /** A thread already on GitHub posts its publishable drafts as replies, in order. */
 export function unpublishedReplies<M extends DraftReviewMessage>(
   thread: DraftThread,

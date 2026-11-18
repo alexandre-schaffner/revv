@@ -65,7 +65,10 @@ function handleApproveClick(): void {
 }
 
 const selectedCount = $derived(selection.selected.length);
-const canComment = $derived(selectedCount > 0 || postableThreadCount(prId) > 0);
+const canComment = $derived(
+  selectedCount > 0 ||
+    postableThreadCount(prId, new Set(selection.selected.map((issue) => issue.id))) > 0,
+);
 
 const approveBlockerSummary = $derived(
   outstandingItemsPhrase(unresolvedIssues.length, unresolvedThreads.length),

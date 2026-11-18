@@ -1,6 +1,7 @@
 import {
   ISSUE_SEVERITY_TAG,
   issueLocation,
+  postsWithReview,
   type ReviewAction,
   unpublishedReplies,
   type WalkthroughIssue,
@@ -23,7 +24,8 @@ export interface SubmitReviewInput {
   action: ReviewAction;
   /**
    * The draft threads the reviewer is posting. Each one still not on GitHub
-   * becomes one review comment; any other id is ignored.
+   * becomes one review comment; any other id is ignored, and so is a thread
+   * the walkthrough wrote for an issue the review doesn't list.
    */
   threadIds?: string[];
   /**
@@ -59,20 +61,22 @@ export interface SkippedComment {
 }
 
 /**
- * The review comments the chosen threads post (see `planThreadComment`). One
- * GitHub can't take would make it reject the whole review, so it stays a local
- * draft, named in `skippedComments`.
+ * The review comments the chosen threads post (see `planThreadComment`). A
+ * thread the walkthrough wrote for an issue posts only when the review lists
+ * that issue (`postsWithReview`). One GitHub can't take would make it reject
+ * the whole review, so it stays a local draft, named in `skippedComments`.
  */
 export function planReviewComments(
   { threads, messages }: Conversation,
   chosen: ReadonlySet<string>,
+  issueIds: ReadonlySet<string>,
   cachedFiles: readonly CachedDiffFile[] | null,
   viewerLogin: string | null,
 ): { posted: PostedThread[]; skippedComments: SkippedComment[] } {
   const posted: PostedThread[] = [];
   const skippedComments: SkippedComment[] = [];
   for (const thread of threads) {
-    if (!chosen.has(thread.id)) continue;
+    if (!chosen.has(thread.id) || !postsWithReview(thread, issueIds)) continue;
     const plan = planThreadComment(thread, messages[thread.id] ?? [], viewerLogin, cachedFiles);
     if (plan === null) continue;
     if (plan.kind === "skip") {
@@ -130,15 +134,16 @@ export function submitReview(prId: string, body: SubmitReviewInput) {
       comment: "COMMENT",
     } as const;
 
+    const issues = yield* walkthroughService.issuesOnPr(pr.id, body.issueIds ?? []);
     const cachedFiles = yield* diffCache.getCachedFiles(pr.id);
     const { posted, skippedComments } = planReviewComments(
       yield* review.getConversation(pr.id),
       new Set(body.threadIds ?? []),
+      new Set(issues.map((issue) => issue.id)),
       cachedFiles,
       viewerLogin,
     );
 
-    const issues = yield* walkthroughService.issuesOnPr(pr.id, body.issueIds ?? []);
     const reviewInput = {
       event: eventMap[body.action],
       body: reviewBody(issues),
