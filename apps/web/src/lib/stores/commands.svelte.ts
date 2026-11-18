@@ -1,4 +1,4 @@
-import { onDestroy } from "svelte";
+import { onDestroy, untrack } from "svelte";
 import { isTextEditingKeyTarget } from "$lib/utils";
 import { fuzzyScore } from "$lib/utils/fuzzy";
 import {
@@ -12,12 +12,36 @@ import {
 
 // Later registrations shadow earlier ones on the same keys, so a page can
 // take over a binding for as long as it is mounted.
-let registered = $state.raw<readonly Command[]>([]);
+//
+// A plain list with a version to re-read on, not a `$state` array: a page
+// switch registers the new page's commands and unregisters the old page's in
+// overlapping batches, where a read-modify-write of reactive state can drop
+// one side's write. The bump is untracked because callers register from
+// inside effects (PillTabs), which must not come to depend on the version.
+const registered: Command[] = [];
+let version = $state(0);
+
+function bump(): void {
+  version = untrack(() => version) + 1;
+}
+
+function current(): readonly Command[] {
+  void version;
+  return registered;
+}
 
 export function registerCommands(commands: readonly Command[]): () => void {
-  registered = [...registered, ...commands];
+  registered.push(...commands);
+  bump();
   return () => {
-    registered = registered.filter((cmd) => !commands.includes(cmd));
+    let removed = false;
+    for (const cmd of commands) {
+      const at = registered.indexOf(cmd);
+      if (at === -1) continue;
+      registered.splice(at, 1);
+      removed = true;
+    }
+    if (removed) bump();
   };
 }
 
@@ -27,13 +51,13 @@ export function useCommands(commands: readonly Command[]): void {
 
 /** The glyphs of a registered command's binding, for UI hints; empty when it has none. */
 export function commandShortcut(id: string): string[] {
-  const keys = registered.find((cmd) => cmd.id === id)?.keys;
+  const keys = current().find((cmd) => cmd.id === id)?.keys;
   return keys ? shortcutGlyphs(keys) : [];
 }
 
 /** Runs the command bound to a ⌘ combo. Returns whether the event was taken. */
 export function dispatchCommandKey(e: KeyboardEvent): boolean {
-  const cmd = findBoundCommand(registered, e);
+  const cmd = findBoundCommand(current(), e);
   if (!cmd) return false;
   if (cmd.notInTextFields && isTextEditingKeyTarget(e)) return false;
   e.preventDefault();
@@ -62,13 +86,13 @@ export function dispatchBareKey(e: KeyboardEvent): boolean {
   if (isTextEditingKeyTarget(e)) return false;
   const prefix = chordPrefix;
   clearChord();
-  const cmd = findBareCommand(registered, e, prefix);
+  const cmd = findBareCommand(current(), e, prefix);
   if (cmd) {
     e.preventDefault();
     cmd.run();
     return true;
   }
-  if (!startsChord(registered, e)) return false;
+  if (!startsChord(current(), e)) return false;
   e.preventDefault();
   chordPrefix = e.key;
   chordTimer = setTimeout(clearChord, CHORD_MS);
@@ -85,7 +109,7 @@ function scoreCommand(cmd: Command, q: string): number {
 }
 
 const filteredCommands = $derived.by(() => {
-  const offered = registered.filter((cmd) => !cmd.hidden && isAvailable(cmd));
+  const offered = current().filter((cmd) => !cmd.hidden && isAvailable(cmd));
   const q = query.trim();
   if (q.length === 0) return offered;
   return offered
