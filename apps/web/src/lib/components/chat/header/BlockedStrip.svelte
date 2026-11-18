@@ -96,7 +96,7 @@ const busy = $derived(isWorktreeBusy(prId));
 	}
 
 	.blocked-title {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		font-weight: 500;
 		flex: 1;
 		min-width: 0;
@@ -106,7 +106,7 @@ const busy = $derived(isWorktreeBusy(prId));
 		display: flex;
 		align-items: center;
 		gap: 4px;
-		font-size: 11px;
+		font-size: var(--text-ui);
 		padding: 3px 8px;
 		border-radius: 4px;
 		border: 1px solid var(--color-border);
@@ -140,12 +140,12 @@ const busy = $derived(isWorktreeBusy(prId));
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		font-size: 11px;
+		font-size: var(--text-ui);
 	}
 
 	.blocked-sha {
 		font-family: var(--font-mono);
-		font-size: 10px;
+		font-size: var(--text-xs);
 		color: var(--color-text-muted);
 		flex-shrink: 0;
 	}
@@ -185,7 +185,7 @@ const busy = $derived(isWorktreeBusy(prId));
 	}
 
 	.blocked-hint {
-		font-size: 11px;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 		margin: 0;
 	}

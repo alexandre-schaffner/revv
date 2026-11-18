@@ -101,11 +101,11 @@ function filesSummary(files: readonly string[]): string {
 					title="View diff"
 				>
 					<span class="flex min-w-0 items-center gap-2">
-						<code class="shrink-0 font-mono text-[10px] text-accent">{commit.shortSha}</code>
+						<code class="shrink-0 font-mono text-xs text-accent">{commit.shortSha}</code>
 						<span class="truncate text-xs text-foreground">{commit.subject}</span>
 					</span>
 					{#if commit.files.length > 0}
-						<span class="truncate font-mono text-[10px] text-muted-foreground">
+						<span class="truncate font-mono text-xs text-muted-foreground">
 							{filesSummary(commit.files)}
 						</span>
 					{/if}
@@ -252,7 +252,7 @@ function filesSummary(files: readonly string[]): string {
 		background: transparent;
 		border: none;
 		padding: 0;
-		font-size: 11px;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 		cursor: pointer;
 		text-decoration: underline;

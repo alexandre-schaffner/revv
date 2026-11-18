@@ -1,6 +1,20 @@
 import { type ClassValue, clsx } from "clsx";
 import type { Snippet } from "svelte";
-import { twMerge } from "tailwind-merge";
+import { extendTailwindMerge } from "tailwind-merge";
+import { createTV } from "tailwind-variants";
+
+// tailwind-merge only knows Tailwind's stock font sizes. Without this, the
+// app's own steps (`text-sm`, `text-ui`, `text-xs`) read as text colors and
+// `cn("text-sm", "text-text-primary")` would drop one of the two.
+const twMergeConfig = {
+  extend: {
+    theme: { text: ["ui", "prose", "prose-dense", "prose-reading", "prose-lede"] },
+  },
+};
+const twMerge = extendTailwindMerge(twMergeConfig);
+
+/** `tv` with the app's font-size steps registered; import this, not the package's. */
+export const tv = createTV({ twMergeConfig });
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));

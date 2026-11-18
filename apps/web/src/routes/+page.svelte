@@ -17,7 +17,7 @@ const resolved = $derived(getReposFetchAttempted());
 	<span class="flex items-center gap-1">
 		{#each commandShortcut(commandId) as glyph, i (i)}
 			{#if i > 0}<span class="text-text-muted">+</span>{/if}
-			<kbd class="inline-flex items-center gap-0.5 rounded border border-border-subtle bg-bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-text-secondary">{glyph}</kbd>
+			<kbd class="inline-flex items-center gap-0.5 rounded border border-border-subtle bg-bg-secondary px-1.5 py-0.5 font-mono text-xs text-text-secondary">{glyph}</kbd>
 		{/each}
 		{action}
 	</span>
@@ -33,9 +33,9 @@ const resolved = $derived(getReposFetchAttempted());
 	</div>
 {:else if resolved}
 	<div class="flex h-full flex-col items-center justify-center text-center">
-		<h1 class="text-4xl font-bold tracking-tight text-text-primary">Revv</h1>
+		<h1 class="text-4xl font-semibold tracking-tight text-text-primary">Revv</h1>
 		<p class="mt-2 text-sm text-text-secondary">AI-powered code review</p>
-		<p class="mt-4 flex flex-col items-center gap-1.5 text-xs text-text-muted">
+		<p class="mt-4 flex flex-col items-center gap-1.5 text-ui text-text-muted">
 			{@render hint("palette:search", "to open a pull request")}
 			{@render hint("palette:commands", "to open the command palette")}
 		</p>

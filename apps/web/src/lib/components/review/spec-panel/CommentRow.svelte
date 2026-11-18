@@ -171,7 +171,7 @@ const ariaLabel = $derived(
 
     .line-chip {
         font-family: var(--font-mono);
-        font-size: 11px;
+        font-size: var(--text-ui);
         font-weight: 500;
         color: var(--color-text-muted);
         letter-spacing: 0.02em;
@@ -201,7 +201,7 @@ const ariaLabel = $derived(
 
     .comment-preview {
         font-family: var(--font-sans);
-        font-size: 12px;
+        font-size: var(--text-ui);
         color: var(--color-text-muted);
     }
 
@@ -212,8 +212,8 @@ const ariaLabel = $derived(
         padding: 1px 7px;
         border-radius: 4px;
         font-family: var(--font-mono);
-        font-size: 10.5px;
-        font-weight: 600;
+        font-size: var(--text-ui);
+        font-weight: 500;
         letter-spacing: 0.04em;
         color: var(--color-text-muted);
         background: color-mix(in srgb, var(--color-accent) 8%, transparent);
@@ -223,7 +223,7 @@ const ariaLabel = $derived(
 
     .count-pill-num {
         color: var(--color-accent);
-        font-weight: 700;
+        font-weight: 600;
     }
 
     .count-pill-label {

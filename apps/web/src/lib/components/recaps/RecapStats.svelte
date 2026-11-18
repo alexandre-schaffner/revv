@@ -52,7 +52,7 @@ let hasRisk = $derived(stats.riskBreakdown.medium + stats.riskBreakdown.high > 0
 		flex-wrap: wrap;
 		gap: 0.5rem;
 		color: var(--color-text-muted);
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 	}
 
 	.stat {

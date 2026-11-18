@@ -198,7 +198,7 @@ const resolved = $derived(resolutionLabel !== null);
 	}
 
 	.issue-card-title {
-		font-size: 13px;
+		font-size: var(--text-sm);
 		font-weight: 500;
 		color: var(--color-text-primary);
 		line-height: 1.4;
@@ -210,7 +210,7 @@ const resolved = $derived(resolutionLabel !== null);
 	}
 
 	.issue-card-description {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 		line-height: 1.5;
 		margin: 0;
@@ -219,10 +219,10 @@ const resolved = $derived(resolutionLabel !== null);
 
 	.issue-step-tag {
 		justify-self: end;
-		font-size: 10px;
+		font-size: var(--text-xs);
 		font-weight: 600;
 		text-transform: uppercase;
-		letter-spacing: 0.04em;
+		letter-spacing: var(--tracking-caps);
 		color: var(--color-text-muted);
 		padding: 1px 6px;
 		border-radius: 9999px;
@@ -236,9 +236,9 @@ const resolved = $derived(resolutionLabel !== null);
 		align-items: center;
 		border-radius: 9999px;
 		padding: 1px 7px;
-		font-size: 10px;
-		font-weight: 700;
-		letter-spacing: 0.04em;
+		font-size: var(--text-xs);
+		font-weight: 600;
+		letter-spacing: var(--tracking-caps);
 		text-transform: uppercase;
 		flex-shrink: 0;
 		background: color-mix(in srgb, var(--color-success) 15%, transparent);
@@ -255,10 +255,10 @@ const resolved = $derived(resolutionLabel !== null);
 	}
 
 	.issue-badge {
-		font-size: 10px;
+		font-size: var(--text-xs);
 		font-weight: 600;
 		text-transform: uppercase;
-		letter-spacing: 0.04em;
+		letter-spacing: var(--tracking-caps);
 		padding: 1px 7px;
 		border-radius: 9999px;
 		border: 1px solid transparent;

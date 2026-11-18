@@ -33,7 +33,8 @@ let { message, loading = false, action }: Props = $props();
 		padding: 4px 6px 4px 21px;
 		border-radius: 6px;
 		color: var(--color-text-muted);
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		text-align: left;
 	}
 

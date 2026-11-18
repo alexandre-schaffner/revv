@@ -36,8 +36,8 @@ let { variant = "app", class: className, "aria-hidden": ariaHidden }: Props = $p
 
 	.revv-brand-app .revv-brand-word {
 		color: var(--color-text-primary);
-		font-size: 12px;
-		font-weight: 600;
+		font-size: var(--text-ui);
+		font-weight: 500;
 	}
 
 	.revv-brand-onboarding {
@@ -46,8 +46,8 @@ let { variant = "app", class: className, "aria-hidden": ariaHidden }: Props = $p
 
 	.revv-brand-onboarding .revv-brand-word {
 		color: var(--ob-text-italic);
-		font-family: 'Newsreader', Georgia, serif;
-		font-size: 17px;
+		font-family: var(--font-serif);
+		font-size: var(--text-lg);
 		font-style: italic;
 		font-weight: 500;
 		letter-spacing: 0.01em;

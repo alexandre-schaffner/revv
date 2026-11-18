@@ -57,7 +57,7 @@ const links = $derived(
         padding: 2px 8px;
         border-radius: 9999px;
         font-family: var(--font-mono);
-        font-size: 10.5px;
+        font-size: var(--text-ui);
         font-weight: 600;
         letter-spacing: 0.02em;
         cursor: pointer;

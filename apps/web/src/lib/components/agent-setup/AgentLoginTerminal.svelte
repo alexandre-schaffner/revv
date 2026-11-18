@@ -219,8 +219,8 @@ onDestroy(() => {
 	}
 
 	.lede {
-		font-family: 'Newsreader', Georgia, serif;
-		font-size: 16px;
+		font-family: var(--font-serif);
+		font-size: var(--text-base);
 		line-height: 1.6;
 		color: var(--terminal-body);
 		margin: 0;
@@ -240,8 +240,8 @@ onDestroy(() => {
 		border: 0;
 		padding: 0;
 		color: var(--terminal-muted);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 10.5px;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
 		cursor: pointer;
@@ -273,8 +273,8 @@ onDestroy(() => {
 	}
 
 	.login-error {
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 11.5px;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
 		color: var(--terminal-accent);
 	}
 
@@ -288,8 +288,8 @@ onDestroy(() => {
 		border: 0;
 		padding: 8px 4px;
 		color: var(--terminal-muted);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 10.5px;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
 		cursor: pointer;

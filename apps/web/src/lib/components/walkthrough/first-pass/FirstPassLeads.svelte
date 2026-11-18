@@ -224,7 +224,8 @@ function splitPath(filePath: string): { dir: string; name: string } {
 		background: transparent;
 		color: var(--color-text-muted);
 		font: inherit;
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		font-variant-numeric: tabular-nums;
 		cursor: pointer;
 	}
@@ -253,7 +254,8 @@ function splitPath(filePath: string): { dir: string; name: string } {
 
 	.leads-note {
 		margin: 0;
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-muted);
 	}
 
@@ -305,7 +307,8 @@ function splitPath(filePath: string): { dir: string; name: string } {
 	}
 
 	.lead-smells-more {
-		font-size: 10px;
+		font-size: var(--text-xs);
+		letter-spacing: var(--text-xs--letter-spacing);
 		font-variant-numeric: tabular-nums;
 		color: var(--color-text-muted);
 	}
@@ -320,7 +323,7 @@ function splitPath(filePath: string): { dir: string; name: string } {
 		display: flex;
 		min-width: 0;
 		font-family: var(--font-mono);
-		font-size: 11.5px;
+		font-size: var(--text-ui);
 		white-space: nowrap;
 	}
 
@@ -338,7 +341,7 @@ function splitPath(filePath: string): { dir: string; name: string } {
 
 	.lead-range {
 		font-family: var(--font-mono);
-		font-size: 11px;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 	}
 
@@ -347,7 +350,8 @@ function splitPath(filePath: string): { dir: string; name: string } {
 	}
 
 	.lead-status {
-		font-size: 10.5px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		text-align: right;
 		white-space: nowrap;
 		color: var(--color-text-muted);
@@ -365,7 +369,7 @@ function splitPath(filePath: string): { dir: string; name: string } {
 		max-width: calc(var(--lead-pad) + var(--lead-icon-col) + var(--lead-gap) + 80ch);
 		padding: 0 8px 0 calc(var(--lead-pad) + var(--lead-icon-col) + var(--lead-gap));
 		overflow: hidden;
-		font-size: 11.5px;
+		font-size: var(--text-ui);
 		line-height: 1.4;
 		color: var(--color-text-muted);
 		-webkit-box-orient: vertical;
@@ -374,7 +378,8 @@ function splitPath(filePath: string): { dir: string; name: string } {
 	}
 
 	.lead-pct {
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		font-variant-numeric: tabular-nums;
 		text-align: right;
 		color: var(--color-text-muted);
@@ -388,7 +393,8 @@ function splitPath(filePath: string): { dir: string; name: string } {
 		background: transparent;
 		color: var(--color-text-muted);
 		font: inherit;
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		cursor: pointer;
 	}
 

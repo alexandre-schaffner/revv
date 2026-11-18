@@ -14,14 +14,19 @@ import {
   postComment,
   watchConversation,
 } from "$lib/stores/conversation.svelte";
+import { getConversationSeenAt, setConversationSeenAt } from "$lib/stores/conversation-seen.svelte";
 import { getActivePanel } from "$lib/stores/focus-mode.svelte";
+import { useMergeEligibility } from "$lib/stores/merge-eligibility.svelte";
+import { getPrById } from "$lib/stores/prs.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { openExternal } from "$lib/utils/open-external";
 import BaseConflicts from "./BaseConflicts.svelte";
 import CiChecks from "./CiChecks.svelte";
-import CommentCard from "./CommentCard.svelte";
 import ConversationSidebar from "./ConversationSidebar.svelte";
 import MarkdownEditor from "./MarkdownEditor.svelte";
+import PrDescription from "./PrDescription.svelte";
+import PrPulse from "./PrPulse.svelte";
+import { itemsSince, prPulse } from "./pr-pulse";
 import Timeline from "./Timeline.svelte";
 
 interface Props {
@@ -34,6 +39,65 @@ let { prId, isActive }: Props = $props();
 const entry = $derived(getConversation(prId));
 const conversation = $derived(entry.request.status === "ok" ? entry.request.data : null);
 const abilities = $derived(getAbilities(prId));
+// Maintainers may edit anyone's description on GitHub; here only its author
+// can, so a click in someone else's text never rewrites it.
+const canEditBody = $derived(
+  abilities.canEdit &&
+    !!conversation &&
+    conversation.viewerLogin.toLowerCase() === conversation.author.login.toLowerCase(),
+);
+
+// ── Overview ────────────────────────────────────────────────────────────
+const pr = $derived(getPrById(prId));
+const baseRef = $derived(pr?.targetBranch ?? "the base branch");
+// Mergeability only means something for an open, ready PR.
+const mergeable = $derived(
+  !!conversation && conversation.state === "open" && !conversation.isDraft,
+);
+const mergeEligibility = useMergeEligibility(
+  () => prId,
+  () => isActive && mergeable,
+);
+const pulse = $derived(
+  conversation ? prPulse(conversation, mergeable ? mergeEligibility.current : null, baseRef) : null,
+);
+
+// What happened since the last visit. The baseline is read once when the tab
+// comes on screen; the store moves on to the newest item straight away, so the
+// marks hold for this visit and the next one starts from here.
+let seenBaseline = $state<string | null>(null);
+$effect(() => {
+  if (!isActive || !prId) return;
+  const id = prId;
+  untrack(() => {
+    seenBaseline = getConversationSeenAt(id);
+  });
+});
+$effect(() => {
+  const newest = conversation?.timeline.at(-1)?.createdAt;
+  if (!isActive || !newest) return;
+  const id = prId;
+  untrack(() => setConversationSeenAt(id, newest));
+});
+const fresh = $derived(
+  conversation ? itemsSince(conversation.timeline, seenBaseline, conversation.viewerLogin) : [],
+);
+
+// Failing or running checks open by themselves; settled ones wait for a click.
+let checksChoice = $state<boolean | null>(null);
+const checksNeedYou = $derived(pulse?.checks.tone === "bad" || pulse?.checks.tone === "pending");
+const checksOpen = $derived(checksChoice ?? checksNeedYou);
+$effect(() => {
+  void prId;
+  checksChoice = null;
+});
+
+function reveal(target: Element | null | undefined): void {
+  target?.scrollIntoView({ block: "start", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+}
+
+let root = $state<HTMLDivElement | null>(null);
+const find = (selector: string) => root?.querySelector(selector);
 
 let composer = $state<HTMLTextAreaElement | null>(null);
 let reviewersOpen = $state(false);
@@ -101,7 +165,22 @@ useCommands([
 ]);
 </script>
 
-<div class="conversation review-columns">
+<div class="conversation review-columns" bind:this={root}>
+	{#if pulse}
+		<div class="slot-pulse">
+			<PrPulse
+				{pulse}
+				{fresh}
+				seenAt={seenBaseline}
+				{checksOpen}
+				onChecks={() => (checksChoice = !checksOpen)}
+				onReviews={() => reveal(find('#side-reviewers')?.closest('section'))}
+				onMerge={pulse.merge.tone === 'bad' ? () => reveal(find('.slot-conflicts')) : undefined}
+				onActivity={() => reveal(find('#activity-heading'))}
+				onFresh={() => reveal(find('[data-fresh]'))}
+			/>
+		</div>
+	{/if}
 	<div class="conversation-main">
 		{#if conversation}
 			{#if entry.stale}
@@ -113,45 +192,26 @@ useCommands([
 				</p>
 			{/if}
 
-			<div class="slot-description">
-				<CommentCard
-					author={conversation.author}
-					kind="description"
-					createdAt={conversation.createdAt}
-					body={conversation.body}
-					url={conversation.url}
-					emptyText="No description provided."
-					onsave={abilities.canEdit ? (body) => editBody(prId, body) : undefined}
-				/>
-			</div>
-
-
-			<div class="slot-timeline">
-				<Timeline {prId} {conversation} />
-			</div>
-
-			<!-- Where CI stands now, after the history that led here: GitHub's merge
-			     box sits in the same place. Each commit above carries its own CI
-			     state in the timeline. -->
+			<!-- Where CI stands now, first thing on the page. Each commit in the
+			     activity below carries its own CI state. -->
+			{#if checksOpen}
 			<div class="slot-checks">
 				<CiChecks {prId} {conversation} />
 			</div>
+			{/if}
 
-			<!-- The other half of GitHub's merge box: conflicts with the base. -->
 			<div class="slot-conflicts">
 				<BaseConflicts {prId} {conversation} />
 			</div>
 
-			{#if abilities.canComment && conversation.state === 'open'}
-				<div class="slot-composer">
-					<MarkdownEditor
-						placeholder="Add a comment"
-						submitLabel="Comment"
-						onsubmit={(body) => postComment(prId, body)}
-						bind:textarea={composer}
+			<div class="slot-description">
+				{#key prId}
+					<PrDescription
+						body={conversation.body}
+						onsave={canEditBody ? (body) => editBody(prId, body) : undefined}
 					/>
-				</div>
-			{/if}
+				{/key}
+			</div>
 		{:else if entry.request.status === 'error'}
 			<div class="conversation-error" role="alert">
 				<p>Couldn't load the conversation: {entry.request.error}</p>
@@ -163,21 +223,37 @@ useCommands([
 			</div>
 		{:else}
 			<div class="conversation-skeleton" aria-busy="true" aria-label="Loading conversation">
-				<div class="skeleton-card">
+				<div class="skeleton-card"><span class="skeleton-line skeleton-line--head"></span></div>
+				<div class="skeleton-body">
 					<span class="skeleton-line skeleton-line--head"></span>
 					<span class="skeleton-line"></span>
 					<span class="skeleton-line skeleton-line--short"></span>
 				</div>
-				<div class="skeleton-card skeleton-card--low"><span class="skeleton-line skeleton-line--head"></span></div>
-				<span class="skeleton-line skeleton-line--event"></span>
-				<span class="skeleton-line skeleton-line--event"></span>
 			</div>
 		{/if}
 
-		<section class="slot-review" aria-labelledby="your-review-heading">
-			<h2 id="your-review-heading" class="review-heading">Your review</h2>
+		<section class="slot-section" aria-labelledby="your-review-heading">
+			<h2 id="your-review-heading" class="section-heading">Your review</h2>
 			<YourReview {prId} />
 		</section>
+
+		<!-- The history comes last, ending where the next comment goes. -->
+		{#if conversation}
+			<section class="slot-section" aria-labelledby="activity-heading">
+				<h2 id="activity-heading" class="section-heading">Activity</h2>
+				<Timeline {prId} {conversation} freshSince={seenBaseline} />
+				{#if abilities.canComment && conversation.state === 'open'}
+					<div class="activity-composer">
+						<MarkdownEditor
+							placeholder="Add a comment"
+							submitLabel="Comment"
+							onsubmit={(body) => postComment(prId, body)}
+							bind:textarea={composer}
+						/>
+					</div>
+				{/if}
+			</section>
+		{/if}
 	</div>
 
 	<aside class="conversation-side" data-col="rail" aria-label="Pull request details">
@@ -211,6 +287,25 @@ useCommands([
 		display: none;
 	}
 
+	/* The overview spans the reading column and the rail: it's about the
+	   whole PR, and everything under it is the detail. */
+	.slot-pulse {
+		margin-bottom: 28px;
+		container: pulse / inline-size;
+	}
+
+	/* Out-specifies review-columns' placement rules, which put every child in
+	   one column. */
+	.conversation > .slot-pulse {
+		grid-column: 3 / 6;
+		grid-row: 1;
+	}
+
+	.conversation > .conversation-main,
+	.conversation > .conversation-side {
+		grid-row: 2;
+	}
+
 	.conversation-main {
 		display: flex;
 		flex-direction: column;
@@ -226,7 +321,7 @@ useCommands([
 		padding-top: 4px;
 	}
 
-	.slot-review {
+	.slot-section {
 		display: flex;
 		flex-direction: column;
 		gap: 12px;
@@ -235,9 +330,14 @@ useCommands([
 		border-top: 1px solid var(--color-border);
 	}
 
-	.review-heading {
+	.activity-composer {
+		margin-top: 8px;
+	}
+
+	.section-heading {
 		margin: 0;
-		font-size: 0.9375rem;
+		font-size: var(--text-lg);
+		letter-spacing: var(--text-lg--letter-spacing);
 		font-weight: 600;
 		color: var(--color-text-primary);
 	}
@@ -250,7 +350,7 @@ useCommands([
 		padding: 6px 6px 6px 12px;
 		border-radius: var(--radius-card);
 		background: color-mix(in srgb, var(--color-warning) 8%, transparent);
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-secondary);
 	}
 
@@ -261,7 +361,7 @@ useCommands([
 		padding: 16px;
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-card);
-		font-size: 0.875rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-secondary);
 	}
 
@@ -280,17 +380,17 @@ useCommands([
 		gap: 16px;
 	}
 
-	.skeleton-card {
+	.skeleton-body {
 		display: flex;
 		flex-direction: column;
 		gap: 10px;
-		padding: 16px;
-		border: 1px solid var(--color-border-subtle);
-		border-radius: var(--radius-card);
+		padding-top: 7px;
 	}
 
-	.skeleton-card--low {
+	.skeleton-card {
 		padding: 14px 16px;
+		border: 1px solid var(--color-border-subtle);
+		border-radius: var(--radius-card);
 	}
 
 	.skeleton-line {
@@ -308,11 +408,6 @@ useCommands([
 		width: 60%;
 	}
 
-	.skeleton-line--event {
-		width: 50%;
-		margin-left: 34px;
-	}
-
 	.side-github {
 		display: inline-flex;
 		align-items: center;
@@ -324,7 +419,7 @@ useCommands([
 		background: none;
 		width: 100%;
 		font: inherit;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-secondary);
 		cursor: pointer;
 	}
@@ -355,8 +450,15 @@ useCommands([
 			display: contents;
 		}
 
-		.slot-description,
-		.conversation-stale {
+		.slot-pulse {
+			order: -1;
+			margin-bottom: 12px;
+		}
+
+		.conversation-stale,
+		.slot-checks,
+		.slot-conflicts,
+		.slot-description {
 			order: 0;
 		}
 
@@ -369,11 +471,7 @@ useCommands([
 			background: var(--color-bg-secondary);
 		}
 
-		.slot-checks,
-		.slot-conflicts,
-		.slot-timeline,
-		.slot-composer,
-		.slot-review,
+		.slot-section,
 		.conversation-error,
 		.conversation-skeleton {
 			order: 2;

@@ -150,7 +150,7 @@ async function testConnection(): Promise<void> {
 
 <style>
 	.test-error {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		line-height: 1.45;
 		color: var(--color-danger);
 		overflow-wrap: anywhere;

@@ -178,6 +178,8 @@ function interleave(
 export class WalkthroughView {
   readonly isStreaming: boolean;
   readonly streamError: string | null;
+  /** The run stopped because the agent's sign-in lapsed; settings can fix it. */
+  readonly authRecovery: boolean;
   readonly summary: string | null;
   readonly sentiment: string | null;
   readonly ratings: WalkthroughEntry["ratings"];
@@ -225,6 +227,7 @@ export class WalkthroughView {
 
     this.isStreaming = $derived(entry?.isStreaming ?? false);
     this.streamError = $derived(entry?.streamError ?? null);
+    this.authRecovery = $derived(entry?.streamEndReason === "agent_auth");
     this.summary = $derived(entry?.summary ?? null);
     const sentiment = $derived(entry?.sentiment ?? null);
     this.sentiment = $derived(sentiment || null);
