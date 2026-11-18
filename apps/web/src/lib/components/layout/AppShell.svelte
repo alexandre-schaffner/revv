@@ -206,9 +206,11 @@ function onRightHandleDblClick(): void {
 	<!-- `inert` while the chat is stacked over it: the main pane is covered, so
 		 it shouldn't answer clicks, focus, or Tab. -->
 	<main class="main-area" bind:this={mainEl} inert={chatOverlay}>
+		<!-- Optional chains: when a page drops a slot (leaving the review page),
+		     the render below re-reads it before this {#if} tears it down. -->
 		{#if chrome.current.tabs}
 			<div class="tabs-float">
-				{@render chrome.current.tabs.snippet(chrome.current.tabs.key)}
+				{@render chrome.current.tabs?.snippet?.(chrome.current.tabs?.key ?? '')}
 			</div>
 		{/if}
 		<div class="main-content">
@@ -222,7 +224,7 @@ function onRightHandleDblClick(): void {
 
 		{#if chrome.current.actions}
 			<div class="actions-float">
-				{@render chrome.current.actions()}
+				{@render chrome.current.actions?.()}
 			</div>
 		{/if}
 	</main>
