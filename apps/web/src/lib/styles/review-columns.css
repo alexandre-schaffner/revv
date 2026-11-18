@@ -2,7 +2,7 @@
    out on one grid, so a block, its annotation and the title line up across
    every section:
 
-     col 1  left gutter   max(24px, min(50% - 458px, 100% - 1312px))
+     col 1  left gutter   max(24px, 50% - 668px)
      col 2  48px          severity-dot gutter
      col 3  820px         content
      col 4  40px          content ↔ rail gap
@@ -10,10 +10,12 @@
      col 6  ≥ 24px        right gutter
 
    Percentages resolve against the `review` container (`.review-content`, the
-   main pane), so the content column re-centres whenever the sidebar or the
-   chat panel resizes the pane. `50% - 458px` centres col 3 in the pane;
-   `100% - 1312px` keeps the rail inside a 24px right gutter once the pane is
-   too narrow to centre; they cross at 1708px.
+   main pane), so the composition re-centres whenever the sidebar or the chat
+   panel resizes the pane. The whole composition is centred, not the content
+   column: the gutter left of the content (col 1 + the 48px col 2) equals the
+   gutter right of the rail (col 6) at every pane width. 668 =
+   (48 + 820 + 40 + 380 + 48) / 2. The 24px floor keeps a left gutter down to
+   the stacked breakpoint below.
 
    Below 1336px (24 + 48 + 820 + 40 + 380 + 24) the rail can't fit beside the
    content: the gutters and rail collapse to zero-width tracks and rail items
@@ -30,7 +32,7 @@
 .review-columns {
   display: grid;
   grid-template-columns:
-    max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
+    max(24px, calc(50% - 668px))
     48px
     minmax(0, 820px)
     40px
