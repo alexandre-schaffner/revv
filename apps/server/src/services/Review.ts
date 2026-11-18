@@ -200,6 +200,7 @@ export function toThread(row: ThreadRow): CommentThread {
     externalThreadId: row.externalThreadId ?? null,
     externalCommentId: row.externalCommentId ?? null,
     lastSyncedAt: row.lastSyncedAt ?? null,
+    walkthroughIssueId: row.walkthroughIssueId ?? null,
   };
 }
 

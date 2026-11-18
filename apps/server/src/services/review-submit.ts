@@ -1,6 +1,7 @@
 import {
   ISSUE_SEVERITY_TAG,
   issueLocation,
+  messagesInReview,
   type ReviewAction,
   unpublishedReplies,
   type WalkthroughIssue,
@@ -22,8 +23,10 @@ import { WalkthroughService } from "./walkthrough/Walkthrough";
 export interface SubmitReviewInput {
   action: ReviewAction;
   /**
-   * The draft threads the reviewer is posting. Each one still not on GitHub
-   * becomes one review comment; any other id is ignored.
+   * The threads the reviewer is posting on. One still not on GitHub becomes a
+   * review comment; one GitHub has gets the reviewer's pending replies. A
+   * thread left out keeps its drafts local. Revv's own comment on a
+   * walkthrough issue rides along only when that issue is in `issueIds`.
    */
   threadIds?: string[];
   /**
@@ -59,21 +62,23 @@ export interface SkippedComment {
 }
 
 /**
- * The review comments the chosen threads post (see `planThreadComment`). One
- * GitHub can't take would make it reject the whole review, so it stays a local
- * draft, named in `skippedComments`.
+ * The review comments the chosen threads post (see `planThreadComment`), each
+ * carrying only what `messagesInReview` lets a review carry. One GitHub can't
+ * take would make it reject the whole review, so it stays a local draft, named
+ * in `skippedComments`.
  */
 export function planReviewComments(
   { threads, messages }: Conversation,
-  chosen: ReadonlySet<string>,
+  chosen: { readonly threadIds: ReadonlySet<string>; readonly issueIds: ReadonlySet<string> },
   cachedFiles: readonly CachedDiffFile[] | null,
   viewerLogin: string | null,
 ): { posted: PostedThread[]; skippedComments: SkippedComment[] } {
   const posted: PostedThread[] = [];
   const skippedComments: SkippedComment[] = [];
   for (const thread of threads) {
-    if (!chosen.has(thread.id)) continue;
-    const plan = planThreadComment(thread, messages[thread.id] ?? [], viewerLogin, cachedFiles);
+    if (!chosen.threadIds.has(thread.id)) continue;
+    const carried = messagesInReview(thread, messages[thread.id] ?? [], chosen.issueIds);
+    const plan = planThreadComment(thread, carried, viewerLogin, cachedFiles);
     if (plan === null) continue;
     if (plan.kind === "skip") {
       skippedComments.push({
@@ -107,8 +112,8 @@ const logged =
  * Post the review to GitHub, its line comments built from the chosen draft
  * threads, then bring the local review in line with what GitHub now holds:
  * each posted thread is linked to its GitHub comment (so neither it nor its
- * drafts is ever posted again), the signed-in user's pending replies on threads
- * already on GitHub go up, and the PR's threads are pulled back.
+ * drafts is ever posted again), the signed-in user's pending replies on the
+ * chosen threads GitHub already has go up, and the PR's threads are pulled back.
  */
 export function submitReview(prId: string, body: SubmitReviewInput) {
   return Effect.gen(function* () {
@@ -130,38 +135,61 @@ export function submitReview(prId: string, body: SubmitReviewInput) {
       comment: "COMMENT",
     } as const;
 
+    const issues = yield* walkthroughService.issuesOnPr(pr.id, body.issueIds ?? []);
+    const issueIds = issues.map((issue) => issue.id);
+    const chosenIssueIds: ReadonlySet<string> = new Set(issueIds);
+
+    const chosenThreadIds: ReadonlySet<string> = new Set(body.threadIds ?? []);
+    const before = yield* review.getConversation(pr.id);
     const cachedFiles = yield* diffCache.getCachedFiles(pr.id);
     const { posted, skippedComments } = planReviewComments(
-      yield* review.getConversation(pr.id),
-      new Set(body.threadIds ?? []),
+      before,
+      { threadIds: chosenThreadIds, issueIds: chosenIssueIds },
       cachedFiles,
       viewerLogin,
     );
-
-    const issues = yield* walkthroughService.issuesOnPr(pr.id, body.issueIds ?? []);
+    // Replies on chosen threads GitHub already has. A submit never touches
+    // those threads' rows before the replies go up.
+    const replies = before.threads
+      .filter((t) => chosenThreadIds.has(t.id))
+      .flatMap((t) =>
+        unpublishedReplies(
+          t,
+          messagesInReview(t, before.messages[t.id] ?? [], chosenIssueIds),
+          viewerLogin,
+        ),
+      );
     const reviewInput = {
       event: eventMap[body.action],
       body: reviewBody(issues),
       comments: posted.map((p) => p.comment),
     };
 
-    // Everything the reviewer picked fell outside the diff, leaving a
-    // bodyless COMMENT / REQUEST_CHANGES — which GitHub 422s on its own.
-    // Say why here instead of relaying that.
-    if (
-      body.action !== "approve" &&
-      skippedComments.length > 0 &&
-      reviewInput.comments.length === 0 &&
-      reviewInput.body.trim() === ""
-    ) {
-      return yield* Effect.fail(
-        new ValidationError({
-          message: `Nothing to submit: ${skippedComments.length === 1 ? "the comment's line is" : "every comment's line is"} no longer part of the diff.`,
-        }),
-      );
+    // GitHub 422s a bodyless COMMENT / REQUEST_CHANGES review. Say why here
+    // instead of relaying that; a comment review made only of replies posts
+    // the replies with no review around them.
+    const reviewIsEmpty = reviewInput.comments.length === 0 && reviewInput.body.trim() === "";
+    if (body.action !== "approve" && reviewIsEmpty) {
+      if (skippedComments.length > 0) {
+        return yield* Effect.fail(
+          new ValidationError({
+            message: `Nothing to submit: ${skippedComments.length === 1 ? "the comment's line is" : "every comment's line is"} no longer part of the diff.`,
+          }),
+        );
+      }
+      if (body.action === "request_changes" || replies.length === 0) {
+        return yield* Effect.fail(
+          new ValidationError({
+            message:
+              body.action === "request_changes"
+                ? "Requesting changes needs an issue or a line comment."
+                : "Nothing to submit.",
+          }),
+        );
+      }
     }
 
-    const submitted = yield* github.reviews
+    const submitReviewToGitHub = github.reviews
       .submit(client, repo.fullName, pr.externalId, reviewInput)
       .pipe(
         Effect.catchIf(isExistingPendingReviewError, () =>
@@ -187,10 +215,12 @@ export function submitReview(prId: string, body: SubmitReviewInput) {
           }),
         ),
       );
+    const submitted =
+      body.action !== "approve" && reviewIsEmpty ? null : yield* submitReviewToGitHub;
 
     // GitHub's review response carries no per-comment ids, so each posted
     // thread is matched back to one of the review's comments.
-    if (posted.length > 0) {
+    if (submitted !== null && posted.length > 0) {
       const ghComments = yield* github.reviews
         .commentsForReview(client, repo.fullName, pr.externalId, submitted.id)
         .pipe(
@@ -224,26 +254,20 @@ export function submitReview(prId: string, body: SubmitReviewInput) {
       }
     }
 
-    // Replies on threads GitHub already has.
-    const after = yield* review.getConversation(pr.id);
-    const replies = after.threads.flatMap((t) =>
-      unpublishedReplies(t, after.messages[t.id] ?? [], viewerLogin),
-    );
     const failedReplies = yield* sync.pushReplies(replies.map((reply) => reply.id));
 
     yield* sync.syncThreadsNow(pr.id);
 
     // Stamped regardless of action: an approve whose body includes walkthrough
     // issues also counts as "sent to GitHub".
-    const issueIds = issues.map((issue) => issue.id);
     const issuesSubmittedAt =
       issueIds.length > 0 ? yield* walkthroughService.markIssuesSubmitted(issueIds) : null;
 
     const { conversation } = yield* conversations.afterWrite(ctx);
 
     return {
-      id: submitted.id,
-      htmlUrl: submitted.htmlUrl,
+      id: submitted?.id ?? null,
+      htmlUrl: submitted?.htmlUrl ?? null,
       issuesSubmittedAt,
       submittedIssueIds: issueIds,
       // Comments GitHub could never have accepted. Their local threads are

@@ -10,7 +10,6 @@ import { call } from "$lib/api/errors";
 import { thrownMessage } from "$lib/api/wire";
 import { acceptWriteResult } from "$lib/stores/conversation.svelte";
 import { markIssuesAsSubmitted } from "$lib/walkthrough/store.svelte";
-import { draftThreadIds } from "./threads";
 
 function actionLabel(action: ReviewAction): string {
   if (action === "approve") return "Approved";
@@ -19,20 +18,23 @@ function actionLabel(action: ReviewAction): string {
 }
 
 /**
- * Submit the review. Resolves true once GitHub has it; a failure has been
+ * Submit the review: `issues` in its body, and whatever `threadIds` have
+ * pending (see `postableThreads`), the threads the reviewer confirmed in the
+ * review dialog. Resolves true once GitHub has it; a failure has been
  * reported to the user and resolves false.
  */
 export async function submitReview(
   prId: string,
   action: ReviewAction,
   issues: readonly WalkthroughIssue[],
+  threadIds: readonly string[],
 ): Promise<boolean> {
   const issueIds = issues.map((issue) => issue.id);
-  // The drafts on screen, so nothing the reviewer hasn't seen goes up.
-  const threadIds = draftThreadIds(prId);
   try {
     const result = await call(
-      api.api.reviews({ id: prId })["github-submit"].post({ action, threadIds, issueIds }),
+      api.api
+        .reviews({ id: prId })
+        ["github-submit"].post({ action, threadIds: [...threadIds], issueIds }),
       "Failed to submit review",
     );
     acceptWriteResult(prId, { conversation: result.conversation });
