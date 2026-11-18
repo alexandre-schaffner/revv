@@ -61,6 +61,21 @@ export function draftCommentBody(
   return body === "" ? null : body;
 }
 
+/**
+ * The messages of a thread a review submit may carry. Revv's own drafts (the
+ * walkthrough's comment on an issue) go up only with an issue the reviewer
+ * chose for this review; the reviewer's own drafts always do.
+ */
+export function messagesInReview<M extends { readonly authorRole: string }>(
+  thread: { readonly walkthroughIssueId: string | null },
+  messages: readonly M[],
+  chosenIssueIds: ReadonlySet<string>,
+): readonly M[] {
+  const { walkthroughIssueId } = thread;
+  if (walkthroughIssueId !== null && chosenIssueIds.has(walkthroughIssueId)) return messages;
+  return messages.filter((m) => m.authorRole !== "ai_agent");
+}
+
 /** A thread already on GitHub posts its publishable drafts as replies, in order. */
 export function unpublishedReplies<M extends DraftReviewMessage>(
   thread: DraftThread,

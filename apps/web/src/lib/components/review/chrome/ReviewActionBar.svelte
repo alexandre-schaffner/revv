@@ -21,24 +21,13 @@ interface Props {
   selectedCount: number;
   /** Anything to submit: selected walkthrough issues or pending line comments. */
   canComment: boolean;
-  approveBlockerSummary: string;
   onGenerateChanges: () => void;
+  /** Opens the submit dialog, where the review's event is chosen. */
   onSubmitReview: () => void;
-  onComment: () => void;
-  onApprove: () => void;
 }
 
-let {
-  prId,
-  submitting,
-  selectedCount,
-  canComment,
-  approveBlockerSummary,
-  onGenerateChanges,
-  onSubmitReview,
-  onComment,
-  onApprove,
-}: Props = $props();
+let { prId, submitting, selectedCount, canComment, onGenerateChanges, onSubmitReview }: Props =
+  $props();
 
 const pr = $derived(getPrById(prId));
 // The agent is on a chat turn, the one Generate changes asked for or another.
@@ -101,7 +90,7 @@ async function runOwnerAction(action: OwnerAction): Promise<void> {
     <GlassPill
       variant="muted"
       disabled={submitting !== null || !canComment}
-      onclick={onComment}
+      onclick={onSubmitReview}
       title={!canComment
         ? "Add comments or select walkthrough issues first"
         : "Post your line comments and selected issues to GitHub as a review"}
@@ -144,16 +133,16 @@ async function runOwnerAction(action: OwnerAction): Promise<void> {
       </GlassPill>
     {/if}
   {:else}
-    <!-- One "Submit review" posts everything as a single GitHub review: the
-         line comments always, and it requests changes when walkthrough
-         issues are selected. Approve stays a separate action. -->
+    <!-- One "Submit review" opens the dialog that picks comment, request
+         changes or approve and shows everything the review posts. Once
+         approved, there is only something to submit if a draft is pending. -->
     <GlassPill
       variant="accent"
-      disabled={submitting !== null || !canComment}
+      disabled={submitting !== null || (approved && !canComment)}
       onclick={onSubmitReview}
-      title={!canComment
+      title={approved && !canComment
         ? "Add comments or select walkthrough issues first"
-        : "Submit your review — posts your comments, and requests changes if any issues are selected"}
+        : "Comment, request changes or approve, and check what goes to GitHub"}
     >
       <ArrowUp size={16} />
       {submitting !== null ? "Submitting…" : "Submit review"}
@@ -164,18 +153,6 @@ async function runOwnerAction(action: OwnerAction): Promise<void> {
         Approved
       </GlassPill>
       <MergeControl {prId} />
-    {:else}
-      <GlassPill
-        variant="success"
-        disabled={submitting !== null}
-        onclick={onApprove}
-        title={approveBlockerSummary
-          ? `Approve this pull request (${approveBlockerSummary} still open)`
-          : "Approve this pull request on GitHub"}
-      >
-        <Check size={16} />
-        {submitting === "approve" ? "Approving…" : "Approve"}
-      </GlassPill>
     {/if}
   {/if}
 </div>
