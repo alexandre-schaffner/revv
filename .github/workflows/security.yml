@@ -43,7 +43,17 @@ jobs:
         with:
           bun-version-file: package.json
       - name: Audit Bun lockfile
-        run: bun audit --audit-level high
+        # Accepted advisories; drop each ignore once its fix can land.
+        # - GHSA-fc5q-39xc-vjpf: picomatch <=4.0.7 has no patched release. It
+        #   reaches us only through dev tooling (knip, vite's tinyglobby)
+        #   globbing our own repo paths.
+        # - GHSA-3r8g-jcqq-3p5j: SvelteKit's remote-function `form` parser
+        #   (fixed only in Kit 3.1.1, a major migration). Revv's web app is a
+        #   static SPA (adapter-static): no SvelteKit server, no remote functions.
+        run: >-
+          bun audit --audit-level high
+          --ignore GHSA-fc5q-39xc-vjpf
+          --ignore GHSA-3r8g-jcqq-3p5j
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: cargo-audit@0.22.2
