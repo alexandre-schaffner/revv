@@ -6,7 +6,8 @@ import {
   type CommentThread,
   canUserModifyComment,
   draftCommentBody,
-  postsWithReview,
+  isPublishableDraftComment,
+  messagesInReview,
   type ThreadMessage,
   unpublishedReplies,
 } from "@revv/shared";
@@ -34,32 +35,41 @@ export function lineRangeLabel(thread: Pick<CommentThread, "startLine" | "endLin
   return endLine && endLine !== startLine ? `:${startLine}-${endLine}` : `:${startLine}`;
 }
 
-/**
- * Threads not yet on GitHub that a submit listing `issueIds` posts as new
- * review comments. Revv's comment on an issue goes up only with that issue.
- */
-export function draftThreadIds(prId: string, issueIds: ReadonlySet<string>): string[] {
-  const viewer = viewerLoginOnPr(prId);
-  return getThreads(prId)
-    .filter(
-      (t) =>
-        postsWithReview(t, issueIds) &&
-        draftCommentBody(t, getThreadMessages(prId, t.id), viewer) !== null,
-    )
-    .map((t) => t.id);
+/** What a review submit posts on one thread, as the review dialog lists it. */
+export interface PostableThread {
+  readonly thread: CommentThread;
+  /** A new review comment, or replies on a thread GitHub already has. */
+  readonly kind: "comment" | "reply";
+  /** The drafts that go up, in order: one comment's parts, or each reply. */
+  readonly messages: readonly ThreadMessage[];
+  /** The text GitHub receives: the joined comment, or each reply. */
+  readonly bodies: readonly string[];
 }
 
 /**
- * Threads a submit listing `issueIds` posts something on: a new comment, or a
- * reply to one GitHub has.
+ * The threads a submit with `issueIds` chosen posts something on, by the
+ * server's rules: a draft thread as a new review comment (Revv's comment on
+ * an issue only with that issue), a thread GitHub has with the viewer's
+ * pending replies. In file and line order.
  */
-export function postableThreadCount(prId: string, issueIds: ReadonlySet<string>): number {
+export function postableThreads(prId: string, issueIds: ReadonlySet<string>): PostableThread[] {
   const viewer = viewerLoginOnPr(prId);
-  return getThreads(prId).filter((t) => {
-    const messages = getThreadMessages(prId, t.id);
-    return (
-      (postsWithReview(t, issueIds) && draftCommentBody(t, messages, viewer) !== null) ||
-      unpublishedReplies(t, messages, viewer).length > 0
-    );
-  }).length;
+  const out: PostableThread[] = [];
+  for (const thread of getThreads(prId)) {
+    const carried = messagesInReview(thread, getThreadMessages(prId, thread.id), issueIds);
+    const body = draftCommentBody(thread, carried, viewer);
+    if (body !== null) {
+      const messages = carried.filter((m) => isPublishableDraftComment(m, viewer));
+      out.push({ thread, kind: "comment", messages, bodies: [body] });
+      continue;
+    }
+    const replies = unpublishedReplies(thread, carried, viewer);
+    if (replies.length > 0) {
+      out.push({ thread, kind: "reply", messages: replies, bodies: replies.map((m) => m.body) });
+    }
+  }
+  return out.sort(
+    (a, b) =>
+      a.thread.filePath.localeCompare(b.thread.filePath) || a.thread.startLine - b.thread.startLine,
+  );
 }

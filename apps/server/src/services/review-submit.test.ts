@@ -80,12 +80,11 @@ function plan(
   threads: CommentThread[],
   messages: Record<string, ThreadMessage[]>,
   cachedFiles: CachedDiffFile[] | null = null,
-  issueIds: ReadonlySet<string> = new Set(),
+  issueIds: readonly string[] = [],
 ) {
   return planReviewComments(
     { threads, messages },
-    new Set(threads.map((t) => t.id)),
-    issueIds,
+    { threadIds: new Set(threads.map((t) => t.id)), issueIds: new Set(issueIds) },
     cachedFiles,
     "me",
   );
@@ -112,8 +111,7 @@ describe("planReviewComments", () => {
     const messages = Object.fromEntries(threads.map((t) => [t.id, [message(t.id)]]));
     const result = planReviewComments(
       { threads, messages },
-      new Set(["resolved", "synced"]),
-      new Set(),
+      { threadIds: new Set(["resolved", "synced"]), issueIds: new Set() },
       null,
       "me",
     );
@@ -137,44 +135,58 @@ describe("planReviewComments", () => {
     ]);
   });
 
-  it("posts Revv's comment on an issue only when the review lists that issue", () => {
-    const threads = [
-      thread({ id: "mine" }),
-      thread({ id: "ai-picked", walkthroughIssueId: "i1" }),
-      thread({ id: "ai-unpicked", walkthroughIssueId: "i2" }),
-    ];
-    const messages = {
-      mine: [message("mine")],
-      "ai-picked": [message("ai-picked", { authorRole: "ai_agent", authorLogin: null })],
-      "ai-unpicked": [message("ai-unpicked", { authorRole: "ai_agent", authorLogin: null })],
-    };
-    expect(plan(threads, messages, null, new Set(["i1"])).posted.map((p) => p.threadId)).toEqual([
-      "mine",
-      "ai-picked",
-    ]);
-    // An approve with no issue picked sends only the reviewer's own comments.
-    expect(plan(threads, messages).posted.map((p) => p.threadId)).toEqual(["mine"]);
-  });
-
   it("keeps every file while no diff is cached", () => {
     const { posted } = plan([thread({ id: "t3", filePath: "any.ts" })], { t3: [message("t3")] });
     expect(posted.map((p) => p.threadId)).toEqual(["t3"]);
   });
 
   it("joins a thread's publishable drafts into one comment and remembers which they were", () => {
-    const { posted } = plan([thread({ id: "t4" })], {
-      t4: [
-        message("t4", { id: "a", body: "First." }),
-        message("t4", { id: "b", authorRole: "coder", authorLogin: null, body: "Agent reply." }),
-        message("t4", { id: "c", authorRole: "ai_agent", body: "Second." }),
-        message("t4", { id: "d", body: "   " }),
-      ],
-    });
+    const { posted } = plan(
+      [thread({ id: "t4", walkthroughIssueId: "issue-1" })],
+      {
+        t4: [
+          message("t4", { id: "a", body: "First." }),
+          message("t4", { id: "b", authorRole: "coder", authorLogin: null, body: "Agent reply." }),
+          message("t4", { id: "c", authorRole: "ai_agent", body: "Second." }),
+          message("t4", { id: "d", body: "   " }),
+        ],
+      },
+      null,
+      ["issue-1"],
+    );
     expect(posted).toEqual([
       {
         threadId: "t4",
         draftIds: ["a", "c"],
         comment: { path: "src/a.ts", body: "First.\n\nSecond.", line: 10, side: "RIGHT" },
+      },
+    ]);
+  });
+});
+
+describe("Revv's issue comments", () => {
+  const aiThread = thread({ id: "ai", walkthroughIssueId: "issue-1" });
+  const aiComment = message("ai", { id: "ai-m", authorRole: "ai_agent", body: "Leaks." });
+
+  it("stay local unless their issue is chosen for the review", () => {
+    expect(plan([aiThread], { ai: [aiComment] }).posted).toEqual([]);
+    expect(plan([aiThread], { ai: [aiComment] }, null, ["issue-2"]).posted).toEqual([]);
+  });
+
+  it("go up with their issue", () => {
+    const { posted } = plan([aiThread], { ai: [aiComment] }, null, ["issue-1"]);
+    expect(posted.map((p) => p.draftIds)).toEqual([["ai-m"]]);
+  });
+
+  it("stay behind when the reviewer's own reply on them goes up", () => {
+    const { posted } = plan([aiThread], {
+      ai: [aiComment, message("ai", { id: "mine", body: "Agreed." })],
+    });
+    expect(posted).toEqual([
+      {
+        threadId: "ai",
+        draftIds: ["mine"],
+        comment: { path: "src/a.ts", body: "Agreed.", line: 10, side: "RIGHT" },
       },
     ]);
   });

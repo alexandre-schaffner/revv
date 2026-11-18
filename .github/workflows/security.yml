@@ -42,18 +42,18 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version-file: package.json
+      # Ignored advisories, each unreachable in Revv; drop the flag once a
+      # patched version is in range.
+      # - GHSA-3r8g-jcqq-3p5j: SvelteKit remote-functions `form` DoS. The web app
+      #   is a static build (adapter-static) with no remote functions or server;
+      #   the fix is only in Kit 3.1.1.
+      # - GHSA-fc5q-39xc-vjpf: picomatch extglob ReDoS. Pulled in only by build
+      #   tooling (vite, knip) matching our own globs; no patched release yet.
       - name: Audit Bun lockfile
-        # Accepted advisories; drop each ignore once its fix can land.
-        # - GHSA-fc5q-39xc-vjpf: picomatch <=4.0.7 has no patched release. It
-        #   reaches us only through dev tooling (knip, vite's tinyglobby)
-        #   globbing our own repo paths.
-        # - GHSA-3r8g-jcqq-3p5j: SvelteKit's remote-function `form` parser
-        #   (fixed only in Kit 3.1.1, a major migration). Revv's web app is a
-        #   static SPA (adapter-static): no SvelteKit server, no remote functions.
         run: >-
           bun audit --audit-level high
-          --ignore GHSA-fc5q-39xc-vjpf
-          --ignore GHSA-3r8g-jcqq-3p5j
+          --ignore=GHSA-3r8g-jcqq-3p5j
+          --ignore=GHSA-fc5q-39xc-vjpf
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: cargo-audit@0.22.2
