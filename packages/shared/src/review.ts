@@ -69,6 +69,11 @@ export interface CommentThread {
   externalThreadId: string | null;
   externalCommentId: string | null;
   lastSyncedAt: string | null;
+  /**
+   * The walkthrough issue this thread comments on, when the walkthrough agent
+   * wrote it; null for every other thread.
+   */
+  walkthroughIssueId: string | null;
 }
 
 export interface ThreadMessage {
