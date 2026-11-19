@@ -261,6 +261,27 @@ describe("database upgrades", () => {
     expect(ledgerWhens(sqlite)).toEqual(journal.entries.map((entry) => entry.when));
     sqlite.close();
   });
+
+  it("does not replay unchanged SQL after a branch migration is renumbered", () => {
+    const path = join(scratch, "renumbered-migration.db");
+    const before = createDb(path).$client;
+    const latest = journal.entries.at(-1);
+    const first = journal.entries[0];
+    if (!latest || !first) throw new Error("no migrations");
+    const oldWhen = first.when - 1;
+    before
+      .prepare("UPDATE __drizzle_migrations SET created_at = ? WHERE created_at = ?")
+      .run(oldWhen, latest.when);
+    before.close();
+
+    const after = createDb(path).$client;
+    expect(ledgerWhens(after)).toEqual([oldWhen, ...journal.entries.map((entry) => entry.when)]);
+    after.close();
+
+    const reopened = createDb(path).$client;
+    expect(ledgerWhens(reopened)).toEqual([oldWhen, ...journal.entries.map((entry) => entry.when)]);
+    reopened.close();
+  });
 });
 
 describe("schema applied outside the journal", () => {
@@ -338,6 +359,64 @@ describe("schema applied outside the journal", () => {
     expect(sqlite.query("SELECT sql FROM sqlite_master ORDER BY name").all()).toEqual(schemaBefore);
     expect(ledgerWhens(sqlite)).toEqual(allWhens);
     sqlite.close();
+  });
+});
+
+describe("account-owned recap history", () => {
+  it("migrates topics, supporting work, and supersession links before removing the source repository", () => {
+    const before = migratedThrough("0590_topic_recaps");
+    seedEveryTable(before);
+    const scope = {
+      key: "all",
+      kind: "all",
+      accountId: "seed-account",
+      label: "Everything",
+      repositoryIds: ["seed-repositories"],
+    };
+    before
+      .prepare(
+        "UPDATE project_recaps SET scope_key = ?, source_scope = ?, lede = 'Persisted recap'",
+      )
+      .run(scope.key, JSON.stringify(scope));
+    const original = before.query("SELECT * FROM project_recaps").get() as Record<
+      string,
+      string | number | null
+    >;
+    const replacement = { ...original, id: "replacement" };
+    const columns = Object.keys(replacement);
+    before
+      .prepare(
+        `INSERT INTO project_recaps (${columns.map((c) => `\`${c}\``).join(",")}) VALUES (${columns.map(() => "?").join(",")})`,
+      )
+      .run(...Object.values(replacement));
+    before.run(
+      "UPDATE project_recaps SET superseded_by = 'replacement' WHERE id = 'seed-project_recaps'",
+    );
+    const childTables = ["recap_pr_entries", "recap_theme_summaries", "recap_pr_digests"];
+    const content = childTables.map((table) => before.query(`SELECT * FROM ${table}`).all());
+    const path = writeInstall(before, "account-recap-history");
+    const after = createDb(path).$client;
+    expect(
+      after
+        .query(
+          "SELECT account_id, repository_id, superseded_by FROM project_recaps WHERE id = 'seed-project_recaps'",
+        )
+        .get(),
+    ).toEqual({ account_id: "seed-account", repository_id: null, superseded_by: "replacement" });
+    for (const [i, table] of childTables.entries())
+      expect(after.query(`SELECT * FROM ${table}`).all()).toEqual(content[i] ?? []);
+    after.run("DELETE FROM repositories WHERE id = 'seed-repositories'");
+    expect(after.query("SELECT count(*) AS n FROM project_recaps").get()).toEqual({ n: 2 });
+    expect(after.query("SELECT count(*) AS n FROM recap_pr_entries").get()).toEqual({ n: 1 });
+    expect(after.query("SELECT count(*) AS n FROM recap_theme_summaries").get()).toEqual({ n: 1 });
+    after.close();
+    const reopened = createDb(path).$client;
+    expect(
+      reopened.query("SELECT lede FROM project_recaps WHERE id = 'seed-project_recaps'").get(),
+    ).toEqual({ lede: "Persisted recap" });
+    reopened.run("DELETE FROM account WHERE id = 'seed-account'");
+    expect(reopened.query("SELECT count(*) AS n FROM project_recaps").get()).toEqual({ n: 0 });
+    reopened.close();
   });
 });
 

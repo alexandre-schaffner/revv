@@ -52,12 +52,28 @@ const check = (
   request: { params?: Record<string, string>; body?: unknown },
 ) =>
   Effect.runPromiseExit(
-    checkOwnership(fields, { params: request.params ?? {}, body: request.body }, "user-1").pipe(
+    checkOwnership(fields, { ...request, body: request.body }, "user-1").pipe(
       Effect.provide(Layer.succeed(DbService, { db })),
     ),
   );
 
 describe("checkOwnership", () => {
+  it("authorizes account-owned recaps after their source repository is removed", async () => {
+    const db = seededDb();
+    for (const n of [1, 2]) {
+      db.$client.run(
+        "INSERT INTO project_recaps (id, account_id, period, period_start, period_end, generated_at) VALUES (?, ?, 'daily', '2026-09-22', '2026-09-23', '2026-09-22')",
+        [`recap-${n}`, `account-${n}`],
+      );
+    }
+    db.$client.run("DELETE FROM repositories WHERE id = 'repo-1'");
+    expect(Exit.isSuccess(await check(db, { id: "recap" }, { params: { id: "recap-1" } }))).toBe(
+      true,
+    );
+    expect(Exit.isFailure(await check(db, { id: "recap" }, { params: { id: "recap-2" } }))).toBe(
+      true,
+    );
+  });
   it("lets through ids in the user's own repositories", async () => {
     const db = seededDb();
     const exit = await check(

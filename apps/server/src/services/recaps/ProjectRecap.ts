@@ -7,6 +7,7 @@ import type {
   ProjectRecapSummary,
   RecapPeriod,
   RecapPrEntry,
+  RecapSourceScope,
   RecapSummaryStats,
   RecapThemeSummary,
 } from "@revv/shared";
@@ -16,9 +17,14 @@ import {
   RECAP_EMPTY_WINDOW_LEDE,
   recapSummaryOf,
 } from "@revv/shared";
-import { and, asc, desc, eq, gte, isNull, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNull, lt, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import { projectRecaps, recapPrEntries, recapThemeSummaries } from "../../db/schema/index";
+import {
+  projectRecaps,
+  recapPrEntries,
+  recapThemeSummaries,
+  repositories,
+} from "../../db/schema/index";
 import type { RecapSourceBundle } from "../../db/schema/project-recaps";
 import { avatarOfRepoLogin } from "../../db/schema/remote-users";
 import { type DbError, RecapNotFoundError } from "../../domain/errors";
@@ -75,7 +81,9 @@ function rowToRecap(
   }
   return {
     id: row.id,
-    repositoryId: row.repositoryId,
+    // Compatibility anchor for repo-based clients; scoped ownership is accountId.
+    repositoryId: row.repositoryId ?? row.sourceScope?.repositoryIds[0] ?? "",
+    sourceScope: row.sourceScope ?? null,
     period: row.period as RecapPeriod,
     periodStart: row.periodStart,
     periodEnd: row.periodEnd,
@@ -102,6 +110,10 @@ function themeSummaryRowToSummary(row: typeof recapThemeSummaries.$inferSelect):
     recapId: row.recapId,
     theme: row.theme,
     summary: row.summary,
+    context: row.context,
+    approach: row.approach,
+    currentState: row.currentState,
+    worthWatching: row.worthWatching,
   };
 }
 
@@ -113,6 +125,7 @@ function entryRowToEntry(
     id: row.id,
     recapId: row.recapId,
     prId: row.prId,
+    repositoryId: row.repositoryId,
     position: row.position,
     theme: row.theme,
     verb: row.verb,
@@ -133,12 +146,14 @@ function rowToSummary(row: typeof projectRecaps.$inferSelect): ProjectRecapSumma
 
 export interface CreatePartialRecapParams {
   readonly repositoryId: string;
+  readonly sourceScope?: RecapSourceScope;
   readonly period: RecapPeriod;
   readonly periodStart: string;
   readonly periodEnd: string;
 }
 
 export interface ListForRepoParams {
+  readonly scopeKey?: string;
   readonly period?: RecapPeriod;
   /** Cursor: the generatedAt of the last row from the previous page. */
   readonly cursor?: string;
@@ -177,13 +192,17 @@ export class ProjectRecapService extends Context.Service<
       params: CreatePartialRecapParams,
     ) => Effect.Effect<ProjectRecap, DbError>;
 
-    readonly getById: (id: string) => Effect.Effect<ProjectRecap, RecapNotFoundError | DbError>;
+    readonly getById: (
+      id: string,
+      accountId?: string,
+    ) => Effect.Effect<ProjectRecap, RecapNotFoundError | DbError>;
 
     /** The period's current (non-superseded) recap, whatever its status. */
     readonly findActiveForPeriod: (
       repoId: string,
       period: RecapPeriod,
       periodStart: string,
+      scopeKey?: string,
     ) => Effect.Effect<ProjectRecap | null, DbError>;
 
     readonly listForRepo: (
@@ -194,7 +213,12 @@ export class ProjectRecapService extends Context.Service<
     /** Most-recent complete recaps for a repo, newest first, at most `limit`. */
     readonly getLatestForRepo: (
       repoId: string,
-      params: { period?: RecapPeriod; limit?: number },
+      params: {
+        period?: RecapPeriod;
+        limit?: number;
+        scopeKey?: string;
+        beforePeriodStart?: string;
+      },
     ) => Effect.Effect<ReadonlyArray<ProjectRecap>, DbError>;
 
     /**
@@ -232,7 +256,11 @@ export class ProjectRecapService extends Context.Service<
     /** Reruns happen in place: a window holds at most one active recap. */
     readonly resetForRerun: (
       recapId: string,
-      newBoundaries?: { readonly periodStart?: string; readonly periodEnd?: string },
+      newBoundaries?: {
+        readonly periodStart?: string;
+        readonly periodEnd?: string;
+        readonly sourceScope?: RecapSourceScope;
+      },
     ) => Effect.Effect<void, RecapNotFoundError | DbError>;
 
     /** For boot-time resume. */
@@ -244,6 +272,7 @@ export class ProjectRecapService extends Context.Service<
         readonly periodStart: string;
         readonly periodEnd: string;
         readonly resumeAttempts: number;
+        readonly sourceScope?: RecapSourceScope | null;
       }>,
       DbError
     >;
@@ -256,6 +285,7 @@ export class ProjectRecapService extends Context.Service<
 >()("ProjectRecapService") {}
 
 export interface RecapWindowRow {
+  readonly scopeKey?: string;
   readonly status: ProjectRecapStatus;
   readonly repositoryId: string;
   readonly period: RecapPeriod;
@@ -275,7 +305,10 @@ export const ProjectRecapServiceLive = Layer.effect(
           const inserted = yield* dbTry("createPartial", () => {
             const values: typeof projectRecaps.$inferInsert = {
               id,
-              repositoryId: params.repositoryId,
+              repositoryId: params.sourceScope ? null : params.repositoryId,
+              accountId: params.sourceScope?.accountId ?? null,
+              scopeKey: params.sourceScope?.key ?? "",
+              sourceScope: params.sourceScope ?? null,
               period: params.period,
               periodStart: params.periodStart,
               periodEnd: params.periodEnd,
@@ -298,7 +331,7 @@ export const ProjectRecapServiceLive = Layer.effect(
           return inserted;
         }),
 
-      getById: (id) =>
+      getById: (id, accountId) =>
         Effect.gen(function* () {
           const row = yield* dbTry("getById", () =>
             db.select().from(projectRecaps).where(eq(projectRecaps.id, id)).get(),
@@ -306,11 +339,30 @@ export const ProjectRecapServiceLive = Layer.effect(
           if (!row) {
             return yield* Effect.fail(new RecapNotFoundError({ recapId: id }));
           }
+          if (accountId) {
+            const owner = row.accountId
+              ? { accountId: row.accountId }
+              : yield* dbTry("getById owner", () =>
+                  db
+                    .select({ accountId: repositories.accountId })
+                    .from(repositories)
+                    .where(eq(repositories.id, row.repositoryId ?? ""))
+                    .get(),
+                );
+            if (
+              owner?.accountId !== accountId ||
+              (row.sourceScope && row.sourceScope.accountId !== accountId)
+            )
+              return yield* Effect.fail(new RecapNotFoundError({ recapId: id }));
+          }
           const entryRows = yield* dbTry("getById entries", () =>
             db
               .select({
                 entry: recapPrEntries,
-                avatarContent: avatarOfRepoLogin(recapPrEntries.prAuthorLogin, row.repositoryId),
+                avatarContent: avatarOfRepoLogin(
+                  recapPrEntries.prAuthorLogin,
+                  sql`coalesce(nullif(${recapPrEntries.repositoryId}, ''), ${row.repositoryId ?? row.sourceScope?.repositoryIds[0] ?? ""})`,
+                ),
               })
               .from(recapPrEntries)
               .where(eq(recapPrEntries.recapId, id))
@@ -327,7 +379,7 @@ export const ProjectRecapServiceLive = Layer.effect(
           );
         }),
 
-      findActiveForPeriod: (repoId, period, periodStart) =>
+      findActiveForPeriod: (repoId, period, periodStart, scopeKey = "") =>
         Effect.gen(function* () {
           return yield* dbTry("findActiveForPeriod", () => {
             const row = db
@@ -335,7 +387,9 @@ export const ProjectRecapServiceLive = Layer.effect(
               .from(projectRecaps)
               .where(
                 and(
-                  eq(projectRecaps.repositoryId, repoId),
+                  scopeKey
+                    ? eq(projectRecaps.scopeKey, scopeKey)
+                    : and(eq(projectRecaps.repositoryId, repoId), eq(projectRecaps.scopeKey, "")),
                   eq(projectRecaps.period, period),
                   eq(projectRecaps.periodStart, periodStart),
                   // Active = anything that hasn't been superseded. Even an
@@ -362,7 +416,11 @@ export const ProjectRecapServiceLive = Layer.effect(
           );
 
           return yield* dbTry("listForRepo", () => {
-            const conditions = [eq(projectRecaps.repositoryId, repoId)];
+            const conditions = [
+              params.scopeKey
+                ? eq(projectRecaps.scopeKey, params.scopeKey)
+                : and(eq(projectRecaps.repositoryId, repoId), eq(projectRecaps.scopeKey, "")),
+            ];
             if (params.period !== undefined) {
               conditions.push(eq(projectRecaps.period, params.period));
             }
@@ -407,24 +465,38 @@ export const ProjectRecapServiceLive = Layer.effect(
       getLatestForRepo: (repoId, params) =>
         Effect.gen(function* () {
           const limit = Math.min(Math.max(1, params.limit ?? 3), 10);
-          return yield* dbTry("getLatestForRepo", () => {
+          const rows = yield* dbTry("getLatestForRepo", () => {
             const conditions = [
-              eq(projectRecaps.repositoryId, repoId),
+              params.scopeKey
+                ? eq(projectRecaps.scopeKey, params.scopeKey)
+                : and(eq(projectRecaps.repositoryId, repoId), eq(projectRecaps.scopeKey, "")),
               eq(projectRecaps.status, "complete"),
             ];
-            if (params.period !== undefined) {
-              conditions.push(eq(projectRecaps.period, params.period));
-            }
-            const rows = db
+            if (params.period) conditions.push(eq(projectRecaps.period, params.period));
+            if (params.beforePeriodStart)
+              conditions.push(lt(projectRecaps.periodStart, params.beforePeriodStart));
+            return db
               .select()
               .from(projectRecaps)
               .where(and(...conditions))
-              .orderBy(desc(projectRecaps.completedAt))
+              .orderBy(desc(projectRecaps.periodStart))
               .limit(limit)
               .all();
-            // `.map(rowToRecap)` would pass the index as the optional `entries` arg.
-            return rows.map((r) => rowToRecap(r));
           });
+          return yield* dbTry("getLatestForRepo explanations", () =>
+            rows.map((row) =>
+              rowToRecap(
+                row,
+                [],
+                db
+                  .select()
+                  .from(recapThemeSummaries)
+                  .where(eq(recapThemeSummaries.recapId, row.id))
+                  .all()
+                  .map(themeSummaryRowToSummary),
+              ),
+            ),
+          );
         }),
 
       finish: (recapId, status, options) =>
@@ -514,6 +586,12 @@ export const ProjectRecapServiceLive = Layer.effect(
           if (newBoundaries?.periodEnd !== undefined) {
             patch.periodEnd = newBoundaries.periodEnd;
           }
+          if (newBoundaries?.sourceScope) {
+            patch.sourceScope = newBoundaries.sourceScope;
+            patch.accountId = newBoundaries.sourceScope.accountId;
+            patch.repositoryId = null;
+            patch.scopeKey = newBoundaries.sourceScope.key;
+          }
           // Atomic so a crash can't strand the row in 'generating' with stale entries (invariant #1).
           yield* dbTry("resetForRerun", () =>
             db.transaction(() => {
@@ -535,6 +613,7 @@ export const ProjectRecapServiceLive = Layer.effect(
                 periodStart: projectRecaps.periodStart,
                 periodEnd: projectRecaps.periodEnd,
                 resumeAttempts: projectRecaps.resumeAttempts,
+                sourceScope: projectRecaps.sourceScope,
               })
               .from(projectRecaps)
               .where(eq(projectRecaps.status, "generating"))
@@ -542,11 +621,12 @@ export const ProjectRecapServiceLive = Layer.effect(
           );
           return rows.map((r) => ({
             id: r.id,
-            repositoryId: r.repositoryId,
+            repositoryId: r.repositoryId ?? r.sourceScope?.repositoryIds[0] ?? "",
             period: r.period as RecapPeriod,
             periodStart: r.periodStart,
             periodEnd: r.periodEnd,
             resumeAttempts: r.resumeAttempts,
+            sourceScope: r.sourceScope,
           }));
         }),
 
@@ -573,6 +653,7 @@ export const ProjectRecapServiceLive = Layer.effect(
           const row = db
             .select({
               status: projectRecaps.status,
+              scopeKey: projectRecaps.scopeKey,
               repositoryId: projectRecaps.repositoryId,
               period: projectRecaps.period,
               periodStart: projectRecaps.periodStart,
@@ -583,7 +664,8 @@ export const ProjectRecapServiceLive = Layer.effect(
           return row
             ? {
                 status: row.status as ProjectRecapStatus,
-                repositoryId: row.repositoryId,
+                scopeKey: row.scopeKey,
+                repositoryId: row.repositoryId ?? "",
                 period: row.period as RecapPeriod,
                 periodStart: row.periodStart,
               }

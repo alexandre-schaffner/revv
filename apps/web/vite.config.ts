@@ -1,5 +1,7 @@
 import { execSync } from "node:child_process";
+import adapter from "@sveltejs/adapter-static";
 import { sveltekit } from "@sveltejs/kit/vite";
+import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
 import tailwindcss from "@tailwindcss/vite";
 import { sveltePhosphorOptimize } from "phosphor-svelte/vite";
 import { defineConfig, type Plugin } from "vite";
@@ -69,7 +71,20 @@ const prLensNodeCryptoStub = (): Plugin => {
 };
 
 export default defineConfig({
-  plugins: [tailwindcss(), sveltekit(), sveltePhosphorOptimize(), prLensNodeCryptoStub()],
+  plugins: [
+    tailwindcss(),
+    sveltekit({
+      preprocess: vitePreprocess(),
+      adapter: adapter({ fallback: "index.html" }),
+      alias: {
+        $lib: "./src/lib",
+        "@revv/server": "../../apps/server/src/index.ts",
+        "@revv/server/*": "../../apps/server/src/*",
+      },
+    }),
+    sveltePhosphorOptimize(),
+    prLensNodeCryptoStub(),
+  ],
   envPrefix: ["VITE_", "TAURI_"],
   define: {
     __COMMIT_HASH__: JSON.stringify(commitHash),

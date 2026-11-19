@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { Repository } from "@revv/shared";
+import CalendarDots from "phosphor-svelte/lib/CalendarDots";
 import House from "phosphor-svelte/lib/House";
 import Plus from "phosphor-svelte/lib/Plus";
 import User from "phosphor-svelte/lib/User";
@@ -69,7 +70,11 @@ function handleAddRepo(): void {
 			</Tooltip.Trigger>
 			<Tooltip.Content side="right" sideOffset={8}>Home</Tooltip.Content>
 		</Tooltip.Root>
-		<div class="rail-divider" aria-hidden="true"></div>
+		<Tooltip.Root>
+      <Tooltip.Trigger><a href="/recaps" class="rail-action home-button" class:home-button--active={page.url.pathname === "/recaps"} aria-label="Recaps" aria-current={page.url.pathname === "/recaps" ? "page" : undefined}><CalendarDots size={18} /></a></Tooltip.Trigger>
+      <Tooltip.Content side="right" sideOffset={8}>Recaps</Tooltip.Content>
+    </Tooltip.Root>
+    <div class="rail-divider" aria-hidden="true"></div>
 	</div>
 
 	<div class="rail-top">

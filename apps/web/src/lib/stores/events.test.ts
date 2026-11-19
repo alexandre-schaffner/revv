@@ -63,6 +63,9 @@ mock.module("$lib/walkthrough/sizing.svelte", () => ({}));
 mock.module("$lib/hunk-scan/store.svelte", () => ({
   onEventsReconnected: hook("hunkScan.reconnect"),
 }));
+mock.module("$lib/recaps/feed.svelte", () => ({
+  onEventsReconnected: hook("recapFeed.reconnect"),
+}));
 mock.module("$lib/recaps/store.svelte", () => ({ onEventsReconnected: hook("recaps.reconnect") }));
 mock.module("./sync.svelte", () => ({
   onEventsOpened: hook("sync.open"),
@@ -127,6 +130,7 @@ describe("catch-up after a gap", () => {
     stream().open();
     expect(reconnectCatchUp()).toBe(true);
     expect(calls).toContain("auth.reconnect");
+    expect(calls.filter((name) => name === "recapFeed.reconnect")).toHaveLength(2);
     expect(calls).toContain("hunkScan.reconnect");
   });
 

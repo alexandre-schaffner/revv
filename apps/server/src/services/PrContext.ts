@@ -37,6 +37,7 @@ export type PrContextError = NotFoundError | GitHubAuthError | GitHubError | DbE
 export class PrContextService extends Context.Service<
   PrContextService,
   {
+    readonly listReposForAccount: (accountId: string) => Effect.Effect<Repository[], DbError>;
     /** A tracked repository, for work that may go on without GitHub. */
     readonly getRepo: (repoId: string) => Effect.Effect<Repository, NotFoundError | DbError>;
     readonly forRepo: (repoId: string) => Effect.Effect<RepoContext, PrContextError>;
@@ -76,6 +77,7 @@ export const PrContextServiceLive = Layer.effect(
       });
 
     return {
+      listReposForAccount: (accountId: string) => repoService.listRepos(accountId),
       getRepo: (repoId: string) => repoService.getRepoById(repoId),
       forRepo,
       readPr,

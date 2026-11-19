@@ -153,6 +153,34 @@ export const addPrEntrySchema = z.object({
 });
 
 export const setThemeSummarySchema = z.object({
+  worth_watching: z
+    .string()
+    .max(1500)
+    .optional()
+    .describe(
+      "Only when evidence establishes an operational risk: name the changed behavior, observable failure symptom, and first place to check. At most 50 words. Empty or omitted when no concrete watchpoint is supported; never invent risks or claim a rollout happened.",
+    ),
+  context: z
+    .string()
+    .min(1)
+    .max(1500)
+    .describe(
+      "The problem and why it matters, explained to a colleague unfamiliar with the subsystem. 1–2 sentences, plain prose.",
+    ),
+  approach: z
+    .string()
+    .min(1)
+    .max(4000)
+    .describe(
+      "How this topic works, with important terms explained and evidenced choices or trade-offs. At most 100 words. State when the source does not establish the approach.",
+    ),
+  current_state: z
+    .string()
+    .min(1)
+    .max(2000)
+    .describe(
+      "State as of the period end: progress, evidenced open questions or blockers. Distinguish merged from deployed. At most 60 words; unknowns stay unknown.",
+    ),
   theme: z
     .string()
     .min(1)
@@ -164,7 +192,7 @@ export const setThemeSummarySchema = z.object({
     .string()
     .min(1)
     .describe(
-      "One- or two-sentence editorial summary of what landed in this theme. Plain prose. May include backtick-wrapped code spans for identifiers / file paths (rendered as small inline chips). NO other markdown — no bold, no links, no headers, no lists. ≤ ~35 words. The UI renders this as a small lede paragraph below the chapter heading and above the PR rows.",
+      "One- or two-sentence explanation of the meaningful changes in this topic during the period. Plain prose. May include backtick-wrapped code spans for identifiers / file paths (rendered as small inline chips). NO other markdown — no bold, no links, no headers, no lists. ≤ ~35 words. The UI renders this as a small lede paragraph below the chapter heading and above the PR rows.",
     ),
 });
 

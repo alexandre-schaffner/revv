@@ -26,6 +26,7 @@ export const recapPrEntries = sqliteTable(
       .notNull()
       .references(() => projectRecaps.id, { onDelete: "cascade" }),
     prId: text("pr_id").notNull(),
+    repositoryId: text("repository_id").notNull().default(""),
     /** Render order within the recap; preserved from the agent's call sequence. */
     position: integer("position").notNull(),
     theme: text("theme").notNull(),

@@ -1,7 +1,7 @@
 <script lang="ts">
-import type { RecapPrEntry } from "@revv/shared";
+import type { RecapPrEntry, RecapThemeSummary } from "@revv/shared";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
-import Avatar from "$lib/components/shared/Avatar.svelte";
+import CaretUp from "phosphor-svelte/lib/CaretUp";
 import {
   Collapsible,
   CollapsibleContent,
@@ -15,294 +15,94 @@ interface Props {
   theme: string;
   entries: ReadonlyArray<RecapPrEntry>;
   swatch: string;
-  summary?: string | undefined;
+  explanation?: RecapThemeSummary | undefined;
+  teamNames?: readonly string[] | undefined;
+  sectionKey?: string | undefined;
 }
-
-let { theme, entries, swatch, summary = undefined }: Props = $props();
-
-let open = $state(true);
-const sectionId = $derived(themeSlug(theme));
-
-const mergedEntries = $derived(entries.filter((e) => e.prState !== "open"));
-const openEntries = $derived(entries.filter((e) => e.prState === "open"));
-
-const countLabel = $derived.by(() => {
-  if (mergedEntries.length === 0 && openEntries.length === 0) return "0 PRs";
-  if (openEntries.length === 0) {
-    return mergedEntries.length === 1 ? "1 shipped" : `${mergedEntries.length} shipped`;
-  }
-  if (mergedEntries.length === 0) {
-    return openEntries.length === 1 ? "1 in progress" : `${openEntries.length} in progress`;
-  }
-  return `${mergedEntries.length} shipped · ${openEntries.length} in progress`;
-});
-
-interface AuthorGroup {
-  readonly handle: string;
-  readonly avatar: string | null;
-  readonly entries: RecapPrEntry[];
-  firstPosition: number;
-}
-
-function groupByAuthor(items: ReadonlyArray<RecapPrEntry>): AuthorGroup[] {
-  const map = new Map<string, AuthorGroup>();
-  for (const e of items) {
-    const key = e.prAuthorLogin || "?";
-    const existing = map.get(key);
-    if (existing) {
-      existing.entries.push(e);
-      if (e.position < existing.firstPosition) existing.firstPosition = e.position;
-    } else {
-      map.set(key, {
-        handle: key,
-        avatar: e.prAuthorAvatar,
-        entries: [e],
-        firstPosition: e.position,
-      });
-    }
-  }
-  const groups = Array.from(map.values());
-  for (const g of groups) g.entries.sort((a, b) => a.position - b.position);
-  groups.sort((a, b) => a.firstPosition - b.firstPosition);
-  return groups;
-}
-
-const mergedGroups = $derived(groupByAuthor(mergedEntries));
-const openGroups = $derived(groupByAuthor(openEntries));
+let { theme, entries, swatch, explanation, teamNames, sectionKey }: Props = $props();
+let open = $state(false);
+let evidenceOpen = $state(false);
+const hasContext = $derived(
+  Boolean(explanation?.context || explanation?.approach || explanation?.currentState),
+);
 </script>
 
-<section class="chapter" id={sectionId}>
+<section class="chapter" id={sectionKey ? `${themeSlug(theme)}-${sectionKey}` : themeSlug(theme)} data-recap-theme={themeSlug(theme)}>
   <Collapsible bind:open>
-    <CollapsibleTrigger class="chapter-header" aria-label="Toggle {theme} chapter">
+    <CollapsibleTrigger class="chapter-header" aria-label="Understand {formatTheme(theme)}">
       <div class="chapter-title">
         <span class="dot" style="--swatch: {swatch}" aria-hidden="true"></span>
         <h2>{formatTheme(theme)}</h2>
       </div>
       <span class="chapter-meta">
-        <span class="chapter-count">{countLabel}</span>
-        <span class="chapter-chevron" data-state={open ? "open" : "closed"}>
-          <CaretDown class="chapter-chevron-icon" aria-hidden="true" />
-        </span>
+        <span class="chapter-action">{open ? "Close" : "Understand"}</span>
+        {#if open}<CaretUp size={12} aria-hidden="true" />{:else}<CaretDown size={12} aria-hidden="true" />{/if}
       </span>
     </CollapsibleTrigger>
+    {#if teamNames?.length}
+      <p class="chapter-teams">Topic also appears in {teamNames.join(", ")}</p>
+    {/if}
+    {#if explanation?.summary}
+      <p class="chapter-summary"><InlineText text={explanation.summary} /></p>
+    {/if}
     <CollapsibleContent>
-      {#if summary && summary.trim().length > 0}
-        <p class="chapter-summary">
-          <InlineText text={summary} />
-        </p>
-      {/if}
-      <div class="chapter-groups">
-        {#snippet authorGroupBlock(group: AuthorGroup, accent: "merged" | "open")}
-          <div class="author-group" class:author-group--open={accent === "open"}>
-            <div class="author-header">
-              <Avatar name={group.handle} src={group.avatar} size={22} />
-              <span class="author-handle">{group.handle}</span>
-              <span class="author-count">
-                {group.entries.length === 1 ? "1 PR" : `${group.entries.length} PRs`}
-              </span>
-            </div>
-            <div class="author-rows">
-              {#each group.entries as entry (entry.id)}
-                <PrRow {entry} />
-              {/each}
-            </div>
+      <div class="chapter-context">
+        {#if explanation?.context}
+          <div class="context-section">
+            <h3>The idea</h3>
+            <p><InlineText text={explanation.context} /></p>
           </div>
-        {/snippet}
-
-        {#each mergedGroups as group (group.handle)}
-          {@render authorGroupBlock(group, "merged")}
-        {/each}
-
-        {#if openGroups.length > 0}
-          <div class="subgroup-divider">
-            <span class="subgroup-label">In progress</span>
-          </div>
-          {#each openGroups as group (`open-${group.handle}`)}
-            {@render authorGroupBlock(group, "open")}
-          {/each}
         {/if}
+        {#if explanation?.approach}
+          <div class="context-section">
+            <h3>How it works</h3>
+            <p><InlineText text={explanation.approach} /></p>
+          </div>
+        {/if}
+        {#if explanation?.currentState}
+          <div class="context-section">
+            <h3>Where it stands</h3>
+            <p><InlineText text={explanation.currentState} /></p>
+          </div>
+        {/if}
+        {#if !hasContext}
+          <p class="legacy-note">This earlier recap includes the supporting work below. Generate a new recap for the expanded topic context.</p>
+        {/if}
+        <Collapsible bind:open={evidenceOpen}>
+          <CollapsibleTrigger class="evidence-trigger">
+            <span>{evidenceOpen ? "Hide supporting work" : "Supporting work"}</span>
+            {#if evidenceOpen}<CaretUp size={11} aria-hidden="true" />{:else}<CaretDown size={11} aria-hidden="true" />{/if}
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div class="evidence">
+              {#each entries as entry (entry.id)}<PrRow {entry} />{/each}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
       </div>
     </CollapsibleContent>
   </Collapsible>
 </section>
 
 <style>
-.chapter {
-  padding: 1.5rem 0;
-  scroll-margin-top: 1.5rem;
-}
-
-.chapter:first-of-type {
-  padding-top: 0;
-}
-
-.chapter :global(.chapter-header) {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: baseline;
-  gap: 1.5rem;
-  padding-bottom: 0.875rem;
-  border-bottom: 1px solid color-mix(in srgb, var(--color-text-muted) 22%, transparent);
-  width: 100%;
-  background: transparent;
-  border-top: 0;
-  border-left: 0;
-  border-right: 0;
-  text-align: left;
-  cursor: pointer;
-  appearance: none;
-  font: inherit;
-  color: inherit;
-}
-
-.chapter :global(.chapter-header:hover .chapter-chevron-icon) {
-  color: var(--color-text-secondary);
-}
-
-.chapter :global(.chapter-header:focus-visible) {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 4px;
-  border-radius: 4px;
-}
-
-.chapter-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.6rem;
-}
-
-.chapter-chevron {
-  display: inline-grid;
-  place-items: center;
-  transition: transform var(--duration-snap) var(--ease-out-expo);
-}
-
-.chapter-chevron[data-state="closed"] {
-  transform: rotate(-90deg);
-}
-
-.chapter :global(.chapter-chevron-icon) {
-  width: 0.75rem;
-  height: 0.75rem;
-  color: var(--color-text-muted);
-}
-
-.chapter-title {
-  display: flex;
-  align-items: center;
-  gap: 0.625rem;
-  min-width: 0;
-}
-
-.chapter-title h2 {
-  margin: 0;
-  font-size: 1.375rem;
-  font-weight: 600;
-  letter-spacing: -0.015em;
-  color: var(--color-text-primary);
-  text-wrap: balance;
-}
-
-.dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  display: inline-block;
-  background: var(--swatch, var(--color-text-muted));
-  flex-shrink: 0;
-}
-
-.chapter-count {
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  color: var(--color-text-muted);
-}
-
-.chapter-summary {
-  margin: 0.875rem 0 0;
-  max-width: 620px;
-  font-size: 0.9375rem;
-  line-height: 1.55;
-  color: var(--color-text-secondary);
-  text-wrap: pretty;
-}
-
-.chapter-groups {
-  display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
-  padding-top: 0.5rem;
-}
-
-.author-group {
-  display: flex;
-  flex-direction: column;
-}
-
-.author-group--open {
-  opacity: 0.78;
-}
-
-.author-header {
-  display: flex;
-  align-items: center;
-  gap: 0.55rem;
-  padding: 0.5rem 0;
-}
-
-.author-handle {
-  font-size: 0.85rem;
-  font-weight: 500;
-  color: var(--color-text-primary);
-}
-
-.author-count {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  letter-spacing: 0.005em;
-  color: var(--color-text-muted);
-  margin-left: auto;
-}
-
-.author-rows {
-  display: flex;
-  flex-direction: column;
-  padding-left: calc(22px + 0.55rem);
-}
-
-.subgroup-divider {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding-top: 0.5rem;
-}
-
-.subgroup-divider::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: color-mix(in srgb, var(--color-text-muted) 18%, transparent);
-}
-
-.subgroup-label {
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  color: var(--color-text-muted);
-}
-
-@media (max-width: 600px) {
-  .chapter :global(.chapter-header) {
-    grid-template-columns: 1fr auto;
-  }
-  .chapter-title {
-    grid-column: 1;
-  }
-  .chapter-meta {
-    grid-column: 2;
-    justify-self: end;
-  }
-}
+.chapter { padding: 1.5rem 0; scroll-margin-top: 1.5rem; }
+.chapter:first-of-type { padding-top: 0; }
+.chapter :global(.chapter-header) { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 1.5rem; width: 100%; padding: 0 0 .875rem; border: 0; border-bottom: 1px solid color-mix(in srgb, var(--color-text-muted) 22%, transparent); background: transparent; text-align: left; font: inherit; color: inherit; cursor: pointer; }
+.chapter :global(.chapter-header:hover) { color: var(--color-text-primary); }
+.chapter :global(.chapter-header:focus-visible), .chapter :global(.evidence-trigger:focus-visible) { outline: 2px solid var(--color-accent); outline-offset: 4px; border-radius: 4px; }
+.chapter-title { display: flex; align-items: center; gap: .625rem; min-width: 0; }
+h2 { margin: 0; font-size: 1.375rem; font-weight: 600; letter-spacing: -.015em; color: var(--color-text-primary); text-wrap: balance; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--swatch); flex-shrink: 0; }
+.chapter-meta { display: inline-flex; align-items: center; gap: .6rem; font-size: .7rem; color: var(--color-text-muted); }
+.chapter-action { font-family: var(--font-mono); }
+.chapter-summary { margin: .875rem 0 0; max-width: 620px; font-size: .9375rem; line-height: 1.55; color: var(--color-text-secondary); text-wrap: pretty; }
+.chapter-teams { margin: .75rem 0 0; font-size: .8125rem; line-height: 1.5; color: var(--color-text-secondary); }
+.chapter-context { display: flex; flex-direction: column; gap: 1.25rem; padding: 1.5rem 0 .25rem; }
+h3 { margin: 0 0 .5rem; font-family: var(--font-mono); font-size: .6875rem; font-weight: 500; text-transform: uppercase; letter-spacing: .14em; color: var(--color-text-muted); }
+.context-section p { margin: 0; max-width: 620px; font-size: .9375rem; line-height: 1.65; color: var(--color-text-secondary); text-wrap: pretty; }
+.chapter :global(.evidence-trigger) { display: inline-flex; align-items: center; gap: .5rem; padding: .375rem 0; border: 0; background: transparent; color: var(--color-text-muted); font: inherit; font-size: .75rem; cursor: pointer; }
+.chapter :global(.evidence-trigger:hover) { color: var(--color-text-primary); }
+.evidence { padding-top: .5rem; }
+.legacy-note { margin: 0; font-size: .8125rem; color: var(--color-text-muted); line-height: 1.55; }
+@media (max-width: 600px) { .chapter :global(.chapter-header) { gap: .75rem; } .chapter-action { display: none; } }
 </style>

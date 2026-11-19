@@ -17,8 +17,10 @@ import type {
   ProjectRecap,
   ProjectRecapStatus,
   RecapPeriod,
+  RecapSourceScope,
   RecapStreamEvent,
   RecapWindowBounds,
+  ServerEventMessage,
 } from "@revv/shared";
 import { rollingWindow } from "@revv/shared";
 import { SPAN, SPAN_ATTR } from "@revv/shared/telemetry";
@@ -69,6 +71,7 @@ interface RecapRun extends SubscriberChannel<RecapStreamEvent>, ToolGate {
 
 export interface RecapRequest {
   readonly repoId: string;
+  readonly sourceScope?: RecapSourceScope;
   readonly period: RecapPeriod;
   /** Omitted: the open window, up to now. */
   readonly window?: RecapWindowBounds;
@@ -173,7 +176,9 @@ export const ProjectRecapJobsLive = Layer.effect(
       effect: Effect.Effect<A, E>,
     ) =>
       Effect.flatMap(
-        windowLocks.acquire(`${window.repositoryId}:${window.period}:${window.periodStart}`),
+        windowLocks.acquire(
+          `${window.scopeKey || window.repositoryId}:${window.period}:${window.periodStart}`,
+        ),
         (lock) => lock.withPermits(1)(effect),
       );
     const subscribers = makeSubscriberRegistry<RecapStreamEvent>({
@@ -218,7 +223,11 @@ export const ProjectRecapJobsLive = Layer.effect(
         if (!moved || !fresh) return;
         // completedAt and errorMessage go out even when null, so a client
         // cache drops the values of an earlier status.
-        yield* realtime.toRepo(fresh.repositoryId, {
+        const sourceScope = fresh.sourceScope;
+        const publish = sourceScope
+          ? (event: ServerEventMessage) => realtime.toAccount(sourceScope.accountId, event)
+          : (event: ServerEventMessage) => realtime.toRepo(fresh.repositoryId, event);
+        yield* publish({
           type: "recap:status-changed",
           data: {
             recapId,
@@ -230,7 +239,7 @@ export const ProjectRecapJobsLive = Layer.effect(
           },
         });
         if (status === "complete") {
-          yield* realtime.toRepo(fresh.repositoryId, {
+          yield* publish({
             type: "recap:added",
             data: { recap: fresh },
           });
@@ -286,9 +295,13 @@ export const ProjectRecapJobsLive = Layer.effect(
           .getById(run.id)
           .pipe(Effect.catchTag("RecapNotFoundError", () => Effect.succeed(null)));
         if (!recap) return { kind: "failed", failure: "Recap row not found" };
-        const repo = yield* prCtx
-          .getRepo(recap.repositoryId)
-          .pipe(Effect.catchTag("NotFoundError", () => Effect.succeed(null)));
+        const repo = recap.sourceScope
+          ? (yield* prCtx.listReposForAccount(recap.sourceScope.accountId)).find((repo) =>
+              recap.sourceScope?.repositoryIds.includes(repo.id),
+            )
+          : yield* prCtx
+              .getRepo(recap.repositoryId)
+              .pipe(Effect.catchTag("NotFoundError", () => Effect.succeed(null)));
         if (!repo) {
           return { kind: "failed", failure: "Repository not found — cannot build source bundle" };
         }
@@ -296,7 +309,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         const assembled =
           (yield* recapService.getSourceBundle(run.id)) ??
           (yield* sources
-            .assemble(recap, repo.fullName)
+            .assemble({ ...recap, repositoryId: repo.id }, repo.fullName)
             .pipe(
               Effect.tap((bundle) =>
                 typeof bundle === "string"
@@ -317,9 +330,12 @@ export const ProjectRecapJobsLive = Layer.effect(
           return { kind: "complete" };
         }
 
-        const priorRecaps = yield* recapService.getLatestForRepo(recap.repositoryId, { limit: 5 });
+        const priorRecaps = yield* recapService.getLatestForRepo(recap.repositoryId, {
+          limit: 5,
+          scopeKey: recap.sourceScope?.key ?? "",
+          beforePeriodStart: recap.periodStart,
+        });
 
-        const repoClient = yield* Effect.cached(sources.repoClient(recap.repositoryId));
         const runContext = yield* Effect.context<never>();
         const tools: RecapToolContext = {
           db,
@@ -329,7 +345,11 @@ export const ProjectRecapJobsLive = Layer.effect(
           getPrDiff: (prId) =>
             prService.getPr(prId).pipe(
               Effect.flatMap((pr) =>
-                Effect.flatMap(repoClient, (client) => sources.loadDiff(pr, repo.fullName, client)),
+                Effect.flatMap(prCtx.getRepo(pr.repositoryId), (repo) =>
+                  Effect.flatMap(sources.repoClient(repo.id), (client) =>
+                    sources.loadDiff(pr, repo.fullName, client),
+                  ),
+                ),
               ),
               Effect.catch(() => Effect.succeed(null)),
               Effect.provide(runContext),
@@ -391,14 +411,24 @@ export const ProjectRecapJobsLive = Layer.effect(
       Effect.gen(function* () {
         const now = new Date();
         const window = request.window ?? rollingWindow(request.period, now);
-        const { repoId, period } = request;
+        const { repoId, period, sourceScope } = request;
+        const publish = (event: ServerEventMessage) =>
+          sourceScope
+            ? realtime.toAccount(sourceScope.accountId, event)
+            : realtime.toRepo(repoId, event);
         return yield* underWindowLock(
-          { repositoryId: repoId, period, periodStart: window.periodStart },
+          {
+            repositoryId: repoId,
+            scopeKey: request.sourceScope?.key ?? "",
+            period,
+            periodStart: window.periodStart,
+          },
           Effect.gen(function* () {
             const existing = yield* recapService.findActiveForPeriod(
               repoId,
               period,
               window.periodStart,
+              request.sourceScope?.key ?? "",
             );
             const plan = planRecapRequest({
               intent: request.intent,
@@ -417,7 +447,10 @@ export const ProjectRecapJobsLive = Layer.effect(
             if (existing && plan === "rerun") {
               const replaced = yield* jobs.running(existing.id);
               yield* jobs.stop(existing.id, "superseded");
-              yield* recapService.resetForRerun(existing.id, window);
+              yield* recapService.resetForRerun(existing.id, {
+                ...window,
+                ...(request.sourceScope ? { sourceScope: request.sourceScope } : {}),
+              });
               if (replaced) {
                 subscribers.fanOut(existing.id, replaced.context, {
                   type: "restarted",
@@ -428,7 +461,7 @@ export const ProjectRecapJobsLive = Layer.effect(
                 .getById(existing.id)
                 .pipe(Effect.catch(() => Effect.succeed(null)));
               if (refreshed) {
-                yield* realtime.toRepo(repoId, {
+                yield* publish({
                   type: "recap:added",
                   data: { recap: refreshed },
                 });
@@ -444,10 +477,11 @@ export const ProjectRecapJobsLive = Layer.effect(
             }
             const created = yield* recapService.createPartial({
               repositoryId: repoId,
+              ...(request.sourceScope ? { sourceScope: request.sourceScope } : {}),
               period,
               ...window,
             });
-            yield* realtime.toRepo(repoId, {
+            yield* publish({
               type: "recap:added",
               data: { recap: created },
             });

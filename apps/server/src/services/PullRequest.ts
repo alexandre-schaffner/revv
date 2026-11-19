@@ -238,6 +238,7 @@ export class PullRequestService extends Context.Service<
     readonly listOpenPrsAsOfWindow: (
       repoId: string,
       until: string,
+      authorLogins?: readonly string[],
     ) => Effect.Effect<ReadonlyArray<ArchivedPrWithWalkthrough>, DbError>;
     readonly markPrsClosed: (
       updates: Array<{ id: string; status: "closed" | "merged"; closedAt: string }>,
@@ -545,7 +546,7 @@ export const PullRequestServiceLive = Layer.effect(
           ),
         ),
 
-      listOpenPrsAsOfWindow: (repoId, until) =>
+      listOpenPrsAsOfWindow: (repoId, until, authorLogins) =>
         dbTry("listOpenPrsAsOfWindow", () => {
           const rows = withLatestWalkthrough(
             db,
@@ -561,6 +562,12 @@ export const PullRequestServiceLive = Layer.effect(
               .where(
                 and(
                   eq(pullRequests.repositoryId, repoId),
+                  authorLogins
+                    ? inArray(
+                        sql`lower(${pullRequests.authorLogin})`,
+                        authorLogins.map((login) => login.toLowerCase()),
+                      )
+                    : undefined,
                   // "Open at `until`" reconstructed from timestamps rather than
                   // the mutable `status` column, which only ever describes now.
                   lt(pullRequests.createdAt, until),

@@ -16,6 +16,7 @@ import {
 } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import * as hunkScan from "$lib/hunk-scan/store.svelte";
+import * as recapFeed from "$lib/recaps/feed.svelte";
 import * as recaps from "$lib/recaps/store.svelte";
 import { getToken } from "$lib/session/token.svelte";
 import * as walkthroughSizing from "$lib/walkthrough/sizing.svelte";
@@ -81,8 +82,8 @@ const CATCH_UP: Record<ServerEventMessage["type"], readonly CatchUp[] | NoCatchU
   "threads:synced": [review.onEventsReconnected],
   "threads:linked": [review.onEventsReconnected],
   "threads:sync-error": [review.onEventsReconnected],
-  "recap:status-changed": [recaps.onEventsReconnected],
-  "recap:added": [recaps.onEventsReconnected],
+  "recap:status-changed": [recaps.onEventsReconnected, recapFeed.onEventsReconnected],
+  "recap:added": [recaps.onEventsReconnected, recapFeed.onEventsReconnected],
 };
 
 /** A reconnect: events sent while the stream was down reached no one. */
@@ -102,6 +103,7 @@ const ON_FOREGROUND: ReadonlyArray<(streamOpen: boolean) => void> = [
   review.onWindowForeground,
   prs.rereadLists,
   repos.rereadRepos,
+  recapFeed.onEventsReconnected,
 ];
 
 const DEAD_CONNECTION_THRESHOLD_MS = 4 * SSE_HEARTBEAT_INTERVAL_MS;
@@ -232,9 +234,11 @@ function dispatch(msg: ServerEventMessage): void {
       break;
     case "recap:status-changed":
       recaps.onRecapStatusChanged(msg.data);
+      recapFeed.onRecapFeedStatusChanged(msg.data);
       break;
     case "recap:added":
       recaps.onRecapAdded(msg.data);
+      recapFeed.onRecapFeedAdded(msg.data);
       break;
     default: {
       const _exhaustive: never = msg;

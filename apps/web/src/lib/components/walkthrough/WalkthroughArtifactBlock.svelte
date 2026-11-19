@@ -3,7 +3,7 @@ import { ARTIFACT_THEME_TOKENS, type ArtifactBlock } from "@revv/shared";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import { onDestroy, untrack } from "svelte";
-import { browser } from "$app/environment";
+import { browser } from "$app/env";
 import { gsap, tokens as motionTokens, prefersReducedMotion } from "$lib/motion";
 import { getResolvedTheme, type ResolvedTheme } from "$lib/stores/theme.svelte";
 

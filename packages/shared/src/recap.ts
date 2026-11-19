@@ -1,6 +1,43 @@
 import type { Activity } from "./activity";
 import type { StreamErrorCode } from "./stream-frames";
 
+/** Durable source snapshot: boot resumption uses these repositories and members. */
+export interface RecapSourceScope {
+  readonly key: string;
+  readonly kind: "all" | "team";
+  readonly label: string;
+  readonly accountId: string;
+  readonly repositoryIds: readonly string[];
+  readonly org?: string;
+  readonly teamSlug?: string;
+  readonly memberLogins?: readonly string[];
+  /** GitHub membership snapshot used for stable team sections and local filtering. */
+  readonly teams?: readonly {
+    readonly org: string;
+    readonly slug: string;
+    readonly name: string;
+    readonly memberLogins: readonly string[];
+    readonly repositoryIds: readonly string[];
+  }[];
+}
+
+/** A saved broad recap may serve only views actually represented in its snapshot. */
+export function recapScopeCovers(
+  scope: RecapSourceScope | null | undefined,
+  selection: { readonly repoId?: string; readonly org?: string; readonly team?: string },
+): boolean {
+  if (!selection.repoId && !selection.team) return true;
+  if (!scope || scope.kind !== "all") return false;
+  if (selection.repoId) return scope.repositoryIds.includes(selection.repoId);
+  return Boolean(
+    scope.teams?.some(
+      (team) =>
+        team.org.toLowerCase() === selection.org?.toLowerCase() &&
+        team.slug.toLowerCase() === selection.team?.toLowerCase(),
+    ),
+  );
+}
+
 export const RECAP_PERIODS = ["daily", "weekly"] as const;
 export type RecapPeriod = (typeof RECAP_PERIODS)[number];
 
@@ -45,6 +82,8 @@ export interface RecapPrEntry {
   readonly id: string;
   readonly recapId: string;
   readonly prId: string;
+  /** Snapshotted provenance, preserved after source PR pruning. */
+  readonly repositoryId?: string;
   readonly position: number;
   readonly theme: string;
   readonly verb: string;
@@ -80,11 +119,18 @@ export interface RecapThemeSummary {
   readonly theme: string;
   /** 1–2 sentence summary. May contain backtick-wrapped code spans. */
   readonly summary: string;
+  /** Background and explanation, frozen at this recap's generation time. */
+  readonly context?: string;
+  readonly approach?: string;
+  readonly currentState?: string;
+  /** Concrete symptom and first check, or empty when no evidenced risk exists. */
+  readonly worthWatching?: string;
 }
 
 export interface ProjectRecap {
   readonly id: string;
   readonly repositoryId: string;
+  readonly sourceScope?: RecapSourceScope | null;
   readonly period: RecapPeriod;
   readonly periodStart: string;
   readonly periodEnd: string;
@@ -117,6 +163,7 @@ export interface ProjectRecap {
 export interface ProjectRecapSummary {
   readonly id: string;
   readonly repositoryId: string;
+  readonly sourceScope?: RecapSourceScope | null;
   readonly period: RecapPeriod;
   readonly periodStart: string;
   readonly periodEnd: string;
@@ -133,6 +180,7 @@ export function recapSummaryOf(recap: ProjectRecap): ProjectRecapSummary {
   return {
     id: recap.id,
     repositoryId: recap.repositoryId,
+    sourceScope: recap.sourceScope ?? null,
     period: recap.period,
     periodStart: recap.periodStart,
     periodEnd: recap.periodEnd,

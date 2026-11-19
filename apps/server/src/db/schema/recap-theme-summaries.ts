@@ -30,6 +30,10 @@ export const recapThemeSummaries = sqliteTable(
      * inline elements at render time). No other markdown.
      */
     summary: text("summary").notNull(),
+    context: text("context").notNull().default(""),
+    approach: text("approach").notNull().default(""),
+    currentState: text("current_state").notNull().default(""),
+    worthWatching: text("worth_watching").notNull().default(""),
   },
   (t) => ({
     /** Idempotency key — the agent upserts on this on every `set_theme_summary`. */
