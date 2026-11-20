@@ -1,10 +1,10 @@
 {
-  "tag": "v0.34.0",
-  "version": "0.34.0",
+  "tag": "v0.35.0",
+  "version": "0.35.0",
   "assets": {
     "aarch64-darwin": {
-      "url": "https://github.com/alexandre-schaffner/revv/releases/download/v0.34.0/Revv_aarch64.app.tar.gz",
-      "hash": "sha256-7Bo3HTIXX1cpJQypvmpMXTpQMcB7/l4DIMoeb9qi180="
+      "url": "https://github.com/alexandre-schaffner/revv/releases/download/v0.35.0/Revv_aarch64.app.tar.gz",
+      "hash": "sha256-H8uLwrxs5E36WqhSOQxGFmer2vlvnlEZoctvfXgVvVo="
     }
   }
 }
