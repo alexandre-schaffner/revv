@@ -1,4 +1,5 @@
 import type { ProjectRecap, RecapPeriod, RecapPrEntry, RecapSummaryStats } from "@revv/shared";
+import { tick } from "svelte";
 import { prefersReducedMotion } from "$lib/motion";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { hash32 } from "$lib/utils/hash";
@@ -67,9 +68,14 @@ export function formatTheme(theme: string): string {
 
 export function scrollToTheme(theme: string): void {
   if (typeof document === "undefined") return;
-  const el = document.getElementById(themeSlug(theme));
-  if (!el) return;
-  el.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
+  document.dispatchEvent(new CustomEvent("recap:reveal-theme", { detail: theme }));
+  void tick().then(() => {
+    const slug = themeSlug(theme);
+    const el =
+      document.getElementById(slug) ??
+      document.querySelector(`[data-recap-theme="${CSS.escape(slug)}"]`);
+    el?.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
+  });
 }
 
 export interface RecapHeader {

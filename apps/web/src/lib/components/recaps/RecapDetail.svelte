@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { ProjectRecap, RecapPeriod, RecapStreamPhase } from "@revv/shared";
+import type { ProjectRecap, RecapPeriod, RecapSourceScope, RecapStreamPhase } from "@revv/shared";
 import ArrowLeft from "phosphor-svelte/lib/ArrowLeft";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import WarningCircle from "phosphor-svelte/lib/WarningCircle";
@@ -13,6 +13,7 @@ import DotMatrixLoader from "./DotMatrixLoader.svelte";
 import RecapBody from "./RecapBody.svelte";
 import RecapHeroBig from "./RecapHeroBig.svelte";
 import RecapSidebar from "./RecapSidebar.svelte";
+import { projectRecap, type RecapViewFilter } from "./recap-view";
 
 interface Props {
   /** The row, with anything a running generation has streamed merged in. */
@@ -23,17 +24,36 @@ interface Props {
   stream?: RecapStreamEntry | null | undefined;
   /** Archive control rendered beside the date in the header. */
   archive?: Snippet | undefined;
+  filter?: RecapViewFilter;
+  scopeLabel?: string;
+  fallbackTeams?: RecapSourceScope["teams"];
 }
 
 let {
-  recap,
+  recap: sourceRecap,
   loading,
   period,
   onBack = undefined,
   stream = null,
   archive = undefined,
+  filter = {},
+  scopeLabel = "Everything",
+  fallbackTeams = [],
 }: Props = $props();
 
+const recap = $derived(
+  sourceRecap
+    ? projectRecap(
+        {
+          ...sourceRecap,
+          ...(sourceRecap.sourceScope && !sourceRecap.sourceScope.teams?.length
+            ? { sourceScope: { ...sourceRecap.sourceScope, teams: fallbackTeams } }
+            : {}),
+        },
+        filter,
+      )
+    : null,
+);
 let thoughtsOpen = $state(false);
 
 const effectivePeriod = $derived<RecapPeriod>(period ?? recap?.period ?? "daily");
@@ -120,7 +140,7 @@ function formatCompletedAt(iso: string): string {
       <RecapHeroBig recap={recap} period={effectivePeriod} {archive} />
       {#if isGenerating && hasAnyContent}
         <div class="body-col">
-          <RecapBody recap={recap} />
+          <RecapBody {recap} {filter} {fallbackTeams} usesCurrentTeams={!sourceRecap?.sourceScope?.teams?.length} />
           <div class="generating-footer">
             {#if hasThoughtText}
               <ThoughtsReveal
@@ -165,7 +185,7 @@ function formatCompletedAt(iso: string): string {
             <p class="empty-title">No PRs merged on this {RECAP_PERIOD_COPY[effectivePeriod].unit}.</p>
           </div>
         {:else if isComplete}
-          <RecapBody recap={recap} />
+          <RecapBody {recap} {filter} {fallbackTeams} usesCurrentTeams={!sourceRecap?.sourceScope?.teams?.length} />
         {:else}
           <div class="body-callout">
             <Spinner size={16} class="motion-essential-spin" aria-hidden="true" />

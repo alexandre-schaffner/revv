@@ -46,6 +46,7 @@ export function buildSourceBundle(
     const pr = row.pr;
     return {
       id: pr.id,
+      repositoryId: pr.repositoryId,
       externalId: pr.externalId,
       title: pr.title,
       authorLogin: pr.authorLogin,
@@ -444,48 +445,59 @@ export function makeRecapSources(deps: {
   ): Effect.Effect<RecapSourceBundle | "empty" | "nothing-yet", DbError> =>
     Effect.gen(function* () {
       const { repositoryId, periodStart, periodEnd } = recap;
-      let windowed = yield* archivedIn(repositoryId, periodStart, periodEnd);
-      const backfill = yield* backfillMissingPrs(
-        repositoryId,
-        repoFullName,
-        periodStart,
-        periodEnd,
-        windowed,
-      );
-      if (backfill.addedCount > 0)
-        windowed = yield* archivedIn(repositoryId, periodStart, periodEnd);
-
-      // As of the window's close, so a historical recap doesn't describe
-      // today's open PRs. Read before the empty-window check so a window
-      // with only open PRs still gets an "active work" recap.
-      const openPrs = yield* openAsOf(repositoryId, periodEnd);
-
-      if (windowed.length === 0 && openPrs.length === 0) {
-        return windowIsCurrent(recap.period, periodStart) ? "nothing-yet" : "empty";
-      }
-
-      // Every PR without a completed walkthrough gets its diff compacted into
-      // a digest, so the agent session scales with many PRs without holding
-      // every raw diff.
-      const client = yield* Effect.cached(repoClient(repositoryId));
-      const digests = yield* Effect.forEach(
-        [...windowed, ...openPrs].filter((row) => row.walkthrough === null),
-        (row) =>
-          Effect.map(
-            Effect.flatMap(client, (c) => loadDiff(row.pr, repoFullName, c)),
-            (diff) => [row.pr.id, buildDigestForRecapPr(row.pr, diff)] as const,
-          ),
+      const scope = recap.sourceScope;
+      const repos = scope
+        ? (yield* deps.prContext.listReposForAccount(scope.accountId)).filter((repo) =>
+            scope.repositoryIds.includes(repo.id),
+          )
+        : [{ id: repositoryId, fullName: repoFullName }];
+      const authors = scope?.kind === "team" ? (scope.memberLogins ?? []) : undefined;
+      const matchesAuthor = (row: ArchivedPrWithWalkthrough) =>
+        !authors ||
+        authors.some((login) => login.toLowerCase() === row.pr.authorLogin.toLowerCase());
+      const bundles = yield* Effect.forEach(
+        repos,
+        (repo) =>
+          Effect.gen(function* () {
+            let windowed = yield* archivedIn(repo.id, periodStart, periodEnd);
+            const backfill = yield* backfillMissingPrs(
+              repo.id,
+              repo.fullName,
+              periodStart,
+              periodEnd,
+              windowed,
+            );
+            if (backfill.addedCount > 0)
+              windowed = yield* archivedIn(repo.id, periodStart, periodEnd);
+            windowed = windowed.filter(matchesAuthor);
+            const openPrs = yield* prs.listOpenPrsAsOfWindow(repo.id, periodEnd, authors);
+            const client = yield* Effect.cached(repoClient(repo.id));
+            const digests = yield* Effect.forEach(
+              [...windowed, ...openPrs].filter((row) => row.walkthrough === null),
+              (row) =>
+                Effect.map(
+                  Effect.flatMap(client, (c) => loadDiff(row.pr, repo.fullName, c)),
+                  (diff) => [row.pr.id, buildDigestForRecapPr(row.pr, diff)] as const,
+                ),
+              { concurrency: 3 },
+            );
+            return { windowed, openPrs, digests };
+          }),
         { concurrency: 3 },
       );
-
+      const windowed = bundles.flatMap((bundle) => bundle.windowed);
+      const openPrs = bundles.flatMap((bundle) => bundle.openPrs);
+      if (!windowed.length && !openPrs.length)
+        return windowIsCurrent(recap.period, periodStart) ? "nothing-yet" : "empty";
+      const bundle = buildSourceBundle(
+        scope?.label ?? repoFullName,
+        { repoId: repositoryId, period: recap.period, periodStart, periodEnd },
+        windowed,
+        openPrs,
+      );
       return attachRecapDigests(
-        buildSourceBundle(
-          repoFullName,
-          { repoId: repositoryId, period: recap.period, periodStart, periodEnd },
-          windowed,
-          openPrs,
-        ),
-        new Map<string, RecapSourcePrDigest>(digests),
+        { ...bundle, ...(scope ? { sourceScope: scope } : {}) },
+        new Map(bundles.flatMap((bundle) => bundle.digests)),
       );
     });
 

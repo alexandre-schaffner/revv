@@ -435,6 +435,20 @@
       "when": 1795400000000,
       "tag": "0580_pr_diff_commits",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "6",
+      "when": 1795400000001,
+      "tag": "0590_topic_recaps",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "6",
+      "when": 1795400000002,
+      "tag": "0600_account_owned_recaps",
+      "breakpoints": true
     }
   ]
 }

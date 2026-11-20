@@ -11,9 +11,10 @@ interface Props {
   /** Archive control rendered beside the date — the routes own the calendar's
    *  data, so they hand it in rather than having it drilled through here. */
   archive?: Snippet | undefined;
+  scopeLabel?: string;
 }
 
-let { recap, period, archive = undefined }: Props = $props();
+let { recap, period, archive = undefined, scopeLabel = "Everything" }: Props = $props();
 
 const header = $derived(buildRecapHeader(recap, period, now(60_000)));
 </script>
@@ -29,7 +30,7 @@ const header = $derived(buildRecapHeader(recap, period, now(60_000)));
       {#if archive}{@render archive()}{/if}
     </div>
     {#if header.syncedRelative}
-      <span class="time-cap">UTC · synced {header.syncedRelative}</span>
+      <span class="time-cap">UTC · synced {header.syncedRelative}{#if recap?.sourceScope?.kind === "all"} · Everything source{#if scopeLabel !== "Everything"} · {scopeLabel} topics{/if}{/if}</span>
     {:else}
       <span class="time-cap">UTC</span>
     {/if}
@@ -62,7 +63,7 @@ const header = $derived(buildRecapHeader(recap, period, now(60_000)));
     </dl>
   {/if}
 
-  {#if header.themes.length > 0}
+  {#if header.themes.length > 0 && !recap?.sourceScope?.teams?.length}
     <section class="themes">
       <span class="eyebrow themes-eyebrow">Themes</span>
       <ul class="themes-list">
@@ -76,7 +77,7 @@ const header = $derived(buildRecapHeader(recap, period, now(60_000)));
             >
               <span class="dot" style="--swatch: {paletteLookup(header.palette, t.theme)}" aria-hidden="true"></span>
               <span class="theme-label">{formatTheme(t.theme)}</span>
-              <span class="theme-count">{t.count}</span>
+
             </button>
           </li>
         {/each}
@@ -86,6 +87,8 @@ const header = $derived(buildRecapHeader(recap, period, now(60_000)));
 </header>
 
 <style>
+
+
 .hero-big {
   display: flex;
   flex-direction: column;
@@ -264,9 +267,5 @@ const header = $derived(buildRecapHeader(recap, period, now(60_000)));
 }
 
 
-.theme-count {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--color-text-muted);
-}
+
 </style>

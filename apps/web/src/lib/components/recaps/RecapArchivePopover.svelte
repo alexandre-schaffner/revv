@@ -13,6 +13,10 @@ import RecapCalendar from "./RecapCalendar.svelte";
  */
 interface Props {
   repoId: string;
+  onOpenRecap?: ((recap: ProjectRecapSummary) => void) | undefined;
+  onOpenWindow?: ((dayKey: string) => void) | undefined;
+  onLoadMonth?: ((month: string) => void) | undefined;
+  isMonthPending?: ((month: string) => boolean) | undefined;
   period: RecapPeriod;
   recaps: ProjectRecapSummary[];
   activeRecapId?: string | null;
@@ -23,6 +27,10 @@ interface Props {
 
 let {
   repoId,
+  onOpenRecap,
+  onOpenWindow,
+  onLoadMonth,
+  isMonthPending,
   period,
   recaps,
   activeRecapId = null,
@@ -56,6 +64,10 @@ function close(): void {
 	<Popover.Content align="end" sideOffset={8} class="archive-popover">
 		<RecapCalendar
 			{repoId}
+			{onOpenRecap}
+			{onOpenWindow}
+			{onLoadMonth}
+			{isMonthPending}
 			{period}
 			{recaps}
 			{activeRecapId}

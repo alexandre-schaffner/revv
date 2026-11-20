@@ -120,4 +120,12 @@ describe("planRecapRequest", () => {
     expect(planRecapRequest({ ...base, intent: "manual", existing })).toBe("reuse");
     expect(planRecapRequest({ ...base, intent: "regenerate", existing })).toBe("rerun");
   });
+
+  it("lets manual requests retry terminal rows without restarting them on every scheduler tick", () => {
+    for (const status of ["error", "stopped"] as const) {
+      const existing = { generatedAt: "2026-06-03T16:00:00.000Z", status };
+      expect(planRecapRequest({ ...base, intent: "manual", existing })).toBe("rerun");
+      expect(planRecapRequest({ ...base, intent: "scheduled", existing })).toBe("reuse");
+    }
+  });
 });

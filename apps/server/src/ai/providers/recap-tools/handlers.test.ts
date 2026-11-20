@@ -10,6 +10,7 @@ import {
   completeRecapHandler,
   recapCompletionBlocker,
   setLedeHandler,
+  setThemeSummaryHandler,
 } from "./handlers";
 import type { RecapToolContext } from "./spec";
 
@@ -107,6 +108,70 @@ const entry = (prId: string, position: number) => ({
   lines_removed: 1,
 });
 
+const explanation = {
+  theme: "storage",
+  summary: "The cache now persists across restarts.",
+  context: "The cache avoids repeating expensive work.",
+  approach: "Cache entries are stored on disk instead of only in memory.",
+  current_state: "Implementation merged; deployment is not established by the sources.",
+};
+
+describe("topic explanations", () => {
+  it("requires supporting evidence and upserts all explanation fields idempotently", async () => {
+    const db = seed();
+    const ctx = ctxFor(db);
+    expect((await setThemeSummaryHandler(ctx, explanation)).isError).toBe(true);
+    await addPrEntryHandler(ctx, entry("pr-shipped", 0));
+    await setThemeSummaryHandler(ctx, explanation);
+    await setThemeSummaryHandler(ctx, { ...explanation, approach: "A revised explanation." });
+    const { recapThemeSummaries } = await import("../../../db/schema/index");
+    const rows = db.select().from(recapThemeSummaries).all();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.context).toBe(explanation.context);
+    expect(rows[0]?.approach).toBe("A revised explanation.");
+    expect(rows[0]?.currentState).toBe(explanation.current_state);
+  });
+  it("persists and streams watchpoints idempotently and snapshots repository provenance", async () => {
+    const db = seed();
+    const events: import("@revv/shared").RecapStreamEvent[] = [];
+    const ctx = {
+      ...ctxFor(db),
+      emit: (event: import("@revv/shared").RecapStreamEvent) => {
+        events.push(event);
+      },
+    };
+    await addPrEntryHandler(ctx, entry("pr-shipped", 0));
+    await setThemeSummaryHandler(ctx, {
+      ...explanation,
+      worth_watching: "If disk reads fail, check the configured cache path.",
+    });
+    await setThemeSummaryHandler(ctx, {
+      ...explanation,
+      worth_watching: "If cache access fails, check filesystem permissions.",
+    });
+    const { recapPrEntries, recapThemeSummaries } = await import("../../../db/schema/index");
+    expect(db.select().from(recapPrEntries).get()?.repositoryId).toBe(BUNDLE.repoId);
+    expect(db.select().from(recapThemeSummaries).all()).toHaveLength(1);
+    expect(db.select().from(recapThemeSummaries).get()?.worthWatching).toContain(
+      "filesystem permissions",
+    );
+    expect(
+      events.filter((event) => event.type === "theme_summary").at(-1)?.data.summary.worthWatching,
+    ).toContain("filesystem permissions");
+    await setThemeSummaryHandler(ctx, explanation);
+    expect(db.select().from(recapThemeSummaries).get()?.worthWatching).toBe("");
+  });
+  it("blocks completion again when evidence introduces an unexplained topic", async () => {
+    const db = seed();
+    const ctx = ctxFor(db);
+    await setLedeHandler(ctx, { lede: "Storage is changing." });
+    await addPrEntryHandler(ctx, entry("pr-shipped", 0));
+    await setThemeSummaryHandler(ctx, explanation);
+    await addPrEntryHandler(ctx, { ...entry("pr-open", 1), theme: "retrieval" });
+    expect(recapCompletionBlocker(db, RECAP)).toContain('"retrieval"');
+  });
+});
+
 describe("recapCompletionBlocker", () => {
   it("names what's missing until the journal has a lede and an entry", async () => {
     const db = seed();
@@ -115,6 +180,8 @@ describe("recapCompletionBlocker", () => {
     await setLedeHandler(ctx, { lede: "Storage moved to disk." });
     expect(recapCompletionBlocker(db, RECAP)).toContain("no PR entries");
     await addPrEntryHandler(ctx, entry("pr-shipped", 0));
+    expect(recapCompletionBlocker(db, RECAP)).toContain("needs a complete set_theme_summary");
+    await setThemeSummaryHandler(ctx, explanation);
     expect(recapCompletionBlocker(db, RECAP)).toBeNull();
   });
 
@@ -156,6 +223,7 @@ describe("complete_recap", () => {
     const ctx = ctxFor(db, completed);
     await setLedeHandler(ctx, { lede: "Storage moved to disk." });
     await addPrEntryHandler(ctx, entry("pr-shipped", 0));
+    await setThemeSummaryHandler(ctx, explanation);
     const before = recap(db);
     const result = await completeRecapHandler(ctx, {});
     expect(result.isError).toBeUndefined();

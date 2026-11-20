@@ -16,6 +16,10 @@ const showDiff = $derived(entry.linesAdded > 0 || entry.linesRemoved > 0);
 </script>
 
 <div class="pr-row">
+  <div class="attribution">
+    <span class="author">{entry.prAuthorLogin ? `@${entry.prAuthorLogin}` : "Author unavailable"}</span>
+    <span>{entry.prState === "open" ? "Open" : "Archived"}</span>
+  </div>
   <div class="title-line">
     <span class="verb">{entry.verb}</span>
     <a class="title" href={href} data-sveltekit-preload-data="hover">{title}</a>
@@ -35,6 +39,8 @@ const showDiff = $derived(entry.linesAdded > 0 || entry.linesRemoved > 0);
 </div>
 
 <style>
+.attribution { display: flex; flex-wrap: wrap; gap: .625rem; margin-bottom: .25rem; font-size: .75rem; line-height: 1.5; color: var(--color-text-secondary); }
+.author { font-weight: 600; color: var(--color-text-primary); }
 .pr-row {
   display: flex;
   flex-direction: column;

@@ -30,6 +30,7 @@ import { onboardingRoutes } from "./routes/onboarding";
 import { prRoutes } from "./routes/prs";
 import { prBaseConflictsRoutes } from "./routes/prs-base-conflicts";
 import { prConversationRoutes } from "./routes/prs-conversation";
+import { recapFeedRoutes } from "./routes/recap-feed";
 import { recapRoutes } from "./routes/recaps";
 import { repoRoutes } from "./routes/repos";
 import { reviewRoutes } from "./routes/reviews";
@@ -132,6 +133,7 @@ const app = new Elysia()
   .use(stackReviewRoutes)
   .use(stackMergeRunRoutes)
   .use(recapRoutes)
+  .use(recapFeedRoutes)
   .use(reviewRoutes)
   .use(threadRoutes)
   .use(updateManifestRoute)

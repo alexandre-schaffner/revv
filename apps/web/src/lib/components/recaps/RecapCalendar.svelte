@@ -40,6 +40,10 @@ import RecapButton from "./RecapButton.svelte";
  */
 interface Props {
   repoId: string;
+  onOpenRecap?: ((recap: ProjectRecapSummary) => void) | undefined;
+  onOpenWindow?: ((dayKey: string) => void) | undefined;
+  onLoadMonth?: ((month: string) => void) | undefined;
+  isMonthPending?: ((month: string) => boolean) | undefined;
   period: RecapPeriod;
   /** All recaps for the repo (any period). The component filters internally. */
   recaps: ProjectRecapSummary[];
@@ -52,7 +56,18 @@ interface Props {
   onLeave?: (() => void) | undefined;
 }
 
-let { repoId, period, recaps, activeRecapId = null, initialDayKey, onLeave }: Props = $props();
+let {
+  repoId,
+  period,
+  recaps,
+  activeRecapId = null,
+  initialDayKey,
+  onLeave,
+  onOpenRecap,
+  onOpenWindow,
+  onLoadMonth,
+  isMonthPending,
+}: Props = $props();
 
 // A page left open across UTC midnight must re-paint the today ring.
 const nowKey = $derived(utcDateKey(new Date(now(60_000))));
@@ -178,20 +193,24 @@ function cellLabel(dayKey: string): string {
 $effect(() => {
   const month = viewMonth;
   const id = repoId;
-  if (id) void untrack(() => fetchRecapsForMonth(id, month));
+  if (onLoadMonth) void untrack(() => onLoadMonth?.(month));
+  else if (id) void untrack(() => fetchRecapsForMonth(id, month));
 });
 
 $effect(() => {
   const month = shiftMonth(viewMonth, -1);
   const id = repoId;
-  if (id) void untrack(() => fetchRecapsForMonth(id, month));
+  if (onLoadMonth) void untrack(() => onLoadMonth?.(month));
+  else if (id) void untrack(() => fetchRecapsForMonth(id, month));
 });
 
 // The geometry is known before the data lands, so the grid never collapses to
 // a loader — empty cells render skeleton dots in place. Keyed off the in-flight
 // flag rather than "not yet loaded", which would strand the dots forever on a
 // month whose fetch failed.
-const monthPending = $derived(getMonthRecapsLoading(repoId, viewMonth));
+const monthPending = $derived(
+  isMonthPending ? isMonthPending(viewMonth) : getMonthRecapsLoading(repoId, viewMonth),
+);
 
 function goToMonth(monthKey: string): void {
   if (monthKey > currentMonth) return;
@@ -228,12 +247,14 @@ function onCellClick(dayKey: string): void {
 function openRecap(recap: ProjectRecapSummary): void {
   onLeave?.();
   if (recap.id === activeRecapId) return;
-  void goto(`/repo/${repoId}/recaps/${recap.id}`);
+  if (onOpenRecap) onOpenRecap(recap);
+  else void goto(`/repo/${repoId}/recaps/${recap.id}`);
 }
 
 function openWindow(dayKey: string): void {
   onLeave?.();
-  void goto(windowPath(repoId, period, dayKey));
+  if (onOpenWindow) onOpenWindow(dayKey);
+  else void goto(windowPath(repoId, period, dayKey));
 }
 
 function moveFocus(dayKey: string): void {

@@ -416,6 +416,39 @@ function listInFlight(db: Db, until: string) {
 }
 
 describe("listOpenPrsAsOfWindow", () => {
+  it("applies team membership before the open-work limit, case-insensitively", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+    seedInFlight(db);
+    for (let i = 0; i < 25; i++)
+      db.insert(pullRequests)
+        .values({
+          id: `unrelated-${i}`,
+          repositoryId: REPO_ID,
+          externalId: 100 + i,
+          title: "Other work",
+          authorLogin: "bob",
+          sourceBranch: "feature",
+          targetBranch: "main",
+          url: "https://example.com",
+          createdAt: "2026-07-01T00:00:00Z",
+          updatedAt: "2026-07-03T00:00:00Z",
+          fetchedAt: "2026-07-03T00:00:00Z",
+        })
+        .run();
+    const rows = await runSvc(db, (svc) =>
+      svc.listOpenPrsAsOfWindow(REPO_ID, WINDOW_END, ["ALICE"]),
+    );
+    expect(rows.map((r) => r.pr.id).sort()).toEqual([
+      "pr-closed-after",
+      "pr-open-alice",
+      "pr-still-open",
+    ]);
+    expect(await runSvc(db, (svc) => svc.listOpenPrsAsOfWindow(REPO_ID, WINDOW_END, []))).toEqual(
+      [],
+    );
+  });
+
   it("includes a PR opened before the window that is still open", async () => {
     const db = createDb(":memory:");
     seed(db);
