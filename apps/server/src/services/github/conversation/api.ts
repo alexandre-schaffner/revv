@@ -6,6 +6,7 @@ import type {
   CiRollup,
   CodeownersFile,
   TeamOption,
+  ViewerTeam,
 } from "@revv/shared";
 import { CODEOWNERS_PATHS, parseCodeowners } from "@revv/shared";
 import { Effect } from "effect";
@@ -27,16 +28,21 @@ import { extractLogTail } from "./log-tail";
 import {
   collectAvatarUrls,
   type MappedConversation,
+  type MappedOwnership,
   mapConversation,
+  mapOwnership,
   mapRollup,
+  mapViewerTeams,
   nodesOf,
   type RawCheckRollup,
   type RawConnection,
   type RawConversation,
   type RawLabel,
+  type RawOwnership,
   type RawPage,
   type RawRollupCommits,
   type RawTimelineNode,
+  type RawViewerTeam,
   toLabel,
 } from "./map";
 import {
@@ -45,8 +51,10 @@ import {
   checksQuery,
   conversationQuery,
   MODERN_TOKENS,
+  ownershipQuery,
   TIMELINE_MAX_PAGES,
   timelinePageQuery,
+  VIEWER_TEAMS_QUERY,
 } from "./queries";
 import { runWrite } from "./writes";
 
@@ -284,6 +292,61 @@ function fetchCodeowners(
     );
 }
 
+/**
+ * The teams (`org/slug`) `login` belongs to in the repo owner's org. Empty
+ * when the owner is a user rather than an organization, or the token can't
+ * read team membership (no `read:org`, a GitHub App without the members
+ * permission, SAML): team ownership is an enhancement, never a reason to
+ * fail the page.
+ */
+function fetchViewerTeams(
+  http: GitHubHttp,
+  client: GitHubClient,
+  ref: RepoRef,
+  login: string,
+): Effect.Effect<ViewerTeam[], GitHubError> {
+  return http
+    .graphqlPartial<{
+      organization: { teams: { nodes: ReadonlyArray<RawViewerTeam> } } | null;
+    }>(client, VIEWER_TEAMS_QUERY, { org: ref.owner, login })
+    .pipe(
+      Effect.map(({ data }) => mapViewerTeams(data.organization?.teams.nodes ?? [])),
+      Effect.catchIf(
+        (e) =>
+          e instanceof GitHubApiError ||
+          e instanceof GitHubAccessDeniedError ||
+          e instanceof GitHubNotFoundError,
+        () => Effect.succeed([]),
+      ),
+    );
+}
+
+/** The reviewers, their verdicts and who asked them: the review-request header's light read. */
+function fetchOwnership(
+  http: GitHubHttp,
+  client: GitHubClient,
+  ref: RepoRef,
+  number: number,
+): Effect.Effect<MappedOwnership, GitHubError> {
+  return Effect.gen(function* () {
+    const { data } = yield* askWithFallback<RawOwnership>(http, client, ownershipQuery, {
+      owner: ref.owner,
+      repo: ref.repo,
+      number,
+    });
+    const ownership = mapOwnership(data, new Date().toISOString());
+    if (!ownership) {
+      return yield* Effect.fail(
+        new GitHubNotFoundError({
+          resource: "pull_request",
+          id: `${ref.owner}/${ref.repo}#${number}`,
+        }),
+      );
+    }
+    return ownership;
+  }).pipe(retryTransient);
+}
+
 interface RawCheckRun {
   readonly status: string;
   readonly output?: { readonly title: string | null; readonly summary: string | null } | null;
@@ -485,6 +548,8 @@ export const conversationApi = (http: GitHubHttp) => {
     fetch: onRepo(fetchConversation),
     ciRollup: onRepo(fetchCiRollup),
     codeowners: onRepo(fetchCodeowners),
+    viewerTeams: onRepo(fetchViewerTeams),
+    ownership: onRepo(fetchOwnership),
     checkDetails: onRepo(fetchCheckDetails),
     labels: onRepo(listRepoLabels),
     assignableUsers: onRepo(searchAssignableUsers),

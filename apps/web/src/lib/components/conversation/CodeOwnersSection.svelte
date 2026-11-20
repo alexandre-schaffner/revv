@@ -1,18 +1,11 @@
 <script lang="ts">
-import {
-  type CodeownersFile,
-  codeownersFor,
-  loginsMatch,
-  type ReviewerEntry,
-  type ReviewVerdict,
-  reviewerVerdict,
-} from "@revv/shared";
+import { loginsMatch, type PrConversation, type ReviewerEntry } from "@revv/shared";
 import CircleDashed from "phosphor-svelte/lib/CircleDashed";
 import UsersThree from "phosphor-svelte/lib/UsersThree";
 import { SvelteSet } from "svelte/reactivity";
 import Avatar from "$lib/components/shared/Avatar.svelte";
 import DisclosureCaret from "$lib/components/shared/DisclosureCaret.svelte";
-import { VERDICT_LABEL } from "$lib/conversation/verdict";
+import { type OwnerGroup, reviewOwnership } from "$lib/conversation/codeowners-review";
 import { gsapSlide } from "$lib/motion";
 import { getChangedPaths } from "$lib/stores/diff-files.svelte";
 import { openInDiff } from "$lib/stores/review-nav.svelte";
@@ -21,68 +14,55 @@ import VerdictGlyph from "./VerdictGlyph.svelte";
 
 // Who CODEOWNERS makes responsible for this PR's files, read from the base
 // branch's CODEOWNERS and matched against the changed files. Each owner
-// carries their review state when they're among the reviewers.
+// carries where its approval stands: a user's own verdict, or for a team,
+// the members who answered on its behalf.
 
 interface Props {
   prId: string;
-  codeowners: CodeownersFile;
-  reviewers: readonly ReviewerEntry[];
-  /** The conversation's avatars by login, for owners who aren't reviewers. */
-  avatars: Readonly<Record<string, string>>;
+  /** Renders nothing while `conversation.codeowners` is null. */
+  conversation: PrConversation;
 }
 
-let { prId, codeowners, reviewers, avatars }: Props = $props();
+let { prId, conversation }: Props = $props();
 
 /** CODEOWNERS handles needn't match a login's case. */
 const avatarsByHandle = $derived(
-  new Map(Object.entries(avatars).map(([login, content]) => [login.toLowerCase(), content])),
+  new Map(
+    Object.entries(conversation.avatars).map(([login, content]) => [login.toLowerCase(), content]),
+  ),
 );
 
-interface OwnerRow {
-  readonly owner: string;
-  readonly team: boolean;
+interface OwnerRow extends OwnerGroup {
   readonly name: string;
-  readonly files: readonly string[];
   readonly reviewer: ReviewerEntry | null;
-  readonly verdict: ReviewVerdict | null;
   readonly avatarContent: string | null;
 }
 
 const paths = $derived(getChangedPaths(prId));
-const ownersByPath = $derived(codeownersFor(codeowners.rules, paths));
+const ownership = $derived(reviewOwnership(conversation, paths));
 
-const rows = $derived.by((): OwnerRow[] => {
-  const files = new Map<string, string[]>();
-  for (const [path, owners] of ownersByPath) {
-    for (const owner of owners) files.set(owner, [...(files.get(owner) ?? []), path]);
-  }
-  return [...files]
-    .map(([owner, owned]): OwnerRow => {
-      const handle = owner.replace(/^@/, "");
-      const team = handle.includes("/");
-      const reviewer =
-        reviewers.find((r) =>
-          r.kind === "team"
-            ? team && r.combinedSlug.toLowerCase() === handle.toLowerCase()
-            : !team && loginsMatch(r.actor.login, handle),
-        ) ?? null;
-      return {
-        owner,
-        team,
-        name: reviewer?.kind === "team" ? reviewer.name : handle,
-        files: owned.sort(),
-        reviewer,
-        verdict: reviewer ? reviewerVerdict(reviewer) : null,
-        avatarContent:
-          (reviewer?.kind === "user" ? reviewer.actor.avatarContent : null) ??
-          avatarsByHandle.get(handle.toLowerCase()) ??
-          null,
-      };
-    })
-    .sort((a, b) => b.files.length - a.files.length || a.name.localeCompare(b.name));
-});
+const rows = $derived.by((): OwnerRow[] =>
+  ownership.groups.map((group): OwnerRow => {
+    const handle = group.handle.toLowerCase();
+    const reviewer =
+      conversation.reviewers.find((r) =>
+        r.kind === "team"
+          ? group.team && r.combinedSlug.toLowerCase() === handle
+          : !group.team && loginsMatch(r.actor.login, handle),
+      ) ?? null;
+    return {
+      ...group,
+      name: reviewer?.kind === "team" ? reviewer.name : group.handle,
+      reviewer,
+      avatarContent:
+        (reviewer?.kind === "user" ? reviewer.actor.avatarContent : null) ??
+        avatarsByHandle.get(handle) ??
+        null,
+    };
+  }),
+);
 
-const unowned = $derived([...ownersByPath.values()].filter((owners) => owners.length === 0).length);
+const unowned = $derived(paths.length - new Set(ownership.groups.flatMap((g) => g.files)).size);
 const open = new SvelteSet<string>();
 
 function toggle(owner: string): void {
@@ -90,13 +70,27 @@ function toggle(owner: string): void {
   else open.add(owner);
 }
 
+/** A request is open: the user still requested, or the team not yet answered for. */
+function awaiting(row: OwnerRow): boolean {
+  return row.reviewer?.kind === "team" || (row.reviewer?.kind === "user" && row.reviewer.requested);
+}
+
 function stateLabel(row: OwnerRow): string {
-  if (!row.reviewer) return "Not requested";
-  return row.verdict ? VERDICT_LABEL[row.verdict] : "Awaiting review";
+  const by = (logins: readonly string[]) =>
+    row.team && logins.length > 0 ? ` by @${logins.join(", @")}` : "";
+  switch (row.status) {
+    case "approved":
+      return `Approved${by(row.approvedBy)}`;
+    case "changes_requested":
+      return `Requested changes${by(row.changesRequestedBy)}`;
+    case "pending":
+      return awaiting(row) ? "Awaiting review" : "Not requested";
+  }
 }
 </script>
 
-{#if paths.length > 0 && (rows.length > 0 || unowned > 0)}
+{#if conversation.codeowners && paths.length > 0 && (rows.length > 0 || unowned > 0)}
+	{@const codeowners = conversation.codeowners}
 	<SidebarSection id="side-codeowners" title="Code owners" align="baseline">
 		{#snippet aside()}
 			<span class="co-source" title="Read from {codeowners.path} on {codeowners.ref}">{codeowners.path}</span>
@@ -119,11 +113,14 @@ function stateLabel(row: OwnerRow): string {
 							<Avatar name={row.name} src={row.avatarContent} size={18} />
 						{/if}
 						<span class="co-name">{row.name}</span>
+						{#if row.mine}
+							<span class="co-you" title="You or one of your teams">you</span>
+						{/if}
 						<span class="co-count">{row.files.length} {row.files.length === 1 ? 'file' : 'files'}</span>
 						<span class="co-state" title={stateLabel(row)}>
-							{#if row.verdict}
-								<VerdictGlyph verdict={row.verdict} size={13} />
-							{:else if row.reviewer}
+							{#if row.status !== 'pending'}
+								<VerdictGlyph verdict={row.status} size={13} />
+							{:else if awaiting(row)}
 								<CircleDashed size={13} weight="bold" class="co-awaiting" />
 							{/if}
 						</span>
@@ -215,6 +212,17 @@ function stateLabel(row: OwnerRow): string {
 		font-size: 0.8125rem;
 		font-weight: 500;
 		color: var(--color-text-primary);
+	}
+
+	.co-you {
+		flex-shrink: 0;
+		padding: 0 5px;
+		border: 1px solid var(--color-accent-chip-border);
+		border-radius: 999px;
+		background: var(--color-accent-chip-bg);
+		color: var(--color-accent-chip-fg);
+		font-size: 0.625rem;
+		line-height: 14px;
 	}
 
 	.co-count {

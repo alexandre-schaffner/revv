@@ -13,19 +13,26 @@ import type {
   CheckDetails,
   CiAccess,
   CiRollup,
+  CodeownersFile,
   ConversationWrite,
   ConversationWriteResult,
   PrConversation,
   PrConversationResponse,
   PrLabel,
+  PrOwnership,
+  PrOwnershipResponse,
+  ReviewerEntry,
   ReviewerOptions,
+  ViewerTeam,
 } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
 import { type DbError, type GitHubError, isGitHubUnreachable } from "../domain/errors";
 import { logError } from "../logger";
 import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { CacheService } from "./Cache";
+import { GitHubAccounts } from "./github/accounts";
 import { AvatarCache } from "./github/avatars";
+import type { MappedConversation } from "./github/conversation/map";
 import { GitHubGateway } from "./github/gateway";
 import { type PrContextBasic, type PrContextError, PrContextService } from "./PrContext";
 import { Realtime } from "./Realtime";
@@ -41,6 +48,11 @@ const DETAILS_NS = "pr-check-details";
 const CODEOWNERS_NS = "pr-codeowners";
 /** CODEOWNERS rarely moves; a base branch's copy is re-read at most this often. */
 const CODEOWNERS_TTL_MS = 10 * 60 * 1000;
+const OWNERSHIP_NS = "pr-ownership";
+// v2: each team carries its member count.
+const VIEWER_TEAMS_NS = "viewer-teams-v2";
+/** Team membership changes rarely; one org's answer serves every PR in it for this long. */
+const VIEWER_TEAMS_TTL_MS = 60 * 60 * 1000;
 
 type ConversationError = GitHubError | PrContextError | DbError;
 
@@ -54,6 +66,12 @@ export class PrConversationService extends Context.Service<
      * (`stale: true`) when GitHub is unreachable or rate-limited.
      */
     readonly load: (prId: string) => Effect.Effect<PrConversationResponse, ConversationError>;
+    /**
+     * Who asked the viewer to review, and which CODEOWNERS rules make them
+     * responsible: a light read that lands with the diff. Falls back to the
+     * cached snapshot (`stale: true`) when GitHub is unreachable.
+     */
+    readonly ownership: (prId: string) => Effect.Effect<PrOwnershipResponse, ConversationError>;
     /** The head commit's CI rollup only; cheap enough to poll. */
     readonly checks: (
       prId: string,
@@ -102,10 +120,34 @@ function loginsOf(conversation: PrConversation): Set<string> {
   return logins;
 }
 
+/** A snapshot cached by an older build may predate these fields. */
+type SnapshotOnDisk = Omit<PrConversation, "viewerTeams" | "reviewers"> & {
+  readonly viewerTeams?: ReadonlyArray<ViewerTeam | string>;
+  readonly reviewers: ReadonlyArray<
+    | Extract<ReviewerEntry, { kind: "team" }>
+    | (Omit<Extract<ReviewerEntry, { kind: "user" }>, "onBehalfOf"> & {
+        readonly onBehalfOf?: readonly string[];
+      })
+  >;
+};
+
+function upgradeSnapshot(snapshot: SnapshotOnDisk): PrConversation {
+  return {
+    ...snapshot,
+    viewerTeams: (snapshot.viewerTeams ?? []).map((t) =>
+      typeof t === "string" ? { combinedSlug: t, memberCount: 0 } : t,
+    ),
+    reviewers: snapshot.reviewers.map(
+      (r): ReviewerEntry => (r.kind === "team" ? r : { ...r, onBehalfOf: r.onBehalfOf ?? [] }),
+    ),
+  };
+}
+
 export const PrConversationServiceLive = Layer.effect(
   PrConversationService,
   Effect.gen(function* () {
     const prContext = yield* PrContextService;
+    const accounts = yield* GitHubAccounts;
     const github = yield* GitHubGateway;
     const cache = yield* CacheService;
     const avatars = yield* AvatarCache;
@@ -134,6 +176,35 @@ export const PrConversationServiceLive = Layer.effect(
         { ttlMs: CODEOWNERS_TTL_MS },
       );
 
+    /** The viewer's teams in the repo's org; one org's answer serves every PR in it for an hour. */
+    const teamsOf = (ctx: PrContextBasic, login: string) =>
+      cache.getOrFetch(
+        VIEWER_TEAMS_NS,
+        `${ctx.repo.githubHost}:${ctx.repo.fullName.split("/")[0]}:${login}`.toLowerCase(),
+        () => github.conversation.viewerTeams(ctx.client, ctx.repo.fullName, login),
+        { ttlMs: VIEWER_TEAMS_TTL_MS },
+      );
+
+    /**
+     * `read`, the base branch's CODEOWNERS and the viewer's teams, all at
+     * once: the account's stored login lets the teams query start without
+     * waiting for `read` to name the viewer. An account with no stored login
+     * asks for the teams once `read` answers.
+     */
+    const withOwnersAndTeams = <A extends { readonly viewerLogin: string }, E>(
+      ctx: PrContextBasic,
+      read: Effect.Effect<A, E>,
+    ) =>
+      Effect.gen(function* () {
+        const login = yield* accounts.viewerLogin(ctx.accountId);
+        const [answer, codeowners, early] = yield* Effect.all(
+          [read, codeownersFor(ctx), login ? teamsOf(ctx, login) : Effect.succeed(null)],
+          { concurrency: 3 },
+        );
+        const viewerTeams = early ?? (yield* teamsOf(ctx, answer.viewerLogin));
+        return { answer, codeowners, viewerTeams };
+      });
+
     /** Fill in the avatars `remote_users` holds for everyone the conversation names. */
     const withAvatars = (host: string, conversation: PrConversation) =>
       Effect.map(avatars.contents(host, loginsOf(conversation)), (known) => ({
@@ -143,16 +214,19 @@ export const PrConversationServiceLive = Layer.effect(
 
     const fetchFresh = (ctx: PrContextBasic, prId: string) =>
       Effect.gen(function* () {
-        const [{ conversation: mapped, avatarUrls }, codeowners] = yield* Effect.all(
-          [
-            github.conversation.fetch(ctx.client, ctx.repo.fullName, ctx.pr.externalId, prId),
-            codeownersFor(ctx),
-          ],
-          { concurrency: 2 },
+        const { answer, codeowners, viewerTeams } = yield* withOwnersAndTeams(
+          ctx,
+          github.conversation.fetch(ctx.client, ctx.repo.fullName, ctx.pr.externalId, prId).pipe(
+            Effect.map((fetched) => ({
+              ...fetched,
+              viewerLogin: fetched.conversation.viewerLogin,
+            })),
+          ),
         );
+        const { conversation: mapped, avatarUrls } = answer;
         // Cached without images: they live in `remote_users`, and every read
         // fills them in from there.
-        const snapshot: PrConversation = { ...mapped, codeowners, avatars: {} };
+        const snapshot: PrConversation = { ...mapped, codeowners, viewerTeams, avatars: {} };
         yield* cache.set(CACHE_NS, prId, snapshot, { ttlMs: CACHE_TTL_MS });
         const { conversation, known } = yield* withAvatars(ctx.repo.githubHost, snapshot);
         yield* warmAvatars(ctx.repo.githubHost, avatarUrls, known);
@@ -161,9 +235,9 @@ export const PrConversationServiceLive = Layer.effect(
 
     const readCached = (prId: string, host: string) =>
       Effect.gen(function* () {
-        const snapshot = yield* cache.get<PrConversation>(CACHE_NS, prId);
+        const snapshot = yield* cache.get<SnapshotOnDisk>(CACHE_NS, prId);
         if (!snapshot) return null;
-        return (yield* withAvatars(host, snapshot)).conversation;
+        return (yield* withAvatars(host, upgradeSnapshot(snapshot))).conversation;
       });
 
     const cached = (prId: string) =>
@@ -181,6 +255,52 @@ export const PrConversationServiceLive = Layer.effect(
             Effect.flatMap(readCached(prId, ctx.repo.githubHost), (snapshot) =>
               snapshot
                 ? Effect.succeed<PrConversationResponse>({ conversation: snapshot, stale: true })
+                : Effect.fail(err),
+            ),
+          ),
+        );
+      });
+
+    const fetchOwnership = (ctx: PrContextBasic, prId: string) =>
+      Effect.gen(function* () {
+        const { answer, codeowners, viewerTeams } = yield* withOwnersAndTeams(
+          ctx,
+          github.conversation.ownership(ctx.client, ctx.repo.fullName, ctx.pr.externalId),
+        );
+        const ownership: PrOwnership = { ...answer, codeowners, viewerTeams };
+        yield* cache.set(OWNERSHIP_NS, prId, ownership, { ttlMs: CACHE_TTL_MS });
+        return ownership;
+      });
+
+    /** The last ownership snapshot, or the conversation snapshot it is a part of. */
+    const cachedOwnership = (prId: string) =>
+      Effect.gen(function* () {
+        const own = yield* cache.get<PrOwnership>(OWNERSHIP_NS, prId);
+        if (own) return own;
+        const snapshot = yield* cache.get<SnapshotOnDisk>(CACHE_NS, prId);
+        return snapshot ? upgradeSnapshot(snapshot) : null;
+      });
+
+    const ownership = (prId: string) =>
+      Effect.gen(function* () {
+        const ctx = yield* prContext.forPr(prId);
+        return yield* fetchOwnership(ctx, prId).pipe(
+          Effect.map((own): PrOwnershipResponse => ({ ownership: own, stale: false })),
+          Effect.catchIf(isGitHubUnreachable, (err) =>
+            Effect.flatMap(cachedOwnership(prId), (snapshot) =>
+              snapshot
+                ? Effect.succeed<PrOwnershipResponse>({
+                    ownership: {
+                      viewerLogin: snapshot.viewerLogin,
+                      viewerTeams: snapshot.viewerTeams,
+                      author: snapshot.author,
+                      reviewers: snapshot.reviewers,
+                      codeowners: snapshot.codeowners,
+                      timeline: snapshot.timeline.filter((t) => t.kind === "review_requested"),
+                      fetchedAt: snapshot.fetchedAt,
+                    },
+                    stale: true,
+                  })
                 : Effect.fail(err),
             ),
           ),
@@ -308,6 +428,7 @@ export const PrConversationServiceLive = Layer.effect(
     return {
       cached,
       load,
+      ownership,
       checks,
       checkDetails,
       write,

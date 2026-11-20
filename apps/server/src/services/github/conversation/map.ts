@@ -10,10 +10,12 @@ import type {
   LinkedIssue,
   PrConversation,
   PrLabel,
+  PrOwnership,
   ReviewDecision,
   ReviewerEntry,
   ReviewVerdict,
   TimelineItem,
+  ViewerTeam,
 } from "@revv/shared";
 
 // Raw GraphQL shapes: only the fields the mapper reads.
@@ -36,6 +38,8 @@ interface RawReview {
   readonly state: string;
   readonly submittedAt: string | null;
   readonly author: RawActor | null;
+  /** Absent on hosts that predate it, and on the legacy `reviews` list. */
+  readonly onBehalfOf?: RawConnection<{ readonly combinedSlug: string }> | null;
 }
 
 export interface RawConnection<N> {
@@ -587,18 +591,32 @@ function toEventItem(node: RawEventNode): TimelineItem | null {
   }
 }
 
-function mapReviewers(pr: RawPullRequest): ReviewerEntry[] {
+type RawReviewers = Pick<
+  RawPullRequest,
+  "author" | "reviewRequests" | "latestOpinionatedReviews" | "latestReviews" | "reviews"
+>;
+
+function mapReviewers(pr: RawReviewers): ReviewerEntry[] {
   // Latest verdict per login. `latestOpinionatedReviews` wins over a later
   // plain comment (GitHub's own sidebar does the same: an approval followed
   // by a comment still reads as an approval).
-  const verdicts = new Map<string, { verdict: ReviewVerdict; at: string | null; raw: RawActor }>();
+  const verdicts = new Map<
+    string,
+    { verdict: ReviewVerdict; at: string | null; raw: RawActor; onBehalfOf: string[] }
+  >();
+  const teamsOf = (review: RawReview) => nodesOf(review.onBehalfOf).map((t) => t.combinedSlug);
   const record = (reviews: RawReview[], overwrite: boolean) => {
     for (const review of reviews) {
       const verdict = toVerdict(review.state);
       if (!verdict || !review.author) continue;
       const login = review.author.login;
       if (!overwrite && verdicts.has(login)) continue;
-      verdicts.set(login, { verdict, at: review.submittedAt, raw: review.author });
+      verdicts.set(login, {
+        verdict,
+        at: review.submittedAt,
+        raw: review.author,
+        onBehalfOf: teamsOf(review),
+      });
     }
   };
   if (pr.latestOpinionatedReviews || pr.latestReviews) {
@@ -615,7 +633,12 @@ function mapReviewers(pr: RawPullRequest): ReviewerEntry[] {
       const priorOpinionated =
         prior?.verdict === "approved" || prior?.verdict === "changes_requested";
       if (!prior || opinionated || !priorOpinionated) {
-        verdicts.set(review.author.login, { verdict, at: review.submittedAt, raw: review.author });
+        verdicts.set(review.author.login, {
+          verdict,
+          at: review.submittedAt,
+          raw: review.author,
+          onBehalfOf: teamsOf(review),
+        });
       }
     }
   }
@@ -645,10 +668,11 @@ function mapReviewers(pr: RawPullRequest): ReviewerEntry[] {
       asCodeOwner: request.asCodeOwner === true,
       verdict: prior?.verdict ?? null,
       verdictAt: prior?.at ?? null,
+      onBehalfOf: prior?.onBehalfOf ?? [],
     });
   }
   const authorLogin = pr.author?.login;
-  for (const [login, { verdict, at, raw }] of verdicts) {
+  for (const [login, { verdict, at, raw, onBehalfOf }] of verdicts) {
     if (seen.has(login) || login === authorLogin) continue;
     entries.push({
       kind: "user",
@@ -657,6 +681,7 @@ function mapReviewers(pr: RawPullRequest): ReviewerEntry[] {
       asCodeOwner: false,
       verdict,
       verdictAt: at,
+      onBehalfOf,
     });
   }
   return entries;
@@ -665,10 +690,66 @@ function mapReviewers(pr: RawPullRequest): ReviewerEntry[] {
 const WRITE_PERMISSIONS = new Set(["ADMIN", "MAINTAIN", "WRITE"]);
 
 /**
- * What GitHub's conversation query answers. CODEOWNERS comes from its own
- * query and avatars from the local cache; the service adds both.
+ * What GitHub's conversation query answers. CODEOWNERS and the viewer's
+ * teams come from their own queries and avatars from the local cache; the
+ * service adds them.
  */
-export type MappedConversation = Omit<PrConversation, "codeowners" | "avatars">;
+export type MappedConversation = Omit<PrConversation, "codeowners" | "avatars" | "viewerTeams">;
+
+interface RawTeamRef {
+  readonly combinedSlug: string;
+  readonly members: { readonly totalCount: number } | null;
+}
+
+export type RawViewerTeam =
+  | (RawTeamRef & { readonly ancestors?: RawConnection<RawTeamRef> | null })
+  | null;
+
+/** The viewer's teams and every team above them, once each. */
+export function mapViewerTeams(nodes: ReadonlyArray<RawViewerTeam>): ViewerTeam[] {
+  const teams = new Map<string, ViewerTeam>();
+  const add = (team: RawTeamRef) => {
+    const key = team.combinedSlug.toLowerCase();
+    if (!teams.has(key)) {
+      teams.set(key, {
+        combinedSlug: team.combinedSlug,
+        memberCount: team.members?.totalCount ?? 0,
+      });
+    }
+  };
+  for (const team of nodes) {
+    if (!team) continue;
+    add(team);
+    for (const ancestor of nodesOf(team.ancestors)) add(ancestor);
+  }
+  return [...teams.values()];
+}
+
+/** What the ownership query answers: the reviewers, plus who asked them. */
+export interface RawOwnership {
+  readonly viewer: { readonly login: string };
+  readonly repository: {
+    readonly pullRequest:
+      | (RawReviewers & { readonly timelineItems: RawConnection<RawTimelineNode> | null })
+      | null;
+  } | null;
+}
+
+export type MappedOwnership = Omit<PrOwnership, "codeowners" | "viewerTeams">;
+
+export function mapOwnership(raw: RawOwnership, fetchedAt: string): MappedOwnership | null {
+  const pr = raw.repository?.pullRequest;
+  if (!pr) return null;
+  return {
+    viewerLogin: raw.viewer.login,
+    author: toActor(pr.author),
+    reviewers: mapReviewers(pr),
+    timeline: nodesOf(pr.timelineItems)
+      .map(toTimelineItem)
+      .filter((item): item is TimelineItem => item?.kind === "review_requested"),
+    fetchedAt,
+  };
+}
 
 /**
  * `olderTimeline` is the pages read before the query's own (newest) page,

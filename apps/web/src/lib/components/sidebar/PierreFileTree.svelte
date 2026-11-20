@@ -15,6 +15,11 @@ interface Props {
   statusByPath: Map<string, GitStatusEntry["status"]>;
   /** Line-change stats for the row badge; only changed files have entries. */
   statsMap?: Map<string, { additions: number; deletions: number }>;
+  /** Files in the code-owner scope, with the hover text naming the rule
+   *  that puts them there. Each gets a badge left of its line counts. */
+  ownedTitles?: Map<string, string>;
+  /** The badge's text: "you" for the viewer's own groups. */
+  ownedBadge?: string;
   /** Currently focused file in the diff viewer (for highlighting). */
   activePath: string | null;
   /** User clicked a *file* (directories are handled internally by the tree). */
@@ -39,6 +44,8 @@ let {
   paths,
   statusByPath,
   statsMap,
+  ownedTitles,
+  ownedBadge = "you",
   activePath,
   onSelect,
   shouldFocus = false,
@@ -119,6 +126,17 @@ $effect(() => {
       tree.setGitStatus(buildGitStatus(statusByPath));
     }
   });
+});
+
+// Same ref pattern as `statsRef`: `renderRowDecoration` reads the current
+// owner badges without a tree rebuild, and a git-status poke repaints rows.
+let ownedRef: Map<string, string> = new Map();
+let ownedBadgeRef = "you";
+
+$effect(() => {
+  ownedRef = ownedTitles ?? new Map();
+  ownedBadgeRef = ownedBadge;
+  untrack(() => tree?.setGitStatus(buildGitStatus(statusByPath)));
 });
 
 let host: HTMLDivElement;
@@ -220,12 +238,32 @@ $effect(() => {
 							margin-inline-start: auto;
 							padding-inline-start: 6px;
 							min-width: 58px;
+							display: flex;
+							align-items: center;
+						}
+						/* CODEOWNERS "you" badge: the only decoration span with
+						 * text. \`order: -1\` sits it before the \`-D\` pseudo,
+						 * leaving the LOC counts at the row's trailing edge. */
+						button[data-type='item'] > [data-item-section='decoration'] > span:not(:empty) {
+							order: -1;
+							margin-inline-end: 6px;
+							padding: 0 5px;
+							border: 1px solid var(--color-accent-chip-border);
+							border-radius: 999px;
+							background: var(--color-accent-chip-bg);
+							color: var(--color-accent-chip-fg);
+							font-size: 9px;
+							line-height: 13px;
 						}
 					`,
         // The cell has to exist to host the `::before`/`::after` stats that
         // `syncStatsStyle()` fills in.
+        // A file in the code-owner scope puts its badge text in the span
+        // itself; hovering it names the matching rule and line.
         renderRowDecoration: (ctx) => {
           if (ctx.item.kind !== "file") return null;
+          const owned = ownedRef.get(ctx.item.path);
+          if (owned) return { text: ownedBadgeRef, title: owned };
           const stats = statsRef.get(ctx.item.path);
           if (!stats || (stats.additions === 0 && stats.deletions === 0)) {
             return null;

@@ -1,4 +1,4 @@
-import { onDestroy } from "svelte";
+import { onDestroy, untrack } from "svelte";
 import { isTextEditingKeyTarget } from "$lib/utils";
 import { fuzzyScore } from "$lib/utils/fuzzy";
 import {
@@ -14,10 +14,12 @@ import {
 // take over a binding for as long as it is mounted.
 let registered = $state.raw<readonly Command[]>([]);
 
+// The registry's own reads are untracked: a caller registering from an
+// `$effect` would otherwise depend on the list it writes, and re-run forever.
 export function registerCommands(commands: readonly Command[]): () => void {
-  registered = [...registered, ...commands];
+  registered = [...untrack(() => registered), ...commands];
   return () => {
-    registered = registered.filter((cmd) => !commands.includes(cmd));
+    registered = untrack(() => registered).filter((cmd) => !commands.includes(cmd));
   };
 }
 

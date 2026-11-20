@@ -3,7 +3,10 @@ import {
   checkBucket,
   collectAvatarUrls,
   mapConversation,
+  mapOwnership,
+  mapViewerTeams,
   type RawConversation,
+  type RawOwnership,
   type RawTimelineNode,
 } from "./map";
 
@@ -57,6 +60,7 @@ function rawConversation(overrides: Record<string, unknown> = {}): RawConversati
               state: "CHANGES_REQUESTED",
               submittedAt: "2026-10-02T00:00:00Z",
               author: user("dave"),
+              onBehalfOf: { nodes: [{ combinedSlug: "o/web" }] },
             },
           ],
         },
@@ -217,6 +221,14 @@ describe("mapConversation", () => {
     expect(carol?.kind === "user" && carol.verdict).toBeNull();
   });
 
+  test("keeps the teams a verdict was given on behalf of", () => {
+    const reviewers = conversation?.reviewers ?? [];
+    const dave = reviewers.find((r) => r.kind === "user" && r.actor.login === "dave");
+    expect(dave?.kind === "user" && dave.onBehalfOf).toEqual(["o/web"]);
+    const erin = reviewers.find((r) => r.kind === "user" && r.actor.login === "erin");
+    expect(erin?.kind === "user" && erin.onBehalfOf).toEqual([]);
+  });
+
   test("maps timeline items and drops pending reviews and unknown nodes", () => {
     const kinds = conversation?.timeline.map((t) => t.kind);
     expect(kinds).toEqual(["commit", "comment", "force_pushed", "labeled"]);
@@ -287,6 +299,63 @@ describe("mapConversation", () => {
       repository: { viewerPermission: null, pullRequest: null },
     };
     expect(mapConversation(raw, [], "pr-1", false, "now")).toBeNull();
+  });
+});
+
+describe("mapOwnership", () => {
+  test("keeps the reviewers and only who asked whom", () => {
+    const conversation = rawConversation();
+    const pr = conversation.repository?.pullRequest;
+    if (!pr) throw new Error("fixture has no PR");
+    const raw: RawOwnership = {
+      viewer: conversation.viewer,
+      repository: {
+        pullRequest: {
+          ...pr,
+          timelineItems: {
+            nodes: [
+              {
+                __typename: "ReviewRequestedEvent",
+                id: "rr1",
+                createdAt: "2026-10-02T00:00:00Z",
+                actor: user("alice"),
+                requestedReviewer: { __typename: "Team", combinedSlug: "o/core" },
+              },
+              ...(pr.timelineItems?.nodes ?? []),
+            ] as RawTimelineNode[],
+          },
+        },
+      },
+    };
+    const own = mapOwnership(raw, "now");
+    expect(own?.viewerLogin).toBe("me");
+    expect(own?.reviewers.length).toBe(
+      mapConversation(conversation, [], "pr-1", false, "now")?.reviewers.length,
+    );
+    expect(own?.timeline.map((t) => t.kind)).toEqual(["review_requested"]);
+    expect(own?.fetchedAt).toBe("now");
+  });
+
+  test("answers null when the PR isn't visible", () => {
+    expect(mapOwnership({ viewer: { login: "me" }, repository: null }, "now")).toBeNull();
+  });
+});
+
+describe("mapViewerTeams", () => {
+  test("counts the teams above the viewer's as theirs, once each", () => {
+    const team = (combinedSlug: string, totalCount: number) => ({
+      combinedSlug,
+      members: { totalCount },
+    });
+    const teams = mapViewerTeams([
+      { ...team("o/rnd", 4), ancestors: { nodes: [team("o/devs", 14)] } },
+      { ...team("o/Devs", 14), ancestors: { nodes: [] } },
+      null,
+    ]);
+    expect(teams).toEqual([
+      { combinedSlug: "o/rnd", memberCount: 4 },
+      { combinedSlug: "o/devs", memberCount: 14 },
+    ]);
   });
 });
 

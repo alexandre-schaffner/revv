@@ -2,7 +2,7 @@
 // scrolling a pane to an anchor. Each pane registers its scroll container
 // with `use:scrollPane`, which also keeps the pane's scroll position per PR.
 
-import { tick } from "svelte";
+import { tick, untrack } from "svelte";
 import type { Action } from "svelte/action";
 import { pulseHighlight } from "$lib/motion";
 import { getLoadedFiles } from "./diff-files.svelte";
@@ -88,9 +88,12 @@ export const scrollPane: Action<HTMLElement, ScrollPaneParams> = (node, params) 
   void tick().then(restore);
   node.addEventListener("scroll", onScroll);
   return {
+    // Svelte calls `update` from an effect; untracked, so the `roots` and
+    // scroll-position reads in `restore` don't make that effect re-run on
+    // the `roots` write that follows, which looped without end.
     update(next: ScrollPaneParams) {
       current = next;
-      restore();
+      untrack(restore);
     },
     destroy() {
       node.removeEventListener("scroll", onScroll);

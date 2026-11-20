@@ -3,8 +3,8 @@ import Check from "phosphor-svelte/lib/Check";
 import type { Snippet } from "svelte";
 
 // One checklist row in a filter popover: check slot, an 18px leading mark
-// (avatar, team glyph, color swatch), the label, and an optional trailing
-// count.
+// (avatar, team glyph, color swatch), the label, an optional trailing count,
+// and an optional trailing mark (a status glyph).
 
 interface Props {
   checked: boolean;
@@ -14,9 +14,10 @@ interface Props {
   count?: number | undefined;
   onclick: () => void;
   leading: Snippet;
+  trailing?: Snippet | undefined;
 }
 
-let { checked, label, title, count, onclick, leading }: Props = $props();
+let { checked, label, title, count, onclick, leading, trailing }: Props = $props();
 </script>
 
 <button
@@ -37,12 +38,18 @@ let { checked, label, title, count, onclick, leading }: Props = $props();
 	{#if count !== undefined}
 		<span class="count">{count}</span>
 	{/if}
+	{#if trailing}
+		<span class="trailing">{@render trailing()}</span>
+	{/if}
 </button>
 
 <style>
 	.filter-option {
 		display: grid;
 		grid-template-columns: 14px 18px minmax(0, 1fr) auto;
+		/* An optional trailing mark takes a further column on the same row. */
+		grid-auto-flow: column;
+		grid-auto-columns: auto;
 		align-items: center;
 		gap: 7px;
 		width: 100%;
@@ -91,5 +98,10 @@ let { checked, label, title, count, onclick, leading }: Props = $props();
 		font-size: 10px;
 		font-variant-numeric: tabular-nums;
 		text-align: center;
+	}
+
+	.trailing {
+		display: inline-flex;
+		align-items: center;
 	}
 </style>

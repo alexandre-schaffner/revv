@@ -4,7 +4,8 @@ import type { Snippet } from "svelte";
 import * as Popover from "$lib/components/ui/popover";
 
 // The body of a checklist filter popover: a title with an optional Clear, a
-// search field, and one scroll region for every section below it. Shared by
+// search field (when given a placeholder), and one scroll region for every
+// section below it. Shared by
 // the sidebar's creator filter and the Conversation tab's pickers so both
 // read as the same control.
 
@@ -12,8 +13,9 @@ interface Props {
   title: string;
   /** Shown when given; clears the selection. */
   onclear?: (() => void) | undefined;
-  query: string;
-  placeholder: string;
+  query?: string;
+  /** Shows the search field; a list short enough to scan goes without one. */
+  placeholder?: string | undefined;
   align?: "start" | "center" | "end";
   children: Snippet;
 }
@@ -35,17 +37,19 @@ let {
 			<button type="button" class="popover-clear" onclick={onclear}>Clear</button>
 		{/if}
 	</div>
-	<label class="filter-search">
-		<MagnifyingGlass size={12} aria-hidden="true" />
-		<input
-			bind:value={query}
-			type="search"
-			{placeholder}
-			aria-label={placeholder}
-			spellcheck="false"
-			autocomplete="off"
-		/>
-	</label>
+	{#if placeholder}
+		<label class="filter-search">
+			<MagnifyingGlass size={12} aria-hidden="true" />
+			<input
+				bind:value={query}
+				type="search"
+				{placeholder}
+				aria-label={placeholder}
+				spellcheck="false"
+				autocomplete="off"
+			/>
+		</label>
+	{/if}
 	<!-- One scroll region for every section: scrolling carries past the first
 	     section and on through the rest instead of trapping inside one list. -->
 	<div class="filter-scroll">

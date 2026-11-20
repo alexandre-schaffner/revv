@@ -8,6 +8,7 @@
 import { sameGithubHost } from "@revv/shared";
 import { goto } from "$app/navigation";
 import { reset as resetChat } from "$lib/chat/turn.svelte";
+import { reset as resetOwnership } from "$lib/conversation/ownership.svelte";
 import { reset as resetHunkScan } from "$lib/hunk-scan/store.svelte";
 import { reset as resetRecapFeed } from "$lib/recaps/feed.svelte";
 import { reset as resetRecaps } from "$lib/recaps/store.svelte";
@@ -89,6 +90,7 @@ function resetAccountStores(): void {
   resetHunkScan();
   resetChat();
   resetConversation();
+  resetOwnership();
   resetRecaps();
   resetRecapFeed();
   resetRecapStream();

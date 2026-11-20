@@ -1,4 +1,5 @@
 import { onDestroy, untrack } from "svelte";
+import { loadOwnership } from "$lib/conversation/ownership.svelte";
 import { ensureHunkScan } from "$lib/hunk-scan/store.svelte";
 import { getToken } from "$lib/session/token.svelte";
 import { loadConversation } from "$lib/stores/conversation.svelte";
@@ -48,6 +49,7 @@ export function useOpenReview(getPrId: () => string | null): void {
       );
       void loadReviewFiles(id, session);
       void loadConversation(id);
+      loadOwnership(id);
     });
   });
   onDestroy(release);

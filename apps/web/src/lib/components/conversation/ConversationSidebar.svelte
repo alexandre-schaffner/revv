@@ -225,12 +225,7 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 	</SidebarSection>
 
 	{#if conversation.codeowners}
-		<CodeOwnersSection
-			{prId}
-			codeowners={conversation.codeowners}
-			reviewers={conversation.reviewers}
-			avatars={conversation.avatars}
-		/>
+		<CodeOwnersSection {prId} {conversation} />
 	{/if}
 
 	<SidebarSection id="side-assignees" title="Assignees">

@@ -38,6 +38,13 @@ export type ReviewerEntry =
       readonly asCodeOwner: boolean;
       readonly verdict: ReviewVerdict | null;
       readonly verdictAt: string | null;
+      /**
+       * Teams (`org/slug`) their latest verdict was given on behalf of. A
+       * member's review satisfies a team's request, and GitHub then drops
+       * the team from the requested reviewers: this is the only trace of
+       * which member answered for which team. Empty on hosts that predate it.
+       */
+      readonly onBehalfOf: readonly string[];
     }
   | {
       readonly kind: "team";
@@ -291,6 +298,12 @@ export interface PrConversation {
   readonly isDraft: boolean;
   readonly reviewDecision: ReviewDecision | null;
   readonly viewerLogin: string;
+  /**
+   * Teams the viewer belongs to in the repository's org, for matching
+   * CODEOWNERS team owners and team review requests. Empty when the repo
+   * isn't owned by an org, or the token can't read team membership.
+   */
+  readonly viewerTeams: readonly ViewerTeam[];
   /** May edit the PR (title, body, reviewers, labels, assignees). */
   readonly viewerCanUpdate: boolean;
   /** Has write access to the repo: may re-run workflows. */
@@ -320,6 +333,31 @@ export interface PrConversation {
    */
   readonly avatars: Readonly<Record<string, string>>;
   readonly fetchedAt: string;
+}
+
+/** A team the viewer belongs to. */
+export interface ViewerTeam {
+  /** `org/slug`. */
+  readonly combinedSlug: string;
+  /** How many people are on it: the smaller the team, the narrower its ownership. */
+  readonly memberCount: number;
+}
+
+/**
+ * What explains a review request, without the rest of the conversation:
+ * served by `GET /api/prs/:id/ownership`, a query light enough to land with
+ * the diff. `timeline` holds only `review_requested` events (who asked whom).
+ */
+export type PrOwnership = Pick<
+  PrConversation,
+  "viewerLogin" | "viewerTeams" | "author" | "reviewers" | "codeowners" | "timeline" | "fetchedAt"
+>;
+
+/** `GET /api/prs/:id/ownership`. */
+export interface PrOwnershipResponse {
+  readonly ownership: PrOwnership;
+  /** Served from the snapshot cache because GitHub couldn't be reached. */
+  readonly stale: boolean;
 }
 
 export function hydrateConversationAvatars(conversation: PrConversation): PrConversation {

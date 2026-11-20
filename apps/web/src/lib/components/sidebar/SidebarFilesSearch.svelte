@@ -1,15 +1,18 @@
 <script lang="ts">
 import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlass";
 import X from "phosphor-svelte/lib/X";
+import type { Snippet } from "svelte";
 import { untrack } from "svelte";
 import { getFileSearchQuery, setFileSearchQuery } from "$lib/stores/sidebar.svelte";
 
 interface Props {
   /** Enter / ArrowDown: the query is applied; move on to the results. */
   onSubmit: (query: string) => void;
+  /** Controls after the field, e.g. a filter trigger. */
+  trailing?: Snippet | undefined;
 }
 
-let { onSubmit }: Props = $props();
+let { onSubmit, trailing }: Props = $props();
 
 let inputEl: HTMLInputElement;
 let inputValue = $state(getFileSearchQuery());
@@ -96,4 +99,5 @@ function handleClear() {
 			</button>
 		{/if}
 	</div>
+	{@render trailing?.()}
 </div>
