@@ -491,7 +491,7 @@ function onDialogKeydown(e: KeyboardEvent): void {
 
 	.submit-title {
 		margin: 0;
-		font-size: 15px;
+		font-size: var(--text-base);
 		font-weight: 600;
 		line-height: 1.3;
 		letter-spacing: -0.01em;
@@ -500,7 +500,7 @@ function onDialogKeydown(e: KeyboardEvent): void {
 
 	.submit-description {
 		margin: 0;
-		font-size: 13px;
+		font-size: var(--text-sm);
 		line-height: 1.45;
 		color: var(--color-text-secondary);
 	}
@@ -514,7 +514,7 @@ function onDialogKeydown(e: KeyboardEvent): void {
 		align-items: center;
 		gap: 8px;
 		margin: 0;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		line-height: 1.45;
 		color: var(--color-text-secondary);
 	}
@@ -605,7 +605,7 @@ function onDialogKeydown(e: KeyboardEvent): void {
 
 	.row-line {
 		font-family: var(--font-mono);
-		font-size: 11px;
+		font-size: var(--text-ui);
 		font-weight: 500;
 		letter-spacing: 0.02em;
 		color: var(--color-text-muted);
@@ -618,7 +618,7 @@ function onDialogKeydown(e: KeyboardEvent): void {
 		align-items: center;
 		gap: 4px;
 		font-family: var(--font-mono);
-		font-size: 11px;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 		white-space: nowrap;
 	}
@@ -638,8 +638,8 @@ function onDialogKeydown(e: KeyboardEvent): void {
 		padding: 1px 5px;
 		border-radius: 3px;
 		font-family: var(--font-mono);
-		font-size: 11px;
-		font-weight: 700;
+		font-size: var(--text-ui);
+		font-weight: 600;
 		letter-spacing: 0.04em;
 		font-variant-numeric: tabular-nums;
 		color: var(--severity-score-label);
@@ -653,7 +653,7 @@ function onDialogKeydown(e: KeyboardEvent): void {
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		font-family: var(--font-sans);
-		font-size: 13px;
+		font-size: var(--text-sm);
 		font-weight: 500;
 		letter-spacing: -0.005em;
 		color: var(--color-text-primary);
@@ -709,7 +709,7 @@ function onDialogKeydown(e: KeyboardEvent): void {
 		background: transparent;
 		font: inherit;
 		font-family: var(--font-sans);
-		font-size: 12px;
+		font-size: var(--text-ui);
 		font-weight: 500;
 		color: var(--color-text-muted);
 		opacity: 0.6;
@@ -748,7 +748,7 @@ function onDialogKeydown(e: KeyboardEvent): void {
 		background: none;
 		font: inherit;
 		font-family: var(--font-sans);
-		font-size: 12px;
+		font-size: var(--text-ui);
 		font-weight: 500;
 		color: var(--color-accent);
 		cursor: pointer;
@@ -776,7 +776,7 @@ function onDialogKeydown(e: KeyboardEvent): void {
 		flex: 1;
 		min-width: 0;
 		margin: 0;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		line-height: 1.45;
 		color: var(--color-text-muted);
 	}
@@ -800,7 +800,7 @@ function onDialogKeydown(e: KeyboardEvent): void {
 		border-radius: 8px;
 		background: transparent;
 		font: inherit;
-		font-size: 13px;
+		font-size: var(--text-sm);
 		font-weight: 500;
 		letter-spacing: -0.005em;
 		white-space: nowrap;
@@ -861,7 +861,7 @@ function onDialogKeydown(e: KeyboardEvent): void {
 		padding: 0 5px;
 		border-radius: 4px;
 		background: color-mix(in srgb, currentColor 16%, transparent);
-		font-size: 11px;
+		font-size: var(--text-ui);
 		line-height: 18px;
 		letter-spacing: 0.04em;
 		opacity: 0.85;
