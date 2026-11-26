@@ -46,6 +46,7 @@ const reviewer = (
   asCodeOwner: false,
   verdict,
   verdictAt: verdict ? at(1) : null,
+  onBehalfOf: [],
 });
 
 const commit = (id: string, minute: number, login = "alice"): TimelineItem => ({
@@ -73,6 +74,7 @@ function conversation(overrides: Partial<PrConversation> = {}): PrConversation {
     isDraft: false,
     reviewDecision: null,
     viewerLogin: "viewer",
+    viewerTeams: [],
     viewerCanUpdate: true,
     viewerCanPush: true,
     labels: [],
