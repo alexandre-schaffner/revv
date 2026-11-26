@@ -131,7 +131,7 @@ function statusTitle(group: OwnerGroup): string {
 <style>
 	.scope-badge {
 		min-width: 12px;
-		font-size: 10px;
+		font-size: var(--text-xs);
 		font-weight: 600;
 		font-variant-numeric: tabular-nums;
 		line-height: 1;
@@ -144,7 +144,7 @@ function statusTitle(group: OwnerGroup): string {
 		justify-content: space-between;
 		gap: 8px;
 		padding: 2px 6px 6px;
-		font-size: 0.75rem;
+		font-size: var(--text-xs);
 		color: var(--color-text-secondary);
 	}
 

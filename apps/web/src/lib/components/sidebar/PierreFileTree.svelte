@@ -255,7 +255,7 @@ $effect(() => {
 							border-radius: 999px;
 							background: var(--color-accent-chip-bg);
 							color: var(--color-accent-chip-fg);
-							font-size: 9px;
+							font-size: var(--text-xs);
 							line-height: 13px;
 						}
 					`,

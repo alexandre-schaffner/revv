@@ -221,7 +221,7 @@ function stateLabel(row: OwnerRow): string {
 		border-radius: 999px;
 		background: var(--color-accent-chip-bg);
 		color: var(--color-accent-chip-fg);
-		font-size: 0.625rem;
+		font-size: var(--text-xs);
 		line-height: 14px;
 	}
 
