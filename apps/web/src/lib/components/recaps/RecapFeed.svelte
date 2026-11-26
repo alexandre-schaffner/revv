@@ -264,23 +264,23 @@ async function stop(): Promise<void> {
 .content { padding-top: 66px; }
 .loader-fullscreen { display: grid; place-items: center; min-height: calc(100vh - 8rem); width: 100%; }
 .period-hero { display: flex; flex-direction: column; align-items: flex-start; gap: .75rem; max-width: calc(var(--recap-measure) + 4rem); width: 100%; margin: 0 auto; padding: 2.5rem 2rem 4rem; }
-.period-eyebrow { font-family: var(--font-mono); font-size: .6875rem; font-weight: 500; text-transform: uppercase; letter-spacing: .18em; color: var(--color-text-muted); }
-.period-title { margin: 0; text-wrap: balance; font-size: 2.5rem; font-weight: 500; letter-spacing: -.02em; line-height: 1.02; color: var(--color-text-primary); }
-.period-lede { margin: .25rem 0 0; font-size: .9375rem; line-height: 1.55; color: var(--color-text-secondary); max-width: 34rem; text-wrap: pretty; }
+.period-eyebrow { font-family: var(--font-sans); font-size: var(--text-ui); font-weight: 500; color: var(--color-text-subtle); }
+.period-title { margin: 0; text-wrap: balance; font-size: var(--text-4xl); font-weight: 500; letter-spacing: -.02em; line-height: 1.02; color: var(--color-text-primary); }
+.period-lede { margin: .25rem 0 0; font-size: var(--text-base); line-height: 1.55; color: var(--color-text-secondary); max-width: 34rem; text-wrap: pretty; }
 .empty-page { width: 100%; max-width: calc(var(--recap-measure) + 4rem); margin: 0 auto; padding: 1.5rem 2rem 4.5rem; }
 .empty-hero { display: flex; flex-direction: column; gap: .35rem; padding-bottom: 1.5rem; }
 .empty-hero .period-eyebrow { display: inline-flex; align-items: center; gap: .5rem; }
 .ai-mark { width: 6px; height: 6px; border-radius: 50%; background: var(--color-ai-accent); }
 .date-row { display: flex; align-items: center; flex-wrap: wrap; gap: .25rem 1.5rem; min-width: 0; }
 .date-row :global(.archive-trigger) { margin-left: auto; flex-shrink: 0; }
-.empty-date { margin: 0; font-family: "Newsreader", Georgia, serif; font-size: 2.75rem; font-weight: 500; letter-spacing: -.02em; line-height: 1.05; color: var(--color-text-primary); text-wrap: balance; }
-.time-cap { font-family: var(--font-mono); font-size: .6875rem; color: var(--color-text-muted); }
+.empty-date { margin: 0; font-family: var(--font-serif); font-size: var(--text-5xl); font-weight: 500; letter-spacing: -.02em; line-height: 1.05; color: var(--color-text-primary); text-wrap: balance; }
+.time-cap { font-size: var(--text-ui); color: var(--color-text-subtle); }
 .empty-card { display: flex; flex-direction: column; align-items: center; gap: .5rem; text-align: center; padding: 3rem 2rem; border: 1px dashed color-mix(in srgb, var(--color-text-muted) 30%, transparent); border-radius: .75rem; }
-.empty-title { margin: 0; font-size: 1rem; font-weight: 500; color: var(--color-text-primary); }
-.empty-hint { margin: 0; max-width: 28rem; font-size: .875rem; line-height: 1.55; color: var(--color-text-secondary); text-wrap: pretty; }
+.empty-title { margin: 0; font-size: var(--text-base); font-weight: 500; color: var(--color-text-primary); }
+.empty-hint { margin: 0; max-width: 28rem; font-size: var(--text-sm); line-height: 1.55; color: var(--color-text-secondary); text-wrap: pretty; }
 .period-cta { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; margin-top: .75rem; }
-.action-error { max-width: var(--recap-measure); margin: 1rem auto; padding: 0 2rem; font-size: .85rem; color: var(--color-danger); }
-@media (max-width: 720px) { .period-title { font-size: 2rem; } }
+.action-error { max-width: var(--recap-measure); margin: 1rem auto; padding: 0 2rem; font-size: var(--text-ui); color: var(--color-danger); }
+@media (max-width: 720px) { .period-title { font-size: var(--text-3xl); letter-spacing: var(--text-3xl--letter-spacing); } }
 </style>
 
 {#snippet periodTabs()}<PillTabs {tabs} activeTab={period} onTabChange={(tab) => navigate(scopeValue, tab === "daily" ? "daily" : "weekly")} trailing={scopePicker} trailingReserve={180} />{/snippet}

@@ -1,4 +1,4 @@
-import { getContext, onDestroy, type Snippet, setContext } from "svelte";
+import { getContext, onDestroy, type Snippet, setContext, untrack } from "svelte";
 
 /**
  * Chrome a page (or any component inside it) shows in the shell around it.
@@ -29,10 +29,16 @@ export interface ShellChrome {
 const KEY = Symbol("shell-chrome");
 
 class ShellChromeHost {
-  #entries = $state<(() => ShellChrome)[]>([]);
+  // A plain list with a version to re-derive on, not a `$state` array: a page
+  // switch registers the new page and unregisters the old one in overlapping
+  // batches, and a read-modify-write of reactive state across them lost the
+  // new page's entry (its tabs vanished after the first PR switch).
+  readonly #entries: (() => ShellChrome)[] = [];
+  #version = $state(0);
 
   /** Per field, the most recently registered entry that defines it wins. */
   readonly current = $derived.by((): ShellChrome => {
+    void this.#version;
     const merged: ShellChrome = {};
     for (const read of this.#entries) {
       const chrome = read();
@@ -44,10 +50,19 @@ class ShellChromeHost {
     return merged;
   });
 
+  // Untracked: components register during init, inside their parent's effect.
+  #bump(): void {
+    this.#version = untrack(() => this.#version) + 1;
+  }
+
   register(read: () => ShellChrome): () => void {
-    this.#entries = [...this.#entries, read];
+    this.#entries.push(read);
+    this.#bump();
     return () => {
-      this.#entries = this.#entries.filter((entry) => entry !== read);
+      const at = this.#entries.indexOf(read);
+      if (at === -1) return;
+      this.#entries.splice(at, 1);
+      this.#bump();
     };
   }
 }

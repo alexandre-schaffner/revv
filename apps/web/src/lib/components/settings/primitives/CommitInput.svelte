@@ -114,7 +114,7 @@ function handleKeydown(e: KeyboardEvent): void {
 		display: inline-flex;
 		align-items: center;
 		gap: 4px;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 	}
 </style>

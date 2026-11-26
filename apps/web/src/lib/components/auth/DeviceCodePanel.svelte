@@ -26,7 +26,7 @@ const clipboard = copyFeedback(2000);
 			? 'bg-bg-elevated'
 			: 'bg-bg-tertiary'}"
 	>
-		<span class="font-mono text-2xl font-bold tracking-widest text-text-primary">{userCode}</span>
+		<span class="font-mono text-2xl font-semibold tracking-widest text-text-primary">{userCode}</span>
 		<button
 			onclick={() => void clipboard.copy(userCode)}
 			class="ml-1 cursor-pointer rounded p-1 text-text-muted transition-colors hover:text-text-primary {surface ===

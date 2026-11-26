@@ -263,13 +263,13 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 	}
 
 	.author {
-		font-size: 13px;
+		font-size: var(--text-sm);
 		font-weight: 500;
 		color: var(--color-text-primary);
 	}
 
 	.timestamp {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 		margin-left: auto;
 	}
@@ -295,7 +295,7 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 		align-items: center;
 		gap: 4px;
 		font-family: inherit;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		background: transparent;
 		border: none;
 		cursor: pointer;
@@ -339,7 +339,8 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 		display: inline-flex;
 		align-items: center;
 		gap: 3px;
-		font-size: 9px;
+		font-size: var(--text-xs);
+		letter-spacing: var(--text-xs--letter-spacing);
 		font-weight: 500;
 		color: var(--color-text-muted);
 		background: var(--color-bg-tertiary);
@@ -379,7 +380,7 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 		border-radius: 4px;
 		padding: 6px 8px;
 		font-family: var(--font-sans);
-		font-size: 13px;
+		font-size: var(--text-sm);
 		line-height: 1.6;
 		color: var(--color-text-primary);
 		resize: none;
@@ -397,7 +398,8 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 		justify-content: flex-end;
 	}
 	.edit-save-btn {
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		padding: 3px 10px;
 		border-radius: 4px;
 		border: none;
@@ -410,7 +412,8 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 		cursor: default;
 	}
 	.edit-cancel-btn {
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		padding: 3px 10px;
 		border-radius: 4px;
 		border: 1px solid var(--color-border);

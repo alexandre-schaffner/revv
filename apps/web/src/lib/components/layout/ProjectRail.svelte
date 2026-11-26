@@ -299,7 +299,7 @@ function handleAddRepo(): void {
 	}
 
 	.folder-pill-fallback {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		font-weight: 600;
 		color: var(--color-text-secondary);
 		text-transform: uppercase;
@@ -309,7 +309,7 @@ function handleAddRepo(): void {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		font-weight: 600;
 		color: var(--color-text-secondary);
 		text-transform: uppercase;
@@ -332,8 +332,9 @@ function handleAddRepo(): void {
 			inset 0 0 0 1px var(--color-border-subtle),
 			0 1px 2px rgba(42, 40, 37, 0.06);
 		color: var(--color-text-secondary);
-		font-size: 9px;
-		font-weight: 600;
+		font-size: var(--text-xs);
+		letter-spacing: var(--text-xs--letter-spacing);
+		font-weight: 500;
 		font-variant-numeric: tabular-nums;
 		line-height: 1;
 	}

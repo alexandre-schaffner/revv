@@ -55,7 +55,7 @@ const groups = $derived(groupIssuesBySeverityWithIndex(issues));
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		font-size: 10px;
+		font-size: var(--text-xs);
 		font-weight: 600;
 		letter-spacing: 0.06em;
 		text-transform: uppercase;

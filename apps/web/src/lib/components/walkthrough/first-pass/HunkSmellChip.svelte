@@ -53,7 +53,8 @@ const classes = $derived([
 		border-radius: 999px;
 		background: color-mix(in srgb, var(--smell-tone) 10%, transparent);
 		color: var(--smell-tone);
-		font-size: 10.5px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		font-weight: 500;
 		line-height: 1;
 		white-space: nowrap;

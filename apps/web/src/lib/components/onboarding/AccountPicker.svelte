@@ -122,14 +122,15 @@ function handlePick(userId: string, host: string): void {
     }
 
     .picker-title {
-        font-size: 28px;
-        font-weight: 700;
+        font-size: var(--text-3xl);
+        letter-spacing: var(--text-3xl--letter-spacing);
+        font-weight: 500;
         color: var(--color-text-primary);
         margin: 0;
     }
 
     .picker-subtitle {
-        font-size: 14px;
+        font-size: var(--text-sm);
         color: var(--color-text-muted);
         margin: 8px 0 0;
     }
@@ -197,8 +198,8 @@ function handlePick(userId: string, host: string): void {
     }
 
     .picker-card-login {
-        font-size: 14px;
-        font-weight: 600;
+        font-size: var(--text-sm);
+        font-weight: 500;
         color: var(--color-text-primary);
         overflow: hidden;
         text-overflow: ellipsis;
@@ -206,7 +207,7 @@ function handlePick(userId: string, host: string): void {
     }
 
     .picker-card-host {
-        font-size: 12px;
+        font-size: var(--text-ui);
         color: var(--color-text-muted);
         overflow: hidden;
         text-overflow: ellipsis;
@@ -235,7 +236,7 @@ function handlePick(userId: string, host: string): void {
     .picker-error {
         max-width: 340px;
         margin: 0;
-        font-size: 12px;
+        font-size: var(--text-ui);
         color: var(--color-danger);
         text-align: center;
     }
@@ -250,7 +251,7 @@ function handlePick(userId: string, host: string): void {
         border-radius: 6px;
         background: transparent;
         color: var(--color-accent);
-        font-size: 13px;
+        font-size: var(--text-sm);
         font-weight: 500;
         cursor: pointer;
         transition: background-color var(--duration-snap);

@@ -11,8 +11,12 @@ import { interceptExternalLinks } from "$lib/utils/open-external";
 
 type Props = Omit<HTMLAttributes<HTMLDivElement>, "children"> & {
   source: string;
-  /** Side panels and threads read at the dense size. */
-  density?: "regular" | "dense";
+  /**
+   * Side panels and threads read at the dense size; documents read top to
+   * bottom (walkthrough, PR description, sentiment) at the reading tier, and a
+   * chapter's standfirst at the lede.
+   */
+  density?: "regular" | "dense" | "reading" | "lede";
 } & (
     | {
         trust: Extract<MarkdownTrust, "agent">;
@@ -52,7 +56,13 @@ function handleClick(event: MouseEvent & { currentTarget: EventTarget & HTMLDivE
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div
 	{...rest}
-	class={cn("prose prose-sm", density === "dense" && "prose-dense", className)}
+	class={cn(
+		"prose",
+		density === "reading" || density === "lede" ? "prose-reading" : "prose-sm",
+		density === "dense" && "prose-dense",
+		density === "lede" && "prose-lede",
+		className,
+	)}
 	onclick={handleClick}
 	{@attach trust === "agent" ? fromAction(prlensDiagrams, getResolvedTheme) : null}
 >

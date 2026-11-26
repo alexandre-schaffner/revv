@@ -48,34 +48,35 @@ const othersOwn = $derived(
 		onOpenChange={(next) => (open = next)}
 		tone="warning"
 		icon={ArrowsClockwise}
-		title="Rebase stack #{stack.number}?"
+		title="Rebase stack #{stack.number}"
 		confirmIcon={ArrowsClockwise}
 		confirmLabel="Force-push {plural(pushed.length, 'branch', 'branches')}"
 		onConfirm={() => {
 			open = false;
 			void rebaseStack(prId, stack);
 		}}
-		width={440}
+		width={520}
 	>
 		{#snippet description()}
-			Revv replays each open layer onto the one below it, the bottom onto
-			<code>{stack.baseRefName}</code>, and force-pushes {pushed.length === 1
-				? 'its branch'
-				: `these ${pushed.length} branches`} together. Nothing is pushed if a layer
-			conflicts or moved meanwhile.
+			Replay each open layer onto the one below it, starting from
+			<code>{stack.baseRefName}</code>, then force-push {plural(pushed.length, 'branch', 'branches')}.
 		{/snippet}
 		{#snippet body()}
-			<ul class="confirm-branches">
+			<ul class="confirm-branches" aria-label="Branches to force-push">
 				{#each pushed as layer (layer.number)}
 					<li>
-						<code class="branch">{layer.headRef}</code>
-						<span class="owner">
-							#{layer.number}{#if layer.authorLogin && !loginsMatch(layer.authorLogin, viewer)}
-								· {layer.authorLogin}'s{/if}
-						</span>
+						<span class="pr-number">#{layer.number}</span>
+						<div class="branch-info">
+							<code class="branch">{layer.headRef}</code>
+							{#if layer.authorLogin && !loginsMatch(layer.authorLogin, viewer)}
+								<span class="owner">{layer.authorLogin}</span>
+							{/if}
+						</div>
 					</li>
 				{/each}
 			</ul>
+
+			<p class="confirm-note">Nothing is pushed if a layer conflicts or has changed.</p>
 
 			{#if othersOwn}
 				<p class="confirm-note">
@@ -89,46 +90,51 @@ const othersOwn = $derived(
 <style>
 	.confirm-note {
 		margin: 0;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		line-height: 1.55;
 		overflow-wrap: anywhere;
 		color: var(--color-text-muted);
 	}
 
 	.confirm-branches {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		max-height: 180px;
-		margin: 0;
-		padding: 7px 10px;
+		flex-shrink: 0;
+		max-height: 240px;
+		margin: 4px 0;
+		padding: 4px 0;
 		overflow-y: auto;
 		list-style: none;
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 7px;
-		background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+		border-block: 1px solid var(--color-border-subtle);
 	}
 
 	.confirm-branches li {
 		display: flex;
 		align-items: baseline;
-		gap: 8px;
-		min-width: 0;
-		font-size: 12px;
+		gap: 16px;
+		padding-block: 8px;
+		font-size: var(--text-sm);
 		line-height: 1.5;
 	}
 
+	.pr-number {
+		flex-shrink: 0;
+		font-variant-numeric: tabular-nums;
+		color: var(--color-text-subtle);
+	}
+
+	.branch-info {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-width: 0;
+	}
+
 	.branch {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
 		font-family: var(--font-mono);
-		font-size: 11.5px;
-		color: var(--color-text-primary);
+		font-size: inherit;
+		overflow-wrap: anywhere;
 	}
 
 	.owner {
-		flex-shrink: 0;
-		color: var(--color-text-muted);
+		color: var(--color-text-secondary);
 	}
 </style>

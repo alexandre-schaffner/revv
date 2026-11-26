@@ -11,25 +11,23 @@ export class RepoRemoval {
     return this.#removing.has(id);
   }
 
-  get deleting(): boolean {
-    return this.pending !== null && this.#removing.has(this.pending.id);
-  }
-
   request(repo: Repository): void {
     this.pending = repo;
   }
 
   onOpenChange = (open: boolean): void => {
-    if (!open && !this.deleting) this.pending = null;
+    if (!open) this.pending = null;
   };
 
+  // Removal is optimistic and its progress lives in a toast, so the confirm
+  // dialog closes immediately rather than idling on a row that's already gone.
   confirm = async (): Promise<void> => {
     const repo = this.pending;
+    this.pending = null;
     if (!repo || this.#removing.has(repo.id)) return;
     this.#removing = new Set([...this.#removing, repo.id]);
     try {
       await deleteRepo(repo.id);
-      this.pending = null;
     } catch {
       // deleteRepo restores the optimistic removal and shows the failure toast.
     } finally {

@@ -113,7 +113,7 @@ const expandLabel = $derived(expand?.all === true ? "Collapse all" : "Expand all
 
     .spec-title {
         font-family: var(--font-mono);
-        font-size: 13px;
+        font-size: var(--text-sm);
         font-weight: 600;
         color: var(--color-text-primary);
         letter-spacing: 0.01em;
@@ -124,7 +124,7 @@ const expandLabel = $derived(expand?.all === true ? "Collapse all" : "Expand all
         align-items: center;
         gap: 10px;
         font-family: var(--font-mono);
-        font-size: 11.5px;
+        font-size: var(--text-ui);
         flex-wrap: wrap;
     }
 
@@ -145,7 +145,7 @@ const expandLabel = $derived(expand?.all === true ? "Collapse all" : "Expand all
         background: transparent;
         color: var(--color-text-muted);
         font-family: var(--font-mono);
-        font-size: 11px;
+        font-size: var(--text-ui);
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.04em;

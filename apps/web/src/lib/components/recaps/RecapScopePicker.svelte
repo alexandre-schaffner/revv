@@ -99,9 +99,9 @@ function choose(next: string): void {
 </div>
 
 <style>
-.scope-hint { margin: .25rem .25rem .5rem; font-size: .75rem; line-height: 1.5; color: var(--color-text-secondary); }
+.scope-hint { margin: .25rem .25rem .5rem; font-size: var(--text-xs); line-height: 1.5; color: var(--color-text-secondary); }
 .scope-anchor { position: absolute; left: 0; top: 50%; transform: translateY(-50%); pointer-events: auto; }
-:global(.recap-scope-trigger) { display: inline-flex; align-items: center; justify-content: center; gap: .4rem; height: 30px; max-width: 172px; padding: 0 .75rem; border: 1px solid var(--color-glass-border); border-radius: 999px; background: var(--color-tab-track-bg); box-shadow: var(--color-glass-shadow), inset 0 .5px 0 var(--color-glass-highlight); color: var(--color-text-secondary); font: inherit; font-size: .75rem; white-space: nowrap; cursor: pointer; }
+:global(.recap-scope-trigger) { display: inline-flex; align-items: center; justify-content: center; gap: .4rem; height: 30px; max-width: 172px; padding: 0 .75rem; border: 1px solid var(--color-glass-border); border-radius: 999px; background: var(--color-tab-track-bg); box-shadow: var(--color-glass-shadow), inset 0 .5px 0 var(--color-glass-highlight); color: var(--color-text-secondary); font: inherit; font-size: var(--text-xs); white-space: nowrap; cursor: pointer; }
 :global(.recap-scope-trigger:hover), :global(.recap-scope-trigger[data-state="open"]) { color: var(--color-text-primary); background: var(--color-bg-tertiary); }
 :global(.recap-scope-trigger:focus-visible) { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 .scope-label { overflow: hidden; text-overflow: ellipsis; max-width: 115px; }

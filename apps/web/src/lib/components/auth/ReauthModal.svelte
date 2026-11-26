@@ -136,7 +136,7 @@ async function retryWithClientId(): Promise<void> {
 							void retryWithClientId();
 						}}
 					>
-						<label class="flex flex-col gap-1.5 text-xs font-medium text-text-secondary">
+						<label class="flex flex-col gap-1.5 text-ui font-medium text-text-secondary">
 							GitHub App client ID for {reauth.host}
 							<input
 								class="h-10 rounded-lg border border-border bg-bg-tertiary px-3 text-sm text-text-primary outline-none focus:border-accent"

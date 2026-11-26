@@ -129,24 +129,24 @@ $effect(() => {
 
 <style>
 .watchpoints { margin: .5rem 0 1rem; padding: 1.25rem 1.5rem; border: 1px solid color-mix(in srgb, var(--color-warning) 25%, var(--color-border-subtle)); border-radius: .75rem; background: color-mix(in srgb, var(--color-warning) 4%, var(--color-bg-secondary)); }
-.watchpoints h2 { display: flex; align-items: center; gap: .5rem; margin: 0 0 1rem; font-size: .8125rem; font-weight: 600; color: var(--color-text-primary); }
+.watchpoints h2 { display: flex; align-items: center; gap: .5rem; margin: 0 0 1rem; font-size: var(--text-ui); font-weight: 600; color: var(--color-text-primary); }
 .watchpoints h2 :global(svg) { color: var(--color-warning); flex-shrink: 0; }
 .watchpoints ul { display: flex; flex-direction: column; gap: 1rem; margin: 0; padding: 0; list-style: none; }
-.watchpoint-topic { padding: 0; background: transparent; border: 0; font: inherit; font-size: .8125rem; font-weight: 600; color: var(--color-text-primary); text-align: left; cursor: pointer; }
+.watchpoint-topic { padding: 0; background: transparent; border: 0; font: inherit; font-size: var(--text-ui); font-weight: 600; color: var(--color-text-primary); text-align: left; cursor: pointer; }
 .watchpoint-topic:hover { text-decoration: underline; }
-.watchpoints p { margin: .25rem 0 0; font-size: .8125rem; line-height: 1.6; color: var(--color-text-secondary); }
-.team-caption { margin: 0; max-width: 70ch; font-size: .8125rem; line-height: 1.6; color: var(--color-text-secondary); }
+.watchpoints p { margin: .25rem 0 0; font-size: var(--text-ui); line-height: 1.6; color: var(--color-text-secondary); }
+.team-caption { margin: 0; max-width: 70ch; font-size: var(--text-ui); line-height: 1.6; color: var(--color-text-secondary); }
 .team-nav { display: flex; flex-wrap: wrap; gap: .5rem; padding: .25rem 0 1.25rem; border-bottom: 1px solid var(--color-border-subtle); }
-.team-nav button { display: inline-flex; align-items: center; gap: .4rem; padding: .4rem .7rem; border: 1px solid var(--color-border-subtle); border-radius: 999px; background: var(--color-bg-secondary); font: inherit; font-size: .75rem; color: var(--color-text-secondary); cursor: pointer; }
+.team-nav button { display: inline-flex; align-items: center; gap: .4rem; padding: .4rem .7rem; border: 1px solid var(--color-border-subtle); border-radius: 999px; background: var(--color-bg-secondary); font: inherit; font-size: var(--text-xs); color: var(--color-text-secondary); cursor: pointer; }
 .team-nav button:hover { background: var(--color-bg-tertiary); color: var(--color-text-primary); }
 .team-section { scroll-margin-top: 1.5rem; }
 .team-heading { display: flex; flex-direction: column; gap: .5rem; margin: .75rem 0 1.5rem; }
-.team-heading h2 { margin: 0; font-size: 1.125rem; font-weight: 600; color: var(--color-text-primary); }
+.team-heading h2 { margin: 0; font-size: var(--text-lg); font-weight: 600; color: var(--color-text-primary); }
 .team-heading :global(.team-trigger) { display: flex; align-items: center; justify-content: space-between; gap: 1rem; width: 100%; border: 0; padding: .5rem 0; background: transparent; color: inherit; text-align: left; font: inherit; cursor: pointer; }
 .team-heading :global(.team-trigger:hover) { color: var(--color-accent); }
 .team-heading :global(.team-trigger:focus-visible) { outline: 2px solid var(--color-accent); outline-offset: 3px; border-radius: .25rem; }
-.team-meta { display: inline-flex; align-items: center; gap: .5rem; flex-shrink: 0; font-size: .75rem; font-weight: 400; color: var(--color-text-secondary); }
-.team-heading p { margin: 0; max-width: 70ch; font-size: .8125rem; line-height: 1.5; color: var(--color-text-secondary); }
+.team-meta { display: inline-flex; align-items: center; gap: .5rem; flex-shrink: 0; font-size: var(--text-xs); font-weight: 400; color: var(--color-text-secondary); }
+.team-heading p { margin: 0; max-width: 70ch; font-size: var(--text-ui); line-height: 1.5; color: var(--color-text-secondary); }
 .watchpoint-topic:focus-visible, .team-nav button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 
 .body {
@@ -157,18 +157,19 @@ $effect(() => {
 }
 
 .eyebrow {
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-family: var(--font-sans);
+  font-size: var(--text-ui);
   font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  color: var(--color-text-muted);
+  color: var(--color-text-subtle);
 }
 
 .lede {
   margin: 0;
-  font-size: 1.1rem;
-  font-weight: 500;
+  font-size: var(--text-lg);
+  letter-spacing: var(--text-lg--letter-spacing);
+  /* A standfirst, not a heading: regular weight, so the bold it carries
+     still reads as emphasis. */
+  font-weight: 400;
   line-height: 1.55;
   color: var(--color-text-primary);
   max-width: 680px;

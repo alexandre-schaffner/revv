@@ -324,7 +324,7 @@ useCommands([
 		color: var(--color-text-secondary);
 		cursor: pointer;
 		text-align: left;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		transition: background-color var(--duration-snap);
 	}
 
@@ -432,7 +432,7 @@ useCommands([
 	}
 
 	.empty-text {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 		margin: 0;
 		line-height: 1.5;
@@ -447,7 +447,8 @@ useCommands([
 		border-radius: 6px;
 		background: var(--color-bg-elevated);
 		color: var(--color-accent, var(--color-text-secondary));
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		font-weight: 500;
 		cursor: pointer;
 		transition: background-color var(--duration-snap), color var(--duration-snap);

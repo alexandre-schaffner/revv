@@ -37,7 +37,7 @@ const share = $derived(
 		min-width: 0;
 		margin: 0;
 		padding: 0 14px 6px;
-		font-size: 0.75rem;
+		font-size: var(--text-xs);
 		font-weight: 500;
 		letter-spacing: 0.01em;
 		color: var(--color-text-secondary);

@@ -338,7 +338,7 @@ function formatCompletedAt(iso: string): string {
 
 .empty-title {
   margin: 0;
-  font-size: 1rem;
+  font-size: var(--text-base);
   font-weight: 500;
   color: var(--color-text-primary);
 }
@@ -362,13 +362,13 @@ function formatCompletedAt(iso: string): string {
 
 .error-title {
   margin: 0;
-  font-size: 0.875rem;
+  font-size: var(--text-sm);
   font-weight: 500;
 }
 
 .error-hint {
   margin: 0.25rem 0 0;
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   color: var(--color-text-muted);
 }
 
@@ -391,9 +391,9 @@ function formatCompletedAt(iso: string): string {
 
 .generating-empty .phase-caption {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   color: var(--color-text-muted);
-  letter-spacing: 0.005em;
+  letter-spacing: var(--text-sm--letter-spacing);
 }
 
 .generating-empty :global(.thoughts-trigger) {
@@ -402,7 +402,7 @@ function formatCompletedAt(iso: string): string {
   gap: 0.35rem;
   margin-top: 0.5rem;
   padding: 0.25rem 0.6rem;
-  font-size: 0.75rem;
+  font-size: var(--text-ui);
   color: var(--color-text-muted);
   background: transparent;
   border: 0;
@@ -437,7 +437,7 @@ function formatCompletedAt(iso: string): string {
 }
 
 .phase-label {
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
   color: var(--color-text-secondary);
 }
 
@@ -448,9 +448,8 @@ function formatCompletedAt(iso: string): string {
 
 .footer {
   padding-top: 0.25rem;
-  font-size: 0.7rem;
+  font-size: var(--text-ui);
   color: var(--color-text-muted);
-  font-family: var(--font-mono);
-  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
 }
 </style>

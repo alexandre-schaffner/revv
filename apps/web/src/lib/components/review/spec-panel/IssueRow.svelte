@@ -162,8 +162,8 @@ function stopPropagation(e: MouseEvent): void {
         align-items: center;
         justify-content: center;
         font-family: var(--font-mono);
-        font-size: 11px;
-        font-weight: 700;
+        font-size: var(--text-ui);
+        font-weight: 600;
         letter-spacing: 0.04em;
         text-transform: uppercase;
         padding: 1px 5px;
@@ -178,7 +178,7 @@ function stopPropagation(e: MouseEvent): void {
 
     .issue-title {
         font-family: var(--font-sans);
-        font-size: 13px;
+        font-size: var(--text-sm);
         font-weight: 500;
         color: var(--color-text-secondary);
         letter-spacing: -0.005em;
@@ -196,15 +196,15 @@ function stopPropagation(e: MouseEvent): void {
         padding: 1px 6px;
         color: var(--color-success);
         font-family: var(--font-mono);
-        font-size: 9.5px;
-        font-weight: 700;
+        font-size: var(--text-xs);
+        font-weight: 600;
         letter-spacing: 0.04em;
         text-transform: uppercase;
     }
 
     .issue-preview {
         font-family: var(--font-sans);
-        font-size: 12px;
+        font-size: var(--text-ui);
         color: var(--color-text-muted);
         white-space: nowrap;
         min-width: 0;

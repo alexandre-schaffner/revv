@@ -88,9 +88,9 @@ export const scrollPane: Action<HTMLElement, ScrollPaneParams> = (node, params) 
   void tick().then(restore);
   node.addEventListener("scroll", onScroll);
   return {
-    // Svelte calls `update` from an effect; untracked, so the `roots` and
-    // scroll-position reads in `restore` don't make that effect re-run on
-    // the `roots` write that follows, which looped without end.
+    // Untracked: Svelte runs an action's update inside an effect, and
+    // `restore` reads and rewrites `roots` (and the saved offsets), so a
+    // tracked update would re-run on its own write, forever.
     update(next: ScrollPaneParams) {
       current = next;
       untrack(restore);

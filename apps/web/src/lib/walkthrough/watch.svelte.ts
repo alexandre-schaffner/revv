@@ -131,7 +131,9 @@ export function useWalkthroughWatch(getPrId: () => string, getIsShown: () => boo
     const authRecovery = entry?.streamEndReason === "agent_auth";
     toast.error("Walkthrough failed", {
       id: `walkthrough-error-${prId}`,
-      description: authRecovery ? agentAuthRecoveryDescription(streamError) : streamError,
+      description: authRecovery
+        ? agentAuthRecoveryDescription(streamError)
+        : "The walkthrough stopped before finishing. Retry to continue.",
       ...(authRecovery
         ? { action: { label: "Open Settings", onClick: () => openSettings("ai") } }
         : {}),

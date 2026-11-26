@@ -65,6 +65,6 @@ const verb = $derived(order[idx % order.length]);
 		display: flex;
 		flex: 1;
 		min-width: 0;
-		font-size: 11px;
+		font-size: var(--text-ui);
 	}
 </style>

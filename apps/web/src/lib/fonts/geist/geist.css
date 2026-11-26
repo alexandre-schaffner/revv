@@ -1,0 +1,36 @@
+/* Geist and Geist Mono 1.9.0, vendored from Vercel's `geist` package
+   (SIL OFL 1.1, see OFL.txt). Not the fontsource build: that one is the
+   Google Fonts cut, which drops the stylistic sets, `case` and the mono's
+   `zero`/coding-ligature features. One variable file per style covers every
+   weight the app uses; the app ships offline, so no unicode-range split. */
+@font-face {
+  font-family: "Geist";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("./Geist-Variable.woff2") format("woff2-variations");
+}
+
+@font-face {
+  font-family: "Geist";
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("./Geist-Italic-Variable.woff2") format("woff2-variations");
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("./GeistMono-Variable.woff2") format("woff2-variations");
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("./GeistMono-Italic-Variable.woff2") format("woff2-variations");
+}

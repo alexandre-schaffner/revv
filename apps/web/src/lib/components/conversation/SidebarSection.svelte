@@ -56,7 +56,7 @@ let { id, title, align = "center", span = false, aside, children }: Props = $pro
 
 	.side-head h3 {
 		margin: 0;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		font-weight: 600;
 		letter-spacing: 0.01em;
 		color: var(--color-text-secondary);

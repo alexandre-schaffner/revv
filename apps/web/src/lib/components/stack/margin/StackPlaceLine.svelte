@@ -38,7 +38,7 @@ let { place }: Props = $props();
 		gap: 6px;
 		min-width: 0;
 		margin-top: 4px;
-		font-size: 12.5px;
+		font-size: var(--text-sm);
 		line-height: 1.6;
 		color: var(--color-text-secondary);
 		white-space: nowrap;

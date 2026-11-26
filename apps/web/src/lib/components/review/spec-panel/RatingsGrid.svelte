@@ -292,7 +292,7 @@ function onGridKeydown(e: KeyboardEvent): void {
 
     .count-elapsed {
         font-family: var(--font-mono);
-        font-size: 11.5px;
+        font-size: var(--text-ui);
         color: var(--color-text-muted);
         font-variant-numeric: tabular-nums;
     }

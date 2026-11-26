@@ -105,8 +105,11 @@ export const checkOwnership = (fields: Fields, request: GuardedRequest, userId: 
 
 /** {@link checkOwnership} as a router's `beforeHandle` hook, for the signed-in user. */
 export function ownedBy(fields: Fields) {
-  return async (ctx: GuardedRequest & { readonly userId: string }) => {
-    const exit = await AppRuntime.runPromiseExit(checkOwnership(fields, ctx, ctx.userId));
+  return async (ctx: Partial<GuardedRequest> & { readonly userId: string }) => {
+    // Elysia leaves `params` undefined on a route with no path parameters
+    // (`POST /api/chat` names its PR in the body).
+    const request = { params: ctx.params ?? {}, body: ctx.body };
+    const exit = await AppRuntime.runPromiseExit(checkOwnership(fields, request, ctx.userId));
     return Exit.isFailure(exit) ? errorResponse(Cause.squash(exit.cause)) : undefined;
   };
 }

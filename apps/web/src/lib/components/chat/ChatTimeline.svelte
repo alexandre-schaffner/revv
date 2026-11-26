@@ -106,6 +106,6 @@ const recentToolCalls = $derived(
 		gap: 8px;
 		min-width: 0;
 		padding: 10px 14px;
-		font-size: 10px;
+		font-size: var(--text-xs);
 	}
 </style>

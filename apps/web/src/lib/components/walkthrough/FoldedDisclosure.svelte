@@ -73,7 +73,8 @@ function toggle(): void {
 		background: transparent;
 		color: var(--color-text-muted);
 		font: inherit;
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		text-align: left;
 		cursor: pointer;
 		transition: background-color var(--duration-snap), color var(--duration-snap);

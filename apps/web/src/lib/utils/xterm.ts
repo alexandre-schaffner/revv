@@ -23,7 +23,7 @@ export function cssTokens(el: HTMLElement): (name: string, fallback: string) => 
 }
 
 export function monoFont(el: HTMLElement): string {
-  return cssTokens(el)("--font-mono", '"JetBrains Mono", "Fira Code", monospace');
+  return cssTokens(el)("--font-mono", "ui-monospace, monospace");
 }
 
 /**

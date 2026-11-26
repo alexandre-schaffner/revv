@@ -65,7 +65,7 @@ $effect(() => {
 
 	.conflict-files li {
 		font-family: var(--font-mono);
-		font-size: 11px;
+		font-size: var(--text-ui);
 		color: var(--color-text-primary);
 		background: var(--color-bg-tertiary);
 		border-radius: 3px;
@@ -74,14 +74,14 @@ $effect(() => {
 
 	.conflict-hint {
 		margin: 0;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		line-height: 1.55;
 		color: var(--color-text-muted);
 	}
 
 	.conflict-hint code {
 		font-family: var(--font-mono);
-		font-size: 11px;
+		font-size: var(--text-ui);
 		background: var(--color-bg-tertiary);
 		border-radius: 3px;
 		padding: 1px 4px;
